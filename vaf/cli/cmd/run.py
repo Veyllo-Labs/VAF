@@ -376,8 +376,14 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
         agent = Agent(verbose=verbose)
         global_agent = agent
         
+        # Download model first (if needed) - this shows tqdm progress bar
+        # Do this BEFORE the spinner, so tqdm output is visible
+        agent.ensure_model_exists()
+        
+        # Now load the model (this is fast if model already exists)
+        # Skip download check since we already did it
         with tui.spinner("Loading model..."):
-            agent.load_model()
+            agent.load_model(skip_download_check=True)
             agent.init_chat()
         
         # Show success after spinner ends (Backend Ready message moved here)
@@ -876,7 +882,10 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
     try:
         agent = Agent(verbose=verbose)
         global_agent = agent
-        agent.load_model()
+        # Download model first (if needed) - this shows tqdm progress bar
+        agent.ensure_model_exists()
+        # Now load the model (skip download check since we already did it)
+        agent.load_model(skip_download_check=True)
         agent.init_chat()
     except Exception as e:
         UI.error(f"Startup failed: {e}")

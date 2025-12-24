@@ -4,20 +4,29 @@ This directory contains the workflow system for VAF, which allows you to define 
 
 ## Structure
 
-- **templates.py** - Workflow template definitions
+- **workflows/** - Individual workflow files (one per workflow)
+- **templates.py** - Automatically loads all workflows from `workflows/` and `~/.vaf/workflows/`
 - **selector.py** - Matches user input to workflows
 - **engine.py** - Executes workflow steps
 - **__init__.py** - Module exports
 
 ## Adding New Workflows
 
-### 1. Define Your Workflow in templates.py
+### 1. Create a New Workflow File
 
-Add a new entry to the `WORKFLOW_TEMPLATES` dictionary:
+Create a new `.py` file in `vaf/workflows/workflows/` (for built-in workflows) or `~/.vaf/workflows/` (for user-generated workflows).
+
+**Example: `vaf/workflows/workflows/my_workflow.py`**
 
 ```python
-"your_workflow_id": {
-    "name": "Your Workflow Name",
+"""
+My Custom Workflow
+
+Description of what this workflow does.
+"""
+
+WORKFLOW = {
+    "name": "My Workflow",
     "description": "What this workflow does",
     "triggers": [
         # Keywords that trigger this workflow
@@ -33,6 +42,10 @@ Add a new entry to the `WORKFLOW_TEMPLATES` dictionary:
         # Variables to extract from user input
         "var_name": "Description of variable",
     },
+    "defaults": {
+        # Optional: Default values for variables
+        "var_name": "default_value",
+    },
     "steps": [
         # Sequence of tool calls
         {
@@ -45,10 +58,26 @@ Add a new entry to the `WORKFLOW_TEMPLATES` dictionary:
 }
 ```
 
-### 2. Example: Simple File Creation Workflow
+### 2. Automatic Loading
+
+Workflows are automatically discovered and loaded:
+- **Built-in workflows**: `vaf/workflows/workflows/*.py` (loaded at startup)
+- **User workflows**: `~/.vaf/workflows/*.py` (loaded at startup, can override built-in)
+
+No need to register or import - just create the file!
+
+### 3. Example: Simple File Creation Workflow
+
+**File: `vaf/workflows/workflows/create_config.py`**
 
 ```python
-"create_config": {
+"""
+Create Config File Workflow
+
+Generate a configuration file.
+"""
+
+WORKFLOW = {
     "name": "Create Config File",
     "description": "Generate a configuration file",
     "triggers": [
@@ -62,6 +91,9 @@ Add a new entry to the `WORKFLOW_TEMPLATES` dictionary:
     "variables": {
         "format": "Config format (json, yaml, etc.)",
     },
+    "defaults": {
+        "format": "json",
+    },
     "steps": [
         {
             "tool": "coding_agent",
@@ -71,7 +103,7 @@ Add a new entry to the `WORKFLOW_TEMPLATES` dictionary:
         },
         {
             "tool": "write_file",
-            "input": '{{"path": "config.{format}", "content": "{config_content}"}}',
+            "input": '{"path": "config.{format}", "content": "{config_content}"}',
             "output": "result",
             "description": "Save config file",
         },
@@ -79,14 +111,25 @@ Add a new entry to the `WORKFLOW_TEMPLATES` dictionary:
 }
 ```
 
-### 3. Variable Handling
+### 4. User-Generated Workflows
+
+To create a user-generated workflow that persists across VAF updates:
+
+1. Create `~/.vaf/workflows/` directory (if it doesn't exist)
+2. Add your workflow file there (e.g., `~/.vaf/workflows/my_custom_workflow.py`)
+3. Restart VAF - the workflow will be automatically loaded
+
+**Note**: User workflows can override built-in workflows with the same filename.
+
+### 5. Variable Handling
 
 Variables can be:
 - Extracted from user input automatically
 - Passed between steps using `{variable_name}`
 - Used in tool inputs with curly braces
+- Have default values in `defaults` dictionary
 
-### 4. Available Tools
+### 6. Available Tools
 
 Common tools you can use in workflows:
 - `coding_agent` - Generate code or content
@@ -95,8 +138,9 @@ Common tools you can use in workflows:
 - `read_file` - Read from a file
 - `bash` - Execute shell commands
 - `librarian_agent` - File/info retrieval
+- `python_sandbox` - Execute Python code safely
 
-### 5. Multi-Step Workflows
+### 7. Multi-Step Workflows
 
 Steps execute sequentially. Output from one step becomes input for the next:
 
@@ -116,7 +160,7 @@ Steps execute sequentially. Output from one step becomes input for the next:
     },
     {
         "tool": "write_file",
-        "input": '{{"path": "{filename}", "content": "{code}"}}',
+        "input": '{"path": "{filename}", "content": "{code}"}',
         "output": "saved",
         "description": "Save to file",
     },
@@ -125,8 +169,8 @@ Steps execute sequentially. Output from one step becomes input for the next:
 
 ## Testing Your Workflow
 
-1. Add your workflow to `WORKFLOW_TEMPLATES`
-2. Restart VAF
+1. Create your workflow file in `workflows/` directory
+2. Restart VAF (workflows are loaded at startup)
 3. Test with a phrase that matches your triggers
 4. Check the debug output to see workflow matching
 
@@ -150,6 +194,7 @@ Make sure to include:
 4. **Meaningful Variables** - Name variables clearly
 5. **Atomic Steps** - Each step should do one thing well
 6. **Error Handling** - Consider what happens if a step fails
+7. **One File Per Workflow** - Keep workflows modular and maintainable
 
 ## Workflow Priority
 
@@ -161,14 +206,28 @@ To increase match probability:
 - Use clear, specific descriptions
 - Include common variations
 
-## Examples in templates.py
+## Existing Workflows
 
-Check the existing workflows for examples:
-- `create_website` - Multi-file web project
-- `research_and_code` - Web search then code generation
-- `analyze_website` - Fetch and analyze web content
-- `code_review` - Review code files
-- `deep_research` - Multi-query research
+Check the existing workflows in `workflows/` for examples:
+- `create_website.py` - Multi-file web project
+- `research_and_code.py` - Web search then code generation
+- `analyze_website.py` - Fetch and analyze web content
+- `code_review.py` - Review code files
+- `deep_research.py` - Multi-query research
+- `web_lookup.py` - Quick web search
+- `generate_docs.py` - Generate documentation
+- `create_file.py` - Create a single file
+
+## Reloading Workflows
+
+If you add a new workflow file while VAF is running, you can reload workflows:
+
+```python
+from vaf.workflows.templates import reload_workflows
+reload_workflows()
+```
+
+Or simply restart VAF (workflows are loaded at startup).
 
 ## Need Help?
 
@@ -177,4 +236,4 @@ If your workflow isn't matching:
 2. Verify triggers match common phrasings
 3. Test pattern matching separately
 4. Ensure description is clear and specific
-
+5. Check that your file defines `WORKFLOW` dictionary correctly

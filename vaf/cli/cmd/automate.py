@@ -89,7 +89,7 @@ def run_tests(
         language = config.get("language", "unknown")
         
         test_commands = {
-            "python": "pytest" if coverage else "pytest",
+            "python": "pytest --cov" if coverage else "pytest",
             "javascript": "npm test",
             "typescript": "npm test",
             "rust": "cargo test",
@@ -210,7 +210,7 @@ def run_lint(
     language = config.get("language", "unknown")
     
     lint_commands = {
-        "python": "ruff check ." if fix else "ruff check . --fix",
+        "python": "ruff check . --fix" if fix else "ruff check .",
         "javascript": "eslint ." if not fix else "eslint . --fix",
         "typescript": "eslint ." if not fix else "eslint . --fix",
         "rust": "cargo clippy" if not fix else "cargo clippy --fix",

@@ -14,7 +14,8 @@ beautifulsoup4>=4.12.0
 html2text>=2024.2.26
 
 # AI/ML
-huggingface_hub>=0.20.0
+huggingface_hub[hf_xet]>=0.20.0
+tqdm>=4.65.0  # Progress bars for downloads
 
 # Search
 ddgs>=6.1.0

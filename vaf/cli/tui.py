@@ -703,7 +703,7 @@ class AnimatedHeader:
             arrow_str.append(char, style=style)
 
         art_grid = Text()
-        art_grid.append("")
+        art_grid.append(",\n")
         art_grid.append("   ( OO)     ", style="white")
         art_grid.append_text(arrow_str)
         art_grid.append("     (OO )\n", style="white")

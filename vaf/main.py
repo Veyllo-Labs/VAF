@@ -20,6 +20,7 @@ def bootstrap():
         "html2text": "html2text",
         # AI/ML
         "huggingface_hub": "huggingface_hub",
+        "tqdm": "tqdm",  # Progress bars for downloads
         # Search
         "ddgs": "ddgs",
         # Automation
@@ -32,7 +33,21 @@ def bootstrap():
         if importlib.util.find_spec(import_name) is None:
             missing.append(pip_name)
     
-    if not missing:
+    # Check for optional extras (like hf_xet for huggingface_hub)
+    optional_extras = []
+    try:
+        # Check if hf_xet is available (optional extra for huggingface_hub)
+        import huggingface_hub
+        try:
+            import hf_xet
+        except ImportError:
+            # hf_xet is not installed, but huggingface_hub is
+            # Add it to optional extras to install
+            optional_extras.append("huggingface_hub[hf_xet]")
+    except ImportError:
+        pass  # huggingface_hub itself is missing, will be handled above
+    
+    if not missing and not optional_extras:
         return  # All good!
     
     # Find requirements.txt (could be in project root or vaf folder)
@@ -44,9 +59,20 @@ def bootstrap():
     print(f"\n{'='*60}")
     print("  VAF - Dependency Check")
     print(f"{'='*60}")
-    print(f"\n  Missing packages ({len(missing)}):")
-    for pkg in missing:
-        print(f"    • {pkg}")
+    
+    if missing:
+        print(f"\n  Missing packages ({len(missing)}):")
+        for pkg in missing:
+            print(f"    • {pkg}")
+    
+    if optional_extras:
+        print(f"\n  Optional extras (recommended, {len(optional_extras)}):")
+        for extra in optional_extras:
+            print(f"    • {extra} (improves performance)")
+    
+    if not missing and not optional_extras:
+        return  # All good!
+    
     print()
     
     response = input("  Auto-install via pip? [Y/n]: ").strip().lower()
@@ -55,16 +81,19 @@ def bootstrap():
         print("\n  Installing dependencies...")
         try:
             if os.path.exists(req_file):
+                # Install from requirements.txt (includes all packages and extras)
                 subprocess.check_call(
                     [sys.executable, "-m", "pip", "install", "-r", req_file, "-q"],
                     stdout=subprocess.DEVNULL
                 )
             else:
                 # Fallback: install missing packages directly
-                subprocess.check_call(
-                    [sys.executable, "-m", "pip", "install"] + missing + ["-q"],
-                    stdout=subprocess.DEVNULL
-                )
+                packages_to_install = missing + optional_extras
+                if packages_to_install:
+                    subprocess.check_call(
+                        [sys.executable, "-m", "pip", "install"] + packages_to_install + ["-q"],
+                        stdout=subprocess.DEVNULL
+                    )
             print("  ✓ Installation complete!\n")
             importlib.invalidate_caches()
         except Exception as e:

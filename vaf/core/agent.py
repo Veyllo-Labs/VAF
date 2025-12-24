@@ -188,9 +188,10 @@ class Agent:
             except Exception as e:
                 pass # Silently ignore broken plugins for stability
 
-    def load_model(self):
+    def load_model(self, skip_download_check: bool = False):
         from vaf.cli.ui import UI
-        self.ensure_model_exists()
+        if not skip_download_check:
+            self.ensure_model_exists()
         
         n_gpu = self.config.get("gpu_layers", 99) # Default to max for server
         n_ctx = self.config.get("n_ctx", 8192)
@@ -240,13 +241,26 @@ class Agent:
         if not os.path.exists(self.model_path):
             UI.event("System", f"Downloading {self.filename}...", style="warning")
             try:
+                # Best practice: huggingface_hub automatically uses tqdm if available
+                # This is the standard, OS-independent way (works on Windows, Linux, macOS)
+                # tqdm shows: progress bar, speed, ETA, file size
                 hf_hub_download(
                     repo_id=self.repo_id,
                     filename=self.filename,
-                    local_dir=self.models_dir,
-                    local_dir_use_symlinks=False 
+                    local_dir=self.models_dir
                 )
+                
                 UI.event("System", "Download complete", style="success")
+            except KeyboardInterrupt:
+                # Handle cancellation gracefully (OS-independent)
+                UI.event("System", "Download cancelled by user", style="warning")
+                # Clean up partial download
+                if os.path.exists(self.model_path):
+                    try:
+                        os.remove(self.model_path)
+                    except OSError:
+                        pass  # Ignore cleanup errors (OS-independent)
+                sys.exit(0)
             except Exception as e:
                 UI.error(f"Download failed: {e}")
                 sys.exit(1)
@@ -487,98 +501,61 @@ User: "show me events"
                 for w in available_workflows
             ])
             
-            # Debug: Log the workflow list to verify it's populated
-            from vaf.cli.ui import UI
-            UI.event("Debug", f"Available workflows for Brain: {len(available_workflows)} workflows", style="dim")
-            
+            # Use same logic as analyze_intent (which works!)
             prompt = (
-                f"You are a workflow selector. Analyze the user's request and determine if it matches any available workflow.\n\n"
+                f"You are a workflow classifier. Your ONLY job is to match the user request to a workflow ID.\n"
                 f"Available Workflows:\n{workflow_list}\n\n"
-                f"User Request: {user_input}\n\n"
-                f"Output ONLY one of:\n"
-                f"- The workflow ID (e.g., 'create_website', 'research_and_code') if it matches\n"
-                f"- 'none' if no workflow matches\n\n"
                 f"Guidelines:\n"
                 f"- Match by INTENT, not exact words (works in ANY language!)\n"
                 f"- IGNORE typos and spelling errors - understand the intent\n"
-                f"- 'webseite für' / 'website for' / 'webseite für umzug' → 'create_website'\n"
-                f"- 'erstelle website' / 'ersllen webseite' (typo) / 'create website' → 'create_website'\n"
-                f"- 'research and code' / 'recherchiere und erstelle code' → 'research_and_code'\n"
-                f"- 'analyze website' / 'analysiere website' → 'analyze_website'\n"
-                f"- Be VERY flexible - understand the user's goal, not just keywords\n"
-                f"- If user wants to CREATE/BUILD/MAKE a website → 'create_website'\n"
-                f"- If user wants to RESEARCH then CODE → 'research_and_code'\n"
-                f"Output ONLY the workflow ID or 'none':"
+                f"- 'webseite für' / 'website for' / 'create website' → create_website\n"
+                f"- 'research and code' / 'recherchiere und code' → research_and_code\n"
+                f"- 'analyze website' / 'analysiere website' → analyze_website\n"
+                f"- 'wo ist' / 'where is' / 'was ist in' (folder/file questions) → none (use librarian_agent, not web_lookup)\n"
+                f"- 'suche nach' / 'search for' (web search) → web_lookup\n"
+                f"- If no match → none\n\n"
+                f"Request: {user_input}\n"
+                f"Output ONLY the workflow ID or 'none'."
             )
             
+            # Quick Inference (same as analyze_intent)
             messages = [{"role": "user", "content": prompt}]
             
-            # RETRY MECHANISM - Try up to 10 times if brain returns empty
-            MAX_RETRIES = 10
-            for retry in range(MAX_RETRIES):
-                content = ""
-                if self.use_server:
-                    payload = {"messages": messages, "max_tokens": 50, "temperature": 0.1}  # Lower temp for more consistent matching
-                    try:
-                        res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=30).json()
-                        raw_content = res['choices'][0]['message']['content']
-                        
-                        # Debug: Log raw response from model
-                        from vaf.cli.ui import UI
-                        UI.event("Debug", f"Brain raw response: '{raw_content[:100]}'", style="dim")
-                        
-                        # Clean the response
-                        clean_content = raw_content.strip().lower()
-                        
-                        # Check if response is actually empty or just whitespace
-                        if not clean_content or len(clean_content) < 2:
-                            if retry < MAX_RETRIES - 1:
-                                UI.event("Debug", f"Workflow analysis returned empty (retry {retry + 1}/{MAX_RETRIES}). Raw: '{raw_content}'", style="dim")
-                                # Add a nudge to the messages for next retry
-                                messages.append({"role": "assistant", "content": raw_content})
-                                messages.append({"role": "system", "content": "You generated an empty response. Please output ONLY the workflow ID (e.g., 'create_website') or 'none'."})
-                                continue
-                            else:
-                                # Last retry failed
-                                UI.event("Debug", f"Workflow analysis returned empty after {MAX_RETRIES} retries. Raw: '{raw_content}'", style="dim")
-                                # Fall back to pattern matching
-                                UI.event("Debug", "Brain returned empty, trying pattern matching fallback", style="dim")
-                                from vaf.workflows.selector import WorkflowSelector
-                                selector = WorkflowSelector()
-                                result = selector.select(user_input)
-                                if result and result.matched and result.confidence >= 0.5:
-                                    UI.event("Debug", f"Pattern matching found: {result.template_id} (confidence: {result.confidence:.2f})", style="dim")
-                                    return result.template_id
-                                return None
-                        
-                        # Parse workflow ID from response
-                        # Look for workflow IDs in the response
-                        match = re.search(r'\b(create_website|research_and_code|analyze_website|code_review|deep_research|generate_docs|web_lookup|create_file)\b', clean_content)
-                        if match:
-                            workflow_id = match.group(1)
-                            if workflow_id in WORKFLOW_TEMPLATES:
-                                UI.event("Debug", f"Brain selected workflow: '{workflow_id}'", style="dim")
-                                return workflow_id
-                        
-                        # Check for "none" response
-                        if "none" in clean_content:
-                            UI.event("Debug", "Brain found no matching workflow", style="dim")
-                            return None
-                        
-                        # If we got a response but couldn't parse it, retry
-                        if retry < MAX_RETRIES - 1:
-                            UI.event("Debug", f"Could not parse workflow ID from: '{clean_content}' (retry {retry + 1}/{MAX_RETRIES})", style="dim")
-                            messages.append({"role": "assistant", "content": raw_content})
-                            messages.append({"role": "system", "content": "Your response was unclear. Output ONLY the workflow ID (e.g., 'create_website') or 'none'."})
-                            continue
-                        
-                        return None
-                        
-                    except Exception as e:
-                        from vaf.cli.ui import UI
-                        UI.event("Debug", f"Workflow analysis error: {e}", style="dim")
-                        return None
+            content = ""
+            if self.use_server:
+                # Sub-Agent Mode: Full thinking capacity with 120s timeout (same as analyze_intent)
+                payload = {"messages": messages, "max_tokens": 1024, "temperature": 0.2}
+                try:
+                    res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=120).json()
+                    content = res['choices'][0]['message']['content']
+                except Exception as e:
+                    # Fall back to pattern matching on error
+                    from vaf.workflows.selector import WorkflowSelector
+                    selector = WorkflowSelector()
+                    result = selector.select(user_input)
+                    if result and result.matched and result.confidence >= 0.5:
+                        return result.template_id
+                    return None
             
+            # Parse workflow ID (same pattern as analyze_intent parses float)
+            import re
+            # Look for workflow IDs in the response
+            match = re.search(r'\b(create_website|research_and_code|analyze_website|code_review|deep_research|generate_docs|web_lookup|create_file)\b', content.lower())
+            if match:
+                workflow_id = match.group(1)
+                if workflow_id in WORKFLOW_TEMPLATES:
+                    return workflow_id
+            
+            # Check for "none" response
+            if "none" in content.lower():
+                return None
+            
+            # If we couldn't parse, fall back to pattern matching
+            from vaf.workflows.selector import WorkflowSelector
+            selector = WorkflowSelector()
+            result = selector.select(user_input)
+            if result and result.matched and result.confidence >= 0.5:
+                return result.template_id
             return None
             
         except Exception as e:
@@ -630,13 +607,21 @@ User: "show me events"
             # Use selector's variable extraction even if pattern matching didn't work
             # (Brain found the workflow, but selector can still extract variables)
             variables = result.variables if result.matched else {}
-            missing = result.missing_variables if result.matched else []
+            
+            # Get required variables from template (in case selector didn't match)
+            template_variables = template.get("variables", {})
+            required_vars = set(template_variables.keys())
+            
+            # Determine which variables are missing
+            missing = [var for var in required_vars if var not in variables]
             
             # If variables are missing, try to extract them from the input
             if missing:
                 # Try to extract missing variables from user input
-                for var_name in missing:
-                    # For description/query variables, use the full input
+                # Use list copy to avoid modification during iteration
+                missing_copy = list(missing)
+                for var_name in missing_copy:
+                    # For description/query/topic variables, use the full input
                     if var_name in ("description", "query", "topic"):
                         variables[var_name] = user_input
                         missing.remove(var_name)
@@ -727,13 +712,45 @@ User: "show me events"
                             from vaf.tools.coder import CodingAgentTool
                             coding_tool = all_tools.get("coding_agent")
                             if coding_tool:
+                                # Extract current task status from output
+                                import re
+                                task_match = re.search(r'Tasks:\s*(\d+)/(\d+)', final_output)
+                                completed_tasks = int(task_match.group(1)) if task_match else 0
+                                total_tasks = int(task_match.group(2)) if task_match else 0
+                                
+                                # Extract remaining tasks from output
+                                remaining_tasks = []
+                                if "Remaining tasks" in final_output or "Tasks:" in final_output:
+                                    # Try to extract task list from output
+                                    task_list_match = re.search(r'Tasks:.*?\n(.*?)(?:\n\n|\n─)', final_output, re.DOTALL)
+                                    if task_list_match:
+                                        task_text = task_list_match.group(1)
+                                        # Extract incomplete tasks (lines starting with ○ or ⠴)
+                                        for line in task_text.split('\n'):
+                                            if '○' in line or '⠴' in line or '⠦' in line or '⠧' in line or '⠇' in line:
+                                                # Extract task text (remove status icons)
+                                                task_text_clean = re.sub(r'[○⬤⠴⠦⠧⠇]', '', line).strip()
+                                                if task_text_clean:
+                                                    remaining_tasks.append(task_text_clean)
+                                
+                                # Build context-aware continue task
+                                context_info = f"**Current Status:** {completed_tasks}/{total_tasks} tasks completed.\n"
+                                if remaining_tasks:
+                                    context_info += f"**Remaining Tasks:**\n" + "\n".join(f"- {t}" for t in remaining_tasks[:5]) + "\n\n"
+                                else:
+                                    context_info += f"**Note:** Check the TODO list in the project to see remaining tasks.\n\n"
+                                
                                 continue_task = (
-                                    f"Continue working on ALL remaining tasks for: {user_input}\n\n"
-                                    f"IMPORTANT:\n"
-                                    f"- Complete EVERY task on the TODO list\n"
-                                    f"- Replace ALL placeholders with real content\n"
-                                    f"- Do NOT stop until ALL tasks are marked as done\n"
-                                    f"- Use the original request '{user_input}' as context for content"
+                                    f"Continue working on the EXISTING project at: {project_path_hint}\n\n"
+                                    f"{context_info}"
+                                    f"**IMPORTANT:**\n"
+                                    f"- Read the existing files to understand what's already done\n"
+                                    f"- Check the TODO list status (some tasks may already be completed)\n"
+                                    f"- Continue from where you left off - do NOT start over\n"
+                                    f"- Complete ONLY the remaining tasks\n"
+                                    f"- Replace ALL remaining placeholders with real content\n"
+                                    f"- Use the original request '{user_input}' as context for content\n"
+                                    f"- Do NOT recreate files that are already done - only modify what's needed"
                                 )
                                 
                                 UI.event("Workflow", "↻ Continuing work on remaining tasks...", style="info")

@@ -264,7 +264,9 @@ def git_commit(
     # Determine message
     final_message = message
     
-    if auto or not message:
+    # Priority: explicit message > auto-generate
+    # Only use AI if: auto flag is set AND no explicit message provided
+    if auto and not message:
         UI.event("Git", "Generating commit message with AI...", style="cyan")
         
         # Get diff

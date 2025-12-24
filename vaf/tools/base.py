@@ -1,0 +1,93 @@
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional
+
+class BaseTool(ABC):
+    """
+    Blueprint for all VAF tools.
+    Every new tool MUST inherit from this class.
+    
+    Example for a new tool (my_tool.py):
+    -----------------------------------------
+    from vaf.tools.base import BaseTool
+    
+    class MyTool(BaseTool):
+        name = "my_super_tool" 
+        description = "Does cool things"
+        
+        # Optional: Only available to Coder Sub-Agent
+        # coder_only = True
+        
+        # Optional: Tool parameters schema
+        parameters = {
+            "type": "object",
+            "properties": {
+                "input": {"type": "string", "description": "Input text"}
+            },
+            "required": ["input"]
+        }
+        
+        def run(self, **kwargs):
+            input_text = kwargs.get("input", "")
+            return f"Processed: {input_text}"
+    -----------------------------------------
+    
+    The tool will be automatically discovered and loaded!
+    """
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # REQUIRED ATTRIBUTES
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    name: str = "base_tool"       # The name used by the model (e.g., "web_search")
+    description: str = "Description" # Explanation for the model regarding what the tool does
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # OPTIONAL ATTRIBUTES
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    # Set to True to make this tool available ONLY to the Coder Sub-Agent
+    # Useful for: file operations, shell commands, code-specific tools
+    coder_only: bool = False
+    
+    # JSON Schema for parameters (optional but recommended)
+    parameters: Dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "required": []
+    }
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ABSTRACT METHOD
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    @abstractmethod
+    def run(self, **kwargs) -> str:
+        """
+        The main execution logic.
+        The model calls this function.
+        
+        Arguments:
+            kwargs: Parameters from the model (e.g., query="Berlin")
+            
+        Returns:
+            str: The result string that the model reads.
+        """
+        pass
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # UTILITY METHODS
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def get_schema(self) -> Dict[str, Any]:
+        """Get the tool schema for the model."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters
+            }
+        }
+    
+    def __repr__(self) -> str:
+        return f"<Tool: {self.name}>"

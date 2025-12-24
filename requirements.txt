@@ -1,0 +1,30 @@
+# VAF - Veyllo Agentic Framework
+# Core Dependencies
+
+# CLI & UI
+typer>=0.9.0
+rich>=13.0.0
+prompt_toolkit>=3.0.0
+colorama>=0.4.0
+shellingham>=1.5.0
+
+# API & Networking
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+html2text>=2024.2.26
+
+# AI/ML
+huggingface_hub>=0.20.0
+
+# Search
+ddgs>=6.1.0
+
+# Automation
+schedule>=1.2.0
+inquirer>=3.1.0
+
+# System Requirements (must be installed separately)
+# Git: Required for version control in coding projects
+# - Windows: https://git-scm.com/download/win or `winget install Git.Git`
+# - macOS: `brew install git` or `xcode-select --install`
+# - Linux: `sudo apt-get install git` (Debian/Ubuntu) or equivalent for your distribution

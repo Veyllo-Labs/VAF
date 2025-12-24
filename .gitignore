@@ -1,0 +1,47 @@
+# LLM Models (zu groß für Git)
+models/*.gguf
+models/*.gguf.*
+
+# Cache und temporäre Dateien
+models/.cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Logs
+logs/
+*.log
+console.log
+
+# Dump-Dateien
+payload_dump.json
+
+# Binaries (optional - können auch gepusht werden, wenn nötig)
+# bin/
+
+# IDE und Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+venv/
+env/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+
+# Node (falls vorhanden)
+node_modules/
+.npm
+

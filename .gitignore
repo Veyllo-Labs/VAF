@@ -18,8 +18,8 @@ console.log
 # Dump-Dateien
 payload_dump.json
 
-# Binaries (optional - können auch gepusht werden, wenn nötig)
-# bin/
+# Binaries (zu groß für GitHub - über 100MB Limit)
+bin/
 
 # IDE und Editor
 .vscode/

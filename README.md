@@ -387,7 +387,7 @@ vaf git log
 
 1. **Clone the repo:**
    ```bash
-   git clone https://github.com/Veyllo-Labs/Veyllo-App.git
+   git clone https://github.com/Veyllo-Labs/VAF.git
    cd VAF
    ```
 

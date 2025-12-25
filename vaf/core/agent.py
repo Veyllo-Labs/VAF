@@ -314,10 +314,10 @@ LANGUAGE_HINT: auto (always reply in the user's language; this includes clarific
 Loaded from: {project_ctx.path}
 {project_ctx.content}
 
-## YOUR TOOLS
 """
         # Dynamic Tool List
         if self.tools:
+            system_prompt += "## YOUR TOOLS\n"
             for name, tool in self.tools.items():
                 # Short description only
                 desc = tool.description.split('.')[0] if '.' in tool.description else tool.description[:60]
@@ -1068,7 +1068,7 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                     from vaf.core.platform import Platform
 
                     noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip().lower() in ("1", "true", "yes")
-                    if not noninteractive and bool(Config.get("ux_auto_open_outputs", False)):
+                    if not noninteractive and bool(Config.get("ux_auto_open_outputs")):
                         out_file = str(workflow_result.outputs.get("output_file") or "")
                         if out_file:
                             p = Path(out_file)
@@ -1192,7 +1192,7 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                         from vaf.core.config import Config
                         from vaf.core.platform import Platform
                         noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip().lower() in ("1", "true", "yes")
-                        if not noninteractive and bool(Config.get("ux_auto_open_outputs", False)):
+                        if not noninteractive and bool(Config.get("ux_auto_open_outputs")):
                             Platform.open_path(project_path_obj)
                     except Exception:
                         pass

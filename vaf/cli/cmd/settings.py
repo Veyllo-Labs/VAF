@@ -538,8 +538,8 @@ def main_menu(agent=None):
         ui_mode = Config.get("ui_mode", "modern")
 
         # UX toggles
-        auto_links = bool(Config.get("ux_auto_open_links", False))
-        auto_outputs = bool(Config.get("ux_auto_open_outputs", False))
+        auto_links = bool(Config.get("ux_auto_open_links"))
+        auto_outputs = bool(Config.get("ux_auto_open_outputs"))
         max_tabs = int(Config.get("ux_auto_open_max_tabs", 8) or 8)
         links_label = f"UX: Auto-open browser links [{'ON' if auto_links else 'OFF'}] (max {max_tabs})"
         outputs_label = f"UX: Auto-open output folders/files [{'ON' if auto_outputs else 'OFF'}]"
@@ -616,7 +616,7 @@ def main_menu(agent=None):
             show_about()
         elif action == 'ux_links':
             # Toggle links
-            new_val = not bool(Config.get("ux_auto_open_links", False))
+            new_val = not bool(Config.get("ux_auto_open_links"))
             Config.set("ux_auto_open_links", new_val)
             # Prompt for max tabs when enabling
             if new_val:
@@ -631,7 +631,7 @@ def main_menu(agent=None):
             UI.event("Settings", f"Auto-open browser links set to {new_val}", style="success")
             time.sleep(1.0)
         elif action == 'ux_outputs':
-            new_val = not bool(Config.get("ux_auto_open_outputs", False))
+            new_val = not bool(Config.get("ux_auto_open_outputs"))
             Config.set("ux_auto_open_outputs", new_val)
             UI.event("Settings", f"Auto-open outputs set to {new_val}", style="success")
             time.sleep(1.0)

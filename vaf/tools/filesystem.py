@@ -256,8 +256,7 @@ class WriteFileTool(BaseTool):
                 temp_dir = os.path.dirname(res) or '.'
                 temp_fd, temp_path = tempfile.mkstemp(
                     suffix='.tmp',
-                    dir=temp_dir,
-                    text=True
+                    dir=temp_dir
                 )
                 
                 try:

@@ -124,10 +124,9 @@ class WebSearchTool(BaseTool):
 
             # Optional UX: auto-open links in browser (tabs)
             if open_in_browser is None:
-                open_in_browser = bool(Config.get("ux_auto_open_links", False))
+                open_in_browser = bool(Config.get("ux_auto_open_links"))
 
             # Never auto-open in non-interactive mode
-            import os
             import time
             noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip().lower() in ("1", "true", "yes")
             if open_in_browser and not noninteractive and links:

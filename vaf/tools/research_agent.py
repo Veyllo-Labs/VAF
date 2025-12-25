@@ -271,7 +271,8 @@ class ResearchTUI:
                 else:
                     color = "green"
                 word_line.append(bar, style=color)
-                word_line.append(f"  {wc}/{tgt} (ok≥{ok})", style="dim")
+                # Show minimum target clearly: "0 / min 500 (ok≥400)"
+                word_line.append(f"  {wc} / min {tgt} (ok≥{ok})", style="dim")
             else:
                 word_line.append("Words: (n/a)", style="dim")
 
@@ -610,6 +611,16 @@ class ResearchAgentTool(BaseTool):
 
         t = threading.Thread(target=_refresher, daemon=True)
         t.start()
+
+        # Set up event-driven updates (like coding_agent does explicitly)
+        # This ensures TUI updates immediately when state changes, not just periodically
+        def trigger_update():
+            try:
+                live.update(tui.render())
+            except Exception:
+                pass  # Live might be stopped
+        
+        tui.set_on_change(trigger_update)
 
         try:
             # Suppress web_search "Reading ..." prints while Live is active (prevents console spam / broken Live updates)

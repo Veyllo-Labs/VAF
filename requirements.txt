@@ -20,6 +20,9 @@ tqdm>=4.65.0  # Progress bars for downloads
 # Search
 ddgs>=6.1.0
 
+# Language Detection
+langid>=1.1.6
+
 # Automation
 schedule>=1.2.0
 inquirer>=3.1.0

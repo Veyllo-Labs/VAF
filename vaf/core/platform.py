@@ -8,6 +8,7 @@ import platform
 import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
+import webbrowser
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PLATFORM DETECTION
@@ -56,6 +57,138 @@ class Platform:
     def home_dir() -> Path:
         """Get user home directory (cross-platform)."""
         return Path.home()
+
+    @staticmethod
+    def documents_dir() -> Path:
+        """
+        Get the user's Documents directory (cross-platform best-effort).
+
+        Note: This intentionally avoids OS-specific shell calls. Most platforms follow:
+        - Windows: %USERPROFILE%\\Documents
+        - macOS/Linux: ~/Documents
+        """
+        return Path.home() / "Documents"
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # UX HELPERS (Open Browser / File Explorer)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def open_url(url: str, incognito: bool = True) -> bool:
+        """
+        Open a URL in the user's default browser (best-effort).
+        
+        Args:
+            url: The URL to open
+            incognito: If True, open in incognito/private mode (default: True for privacy)
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if not url:
+                return False
+            
+            # If incognito is disabled, use standard method
+            if not incognito:
+                return bool(webbrowser.open_new_tab(url))
+            
+            # Try to detect and use browser-specific incognito flags
+            import subprocess
+            
+            # Common browser executables and their incognito flags
+            browsers = []
+            
+            if Platform.is_windows():
+                browsers = [
+                    # Chrome/Chromium
+                    ("chrome.exe", ["--incognito", url]),
+                    ("msedge.exe", ["--inprivate", url]),
+                    ("brave.exe", ["--incognito", url]),
+                    # Firefox
+                    ("firefox.exe", ["-private-window", url]),
+                ]
+            elif Platform.is_macos():
+                browsers = [
+                    # Chrome/Chromium
+                    ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ["--incognito", url]),
+                    ("/Applications/Chromium.app/Contents/MacOS/Chromium", ["--incognito", url]),
+                    ("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser", ["--incognito", url]),
+                    # Firefox
+                    ("/Applications/Firefox.app/Contents/MacOS/firefox", ["-private-window", url]),
+                    # Safari (macOS only)
+                    ("/Applications/Safari.app/Contents/MacOS/Safari", ["--private", url]),
+                ]
+            else:  # Linux
+                browsers = [
+                    # Chrome/Chromium
+                    ("google-chrome", ["--incognito", url]),
+                    ("chromium-browser", ["--incognito", url]),
+                    ("chromium", ["--incognito", url]),
+                    ("brave-browser", ["--incognito", url]),
+                    # Firefox
+                    ("firefox", ["-private-window", url]),
+                ]
+            
+            # Try each browser in order
+            for browser_cmd, args in browsers:
+                browser_path = shutil.which(browser_cmd) if not browser_cmd.startswith("/") else (browser_cmd if os.path.exists(browser_cmd) else None)
+                
+                if browser_path:
+                    try:
+                        # Use Popen to avoid blocking
+                        subprocess.Popen(
+                            [browser_path] + args,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            start_new_session=True  # Detach from parent process
+                        )
+                        return True
+                    except Exception:
+                        continue  # Try next browser
+            
+            # Fallback: Use standard webbrowser (no incognito, but at least opens)
+            return bool(webbrowser.open_new_tab(url))
+            
+        except Exception:
+            # Final fallback: standard method
+            try:
+                return bool(webbrowser.open_new_tab(url))
+            except Exception:
+                return False
+
+    @staticmethod
+    def open_path(path: Path) -> bool:
+        """
+        Open a file or folder with the OS default handler.
+        - Folders: file explorer
+        - Files: default associated app (HTML opens in browser)
+        """
+        try:
+            p = Path(path).expanduser()
+            if not p.exists():
+                return False
+
+            if Platform.is_windows():
+                # os.startfile is the most reliable on Windows
+                os.startfile(str(p))  # type: ignore[attr-defined]
+                return True
+
+            # macOS/Linux: use open/xdg-open if available, else fall back to webbrowser
+            import subprocess
+
+            if Platform.is_macos() and shutil.which("open"):
+                subprocess.Popen(["open", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+
+            if Platform.is_linux() and shutil.which("xdg-open"):
+                subprocess.Popen(["xdg-open", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+
+            # Fallback: try browser (works for file:// on many platforms)
+            return bool(webbrowser.open(str(p.as_uri())))
+        except Exception:
+            return False
     
     @staticmethod
     def config_dir() -> Path:

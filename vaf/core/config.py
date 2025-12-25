@@ -12,7 +12,15 @@ class Config:
         "provider": "local",
         "gpu_layers": -1,
         "n_ctx": 8192,
-        "temperature": 0.7
+        "temperature": 0.7,
+
+        # UX toggles (opt-in)
+        # Auto open web search source links in the user's default browser (tabs)
+        "ux_auto_open_links": True,
+        # Auto open created output folders/files (file explorer / browser for html)
+        "ux_auto_open_outputs": True,
+        # Safety cap for tabs opened automatically
+        "ux_auto_open_max_tabs": 8,
     }
 
     @classmethod

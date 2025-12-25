@@ -444,6 +444,151 @@ def init_project(
             UI.print(f"  [cyan]{key}[/cyan]: {value}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# NON-INTERACTIVE PROMPT COMMAND (SCRIPTING)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.command(name="prompt")
+def prompt_command(
+    prompt: str = typer.Option(..., "--prompt", "-p", help="Prompt text (non-interactive)"),
+    output_format: str = typer.Option("text", "--output-format", help="text | json | stream-json"),
+    session: str = typer.Option(None, "--session", "-s", help="Load an existing session ID"),
+    save_session: bool = typer.Option(False, "--save-session", help="Save this interaction as a session"),
+):
+    """
+    Non-interactive mode (scripting).
+
+    Examples:
+        vaf prompt -p "Explain this repo" --output-format json
+        vaf prompt -p "Search latest release notes" --output-format stream-json
+    """
+    import json
+    import os
+    import sys
+    from vaf.core.agent import Agent
+    from vaf.core.session import SessionManager
+    from vaf.cli.ui import UI
+
+    fmt = (output_format or "text").strip().lower()
+    if fmt not in ("text", "json", "stream-json"):
+        raise typer.BadParameter("output-format must be one of: text, json, stream-json")
+
+    # In non-interactive mode we never block on prompts (trust gating will return errors).
+    os.environ["VAF_NONINTERACTIVE"] = "1"
+
+    # Silence rich UI events for machine-readable outputs
+    if fmt in ("json", "stream-json"):
+        UI.event = staticmethod(lambda *args, **kwargs: None)
+        UI.error = staticmethod(lambda *args, **kwargs: None)
+        UI.warning = staticmethod(lambda *args, **kwargs: None)
+        UI.success = staticmethod(lambda *args, **kwargs: None)
+        UI.info = staticmethod(lambda *args, **kwargs: None)
+
+    mgr = SessionManager()
+    loaded_session = None
+    if session:
+        try:
+            loaded_session = mgr.load(session)
+        except FileNotFoundError:
+            loaded_session = None
+
+    agent = Agent(verbose=False)
+    agent.init_chat()
+
+    # Restore session history if provided (keeps system prompt at history[0])
+    if loaded_session:
+        for m in loaded_session.get_history():
+            if m.get("role") == "system":
+                continue
+            agent.history.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+
+    def ndjson_emit(evt: dict):
+        line = json.dumps(evt, ensure_ascii=False)
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+
+    if fmt == "stream-json":
+        agent.set_event_sink(ndjson_emit)
+        ndjson_emit({"type": "start"})
+
+    result_text = agent.chat_step(
+        prompt,
+        stream_callback=(lambda s: ndjson_emit({"type": "text_delta", "text": s})) if fmt == "stream-json" else None,
+    )
+
+    if fmt == "text":
+        if result_text:
+            print(result_text)
+        raise typer.Exit(0)
+
+    if fmt == "json":
+        payload = {"ok": True, "output": result_text or ""}
+        print(json.dumps(payload, ensure_ascii=False))
+        if save_session:
+            s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
+            s.add_message("user", prompt)
+            s.add_message("assistant", result_text or "")
+            mgr.save(s)
+        raise typer.Exit(0)
+
+    if save_session:
+        s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
+        s.add_message("user", prompt)
+        s.add_message("assistant", result_text or "")
+        mgr.save(s)
+        ndjson_emit({"type": "session_saved", "id": s.id})
+
+    ndjson_emit({"type": "end"})
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TRUST COMMAND (Trusted folders / capability gating)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.command(name="trust")
+def trust_command(
+    path: str = typer.Argument(".", help="Folder to trust (default: current directory)"),
+    list_trusted: bool = typer.Option(False, "--list", "-l", help="List trusted folders"),
+    remove: str = typer.Option(None, "--remove", "-r", help="Remove a trusted folder by exact path"),
+    status: bool = typer.Option(False, "--status", help="Show whether current folder is trusted"),
+):
+    """
+    Manage trusted folders (used by the once/always/cancel gate for risky tools).
+    """
+    from pathlib import Path
+    from vaf.cli.ui import UI
+    from vaf.core.trust import load_trust_state, save_trust_state, mark_trusted_dir, is_trusted_dir
+
+    state = load_trust_state()
+
+    if list_trusted:
+        if not state.trusted_dirs:
+            UI.print("No trusted folders configured.")
+            raise typer.Exit(0)
+        UI.print("Trusted folders:")
+        for p in sorted(state.trusted_dirs):
+            UI.print(f"- {p}")
+        raise typer.Exit(0)
+
+    if remove:
+        before = set(state.trusted_dirs)
+        if remove in state.trusted_dirs:
+            state.trusted_dirs.remove(remove)
+            save_trust_state(state)
+            UI.success("Removed trusted folder.")
+        else:
+            UI.warning("Path not found in trusted folders.")
+        raise typer.Exit(0)
+
+    p = Path(path).expanduser().resolve()
+
+    if status:
+        UI.print(f"Trusted: {'yes' if is_trusted_dir(p) else 'no'}")
+        raise typer.Exit(0)
+
+    mark_trusted_dir(p)
+    UI.success(f"Trusted folder added: {p}")
+    UI.print("Tip: 'always' decisions in the gate will also mark the current folder trusted.")
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # QUICK START ALIASES
 # ═══════════════════════════════════════════════════════════════════════════════
 

@@ -5,6 +5,7 @@ Provides persistent storage for chat sessions
 import json
 import uuid
 import gzip
+import random
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -35,7 +36,7 @@ class Message:
 @dataclass
 class Session:
     """A conversation session."""
-    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    id: str = field(default_factory=lambda: _generate_session_id())
     name: str = ""
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -72,7 +73,7 @@ class Session:
     def from_dict(cls, data: Dict) -> "Session":
         messages = [Message.from_dict(m) for m in data.get("messages", [])]
         return cls(
-            id=data.get("id", str(uuid.uuid4())[:8]),
+            id=data.get("id", _generate_session_id()),
             name=data.get("name", ""),
             created_at=data.get("created_at", datetime.now().isoformat()),
             updated_at=data.get("updated_at", datetime.now().isoformat()),
@@ -94,6 +95,28 @@ class Session:
                 return content + "..." if len(msg.content) > 50 else content
         
         return f"{len(self.messages)} messages"
+
+
+def _generate_session_id() -> str:
+    """
+    Generate a human-friendly session ID: <color><6 digits>
+    Examples: yellow012345, red654321
+
+    Collisions are unlikely, but we still try a few times against the default storage dir.
+    """
+    colors = ("yellow", "red", "blue", "green", "purple", "cyan", "orange")
+    sessions_dir = Path.home() / ".vaf" / "sessions"
+
+    for _ in range(20):
+        color = random.choice(colors)
+        digits = f"{random.randint(0, 999_999):06d}"
+        sid = f"{color}{digits}"
+        # Avoid collisions with existing session files
+        if not (sessions_dir / f"{sid}.json").exists() and not (sessions_dir / f"{sid}.json.gz").exists():
+            return sid
+
+    # Fallback (extremely unlikely)
+    return f"{random.choice(colors)}{random.randint(0, 999_999):06d}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

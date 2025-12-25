@@ -12,6 +12,8 @@ except ImportError:
         from duckduckgo_search import DDGS
 
 from vaf.cli.ui import UI
+from vaf.core.config import Config
+from vaf.core.platform import Platform
 from vaf.tools.base import BaseTool
 
 class WebSearchTool(BaseTool):
@@ -30,6 +32,10 @@ class WebSearchTool(BaseTool):
                 "type": "boolean",
                 "description": "If true, fetch a short text preview from top results (slower). Default: false",
             },
+            "open_in_browser": {
+                "type": "boolean",
+                "description": "If true, open result links in the default browser (tabs). Default: from settings.",
+            },
         },
         "required": ["query"]
     }
@@ -38,6 +44,7 @@ class WebSearchTool(BaseTool):
         query = kwargs.get('query', '')
         max_results = int(kwargs.get("max_results", 5) or 5)
         deep = bool(kwargs.get("deep", False))
+        open_in_browser = kwargs.get("open_in_browser", None)
         if not query:
             return "Error: No query provided."
 
@@ -76,7 +83,12 @@ class WebSearchTool(BaseTool):
 
             summary = title
             preview_count = 0
-            preview_limit = 3 if deep else 0
+            # When deep previews are enabled, fetch previews for up to 10 results (or fewer if max_results < 10)
+            preview_limit = min(max_results, 10) if deep else 0
+
+            # Collect links for optional auto-open (dedupe)
+            links = []
+            seen = set()
 
             for i, res in enumerate(results, 1):
                 page_title = res.get("title", "").strip()
@@ -88,15 +100,37 @@ class WebSearchTool(BaseTool):
                     summary += f"   - Snippet: {snippet}\n"
                 if link:
                     summary += f"   - Source: {link}\n"
+                    if link and link not in seen:
+                        seen.add(link)
+                        links.append(link)
+                    # Always show link in TUI
+                    UI.event("Web Search", f"Reading {link[:60]}...", style="dim")
 
                 if deep and link and preview_count < preview_limit:
-                    UI.event("Web Search", f"Reading {link[:60]}...", style="dim")
                     page_text = fetch_text(link)
                     if page_text:
                         summary += f"   - Preview: {page_text[:800]}...\n"
                     preview_count += 1
 
                 summary += "\n"
+
+            # Optional UX: auto-open links in browser (tabs)
+            if open_in_browser is None:
+                open_in_browser = bool(Config.get("ux_auto_open_links", False))
+
+            # Never auto-open in non-interactive mode
+            import os
+            import time
+            noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip().lower() in ("1", "true", "yes")
+            if open_in_browser and not noninteractive and links:
+                max_tabs = int(Config.get("ux_auto_open_max_tabs", 8) or 8)
+                max_tabs = max(1, min(max_tabs, 20))
+                for url in links[:max_tabs]:
+                    ok = Platform.open_url(url)
+                    if not ok:
+                        UI.event("Web Search", f"⚠️ Could not open: {url[:60]}...", style="warning")
+                    # Small delay between opens to avoid overwhelming the browser
+                    time.sleep(0.3)
 
             return summary.strip()
         except Exception as e:

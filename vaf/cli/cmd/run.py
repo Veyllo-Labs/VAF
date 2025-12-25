@@ -326,6 +326,94 @@ def run(
         _run_classic(message, verbose, session)
 
 
+@app.command("prompt")
+def run_prompt(
+    prompt: str = typer.Option(..., "--prompt", "-p", help="Prompt text (non-interactive)"),
+    output_format: str = typer.Option("text", "--output-format", help="text | json | stream-json"),
+    session: str = typer.Option(None, "--session", "-s", help="Load an existing session ID"),
+    save_session: bool = typer.Option(False, "--save-session", help="Save this interaction as a session"),
+):
+    """
+    Convenience alias: `vaf run prompt ...` -> same behavior as `vaf prompt ...`.
+
+    Note: this does NOT (yet) send the prompt into an already-running interactive `vaf run`.
+    It starts a new non-interactive run (but can load/save sessions).
+    """
+    import json
+    import os
+    import sys
+    from vaf.cli.ui import UI
+    from vaf.core.session import SessionManager
+
+    fmt = (output_format or "text").strip().lower()
+    if fmt not in ("text", "json", "stream-json"):
+        raise typer.BadParameter("output-format must be one of: text, json, stream-json")
+
+    os.environ["VAF_NONINTERACTIVE"] = "1"
+
+    if fmt in ("json", "stream-json"):
+        UI.event = staticmethod(lambda *args, **kwargs: None)
+        UI.error = staticmethod(lambda *args, **kwargs: None)
+        UI.warning = staticmethod(lambda *args, **kwargs: None)
+        UI.success = staticmethod(lambda *args, **kwargs: None)
+        UI.info = staticmethod(lambda *args, **kwargs: None)
+
+    mgr = SessionManager()
+    loaded_session = None
+    if session:
+        try:
+            loaded_session = mgr.load(session)
+        except FileNotFoundError:
+            loaded_session = None
+
+    agent = Agent(verbose=False)
+    agent.init_chat()
+
+    if loaded_session:
+        for m in loaded_session.get_history():
+            if m.get("role") == "system":
+                continue
+            agent.history.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+
+    def ndjson_emit(evt: dict):
+        line = json.dumps(evt, ensure_ascii=False)
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+
+    if fmt == "stream-json":
+        agent.set_event_sink(ndjson_emit)
+        ndjson_emit({"type": "start"})
+
+    result_text = agent.chat_step(
+        prompt,
+        stream_callback=(lambda s: ndjson_emit({"type": "text_delta", "text": s})) if fmt == "stream-json" else None,
+    )
+
+    if fmt == "text":
+        if result_text:
+            print(result_text)
+        raise typer.Exit(0)
+
+    if fmt == "json":
+        payload = {"ok": True, "output": result_text or ""}
+        print(json.dumps(payload, ensure_ascii=False))
+        if save_session:
+            s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
+            s.add_message("user", prompt)
+            s.add_message("assistant", result_text or "")
+            mgr.save(s)
+        raise typer.Exit(0)
+
+    if save_session:
+        s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
+        s.add_message("user", prompt)
+        s.add_message("assistant", result_text or "")
+        mgr.save(s)
+        ndjson_emit({"type": "session_saved", "id": s.id})
+
+    ndjson_emit({"type": "end"})
+
+
 def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None):
     """Run with modern TUI interface."""
     global global_agent
@@ -816,7 +904,26 @@ def _process_agent_message(agent, user_input: str, tui, session):
         with tui.spinner("Thinking..."):
             pass  # Just show spinner briefly
         
-        agent.chat_step(user_input, stream_callback=stream_callback)
+        result_text = agent.chat_step(user_input, stream_callback=stream_callback)
+        
+        # IMPORTANT: Workflows may stream only progress ticks (e.g. "✓ Step 1/2: ...")
+        # which are not the actual final answer. In that case, still print the returned result.
+        if result_text:
+            import re
+            has_real_content = False
+            for part in response_parts:
+                p = str(part)
+                # Treat workflow progress ticks as non-answer
+                if re.search(r"✓\s*Step\s+\d+/\d+\s*:", p):
+                    continue
+                # Anything with non-whitespace counts as real content
+                if p.strip():
+                    has_real_content = True
+                    break
+
+            if (not response_parts) or (not has_real_content):
+                response_parts = [str(result_text)]
+                tui.console.print(str(result_text), markup=True, style=f"bold {tui.primary}")
         tui.newline()
         
         # Save response to session

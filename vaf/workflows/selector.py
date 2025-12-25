@@ -195,6 +195,14 @@ class WorkflowSelector:
             else:
                 missing.append(var_name)
         
+        # Plug-and-play fallback: if the workflow matched but "query-like" fields are missing,
+        # use the raw user input instead of failing the workflow.
+        # This prevents common failures like web_lookup missing {query}.
+        for qvar in ("query", "topic", "description", "task_description"):
+            if qvar in missing:
+                variables[qvar] = user_input.strip()
+                missing.remove(qvar)
+        
         return variables, missing
     
     def _extract_value(self, user_input: str, var_name: str, var_desc: str) -> Optional[str]:

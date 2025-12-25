@@ -67,6 +67,11 @@ class Agent:
         
         self.history = []
 
+        # Trust gating state (session-only)
+        self._allow_once_tools = set()
+        self._noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip() in ("1", "true", "yes")
+        self._event_sink = None  # optional callable(dict)
+
         # Initialize Tools (Dynamic Loading)
         self.tools = {}
         self._load_tools()
@@ -273,6 +278,15 @@ class Agent:
         os_info = f"{platform.system()} {platform.release()}"
         home_dir = os.path.expanduser("~")
         cwd = os.getcwd()
+        
+        # Optional project context: VAF.md (search upwards from CWD)
+        project_ctx = None
+        try:
+            from pathlib import Path
+            from vaf.core.project_context import load_project_context
+            project_ctx = load_project_context(Path(cwd))
+        except Exception:
+            project_ctx = None
 
         # Dynamic Identity
         model_file = self.filename.lower()
@@ -288,6 +302,18 @@ Time: {now_str} | OS: {os_info} | Home: {home_dir} | CWD: {cwd}
 
 **IMPORTANT**: You have access to the CURRENT DATE and TIME above. Use this information directly for date/time questions. DO NOT use web_search for current date/time - you already have this information!
 
+# LANGUAGE_HINT is updated dynamically on each user message (see _refresh_language_hint).
+# It MUST live inside the main system prompt (history[0]) so it survives context compression.
+LANGUAGE_HINT: auto (always reply in the user's language; this includes clarification questions)
+"""
+
+        # Insert project context early so it shapes behavior consistently
+        if project_ctx:
+            system_prompt += f"""
+## PROJECT CONTEXT (VAF.md)
+Loaded from: {project_ctx.path}
+{project_ctx.content}
+
 ## YOUR TOOLS
 """
         # Dynamic Tool List
@@ -302,7 +328,9 @@ Time: {now_str} | OS: {os_info} | Home: {home_dir} | CWD: {cwd}
 
 ⚠️ **WARNING**: If you write "I'll use web_search" or say you will use a tool but DON'T actually call it, you have FAILED. Thinking about using a tool is NOT the same as using it!
 
-1. **LANGUAGE**: Reply in the user's language (German→German, English→English)
+1. **LANGUAGE**: ALWAYS reply in the user's language (same language as the user's most recent message).
+   - This includes clarification questions and missing-info prompts.
+   - NEVER switch to English if the user is speaking another language.
 
 2. **TOOL USAGE** - CALL IMMEDIATELY, NO DISCUSSION!
    - "Who is X?" → CALL web_search(X) NOW
@@ -340,8 +368,8 @@ Time: {now_str} | OS: {os_info} | Home: {home_dir} | CWD: {cwd}
    EXCEPTION: If the query requires specific information (location, date, name, etc.) that you don't have → ASK FIRST (see rule 6)
 
 6. **ASK FOR MISSING INFORMATION**: If a request requires specific information you don't have, ASK the user FIRST before searching. Do NOT guess or use generic queries that will return wrong results.
-   - "What's the weather?" → ASK: "Which city or location?" THEN search with location
-   - "Weather today" → ASK: "Where are you located?" THEN search with specific location
+   - "What's the weather?" → ASK (in user's language): DE: "Für welche Stadt oder welchen Ort?" / EN: "Which city or location?" THEN search with location
+   - "Weather today" → ASK (in user's language): DE: "Wo (Stadt/Ort) soll ich nachsehen?" / EN: "Where are you located?" THEN search with specific location
    - "Show me events" → ASK: "What kind of events and for which date/location?" THEN search
    - "How many files in folder?" → ASK: "Which folder?" if not clear
    - Better to ask once than to search with wrong/generic information and get useless results!
@@ -363,7 +391,7 @@ User: "how does the context manager work in cursor?"
 
 User: "what's the weather today?"
 ❌ WRONG: [CALLS web_search("weather today")] → Gets generic/wrong results
-✅ CORRECT: "Which city or location should I check the weather for?" → Then [CALLS web_search("weather [location]")]
+✅ CORRECT: Ask for city/location IN THE USER'S LANGUAGE → Then [CALLS web_search("weather [location]")]
 
 User: "show me events"
 ❌ WRONG: [CALLS web_search("events")] → Too generic, wrong results
@@ -392,6 +420,269 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
         self.history = [
             {"role": "system", "content": system_prompt}
         ]
+
+    def _detect_user_language(self, text: str) -> str:
+        """
+        Very small heuristic for per-turn language pinning.
+
+        Returns:
+            - "de" if input looks German
+            - "en" if input looks English
+            - "<iso639-1>" for other languages if confidently detected (optional)
+            - "auto" if unclear/other (let the model mirror the user's language)
+
+        Note: We intentionally avoid adding new dependencies here.
+        """
+        t = (text or "").strip().lower()
+        if not t:
+            return "auto"
+
+        # Optional: if user has langid installed, use it to recognize many languages offline.
+        # We keep this OPTIONAL (no hard dependency) to stay lightweight/cross-platform.
+        try:
+            # langid is pure-Python and supports many languages (offline).
+            import langid  # type: ignore
+
+            # langid can be noisy on very short strings; prefer it when we have some length.
+            if len(t) >= 20 and any(ch.isalpha() for ch in t):
+                code, _score = langid.classify(t)
+                code = (code or "").strip().lower()
+                if code:
+                    # Normalize some common variants
+                    if code == "iw":  # legacy Hebrew code sometimes seen
+                        code = "he"
+                    return code
+        except Exception:
+            pass
+
+        # Strong German markers
+        if any(ch in t for ch in ("ä", "ö", "ü", "ß")):
+            return "de"
+
+        german_cues = (
+            "kannst", "bitte", "wetter", "morgen", "heute", "gestern", "wie ", "was ", "wo ", "warum",
+            "ich ", "du ", "wir ", "ihr ", "nicht", "und", "für", "über", "dass", "mach", "erstelle", "zeige",
+        )
+        if any(cue in t for cue in german_cues):
+            return "de"
+
+        # Basic English cues (keep conservative; otherwise leave auto)
+        english_cues = (
+            "please", "weather", "tomorrow", "today", "yesterday", "how ", "what ", "where ", "why ",
+            "i ", "you ", "we ", "they ", "don't", "and", "for", "about", "make", "create", "show",
+        )
+        if any(cue in t for cue in english_cues):
+            return "en"
+
+        return "auto"
+
+    def _check_language_mismatch(self, user_input: str, assistant_response: str) -> None:
+        """
+        Check if the assistant responded in a different language than the user.
+        If mismatch detected, add a warning to history prompting the model to translate/reformulate.
+        
+        This helps catch cases where the model ignores LANGUAGE_HINT and responds in English
+        when the user asked in Turkish, Spanish, etc.
+        """
+        if not assistant_response or len(assistant_response.strip()) < 10:
+            return  # Too short to reliably detect
+        
+        user_lang = self._detect_user_language(user_input)
+        response_lang = self._detect_user_language(assistant_response)
+        
+        # Skip if either is "auto" (unclear) or if they match
+        if user_lang == "auto" or response_lang == "auto":
+            return
+        if user_lang == response_lang:
+            return
+        
+        # Language names for friendly messages (comprehensive list for langid's 97 languages)
+        language_names = {
+            # Major European languages
+            "en": "English", "de": "German", "fr": "French", "es": "Spanish",
+            "it": "Italian", "pt": "Portuguese", "nl": "Dutch", "pl": "Polish",
+            "ru": "Russian", "uk": "Ukrainian", "sv": "Swedish", "no": "Norwegian",
+            "da": "Danish", "fi": "Finnish", "cs": "Czech", "ro": "Romanian",
+            "hu": "Hungarian", "el": "Greek", "tr": "Turkish", "bg": "Bulgarian",
+            "hr": "Croatian", "sr": "Serbian", "sk": "Slovak", "sl": "Slovenian",
+            "et": "Estonian", "lv": "Latvian", "lt": "Lithuanian", "ga": "Irish",
+            "mt": "Maltese", "is": "Icelandic", "mk": "Macedonian", "sq": "Albanian",
+            "bs": "Bosnian", "ca": "Catalan", "eu": "Basque", "gl": "Galician",
+            # Asian languages
+            "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "hi": "Hindi",
+            "th": "Thai", "vi": "Vietnamese", "id": "Indonesian", "ms": "Malay",
+            "tl": "Filipino", "my": "Burmese", "km": "Khmer", "lo": "Lao",
+            "bn": "Bengali", "ta": "Tamil", "te": "Telugu", "ml": "Malayalam",
+            "kn": "Kannada", "gu": "Gujarati", "pa": "Punjabi", "ur": "Urdu",
+            "ne": "Nepali", "si": "Sinhala", "ka": "Georgian",
+            "hy": "Armenian", "az": "Azerbaijani", "kk": "Kazakh", "ky": "Kyrgyz",
+            "uz": "Uzbek", "mn": "Mongolian", "bo": "Tibetan",
+            # Middle Eastern & African languages
+            "ar": "Arabic", "he": "Hebrew", "fa": "Persian", "ps": "Pashto",
+            "sw": "Swahili", "am": "Amharic", "zu": "Zulu", "af": "Afrikaans",
+            "so": "Somali", "ha": "Hausa", "yo": "Yoruba", "ig": "Igbo",
+            # Other languages
+            "eo": "Esperanto", "la": "Latin", "cy": "Welsh", "br": "Breton",
+        }
+        
+        user_lang_name = language_names.get(user_lang, user_lang.upper())
+        response_lang_name = language_names.get(response_lang, response_lang.upper())
+        
+        # Generate warning message in the user's language (if we can) or bilingual
+        if user_lang == "de":
+            warning = (
+                f"⚠️ **Sprach-Mismatch erkannt**: Du hast auf {response_lang_name} geantwortet, "
+                f"aber der Nutzer spricht {user_lang_name}. "
+                f"Bitte übersetze deine Antwort ins {user_lang_name} oder formuliere sie auf {user_lang_name} um."
+            )
+        elif user_lang in language_names:
+            # Try to generate a warning in the user's language (simple approach)
+            warning = (
+                f"⚠️ **Language mismatch detected**: You responded in {response_lang_name}, "
+                f"but the user is speaking {user_lang_name}. "
+                f"Please translate your response to {user_lang_name} or reformulate it in {user_lang_name}."
+            )
+        else:
+            # Fallback: bilingual
+            warning = (
+                f"⚠️ **Language mismatch**: You answered in {response_lang_name}, "
+                f"but user speaks {user_lang_name}. "
+                f"Please respond in {user_lang_name}."
+            )
+        
+        # Add warning to history so model sees it and can correct on next turn
+        self.history.append({
+            "role": "system",
+            "content": warning
+        })
+        
+        from vaf.cli.ui import UI
+        UI.event("Language", f"Mismatch: User={user_lang_name}, Response={response_lang_name}", style="warning")
+
+    def _refresh_language_hint(self, user_input: str) -> None:
+        """
+        Update LANGUAGE_HINT inside the main system prompt (history[0]).
+        This ensures the current response language is consistently enforced,
+        including in "no workflow match" situations and after context compression.
+        """
+        if not self.history or self.history[0].get("role") != "system":
+            return
+
+        # Optional user override via config: language = "auto" | "de" | "en"
+        configured = (self.config.get("language", "auto") or "auto").strip().lower()
+        if configured in ("de", "en"):
+            lang = configured
+        else:
+            lang = self._detect_user_language(user_input)
+
+        # Human-friendly names for common languages (comprehensive list for langid's 97 languages)
+        language_names = {
+            # Major European languages
+            "en": "English",
+            "de": "German",
+            "fr": "French",
+            "es": "Spanish",
+            "it": "Italian",
+            "pt": "Portuguese",
+            "nl": "Dutch",
+            "pl": "Polish",
+            "ru": "Russian",
+            "uk": "Ukrainian",
+            "sv": "Swedish",
+            "no": "Norwegian",
+            "da": "Danish",
+            "fi": "Finnish",
+            "cs": "Czech",
+            "ro": "Romanian",
+            "hu": "Hungarian",
+            "el": "Greek",
+            "tr": "Turkish",
+            "bg": "Bulgarian",
+            "hr": "Croatian",
+            "sr": "Serbian",
+            "sk": "Slovak",
+            "sl": "Slovenian",
+            "et": "Estonian",
+            "lv": "Latvian",
+            "lt": "Lithuanian",
+            "ga": "Irish",
+            "mt": "Maltese",
+            "is": "Icelandic",
+            "mk": "Macedonian",
+            "sq": "Albanian",
+            "bs": "Bosnian",
+            "ca": "Catalan",
+            "eu": "Basque",
+            "gl": "Galician",
+            # Asian languages
+            "ja": "Japanese",
+            "ko": "Korean",
+            "zh": "Chinese",
+            "hi": "Hindi",
+            "th": "Thai",
+            "vi": "Vietnamese",
+            "id": "Indonesian",
+            "ms": "Malay",
+            "tl": "Filipino",
+            "my": "Burmese",
+            "km": "Khmer",
+            "lo": "Lao",
+            "bn": "Bengali",
+            "ta": "Tamil",
+            "te": "Telugu",
+            "ml": "Malayalam",
+            "kn": "Kannada",
+            "gu": "Gujarati",
+            "pa": "Punjabi",
+            "ur": "Urdu",
+            "ne": "Nepali",
+            "si": "Sinhala",
+            "ka": "Georgian",
+            "hy": "Armenian",
+            "az": "Azerbaijani",
+            "kk": "Kazakh",
+            "ky": "Kyrgyz",
+            "uz": "Uzbek",
+            "mn": "Mongolian",
+            "bo": "Tibetan",
+            # Middle Eastern & African languages
+            "ar": "Arabic",
+            "he": "Hebrew",
+            "fa": "Persian",
+            "ps": "Pashto",
+            "sw": "Swahili",
+            "am": "Amharic",
+            "zu": "Zulu",
+            "af": "Afrikaans",
+            "so": "Somali",
+            "ha": "Hausa",
+            "yo": "Yoruba",
+            "ig": "Igbo",
+            # Other languages
+            "eo": "Esperanto",
+            "la": "Latin",
+            "cy": "Welsh",
+            "br": "Breton",
+        }
+
+        if lang == "de":
+            hint = "LANGUAGE_HINT: de (Antworte auf Deutsch. Stelle Rückfragen ebenfalls auf Deutsch.)"
+        elif lang == "en":
+            hint = "LANGUAGE_HINT: en (Answer in English. Ask clarifying questions in English.)"
+        elif lang and lang != "auto":
+            name = language_names.get(lang, lang)
+            hint = f"LANGUAGE_HINT: {lang} (Answer in {name}. Ask clarifying questions in the same language.)"
+        else:
+            hint = "LANGUAGE_HINT: auto (always reply in the user's language; this includes clarification questions)"
+
+        content = str(self.history[0].get("content") or "")
+        if "LANGUAGE_HINT:" in content:
+            content = re.sub(r"^LANGUAGE_HINT:.*$", hint, content, flags=re.MULTILINE)
+        else:
+            # Put it near the top so it has high priority
+            content = content.rstrip() + "\n" + hint + "\n"
+
+        self.history[0]["content"] = content
 
     def get_token_usage(self):
         """Calculates current token usage from history."""
@@ -711,7 +1002,7 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                 # If still missing critical variables, fall back to LLM
                 if missing:
                     UI.event("Workflow", f"Missing inputs: {', '.join(missing)} - falling back to LLM", style="warning")
-                    return None
+                return None
             
             # Create a SelectorResult for compatibility
             from vaf.workflows.selector import SelectorResult
@@ -768,6 +1059,30 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
             if workflow_result.success:
                 # Format the final output
                 final_output = str(workflow_result.final_output or "Done.")
+
+                # UX: auto-open outputs (report/files) and/or project folders
+                try:
+                    import os
+                    from pathlib import Path
+                    from vaf.core.config import Config
+                    from vaf.core.platform import Platform
+
+                    noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip().lower() in ("1", "true", "yes")
+                    if not noninteractive and bool(Config.get("ux_auto_open_outputs", False)):
+                        out_file = str(workflow_result.outputs.get("output_file") or "")
+                        if out_file:
+                            p = Path(out_file)
+                            # Open HTML reports in browser, otherwise open folder/file in explorer
+                            if p.suffix.lower() in (".html", ".htm") and p.exists():
+                                Platform.open_url(p.as_uri())
+                            else:
+                                # Prefer opening folder for files
+                                if p.exists() and p.is_file():
+                                    Platform.open_path(p.parent)
+                                elif p.exists():
+                                    Platform.open_path(p)
+                except Exception:
+                    pass
                 
                 # Check if coding_agent was used and if tasks might be incomplete
                 coding_agent_used = any(step.tool == "coding_agent" for step in steps)
@@ -869,11 +1184,43 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                     project_path_obj = Path(project_path_hint)
                     if project_path_obj.exists():
                         project_link = f"[link=file:///{project_path_hint.replace(chr(92), '/')}]{project_path_hint}[/link]"
+
+                    # UX: auto-open created project folder in file explorer
+                    try:
+                        import os
+                        from vaf.core.config import Config
+                        from vaf.core.platform import Platform
+                        noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip().lower() in ("1", "true", "yes")
+                        if not noninteractive and bool(Config.get("ux_auto_open_outputs", False)):
+                            Platform.open_path(project_path_obj)
+                    except Exception:
+                        pass
                 
-                # Detect user language from input
-                user_lang = "en"
-                if any(word in user_input.lower() for word in ["kannst", "erstelle", "mach", "bitte", "für", "webseite"]):
-                    user_lang = "de"
+                # Detect user language from input (light heuristic)
+                user_lang = "de" if any(
+                    w in user_input.lower()
+                    for w in [
+                        "kannst", "erstelle", "mach", "bitte", "für", "über", "recherche", "analyse",
+                        "deutsch", "ja", "nein", "wetter", "webseite"
+                    ]
+                ) else "en"
+
+                # If this workflow produced a saved report/file, prefer a direct "saved at" message over "project ready".
+                if workflow_id in ("deep_research",) or ("output_file" in workflow_result.outputs and "saved" in workflow_result.outputs):
+                    try:
+                        from pathlib import Path
+                        out_file = str(workflow_result.outputs.get("output_file") or "")
+                        p = Path(out_file) if out_file else None
+                        link = ""
+                        if p and p.exists():
+                            ps = str(p)
+                            link = f"[link=file:///{ps.replace(chr(92), '/')}]{ps}[/link]"
+                        target = link or out_file or str(workflow_result.outputs.get("saved") or "")
+                        if user_lang == "de":
+                            return f"**✓ Fertig!** Report gespeichert:\n{target}"
+                        return f"**✓ Done!** Report saved:\n{target}"
+                    except Exception:
+                        pass
                 
                 # Build completion message based on language and completion status
                 if incomplete_tasks_hint:
@@ -922,6 +1269,11 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
             UI.error("Agent not initialized. Run 'vaf run' first.")
             return
 
+        # Keep language pinned to the user's most recent message.
+        # This must happen early so it affects workflow selection + normal chat replies.
+        if not skip_input:
+            self._refresh_language_hint(user_input)
+
         # 0. Context Management (Trim/Summarize) - BEFORE adding user input
         self.manage_context()
         
@@ -947,6 +1299,8 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
             self.history.append({"role": "user", "content": user_input})
             # 0.5. Context Management AGAIN - AFTER adding user input (in case it pushed us over limit)
             self.manage_context()
+            # Re-apply after potential compression to ensure the hint stays in history[0].
+            self._refresh_language_hint(user_input)
         else:
             pass
 
@@ -978,18 +1332,22 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
             tool_calls_detected = []
             
             if self.use_server:
-                # HTTP Client Logic
-                payload = {
-                     "messages": self.history,
-                     "tools": self.TOOLS, 
-                     "tool_choice": "auto",
-                     "stream": True,
-                     "temperature": target_temp,
-                }    
-                # Retry loop for 503 (Model Loading)
+                # Proactive Context Management: Compress before request to prevent overflow
+                self.manage_context()
+                
+                # Retry loop for 503 (Model Loading) and 500 (Context Overflow)
                 response = None
                 for _ in range(15): # Try for ~30 seconds
                     try:
+                        # CRITICAL: Rebuild payload with current history (may have been compressed)
+                        payload = {
+                             "messages": self.history,
+                             "tools": self.TOOLS, 
+                             "tool_choice": "auto",
+                             "stream": True,
+                             "temperature": target_temp,
+                        }
+                        
                         response = requests.post(
                             "http://127.0.0.1:8080/v1/chat/completions", 
                             json=payload, 
@@ -1004,6 +1362,34 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                             UI.event("Server", "Model is loading, waiting...", style="warning")
                             time.sleep(2)
                             continue
+                        
+                        # Handle Context Overflow (500) - automatically compress and retry
+                        if response.status_code == 500:
+                            error_text = response.text or ""
+                            if "context" in error_text.lower() or "exceed" in error_text.lower():
+                                UI.event("Context", "Context overflow detected. Compressing history...", style="warning")
+                                # Aggressively compress context
+                                self.manage_context()
+                                # Also truncate old messages if still too large
+                                if len(self.history) > 20:
+                                    # Keep system prompt, last user message, and last 10 messages
+                                    system_msgs = [m for m in self.history if m.get("role") == "system"]
+                                    user_msgs = [m for m in self.history if m.get("role") == "user"]
+                                    assistant_msgs = [m for m in self.history if m.get("role") == "assistant"]
+                                    
+                                    # Keep first system message, last user message, last 5 assistant messages
+                                    new_history = []
+                                    if system_msgs:
+                                        new_history.append(system_msgs[0])  # Keep first system prompt
+                                    if user_msgs:
+                                        new_history.append(user_msgs[-1])  # Keep last user message
+                                    if assistant_msgs:
+                                        new_history.extend(assistant_msgs[-5:])  # Keep last 5 assistant messages
+                                    
+                                    self.history = new_history
+                                    UI.event("Context", f"Compressed to {len(self.history)} messages. Retrying...", style="info")
+                                    # Retry the request with compressed context (payload will be rebuilt in next iteration)
+                                    continue
                             
                         if response.status_code != 200:
                             UI.error(f"Server returned {response.status_code}: {response.text}")
@@ -1248,9 +1634,19 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                             # No spinner, just run. The tool will print its own updates.
                             result = self.execute_tool(function_name, arguments)
                         else:
-                            # Standard Tool Spinner
-                            with UI_Class.console.status(f"[bold cyan](O_O) Executing {function_name}...[/bold cyan]", spinner="dots"):
+                            # IMPORTANT: Some tools require interactive confirmation (trust gate).
+                            # Rich's live status spinner can hide/break interactive prompts.
+                            # So for risky/gated tools, run WITHOUT the status spinner.
+                            from vaf.core.trust import should_gate_tool
+                            if should_gate_tool(function_name):
                                 result = self.execute_tool(function_name, arguments)
+                            else:
+                                # Standard Tool Spinner
+                                with UI_Class.console.status(
+                                    f"[bold cyan](O_O) Executing {function_name}...[/bold cyan]",
+                                    spinner="dots"
+                                ):
+                                    result = self.execute_tool(function_name, arguments)
                     except Exception as e:
                         error_msg = f"Error executing tool: {e}"
                         result = error_msg
@@ -1368,7 +1764,14 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                      elif tool_name == "write_file":
                          prompt = "File written successfully. Analyze the result and inform the user."
                      elif tool_name == "web_search":
-                         prompt = "Search complete. Analyze the results. Proceed with the next step (Thought, Tool or Answer)."
+                         prompt = (
+                             "🚨 CRITICAL: Web search is COMPLETE. You have ALL the search results.\n\n"
+                             "STOP thinking. STOP analyzing. STOP planning.\n"
+                             "DO NOT call web_search again. DO NOT call any other tools.\n"
+                             "You MUST output the FINAL ANSWER to the user RIGHT NOW.\n\n"
+                             "Extract the key information from the search results and give a direct, concise answer.\n"
+                             "Do NOT explain your process. Do NOT mention the tool. Just give the answer."
+                         )
                      elif tool_name == "coding_agent":
                          # Extract original user task from history (look for the most recent user message that triggered coding_agent)
                          original_task = None
@@ -1485,8 +1888,31 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                 else:
                     # Did the model plan a tool use but fail to execute?
                     lower_response = full_response.lower()
+
+                    def _is_missing_info_clarification(resp: str) -> bool:
+                        """
+                        If the assistant is asking for missing info (e.g., city for weather),
+                        do NOT force a tool call. Clarification is the correct next step.
+                        """
+                        r = (resp or "").strip().lower()
+                        if not r:
+                            return False
+                        has_q = "?" in r
+                        patterns = [
+                            # German
+                            "welche stadt", "welchen ort", "für welche stadt", "für welchen ort",
+                            "wo (stadt", "wo (stadt/ort", "wo soll ich", "welche region",
+                            "bitte den namen der stadt", "stadt oder ort", "stadt/ort",
+                            # English
+                            "which city", "what city", "which location", "what location",
+                            "where should i", "which region", "what region",
+                        ]
+                        asks_location = any(p in r for p in patterns)
+                        asks_more = any(p in r for p in ["need more information", "please specify", "bitte gib", "bitte sag"])
+                        return (has_q and (asks_location or asks_more)) or asks_location
+
                     detected_tools = [t for t in ["write_file", "read_file", "list_files", "web_search", "run_command", "librarian_agent", "find_files"] if t in lower_response]
-                    if detected_tools and retries < 2:
+                    if detected_tools and retries < 2 and not _is_missing_info_clarification(lower_response):
                         prompt = f"You planned to use '{detected_tools[0]}'. Stop thinking and output the JSON for '{detected_tools[0]}' now."
                     elif retries < 3:
                         prompt = "You have reflected enough. Now strictly output the next Tool Call (JSON) or your Final Answer."
@@ -1514,7 +1940,14 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
             response_length = len(full_content.strip())
             is_short_response = response_length < 300  # Short responses are suspicious
             
-            if not tool_calls_detected and self._tool_talk_retries < 2 and is_short_response:
+            # CRITICAL: Don't trigger tool-intent detection if web_search was already executed in this conversation
+            # (The model might mention it in "thinking" after getting results, but shouldn't be forced to call it again)
+            web_search_already_executed = any(
+                msg.get("role") == "tool" and msg.get("name") == "web_search"
+                for msg in self.history[-10:]  # Check last 10 messages
+            )
+            
+            if not tool_calls_detected and self._tool_talk_retries < 2 and is_short_response and not web_search_already_executed:
                 lower_response = full_response.lower()
                 
                 # STRICT patterns: These indicate INTENT to use a tool (not just mentioning)
@@ -1531,24 +1964,46 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                 
                 # Only trigger on clear intent, not just tool mentions
                 if has_intent:
-                    # Detect WHICH tool was mentioned for specific guidance
-                    tool_names = ["web_search", "webfetch", "coding_agent", "librarian_agent", 
-                                 "write_file", "read_file", "bash", "list_files"]
-                    mentioned_tools = [t for t in tool_names if t in lower_response]
-                    tool_hint = mentioned_tools[0] if mentioned_tools else "web_search"
-                    
-                    UI.event("Debug", f"Tool-Intent '{tool_hint}' without action. Retry {self._tool_talk_retries + 1}/2", style="warning")
-                    
-                    # DON'T add failed response - give SPECIFIC instruction
-                    self.history.append({
-                        "role": "system", 
-                        "content": f"⚠️ You said you would use '{tool_hint}' but DIDN'T!\n"
-                                   f"Your NEXT message MUST be a tool call to '{tool_hint}'.\n"
-                                   f"NO explanations. NO apologies. OUTPUT '{tool_hint}' TOOL CALL NOW."
-                    })
-                    self._tool_talk_retries += 1
-                    retries += 1
-                    continue
+                    # If the assistant is asking for missing info (e.g., city/location), allow it.
+                    # We should only force tool calls when we have enough info to execute.
+                    def _is_missing_info_clarification(resp: str) -> bool:
+                        r = (resp or "").strip().lower()
+                        if not r:
+                            return False
+                        has_q = "?" in r
+                        patterns = [
+                            "welche stadt", "welchen ort", "für welche stadt", "für welchen ort",
+                            "wo (stadt", "wo (stadt/ort", "wo soll ich", "welche region",
+                            "bitte den namen der stadt", "stadt oder ort", "stadt/ort",
+                            "which city", "what city", "which location", "what location",
+                            "where should i", "which region", "what region",
+                        ]
+                        asks_location = any(p in r for p in patterns)
+                        asks_more = any(p in r for p in ["need more information", "please specify", "bitte gib", "bitte sag"])
+                        return (has_q and (asks_location or asks_more)) or asks_location
+
+                    if _is_missing_info_clarification(lower_response):
+                        self._tool_talk_retries = 0
+                        # Skip tool-talk forcing; clarification is acceptable.
+                    else:
+                        # Detect WHICH tool was mentioned for specific guidance
+                        tool_names = ["web_search", "webfetch", "coding_agent", "librarian_agent", 
+                                     "write_file", "read_file", "bash", "list_files"]
+                        mentioned_tools = [t for t in tool_names if t in lower_response]
+                        tool_hint = mentioned_tools[0] if mentioned_tools else "web_search"
+                        
+                        UI.event("Debug", f"Tool-Intent '{tool_hint}' without action. Retry {self._tool_talk_retries + 1}/2", style="warning")
+                        
+                        # DON'T add failed response - give SPECIFIC instruction
+                        self.history.append({
+                            "role": "system", 
+                            "content": f"⚠️ You said you would use '{tool_hint}' but DIDN'T!\n"
+                                       f"Your NEXT message MUST be a tool call to '{tool_hint}'.\n"
+                                       f"NO explanations. NO apologies. OUTPUT '{tool_hint}' TOOL CALL NOW."
+                        })
+                        self._tool_talk_retries += 1
+                        retries += 1
+                        continue
             
             # Reset tool-talk counter on successful response
             self._tool_talk_retries = 0
@@ -1556,6 +2011,11 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
             # Clean History: Store ONLY the final content (Answer), discarding the reasoning trace.
             history_content = full_content if full_content else full_response
             self.history.append({"role": "assistant", "content": history_content})
+            
+            # Check for language mismatch: Did the model respond in a different language than the user?
+            # This helps catch cases where LANGUAGE_HINT was ignored (e.g., user asks in Turkish, model responds in English)
+            if not skip_input and user_input and history_content:
+                self._check_language_mismatch(user_input, history_content)
             
             # Context Management: Check after adding assistant response
             # Long reasoning phases can push us over the limit
@@ -1667,6 +2127,44 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
              return fallback_msg
 
     def execute_tool(self, name, args):
+        from vaf.cli.ui import UI
+        from pathlib import Path
+        from vaf.core.trust import should_gate_tool, get_tool_policy, set_tool_policy, mark_trusted_dir, is_trusted_dir, explain_gate
+        
+        def emit(evt: dict):
+            if callable(self._event_sink):
+                try:
+                    self._event_sink(evt)
+                except Exception:
+                    pass
+
+        # Gate risky tools with once/always/cancel (no persistent deny)
+        if should_gate_tool(name):
+            policy = get_tool_policy(name)
+            cwd = Path.cwd()
+            trusted = is_trusted_dir(cwd)
+            allowed_once = name in self._allow_once_tools
+            
+            if policy != "allow" and not trusted and not allowed_once:
+                emit({"type": "gate_required", "tool": name, "cwd": str(cwd)})
+                if self._noninteractive:
+                    return f"[ERROR] Tool '{name}' requires confirmation ({explain_gate(name)}). Re-run interactively or mark folder trusted."
+                
+                UI.event("Security", f"Tool '{name}' requires confirmation. {explain_gate(name)}", style="warning")
+                choice = UI.prompt("Allow? [o]nce / [a]lways / [c]ancel: ").strip().lower()
+                if choice in ("o", "once"):
+                    self._allow_once_tools.add(name)
+                    emit({"type": "gate_decision", "tool": name, "decision": "allow_once"})
+                elif choice in ("a", "always"):
+                    # Always = trust current folder + allow tool
+                    mark_trusted_dir(cwd)
+                    set_tool_policy(name, "allow")
+                    emit({"type": "gate_decision", "tool": name, "decision": "allow_always"})
+                else:
+                    emit({"type": "gate_decision", "tool": name, "decision": "cancel"})
+                    return f"[CANCELLED] Tool '{name}' cancelled by user."
+
+        emit({"type": "tool_start", "tool": name, "args": args})
         try:
             if name in self.tools:
                 result = self.tools[name].run(**args)
@@ -1675,6 +2173,42 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
         except Exception as e:
             result = f"Tool Error: {e}"
 
+        # If python_sandbox blocked the request, offer a gated fallback to python_exec
+        # (once/always/cancel) so the user can explicitly override sandbox restrictions.
+        if name == "python_sandbox" and isinstance(result, str) and result.startswith("Security Error:"):
+            if "python_exec" in self.tools:
+                cwd = Path.cwd()
+                policy = get_tool_policy("python_exec")
+                trusted = is_trusted_dir(cwd)
+                allowed_once = "python_exec" in self._allow_once_tools
+                
+                if policy != "allow" and not trusted and not allowed_once:
+                    if not self._noninteractive:
+                        UI.event("Security", "python_sandbox blocked this code. You can run it UNSANDBOXED via python_exec.", style="warning")
+                        choice = UI.prompt("Run via python_exec? [o]nce / [a]lways / [c]ancel: ").strip().lower()
+                        if choice in ("o", "once"):
+                            self._allow_once_tools.add("python_exec")
+                        elif choice in ("a", "always"):
+                            mark_trusted_dir(cwd)
+                            set_tool_policy("python_exec", "allow")
+                        else:
+                            return result + "\n\n[CANCELLED] Not running unsandboxed."
+                    else:
+                        return result + "\n\n[INFO] python_exec is available but requires interactive confirmation."
+                
+                # Execute unsandboxed python if allowed
+                if get_tool_policy("python_exec") == "allow" or is_trusted_dir(cwd) or ("python_exec" in self._allow_once_tools):
+                    code = (args or {}).get("code", "")
+                    emit({"type": "tool_start", "tool": "python_exec", "args": {"timeout": 30}})
+                    try:
+                        unsafe_result = self.tools["python_exec"].run(code=code, timeout=30)
+                    except Exception as e:
+                        unsafe_result = f"Tool Error: {e}"
+                    emit({"type": "tool_end", "tool": "python_exec"})
+                    result = unsafe_result
+
+        emit({"type": "tool_end", "tool": name})
+
         # TRUNCATION: Limit context usage for massive outputs (e.g. list_files on Downloads)
         MAX_LEN = 2000
         if len(str(result)) > MAX_LEN:
@@ -1682,6 +2216,10 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
             result = f"{truncated}\n... [Output Truncated. Total length: {len(str(result))} chars. Use specific filters or read sub-parts.]"
         
         return result
+
+    def set_event_sink(self, sink):
+        """Set an optional event sink for structured outputs (e.g. stream-json)."""
+        self._event_sink = sink
 
     # --- Tool Implementations ---
 

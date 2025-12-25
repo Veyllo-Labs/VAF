@@ -143,6 +143,36 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
         Returns result string or None if task is too complex.
         """
         task_lower = task.lower()
+        
+        # ─────────────────────────────────────────────────────────────────────
+        # GUARD: Web search result payloads should NOT trigger filesystem heuristics.
+        # Without this, URLs like ".com" can be misread as file extensions (e.g. "*.com"),
+        # causing bogus searches like "Searching for '*.com' in \\season".
+        # ─────────────────────────────────────────────────────────────────────
+        if (
+            "### web search results" in task_lower
+            or "web search results:" in task_lower
+            or "user question:" in task_lower
+            or "http://" in task_lower
+            or "https://" in task_lower
+        ):
+            # If this looks like the web_lookup workflow "synthesis" prompt,
+            # we MUST NOT return the deterministic summary — the workflow expects an actual answer.
+            # We only use the deterministic summary to prevent bogus filesystem heuristics.
+            if (
+                "answer the user's question" in task_lower
+                or "use the web search results" in task_lower
+                or "include 2-3 source links" in task_lower
+                or "synthesize" in task_lower
+            ):
+                return None
+
+            summary = self._summarize_web_results(task)
+            if summary:
+                return summary
+
+            # If we couldn't parse, force LLM slow-path instead of filesystem
+            return None
         # Normalize common mojibake sequences seen in some Windows consoles (e.g., "groÃŸ" instead of "groß")
         task_norm = (
             task_lower
@@ -409,6 +439,57 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
         
         # Default to current directory
         return Path.cwd()
+
+    def _summarize_web_results(self, task: str) -> Optional[str]:
+        """
+        Deterministic summarizer for web_search payloads (no LLM).
+        Extracts the query and the top links/snippets so workflows like web_lookup
+        don't accidentally trigger filesystem heuristics.
+        """
+        lower = task.lower()
+        if "web search results" not in lower:
+            return None
+
+        import re
+
+        # Try to extract "User question:" and "Query:"
+        user_q = None
+        m = re.search(r"user question:\s*(.+)", task, flags=re.IGNORECASE)
+        if m:
+            user_q = m.group(1).strip()
+
+        query = None
+        m = re.search(r"^query:\s*(.+)$", task, flags=re.IGNORECASE | re.MULTILINE)
+        if m:
+            query = m.group(1).strip()
+
+        # Extract a few links (supports either "Link: ..." or raw URLs)
+        urls = re.findall(r"https?://[^\s\)\]]+", task)
+        urls = [u.rstrip(".,") for u in urls]
+
+        # Extract numbered result titles if present ("1. **Title**")
+        titles = re.findall(r"^\s*\d+\.\s*\*\*(.+?)\*\*", task, flags=re.MULTILINE)
+
+        lines = []
+        lines.append("### Web Lookup (Deterministic Summary)")
+        if user_q:
+            lines.append(f"**Question:** {user_q}")
+        elif query:
+            lines.append(f"**Question:** {query}")
+
+        if titles:
+            lines.append("\n**Top results:**")
+            for t in titles[:5]:
+                lines.append(f"- {t.strip()}")
+
+        if urls:
+            lines.append("\n**Sources:**")
+            for u in urls[:5]:
+                lines.append(f"- {u}")
+        else:
+            lines.append("\n[INFO] No URLs found in the search payload.")
+
+        return "\n".join(lines)
     
     def _extract_search_term(self, task: str) -> Optional[str]:
         """Extract search term/pattern from task."""

@@ -23,6 +23,12 @@ def _strip_tags(s: str) -> str:
     txt = re.sub(r"\s+", " ", txt).strip()
     return txt
 
+def _word_count_from_html(s: str) -> int:
+    txt = _strip_tags(s)
+    if not txt:
+        return 0
+    return len(re.findall(r"\b\w+\b", txt, flags=re.UNICODE))
+
 
 def _find_h1_topic(html: str) -> Optional[str]:
     m = re.search(r"(?is)<h1[^>]*>\s*Research Report:\s*(.*?)\s*</h1>", html or "")
@@ -73,6 +79,10 @@ class RepairReportTool(BaseTool):
             "topic": {"type": "string", "description": "Main topic (optional; inferred from <h1> if missing)"},
             "content": {"type": "string", "description": "HTML report content"},
             "language": {"type": "string", "description": "Force language: de|en (optional)"},
+            # Preferred: word-based thresholds (align with research_agent)
+            "min_words_target": {"type": "integer", "default": 500},
+            "min_words_ok_ratio": {"type": "number", "default": 0.8},
+            # Backward compat (deprecated): char-based thresholds
             "min_chars_empty": {"type": "integer", "default": 150},
             "min_chars_ok": {"type": "integer", "default": 500},
         },
@@ -95,6 +105,12 @@ class RepairReportTool(BaseTool):
         forced_lang = (kwargs.get("language") or "").strip().lower()
         lang = forced_lang if forced_lang in ("de", "en") else _detect_language(topic)
 
+        min_words_target = int(kwargs.get("min_words_target", 500) or 500)
+        min_words_ok_ratio = float(kwargs.get("min_words_ok_ratio", 0.8) or 0.8)
+        min_words_target = max(150, min(min_words_target, 1200))
+        min_words_ok_ratio = max(0.5, min(min_words_ok_ratio, 0.95))
+        min_words_ok = max(50, int(min_words_target * min_words_ok_ratio))
+
         min_chars_empty = int(kwargs.get("min_chars_empty", 150) or 150)
         min_chars_ok = int(kwargs.get("min_chars_ok", 500) or 500)
 
@@ -106,14 +122,24 @@ class RepairReportTool(BaseTool):
 
         replacements: List[Tuple[int, int, str]] = []
         for sec in sections:
+            words = _word_count_from_html(sec.body_html)
             visible_len = len(_strip_tags(sec.body_html))
-            if visible_len >= min_chars_ok:
+
+            # Prefer word-based thresholds; fall back to char-based if needed
+            ok_by_words = words >= min_words_ok
+            ok_by_chars = visible_len >= min_chars_ok
+            if ok_by_words or (words == 0 and ok_by_chars):
                 continue
 
-            level = "empty" if visible_len < min_chars_empty else "short"
-            UI.event("Repair", f"Fixing section '{sec.title}' ({level}, {visible_len} chars)", style="warning")
+            level = "empty" if (words == 0 and visible_len < min_chars_empty) or (words > 0 and words < max(30, min_words_ok // 8)) else "short"
+            if words > 0:
+                UI.event("Repair", f"Fixing section '{sec.title}' ({level}, {words} words)", style="warning")
+            else:
+                UI.event("Repair", f"Fixing section '{sec.title}' ({level}, {visible_len} chars)", style="warning")
 
             # Generate just this section as a fragment.
+            # For "short" sections, prefer append-style expansion (keeps existing content, avoids full rewrite).
+            existing_section_html = f"<h2>{sec.title}</h2>{sec.body_html}".strip()
             fragment = agent.run(
                 topic=topic,
                 format="html_fragment",
@@ -121,8 +147,11 @@ class RepairReportTool(BaseTool):
                 language=lang,
                 max_results=5,
                 deep=(level == "empty"),
-                min_chars_empty=min_chars_empty,
-                min_chars_ok=min_chars_ok,
+                min_words_target=min_words_target,
+                min_words_ok_ratio=min_words_ok_ratio,
+                min_chars_empty=min_chars_empty,  # backward compat
+                min_chars_ok=min_chars_ok,        # backward compat
+                existing_section_html=(existing_section_html if level == "short" else ""),
             )
             fragment = str(fragment or "").strip()
             if not fragment:

@@ -1074,7 +1074,8 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                             p = Path(out_file)
                             # Open HTML reports in browser, otherwise open folder/file in explorer
                             if p.suffix.lower() in (".html", ".htm") and p.exists():
-                                Platform.open_url(p.as_uri())
+                                # Local HTML report: open non-incognito for maximum compatibility (file:// + private mode can be flaky across browsers)
+                                Platform.open_url(p.as_uri(), incognito=False)
                             else:
                                 # Prefer opening folder for files
                                 if p.exists() and p.is_file():

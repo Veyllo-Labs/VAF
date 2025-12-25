@@ -60,6 +60,16 @@ def _visible_text_len(html_fragment: str) -> int:
     txt = re.sub(r"\s+", " ", txt).strip()
     return len(txt)
 
+def _visible_word_count(html_fragment: str) -> int:
+    """
+    Approximate word count for an HTML fragment: strip tags, collapse whitespace, count word-like tokens.
+    """
+    txt = re.sub(r"<[^>]+>", " ", html_fragment or "")
+    txt = re.sub(r"\s+", " ", txt).strip()
+    if not txt:
+        return 0
+    return len(re.findall(r"\b\w+\b", txt, flags=re.UNICODE))
+
 def _detect_language(text: str) -> str:
     """
     Very small heuristic: return 'de' for obviously German input, else 'en'.
@@ -117,13 +127,20 @@ class ResearchAgentTool(BaseTool):
             "max_results": {"type": "integer", "description": "web_search results per section (1-10)", "default": 5},
             "deep": {"type": "boolean", "description": "Enable deep previews in web_search (slower)", "default": False},
             "language": {"type": "string", "description": "Force output language: de | en (optional)"},
-            "min_chars_empty": {"type": "integer", "description": "If section text < this, treat as empty and retry", "default": 150},
-            "min_chars_ok": {"type": "integer", "description": "If section text < this, treat as too short and expand once", "default": 500},
+            # Preferred: word-based thresholds (requested)
+            "min_words_target": {"type": "integer", "description": "Target words per section (default: 500)", "default": 500},
+            "min_words_ok_ratio": {"type": "number", "description": "Acceptable ratio of target (default: 0.8)", "default": 0.8},
+            # Backward compat (deprecated): char-based thresholds
+            "min_chars_empty": {"type": "integer", "description": "[Deprecated] If section text < this, treat as empty and retry", "default": 150},
+            "min_chars_ok": {"type": "integer", "description": "[Deprecated] If section text < this, treat as too short and expand once", "default": 500},
             "sections": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Optional explicit section titles. If omitted, uses a sensible default set of 10 sections.",
             },
+            # Optional: append-style expansion (used by repair_report and internal expand path)
+            # Only meaningful when generating a single html_fragment section.
+            "existing_section_html": {"type": "string", "description": "Existing HTML fragment for the section (optional)."},
         },
         "required": ["topic"],
     }
@@ -134,9 +151,13 @@ class ResearchAgentTool(BaseTool):
         max_results = int(kwargs.get("max_results", 5) or 5)
         deep = bool(kwargs.get("deep", False))
         forced_lang = (kwargs.get("language") or "").strip().lower()
+        min_words_target = int(kwargs.get("min_words_target", 500) or 500)
+        min_words_ok_ratio = float(kwargs.get("min_words_ok_ratio", 0.8) or 0.8)
+        # Backward compat (deprecated)
         min_chars_empty = int(kwargs.get("min_chars_empty", 150) or 150)
         min_chars_ok = int(kwargs.get("min_chars_ok", 500) or 500)
         section_titles: Optional[Sequence[str]] = kwargs.get("sections")
+        existing_section_html = str(kwargs.get("existing_section_html") or "").strip()
 
         if not topic:
             return "Error: No topic provided."
@@ -145,6 +166,13 @@ class ResearchAgentTool(BaseTool):
 
         max_results = max(1, min(max_results, 10))
         lang = forced_lang if forced_lang in ("de", "en") else _detect_language(topic)
+
+        # Word-based targets (preferred)
+        min_words_target = max(150, min(min_words_target, 1200))
+        min_words_ok_ratio = max(0.5, min(min_words_ok_ratio, 0.95))
+        min_words_ok = max(50, int(min_words_target * min_words_ok_ratio))
+
+        # Char thresholds kept only for backward-compat fallback
         min_chars_empty = max(50, min(min_chars_empty, 2000))
         min_chars_ok = max(min_chars_empty + 1, min(min_chars_ok, 5000))
 
@@ -198,12 +226,19 @@ class ResearchAgentTool(BaseTool):
                 web_results=_truncate(results, 4500),
                 sources=sources,
                 lang=lang,
+                min_words_target=min_words_target,
+                attempt="initial",
+                existing_section_html=(existing_section_html if (existing_section_html and len(specs) == 1) else ""),
             )
 
-            # Quality check + retry/expand based on content length.
+            # Quality check + retry/expand (word-based, with internal buffer).
+            word_count = _visible_word_count(section_html)
             text_len = _visible_text_len(section_html)
-            if text_len < min_chars_empty:
-                UI.event("Research", f"↻ Section empty (<{min_chars_empty}) — retrying with deep search", style="warning")
+
+            # "Empty" = basically no usable content
+            is_empty = (word_count == 0 and text_len < min_chars_empty) or (word_count > 0 and word_count < max(30, min_words_ok // 8))
+            if is_empty:
+                UI.event("Research", f"↻ Section empty/too thin — retrying with deep search", style="warning")
                 retry_results = web.run(query=section_query, max_results=min(10, max_results + 2), deep=True, open_in_browser=False)
                 retry_sources = _extract_urls(retry_results)
                 for u in retry_sources:
@@ -215,17 +250,26 @@ class ResearchAgentTool(BaseTool):
                     web_results=_truncate(retry_results, 4500),
                     sources=retry_sources,
                     lang=lang,
+                    min_words_target=min_words_target,
+                    attempt="retry",
+                    existing_section_html="",
                 )
+                word_count = _visible_word_count(section_html)
                 text_len = _visible_text_len(section_html)
 
-            if min_chars_empty <= text_len < min_chars_ok:
-                UI.event("Research", f"↻ Section short (<{min_chars_ok}) — expanding once", style="dim")
+            # Short = below buffer threshold (e.g., < 400 words if target is 500)
+            is_short = (word_count > 0 and word_count < min_words_ok) or (word_count == 0 and min_chars_empty <= text_len < min_chars_ok)
+            if is_short:
+                UI.event("Research", f"↻ Section short (<{min_words_ok} words) — expanding (append) once", style="dim")
                 section_html = self._summarize_section_html(
                     topic=topic,
                     title=spec.title,
-                    web_results=_truncate(results, 3000),
+                    web_results=_truncate(results, 4500),
                     sources=sources,
                     lang=lang,
+                    min_words_target=min_words_target,
+                    attempt="append",
+                    existing_section_html=section_html,
                 )
             rendered_sections.append(section_html)
 
@@ -238,48 +282,79 @@ class ResearchAgentTool(BaseTool):
             return md
 
         html = self._assemble_html(topic, rendered_sections, all_sources, lang=lang)
-
-        # Optional UX: open sources in browser once (tabs) for transparency
-        try:
-            import os
-            noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip().lower() in ("1", "true", "yes")
-            if bool(Config.get("ux_auto_open_links", False)) and not noninteractive and all_sources:
-                max_tabs = int(Config.get("ux_auto_open_max_tabs", 8) or 8)
-                max_tabs = max(1, min(max_tabs, 20))
-                for url in all_sources[:max_tabs]:
-                    ok = Platform.open_url(url)
-                    if not ok:
-                        UI.event("Research", f"⚠️ Could not open: {url[:60]}...", style="warning")
-                    # Small delay between opens
-                    time.sleep(0.3)
-        except Exception:
-            pass
         return html
 
-    def _summarize_section_html(self, topic: str, title: str, web_results: str, sources: Sequence[str], lang: str) -> str:
+    def _summarize_section_html(
+        self,
+        topic: str,
+        title: str,
+        web_results: str,
+        sources: Sequence[str],
+        lang: str,
+        min_words_target: int,
+        attempt: str = "initial",
+        existing_section_html: str = "",
+    ) -> str:
         """
         Call the model for ONE section only (bounded input), return an HTML fragment.
         """
         model_name = Config.get("model", "") or ""
         lang_instruction = "Write in German." if lang == "de" else "Write in English."
-        prompt = (
+        attempt = (attempt or "initial").strip().lower()
+
+        extra = ""
+        if attempt == "retry":
+            extra = "Try again with better coverage and specificity while staying evidence-based."
+        elif attempt == "expand":
+            extra = "Expand significantly with more detail and concrete examples while staying evidence-based."
+        elif attempt == "append":
+            extra = (
+                "You will be given an existing HTML fragment for this section. "
+                "DO NOT rewrite it. Keep it, and ONLY APPEND new content to reach the length requirement. "
+                "Avoid repeating points already present."
+            )
+
+        base_instructions = (
             "Write ONE section of an HTML research report.\n"
             f"Main topic: {topic}\n"
             f"Section title: {title}\n\n"
             f"{lang_instruction}\n"
+            f"Length requirement: at least {min_words_target} words (do not mention word counts).\n"
+            f"{extra}\n"
             "Use ONLY the provided web search results as evidence.\n"
             "Do NOT invent sources. Do NOT use example.com or placeholder links.\n"
             "Return ONLY an HTML fragment (no <html>, no <head>, no <body>).\n"
-            "Structure:\n"
-            "- <h2>Section title</h2>\n"
-            "- 1-3 short paragraphs\n"
-            "- <ul> with 3-6 key bullets\n"
-            "- If uncertain, say so briefly.\n\n"
-            "Web search results:\n"
-            f"{web_results}\n\n"
-            "Cite 2-4 of these sources inline where relevant (as plain URLs):\n"
-            + "\n".join(sources[:6])
         )
+
+        if attempt == "append" and existing_section_html:
+            prompt = (
+                base_instructions
+                + "You are given the EXISTING section HTML below.\n"
+                  "Return the UPDATED FULL section HTML fragment.\n"
+                  "- Keep exactly one <h2> at the top\n"
+                  "- Keep existing content intact\n"
+                  "- Append 2-4 additional paragraphs and, if useful, add 2-4 new bullets (no duplicates)\n"
+                  "- Be coherent and avoid repetition\n\n"
+                  "EXISTING SECTION HTML:\n"
+                + existing_section_html
+                + "\n\nWeb search results:\n"
+                + str(web_results)
+                + "\n\nCite 2-4 of these sources inline where relevant (as plain URLs):\n"
+                + "\n".join(sources[:6])
+            )
+        else:
+            prompt = (
+                base_instructions
+                + "Structure:\n"
+                  "- <h2>Section title</h2>\n"
+                  "- 3-6 paragraphs\n"
+                  "- <ul> with 6-10 key bullets\n"
+                  "- If uncertain, say so briefly.\n\n"
+                  "Web search results:\n"
+                + str(web_results)
+                + "\n\nCite 2-4 of these sources inline where relevant (as plain URLs):\n"
+                + "\n".join(sources[:6])
+            )
 
         def call(max_tokens: int, temperature: float) -> str:
             res = requests.post(
@@ -302,14 +377,14 @@ class ResearchAgentTool(BaseTool):
             return (msg.get("content") or "").strip()
 
         try:
-            content = call(max_tokens=900, temperature=0.2)
+            content = call(max_tokens=2200, temperature=0.2)
             content = _strip_answer_artifacts(content)
             content = _strip_untrusted_links(content, sources)
             if content:
                 return content
 
             # Retry once with slightly different settings and a shorter web_results payload.
-            retry_prompt = prompt.replace(web_results, _truncate(web_results, 2000))
+            retry_prompt = prompt.replace(web_results, _truncate(web_results, 2500))
             res = requests.post(
                 "http://127.0.0.1:8080/v1/chat/completions",
                 json={
@@ -318,8 +393,8 @@ class ResearchAgentTool(BaseTool):
                         {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
                         {"role": "user", "content": retry_prompt},
                     ],
-                    "max_tokens": 700,
-                    "temperature": 0.3,
+                    "max_tokens": 1800,
+                    "temperature": 0.25,
                 },
                 timeout=90,
             )

@@ -49,8 +49,10 @@ WORKFLOW = {
                 "format": "html",
                 "max_results": 5,
                 "deep": False,
-                "min_chars_empty": 150,
-                "min_chars_ok": 500
+                "min_words_target": 500,
+                "min_words_ok_ratio": 0.8,
+                "min_chars_empty": 150,  # backward compat
+                "min_chars_ok": 500      # backward compat
             },
             "input": "{topic}",
             "output": "report",
@@ -61,8 +63,10 @@ WORKFLOW = {
             "args": {
                 "topic": "{topic}",
                 "content": "{report}",
-                "min_chars_empty": 150,
-                "min_chars_ok": 500
+                "min_words_target": 500,
+                "min_words_ok_ratio": 0.8,
+                "min_chars_empty": 150,  # backward compat
+                "min_chars_ok": 500      # backward compat
             },
             "input": "{topic}",
             "output": "repaired_report",

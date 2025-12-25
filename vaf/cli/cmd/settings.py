@@ -1,12 +1,16 @@
 import typer
 import inquirer
 from rich.table import Table
+from rich.text import Text
+from rich.console import Console
+from rich.terminal_theme import TerminalTheme
 from huggingface_hub import HfApi, hf_hub_download
 from vaf.core.config import Config
 from vaf.cli.ui import UI
 import os
 import sys
 import time
+from io import StringIO
 
 app = typer.Typer()
 
@@ -170,6 +174,18 @@ def select_model_menu():
     UI.console.input("[dim]Press Enter to continue...[/dim]")
 
 
+def _get_color_box(color: str) -> str:
+    """Create a small color box by rendering with Rich and extracting ANSI codes."""
+    # Use Rich to render the color box, then extract the ANSI string
+    # This ensures compatibility with inquirer
+    console = Console(force_terminal=True, color_system="truecolor", file=StringIO())
+    console.print(f"[{color} on {color}]██[/{color} on {color}]", end="")
+    ansi_string = console.file.getvalue()
+    console.file.close()
+    
+    return ansi_string
+
+
 def select_theme_menu():
     """Select and apply a theme."""
     try:
@@ -184,11 +200,17 @@ def select_theme_menu():
     themes = ThemeManager.list_themes()
     
     choices = []
-    for theme in themes:
-        label = f"{theme} (Active)" if theme == current else theme
-        choices.append(label)
+    for theme_name in themes:
+        theme = ThemeManager.get_theme(theme_name)
+        primary_color = theme.get("primary", "#00d4ff")
+        color_box = _get_color_box(primary_color)
+        label = f"{color_box} {theme_name}"
+        if theme_name == current:
+            label = f"{label} (Active)"
+        # Store as tuple: (display_label, actual_value)
+        choices.append((label, theme_name))
     
-    choices.append("Cancel")
+    choices.append(("Cancel", "cancel"))
     
     UI.panel(f"Current Theme: {current}", title="Theme Settings", style="highlight")
     
@@ -200,10 +222,10 @@ def select_theme_menu():
     ]
     answers = inquirer.prompt(questions)
     
-    if not answers or answers['theme'] == "Cancel":
+    if not answers or answers['theme'] == "cancel":
         return
     
-    selected = answers['theme'].replace(" (Active)", "")
+    selected = answers['theme']
     
     if ThemeManager.set_theme(selected):
         Config.set("theme", selected)
@@ -270,11 +292,22 @@ def show_theme_menu():
     current = ThemeManager.current()
     themes = ThemeManager.list_themes()
     
-    # Build choices with preview colors
+    # Show color preview before menu
+    UI.print("\n[bold]Theme Color Preview:[/bold]")
+    preview_line = ""
+    for theme_name in themes[:12]:  # Show first 12 themes
+        theme = ThemeManager.get_theme(theme_name)
+        primary_color = theme.get("primary", "#00d4ff")
+        color_box = _get_color_box(primary_color)
+        preview_line += f"{color_box} "
+    UI.console.print(preview_line)
+    UI.print()  # Empty line
+    
+    # Build choices with theme names (color boxes shown above)
     choices = []
     for theme_name in themes:
         theme = ThemeManager.get_theme(theme_name)
-        label = theme.get("name", theme_name.title())
+        label = theme.get('name', theme_name.title())
         if theme_name == current:
             label = f"{label} (Current)"
         choices.append((label, theme_name))
@@ -527,12 +560,17 @@ def main_menu(agent=None):
         persist = agent.config.get("persist_server", False) if agent else False
         p_label = "[ON]" if persist else "[OFF]"
         
-        # Get current theme
+        # Get current theme with color box
         try:
             from vaf.cli.themes import ThemeManager
             current_theme = ThemeManager.current()
+            theme = ThemeManager.get_theme(current_theme)
+            primary_color = theme.get("primary", "#00d4ff")
+            theme_color_box = _get_color_box(primary_color)
+            theme_label = f"{theme_color_box} Theme: {current_theme}"
         except ImportError:
             current_theme = "default"
+            theme_label = f"Theme: {current_theme}"
         
         # Get current UI mode
         ui_mode = Config.get("ui_mode", "modern")
@@ -567,7 +605,7 @@ def main_menu(agent=None):
                               ('Select Active Model', 'list'),
                               ('Search & Download New Models', 'search'),
                               ('─────────────────', None),
-                              (f'Theme: {current_theme}', 'theme'),
+                              (theme_label, 'theme'),
                               (f'UI Mode: {ui_mode}', 'ui_mode'),
                               (links_label, 'ux_links'),
                               (outputs_label, 'ux_outputs'),

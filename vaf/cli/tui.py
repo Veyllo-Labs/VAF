@@ -684,6 +684,13 @@ class AnimatedHeader:
         self.left_agt = left_agt
         self.right_agt = right_agt
         self.arrow_chars = ["<", "=", "=", "=", "=", "=", ">"]
+        
+        # Get current theme colors
+        from vaf.core.config import Config
+        theme_name = Config.get("theme", "vaf")
+        theme = ThemeManager.get_theme(theme_name)
+        self.border_color = theme.get("border_active", theme.get("primary", "#00d4ff"))
+        self.text_color = theme.get("primary", "#00d4ff")
 
     def __rich__(self) -> Panel:
         # Wave Animation Logic
@@ -697,9 +704,9 @@ class AnimatedHeader:
             if dist == 0:
                 style = "bold white"
             elif dist == 1:
-                style = "bold cyan"
+                style = f"bold {self.text_color}"
             else:
-                style = "dim cyan"
+                style = f"dim {self.text_color}"
             arrow_str.append(char, style=style)
 
         art_grid = Text()
@@ -713,8 +720,8 @@ class AnimatedHeader:
 
         return Panel(
             Align.center(art_grid),
-            title=f"[bold cyan]{self.title}[/bold cyan]",
-            border_style="bold cyan",
+            title=f"[bold {self.text_color}]{self.title}[/bold {self.text_color}]",
+            border_style=f"bold {self.border_color}",
             padding=(0, 2)
         )
 

@@ -23,6 +23,7 @@ import os
 import sys
 
 from vaf.cli.ui import UI, AnimatedHeader
+from vaf.cli.themes import ThemeManager
 from vaf.core.config import Config
 from vaf.core.platform import Platform
 from vaf.core.trust_map import filter_results_by_quality, find_optimal_threshold, rate_url_quality
@@ -49,9 +50,14 @@ class _StaticHeader:
         self.title = title
         self.left_agt = left_agt
         self.right_agt = right_agt
+        # Get current theme colors
+        theme_name = Config.get("theme", "vaf")
+        theme = ThemeManager.get_theme(theme_name)
+        self.border_color = theme.get("border_active", theme.get("primary", "#00d4ff"))
+        self.text_color = theme.get("primary", "#00d4ff")
 
     def __rich__(self) -> Panel:
-        arrow_str = Text("<=====>", style="bold cyan")
+        arrow_str = Text(f"<=====>", style=f"bold {self.text_color}")
         art_grid = Text()
         art_grid.append(" \n")
         art_grid.append("   ( OO)     ", style="white")
@@ -61,8 +67,8 @@ class _StaticHeader:
         art_grid.append(row3 + "\n", style="white")
         return Panel(
             Align.center(art_grid),
-            title=f"[bold cyan]{self.title}[/bold cyan]",
-            border_style="bold cyan",
+            title=f"[bold {self.text_color}]{self.title}[/bold {self.text_color}]",
+            border_style=f"bold {self.border_color}",
             padding=(0, 2),
         )
 
@@ -167,6 +173,13 @@ class ResearchTUI:
         self.word_target = 0
         self.word_ok = 0
         self._lock = threading.RLock()
+        
+        # Get current theme colors for borders and text
+        theme_name = Config.get("theme", "vaf")
+        theme = ThemeManager.get_theme(theme_name)
+        self.border_color = theme.get("border_active", theme.get("primary", "#00d4ff"))
+        self.text_color = theme.get("primary", "#00d4ff")
+        
         self._header = (
             AnimatedHeader("Collaboration Mode Active", "Main Agt", "Researcher")
             if animate
@@ -277,7 +290,12 @@ class ResearchTUI:
                 word_line.append("Words: (n/a)", style="dim")
 
             logs = "\n".join(self._logs) if self._logs else "…"
-            log_panel = Panel(logs, title="Research Log", border_style="cyan", padding=(0, 1))
+            log_panel = Panel(
+                logs, 
+                title=f"[bold {self.text_color}]Research Log[/bold {self.text_color}]", 
+                border_style=self.border_color, 
+                padding=(0, 1)
+            )
 
             return Group(
                 self._header,

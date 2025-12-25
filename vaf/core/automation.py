@@ -234,6 +234,11 @@ vaf automation delete <id>   # Delete task
         task.next_run = task.calculate_next_run().isoformat()
         self.tasks[task.id] = task
         self._save_task(task)
+        
+        # If scheduler is already running, schedule this task immediately
+        if self._running:
+            self._schedule_task(task)
+        
         return task
     
     def update(self, task_id: str, **kwargs) -> Optional[AutomationTask]:
@@ -333,11 +338,36 @@ vaf automation delete <id>   # Delete task
             tasks = [t for t in tasks if t.enabled]
         return sorted(tasks, key=lambda t: t.next_run or "")
     
-    def run_task(self, task: AutomationTask, callback: Callable = None) -> str:
-        """Execute an automation task."""
+    def run_task(self, task: AutomationTask, callback: Callable = None, new_terminal: bool = True) -> str:
+        """
+        Execute an automation task.
+        
+        Args:
+            task: The automation task to run
+            callback: Optional callback for progress updates
+            new_terminal: If True, run in a new terminal window (default: True)
+        """
         from vaf.cli.ui import UI
+        from vaf.core.platform import Platform
+        import sys
+        import subprocess
         
         UI.event("Automation", f"Running: {task.name}", style="info")
+        
+        # If new_terminal is True, open in new terminal window
+        if new_terminal:
+            # Build command to run automation
+            # Use 'vaf automation run <id>' command
+            vaf_cmd = f'vaf automation run {task.id}'
+            
+            # Try to open in new terminal
+            title = f"VAF Automation: {task.name}"
+            if Platform.open_new_terminal(vaf_cmd, title=title):
+                UI.success(f"Automation started in new terminal window: {task.name}")
+                return f"Automation '{task.name}' started in new terminal window"
+            else:
+                # Fallback: run in current process if new terminal fails
+                UI.warning(f"Could not open new terminal, running in background...")
         
         # Build the prompt with parameters
         prompt = task.prompt
@@ -431,7 +461,8 @@ vaf automation delete <id>   # Delete task
         if not task.enabled:
             return
         
-        job_func = lambda t=task: self.run_task(t)
+        # Run in new terminal window by default
+        job_func = lambda t=task: self.run_task(t, new_terminal=True)
         
         if task.frequency == Frequency.HOURLY:
             schedule.every().hour.at(f":{task.time.split(':')[1]}").do(job_func)
@@ -447,7 +478,7 @@ vaf automation delete <id>   # Delete task
             # Monthly is trickier - check daily and run if day matches
             def monthly_check(t=task):
                 if datetime.now().day == (t.day or 1):
-                    self.run_task(t)
+                    self.run_task(t, new_terminal=True)
             schedule.every().day.at(task.time).do(monthly_check)
 
 
@@ -696,7 +727,8 @@ def run_automation(
     def print_output(text):
         console.print(text, end="")
     
-    result = manager.run_task(task, callback=print_output)
+    # Don't open new terminal when called directly from CLI
+    result = manager.run_task(task, callback=print_output, new_terminal=False)
     console.print("\n")
 
 

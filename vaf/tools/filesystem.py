@@ -1,6 +1,9 @@
 import os
 import shutil
 from vaf.tools.base import BaseTool
+from pathlib import Path
+from typing import List, Tuple
+import heapq
 
 # Common Safety Logic
 # Common Safety Logic
@@ -93,6 +96,101 @@ class ListFilesTool(BaseTool):
                 
             return output if output else "Empty Directory"
         except Exception as e: return str(e)
+
+
+class FolderSizeTool(BaseTool):
+    name = "folder_size"
+    description = "Calculates the total size of a folder (recursive), with optional largest-files preview."
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Folder path (absolute or relative)"},
+            "top_n": {"type": "integer", "description": "Show N largest files (default: 10)"},
+            "max_files": {"type": "integer", "description": "Safety cap for scanned files (default: 200000)"},
+        },
+        "required": ["path"],
+    }
+
+    def run(self, **kwargs) -> str:
+        path = kwargs.get("path", "")
+        top_n = int(kwargs.get("top_n", 10) or 10)
+        max_files = int(kwargs.get("max_files", 200000) or 200000)
+
+        if not path:
+            return "Error: No path provided."
+
+        safe, abs_path = is_safe_path(path)
+        if not safe:
+            return abs_path
+
+        root = Path(abs_path)
+        if not root.exists():
+            return f"Error: Path not found: {abs_path}"
+        if not root.is_dir():
+            return f"Error: Not a directory: {abs_path}"
+
+        def fmt_size(num_bytes: int) -> str:
+            if num_bytes < 1024:
+                return f"{num_bytes} B"
+            if num_bytes < 1024 * 1024:
+                return f"{num_bytes / 1024:.1f} KB"
+            if num_bytes < 1024 * 1024 * 1024:
+                return f"{num_bytes / (1024 * 1024):.1f} MB"
+            return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+        total_bytes = 0
+        file_count = 0
+        dir_count = 0
+        largest: List[Tuple[int, str]] = []  # min-heap of (size, path)
+        top_n = max(0, min(top_n, 50))
+
+        try:
+            for dirpath, dirnames, filenames in os.walk(root, topdown=True, onerror=None, followlinks=False):
+                dir_count += 1
+
+                for name in filenames:
+                    file_count += 1
+                    if file_count > max_files:
+                        raise RuntimeError(f"Scan aborted: too many files (> {max_files}).")
+
+                    fpath = Path(dirpath) / name
+                    try:
+                        size = fpath.stat().st_size
+                    except Exception:
+                        continue
+
+                    total_bytes += int(size)
+
+                    if top_n > 0:
+                        pstr = str(fpath)
+                        if len(largest) < top_n:
+                            heapq.heappush(largest, (int(size), pstr))
+                        else:
+                            if int(size) > largest[0][0]:
+                                heapq.heapreplace(largest, (int(size), pstr))
+        except RuntimeError as e:
+            # Return partial results with explicit warning
+            warning = str(e)
+        else:
+            warning = ""
+
+        largest_sorted = sorted(largest, key=lambda x: x[0], reverse=True)
+
+        out = []
+        out.append("### Folder Size")
+        out.append(f"Path: {abs_path}")
+        out.append(f"Total size: **{fmt_size(total_bytes)}**")
+        out.append(f"Files: {file_count}")
+        out.append(f"Directories: {dir_count}")
+        if warning:
+            out.append(f"\n⚠️ {warning}")
+        if largest_sorted:
+            out.append("\n**Largest files:**")
+            for size, pstr in largest_sorted:
+                out.append(f"- {fmt_size(size)} - {pstr}")
+
+        return "\n".join(out)
 
 class ReadFileTool(BaseTool):
     name = "read_file"

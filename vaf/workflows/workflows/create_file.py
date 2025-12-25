@@ -28,15 +28,35 @@ WORKFLOW = {
     "steps": [
         {
             "tool": "coding_agent",
-            "input": "Create: {description}\nFilename: {filename}",
+            "input": (
+                "Create the contents for this file.\n"
+                "Return ONLY the file content (no Markdown fences, no explanations).\n\n"
+                "Filename: {filename}\n"
+                "Requirements: {description}\n"
+            ),
             "output": "content",
             "description": "Generate file content",
         },
         {
             "tool": "write_file",
-            "input": '{"path": "{filename}", "content": "{content}"}',
+            "args": {
+                "path": "{filename}",
+                "content": "{content}",
+            },
+            "input": "{filename}",
             "output": "saved",
             "description": "Save the file",
+        },
+        {
+            "tool": "librarian_agent",
+            "input": (
+                "Create a short user-facing completion message.\n"
+                "Include: what was created, where it was saved, and how to use it (if applicable).\n\n"
+                "Filename: {filename}\n"
+                "Write result: {saved}\n"
+            ),
+            "output": "final",
+            "description": "Return a helpful completion message",
         },
     ],
 }

@@ -1,6 +1,5 @@
 # 文 Veyllo Agentic Framework (VAF)
 
-VAF is a premium, local-first AI agent framework designed for high efficiency and aesthetic interaction. It features a **modern terminal UI**, multiple themes, session management, scheduled automations, and powerful developer tools that work on **Python 3.13** across platforms (Windows, Linux, macOS).
 
 ```
 O))         O))       O))))))))
@@ -10,8 +9,35 @@ O))         O))       O))))))))
     O)) O)) )))) O))  O))      
      O))))        O)) O))      
       O))          O))O))     (OO ) 
-      
 ```
+
+VAF is a comprehensive agent suite designed to transform LLMs like VQ-1 into autonomous powerhouses. It features a modular plug-and-play architecture, allowing you to extend agent capabilities with custom Python workflows. Built for Python 3.13, VAF offers a modern terminal UI, cross-platform support (Windows, Linux, macOS), session management, and powerful automation tools.
+
+## 🚀 Quick Install
+
+**All Platforms:**
+```bash
+git clone https://github.com/Veyllo-Labs/VAF.git
+cd VAF
+pip install -e .
+```
+
+**Linux/macOS:**
+- The `vaf` command is usually available immediately after installation
+- If not found, add to PATH: `export PATH="$HOME/.local/bin:$PATH"` (add to `~/.bashrc` or `~/.zshrc` for persistence)
+
+**Windows:**
+- After installation, **restart your terminal** (PATH is updated automatically)
+- Or manually add to PATH: `%LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python.*\LocalCache\local-packages\Python*\Scripts`
+- Alternative: Use `python -m vaf` instead of `vaf`
+
+**Verify installation:**
+```bash
+vaf --version
+```
+
+See [Installation](#installation) below for detailed platform-specific instructions.
+
 
 ## ✨ Highlights
 
@@ -21,6 +47,7 @@ O))         O))       O))))))))
 - 💾 **Session Management** - Save, load, and search conversations
 - ⏪ **Undo/Snapshot** - Git-based code change tracking and rollback
 - ⚡ **Scheduled Automations** - Time-based tasks (daily news, weather reports)
+- 🔄 **Workflows** - Plug-and-play multi-step pipelines (create website, research & code, etc.)
 - 🛠️ **Powerful Tools** - Bash execution, web fetching, parallel operations
 - 🤖 **Sub-Agents** - Specialized agents for coding and file navigation
 
@@ -246,6 +273,40 @@ vaf snapshot clean --keep 50
 | Coder  ✅ Finalizing...
 ```
 
+### 🔄 Workflows - Plug & Play Pipelines
+
+VAF includes pre-built workflows that automatically execute multi-step tasks. Just describe what you want, and VAF handles the rest!
+
+**Built-in Workflows:**
+- **Create Website** - "Erstelle eine Website für ein Umzugsunternehmen in Berlin"
+- **Research & Code** - "Recherchiere Python async/await und erstelle Beispielcode"
+- **Deep Research** - "Tiefgehende Recherche über Machine Learning"
+- **Code Review** - "Review diesen Code und verbessere ihn"
+- **Analyze Website** - "Analysiere diese URL und fasse zusammen"
+- **Generate Docs** - "Erstelle Dokumentation für dieses Projekt"
+- **Create Scheduled Task** - "Erstelle immer um 21:27 eine Website mit News auf meinem Desktop"
+
+**How It Works:**
+1. You describe your task in natural language (German or English)
+2. VAF's "Brain" matches your input to the best workflow
+3. Variables are automatically extracted (time, format, topic, etc.)
+4. Workflow executes all steps automatically
+5. Results are delivered with clickable file links
+
+**Example:**
+```
+❯ Erstelle eine Website für ein Umzugsunternehmen in Berlin
+
+VAF: 🧠 Matching workflow: create_website
+     📝 Extracted: description = "Umzugsunternehmen in Berlin"
+     🔄 Executing workflow...
+     ✅ Website created: index.html, style.css, script.js
+     📁 Files: file:///path/to/index.html
+```
+
+**Create Custom Workflows:**
+Just create a `.py` file in `~/.vaf/workflows/` - VAF automatically discovers and loads it! See `vaf/workflows/README.md` for details.
+
 ### 🛠️ AI Tools
 
 #### Bash Tool - Execute Shell Commands
@@ -385,21 +446,39 @@ vaf git log
 
 ## Installation
 
-1. **Clone the repo:**
-   ```bash
-   git clone https://github.com/Veyllo-Labs/VAF.git
-   cd VAF
-   ```
+<a name="installation"></a>
 
-2. **Install Dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+Install VAF globally to use the `vaf` command from anywhere (just like `git`, `npm`, or other CLI tools):
 
-3. **Install Package (Editable Mode):**
-   ```bash
-   pip install -e .
-   ```
+```bash
+# Clone the repository
+git clone https://github.com/Veyllo-Labs/VAF.git
+cd VAF
+
+# Install globally (creates 'vaf' command)
+pip install -e .
+```
+
+**That's it!** After installation, you can use `vaf run` from any directory.
+
+### Platform-Specific Notes
+
+**Linux & macOS:**
+- Usually works immediately - pip automatically adds scripts to `~/.local/bin` (which is typically in PATH)
+- If `vaf` is not found, add to PATH: `export PATH="$HOME/.local/bin:$PATH"` (add to `~/.bashrc` or `~/.zshrc` for persistence)
+- Or install system-wide: `sudo pip install -e .` (installs to `/usr/local/bin`)
+
+**Windows:**
+- Scripts are installed to `%LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python.*\LocalCache\local-packages\Python*\Scripts`
+- You may need to restart your terminal or add the Scripts directory to PATH manually
+- Or use `python -m vaf` as an alternative
+
+### Why Global Installation?
+
+- ✅ **Works from anywhere** - No need to be in the VAF directory
+- ✅ **Standard practice** - This is how CLI tools are typically installed (like `git`, `npm`, `docker`)
+- ✅ **Easy updates** - Just run `pip install -e .` again to update
+- ✅ **No conflicts** - VAF is a standalone tool with no system conflicts
 
 ## Quick Start
 
@@ -458,9 +537,14 @@ Settings are stored in `~/.vaf/`:
 ├── snapshots/        # Code snapshots
 ├── automations/      # Scheduled tasks
 │   └── README.md     # How automations work
+├── workflows/        # Custom workflows (plug & play!)
+│   └── *.py          # Your custom workflow files
 ├── history           # Command history
 └── autosuggest.json  # Learned word suggestions
 ```
+
+**Custom Workflows:**
+Place your custom workflow files in `~/.vaf/workflows/*.py` - they're automatically discovered and loaded at startup!
 
 ## Project Structure
 
@@ -473,6 +557,7 @@ vaf/
 │   ├── session.py        # Session Management
 │   ├── snapshot.py       # Undo/Snapshot System
 │   ├── automation.py     # Scheduled Tasks
+│   ├── context.py        # Context Management
 │   └── platform.py       # Cross-Platform Utils
 ├── cli/
 │   ├── tui.py            # Modern Terminal UI
@@ -495,11 +580,29 @@ vaf/
 │   ├── webfetch.py       # Web Content Fetching
 │   ├── codesearch.py     # Code Search
 │   ├── automation.py     # Automation Tool
-│   └── search.py         # Web Search
+│   ├── search.py         # Web Search
+│   └── python_sandbox.py # Safe Python Execution
+├── workflows/
+│   ├── engine.py         # Workflow Execution Engine
+│   ├── selector.py       # Workflow Matching (Brain + Patterns)
+│   ├── templates.py      # Auto-loading Workflow System
+│   ├── README.md         # Workflow Documentation
+│   └── workflows/        # Individual Workflow Files
+│       ├── create_website.py
+│       ├── research_and_code.py
+│       ├── deep_research.py
+│       ├── create_scheduled_task.py
+│       ├── analyze_website.py
+│       ├── code_review.py
+│       ├── generate_docs.py
+│       ├── create_file.py
+│       └── web_lookup.py
 └── main.py               # CLI Entry Point
 ```
 
-## Extending VAF (Plugin System)
+## Extending VAF
+
+### 1. Adding New Tools (Plugin System)
 
 VAF supports a "Drop-in" plugin system. To add a new tool:
 
@@ -528,6 +631,54 @@ class MyTool(BaseTool):
 ```
 
 The agent automatically discovers and registers your tool at startup!
+
+### 2. Creating Custom Workflows (Plug & Play)
+
+Workflows are even easier - just create a `.py` file with a `WORKFLOW` dictionary!
+
+**Create `~/.vaf/workflows/my_workflow.py`:**
+```python
+"""
+My Custom Workflow
+"""
+
+WORKFLOW = {
+    "name": "My Workflow",
+    "description": "What this workflow does",
+    "triggers": [
+        "keyword1", "keyword2",
+        "phrase to match",
+    ],
+    "trigger_patterns": [
+        r"pattern.*match",
+    ],
+    "variables": {
+        "topic": "What to process",
+    },
+    "steps": [
+        {
+            "tool": "web_search",
+            "input": "{topic}",
+            "output": "results",
+            "description": "Search the web",
+        },
+        {
+            "tool": "coding_agent",
+            "input": "Based on: {results}\nCreate code for: {topic}",
+            "output": "code",
+            "description": "Generate code",
+        },
+    ],
+}
+```
+
+**That's it!** VAF automatically:
+- Discovers your workflow at startup
+- Matches user input to your triggers
+- Extracts variables automatically
+- Executes all steps in sequence
+
+See `vaf/workflows/README.md` for complete documentation and examples.
 
 ## Version
 

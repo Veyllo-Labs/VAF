@@ -165,9 +165,12 @@ class Agent:
                         # 4. Register the tool (Filter primitives to force Sub-Agent usage)
                         instance = obj()
                         
-                        # Built-in tools reserved for Coding Sub-Agent only
-                        BUILTIN_CODER_TOOLS = [
+                        # Tools intentionally NOT exposed to the Main Agent.
+                        # Rationale: keep the Main Agent high-level; delegate OS/filesystem analysis to sub-agents
+                        # (e.g., librarian_agent) to avoid prompt/tool confusion and to keep behavior consistent.
+                        MAIN_AGENT_EXCLUDED_TOOLS = [
                             "write_file", "read_file", "list_files", "move_file",  # Filesystem
+                            "folder_size",   # Deterministic sizing (prefer via librarian_agent)
                             "bash",           # Shell commands (for build/test)
                             "codesearch",     # Code navigation
                             "batch",          # Parallel operations
@@ -175,7 +178,7 @@ class Agent:
                         
                         # Check if tool is coder-only (built-in or marked with coder_only=True)
                         is_coder_only = (
-                            instance.name in BUILTIN_CODER_TOOLS or 
+                            instance.name in MAIN_AGENT_EXCLUDED_TOOLS or 
                             getattr(instance, 'coder_only', False)
                         )
                         
@@ -310,10 +313,18 @@ Time: {now_str} | OS: {os_info} | Home: {home_dir} | CWD: {cwd}
    - "How many storage devices" → CALL librarian_agent NOW
    - "What drives" → CALL librarian_agent NOW
    - System/storage questions → CALL librarian_agent NOW
+   - "Largest files" / "Biggest files" → CALL librarian_agent NOW
+   - "Find files by size" → CALL librarian_agent NOW
+   - "Multiple files" / "Several files" → CALL librarian_agent NOW
+   - "File analysis" → CALL librarian_agent NOW
+   - "Data files" → CALL librarian_agent NOW
+   - Complex file queries (sorting, filtering, analysis) → CALL librarian_agent NOW
+   - Questions about file contents, sizes, types, locations → CALL librarian_agent NOW
    - "Create website/app/code/program/script" → CALL coding_agent NOW
    - "Build/make a tool/app/website" → CALL coding_agent NOW
    - ANY coding/programming/website/app task → CALL coding_agent NOW
    - "Read URL" → CALL webfetch(url) NOW
+   - "Create automation" / "Schedule task" → CALL create_automation NOW
    - Unknown person/topic → CALL web_search NOW
    - and so on... check the tools list!
 
@@ -357,6 +368,25 @@ User: "what's the weather today?"
 User: "show me events"
 ❌ WRONG: [CALLS web_search("events")] → Too generic, wrong results
 ✅ CORRECT: "What kind of events? And for which date or location?" → Then search with specific info
+
+User: "what are the largest files I have?"
+❌ WRONG: [CALLS find_files] → Too simple, can't sort/analyze
+❌ WRONG: "I'll use find_files to search..." → Just talking
+✅ CORRECT: [CALLS librarian_agent("Find and list the largest files on this system, sorted by size")] → Gets detailed analysis
+
+User: "analyze my data files"
+❌ WRONG: [CALLS find_files] → Too simple for analysis
+✅ CORRECT: [CALLS librarian_agent("Analyze data files on this system: find all data files, show sizes, types, and locations")] → Gets comprehensive analysis
+
+User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my Desktop?"
+❌ WRONG: [CALLS create_automation] then [CALLS web_search] then [CALLS git_init] → Unnecessary tools, automation prompt should handle it
+✅ CORRECT: [CALLS create_automation(name="weather_berlin", prompt="Create a weather summary for Berlin tomorrow as HTML file and save to Desktop", frequency="daily", time="21:07", output_path="Desktop")] → Automation will handle web_search and HTML generation when it runs
+
+**IMPORTANT FOR AUTOMATIONS:**
+- When creating automations, the prompt should describe WHAT to do, not HOW
+- The automation will execute the prompt later, and the agent will call tools then
+- DO NOT call web_search, git_init, or other tools AFTER creating automation
+- The automation's prompt should be self-contained (e.g., "Create weather summary for Berlin tomorrow as HTML")
 """
 
         self.history = [
@@ -502,17 +532,27 @@ User: "show me events"
             ])
             
             # Use same logic as analyze_intent (which works!)
+            # Build dynamic examples from available workflows
+            workflow_ids = list(WORKFLOW_TEMPLATES.keys())
+            examples = []
+            for wf_id in workflow_ids:
+                wf = WORKFLOW_TEMPLATES[wf_id]
+                # Get trigger examples from the workflow
+                triggers = wf.get("triggers", [])[:3]  # First 3 triggers as examples
+                if triggers:
+                    examples.append(f"- {', '.join(triggers)} → {wf_id}")
+            
             prompt = (
                 f"You are a workflow classifier. Your ONLY job is to match the user request to a workflow ID.\n"
                 f"Available Workflows:\n{workflow_list}\n\n"
                 f"Guidelines:\n"
                 f"- Match by INTENT, not exact words (works in ANY language!)\n"
                 f"- IGNORE typos and spelling errors - understand the intent\n"
-                f"- 'webseite für' / 'website for' / 'create website' → create_website\n"
-                f"- 'research and code' / 'recherchiere und code' → research_and_code\n"
-                f"- 'analyze website' / 'analysiere website' → analyze_website\n"
-                f"- 'wo ist' / 'where is' / 'was ist in' (folder/file questions) → none (use librarian_agent, not web_lookup)\n"
-                f"- 'suche nach' / 'search for' (web search) → web_lookup\n"
+                f"- If request contains TIME (e.g., 'at 21:27', 'um 21:27', 'always at', 'immer um', 'daily at', 'täglich um') → create_scheduled_task\n"
+                f"- If request asks to schedule/automate something → create_scheduled_task\n"
+                f"- If request is about folder/file locations → none (use librarian_agent, not web_lookup)\n"
+                f"- If request is a simple web search → web_lookup\n"
+                f"- Examples:\n" + "\n".join(examples) + "\n"
                 f"- If no match → none\n\n"
                 f"Request: {user_input}\n"
                 f"Output ONLY the workflow ID or 'none'."
@@ -539,8 +579,9 @@ User: "show me events"
             
             # Parse workflow ID (same pattern as analyze_intent parses float)
             import re
-            # Look for workflow IDs in the response
-            match = re.search(r'\b(create_website|research_and_code|analyze_website|code_review|deep_research|generate_docs|web_lookup|create_file)\b', content.lower())
+            # Dynamically build regex from all available workflow IDs (plug and play!)
+            workflow_ids_pattern = '|'.join(re.escape(wf_id) for wf_id in WORKFLOW_TEMPLATES.keys())
+            match = re.search(rf'\b({workflow_ids_pattern})\b', content.lower())
             if match:
                 workflow_id = match.group(1)
                 if workflow_id in WORKFLOW_TEMPLATES:
@@ -615,18 +656,57 @@ User: "show me events"
             # Determine which variables are missing
             missing = [var for var in required_vars if var not in variables]
             
-            # If variables are missing, try to extract them from the input
+            # Debug: Log extracted variables
+            if variables:
+                from vaf.cli.ui import UI
+                UI.event("Debug", f"Extracted variables: {list(variables.keys())}", style="dim")
+            
+            # If variables are missing, try to extract them from the input using improved extraction
             if missing:
-                # Try to extract missing variables from user input
-                # Use list copy to avoid modification during iteration
-                missing_copy = list(missing)
+                from vaf.cli.ui import UI
+                UI.event("Debug", f"Missing variables: {missing}", style="dim")
+                # Use selector's improved _extract_value method for better extraction
+                missing_copy = list(missing)  # Use copy to avoid modification during iteration
                 for var_name in missing_copy:
-                    # For description/query/topic variables, use the full input
-                    if var_name in ("description", "query", "topic"):
-                        variables[var_name] = user_input
+                    extracted = selector._extract_value(user_input, var_name, template_variables.get(var_name, ""))
+                    if extracted:
+                        variables[var_name] = extracted
                         missing.remove(var_name)
                     else:
-                        UI.event("Workflow", f"Missing input: {var_name}", style="warning")
+                        # For description/query/topic/task_description variables, use cleaned input as fallback
+                        if var_name in ("description", "query", "topic", "task_description"):
+                            # Try to extract a cleaned version first
+                            cleaned = selector._extract_value(user_input, var_name, template_variables.get(var_name, ""))
+                            if cleaned and len(cleaned) > 5:
+                                variables[var_name] = cleaned
+                            else:
+                                # Last resort: use full input but clean it
+                                # Remove time patterns, frequency words, etc.
+                                import re
+                                cleaned_input = user_input
+                                # Remove time patterns (HH:MM format)
+                                cleaned_input = re.sub(r'\b\d{1,2}:\d{2}\b', '', cleaned_input)
+                                # Remove frequency words (works in any language)
+                                frequency_words = ["immer", "täglich", "daily", "always", "every day", "um", "at"]
+                                for word in frequency_words:
+                                    cleaned_input = re.sub(rf'\b{word}\b', '', cleaned_input, flags=re.IGNORECASE)
+                                # Remove format mentions
+                                format_words = ["html", "markdown", "txt", "text"]
+                                for word in format_words:
+                                    cleaned_input = re.sub(rf'\b{word}\b', '', cleaned_input, flags=re.IGNORECASE)
+                                # Remove path mentions
+                                path_words = ["desktop", "documents", "downloads", "on my", "to my"]
+                                for word in path_words:
+                                    cleaned_input = re.sub(rf'\b{word}\b', '', cleaned_input, flags=re.IGNORECASE)
+                                # Clean up whitespace
+                                cleaned_input = re.sub(r'\s+', ' ', cleaned_input).strip()
+                                if cleaned_input:
+                                    variables[var_name] = cleaned_input
+                                else:
+                                    variables[var_name] = user_input
+                            missing.remove(var_name)
+                        else:
+                            UI.event("Workflow", f"Missing input: {var_name}", style="warning")
                 
                 # If still missing critical variables, fall back to LLM
                 if missing:
@@ -1205,6 +1285,11 @@ User: "show me events"
                                 f"You MUST inform the user about this error immediately. Do not think - just report the error."
                             )
                         })
+                    
+                    # Context Management: Check after each tool response to prevent overflow
+                    # Tool responses can be large (e.g., web_search results, file contents)
+                    # Compress if we're approaching the limit
+                    self.manage_context()
                 
                 UI.event("Debug", "Tool finished. Sending result to model...", style="dim")
                 continue
@@ -1471,6 +1556,10 @@ User: "show me events"
             # Clean History: Store ONLY the final content (Answer), discarding the reasoning trace.
             history_content = full_content if full_content else full_response
             self.history.append({"role": "assistant", "content": history_content})
+            
+            # Context Management: Check after adding assistant response
+            # Long reasoning phases can push us over the limit
+            self.manage_context()
             
             # --- Proactive Context Compression (User Request) ---
             # "Only Questions and Answers remain in Context"

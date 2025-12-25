@@ -36,15 +36,34 @@ WORKFLOW = {
         },
         {
             "tool": "librarian_agent",
-            "input": "Analyze this project structure and create comprehensive documentation:\n\n{file_list}\n\nInclude: Overview, file descriptions, usage instructions.",
+            "input": (
+                "Create a comprehensive DOCUMENTATION.md for this project.\n"
+                "Include: overview, key modules/files, how to run, common commands, and any important notes.\n"
+                "Be concise but complete.\n\n"
+                "Project file list:\n{file_list}\n"
+            ),
             "output": "documentation",
             "description": "Generate documentation",
         },
         {
             "tool": "write_file",
-            "input": '{"path": "DOCUMENTATION.md", "content": "{documentation}"}',
+            "args": {
+                "path": "DOCUMENTATION.md",
+                "content": "{documentation}",
+            },
+            "input": "DOCUMENTATION.md",
             "output": "saved",
             "description": "Save documentation",
+        },
+        {
+            "tool": "librarian_agent",
+            "input": (
+                "Write a short completion message.\n"
+                "Include the output filename and what the documentation contains.\n\n"
+                "Save result: {saved}\n"
+            ),
+            "output": "final",
+            "description": "Return a helpful completion message",
         },
     ],
 }

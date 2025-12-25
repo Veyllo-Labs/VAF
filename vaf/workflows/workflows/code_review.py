@@ -35,15 +35,38 @@ WORKFLOW = {
         },
         {
             "tool": "coding_agent",
-            "input": "Review and improve this code. Fix bugs, improve readability, add comments:\n\n{original_code}",
+            "input": (
+                "Improve this code.\n"
+                "- Fix bugs\n"
+                "- Improve readability\n"
+                "- Add/adjust comments where helpful\n"
+                "- Keep behavior unless a bug fix requires a change\n\n"
+                "Return ONLY the improved file content (no Markdown fences, no explanation).\n\n"
+                "{original_code}\n"
+            ),
             "output": "improved_code",
             "description": "Review and improve the code",
         },
         {
             "tool": "write_file",
-            "input": '{"path": "{path}", "content": "{improved_code}"}',
+            "args": {
+                "path": "{path}",
+                "content": "{improved_code}",
+            },
+            "input": "{path}",
             "output": "saved",
             "description": "Save the improved code",
+        },
+        {
+            "tool": "librarian_agent",
+            "input": (
+                "Write a short change summary for the user.\n"
+                "Include: key improvements, any behavior changes, and where it was saved.\n\n"
+                "File: {path}\n"
+                "Save result: {saved}\n"
+            ),
+            "output": "final",
+            "description": "Summarize changes",
         },
     ],
 }

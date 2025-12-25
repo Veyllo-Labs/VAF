@@ -36,7 +36,15 @@ WORKFLOW = {
         },
         {
             "tool": "librarian_agent",
-            "input": "Analyze and summarize this website content:\n\n{content}",
+            "input": (
+                "Analyze this website content and produce a useful summary.\n"
+                "Include:\n"
+                "- What the page is about (1-2 sentences)\n"
+                "- Key points (bullets)\n"
+                "- Any actionable info (links, steps, requirements)\n"
+                "- If it's a product/service page: pricing/offer highlights if present\n\n"
+                "{content}\n"
+            ),
             "output": "analysis",
             "description": "Analyze and summarize the content",
         },

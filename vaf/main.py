@@ -460,5 +460,9 @@ def callback(
         UI.print("https://github.com/Veyllo-Labs/Veyllo-App")
         raise typer.Exit()
 
-if __name__ == "__main__":
+def main():
+    """Entry point for console script."""
     app()
+
+if __name__ == "__main__":
+    main()

@@ -103,7 +103,10 @@ WORKFLOW = {
         },
         {
             "tool": "write_file",
-            "input": '{"path": "config.{format}", "content": "{config_content}"}',
+            "args": {
+                "path": "config.{format}",
+                "content": "{config_content}",
+            },
             "output": "result",
             "description": "Save config file",
         },
@@ -160,7 +163,10 @@ Steps execute sequentially. Output from one step becomes input for the next:
     },
     {
         "tool": "write_file",
-        "input": '{"path": "{filename}", "content": "{code}"}',
+        "args": {
+            "path": "{filename}",
+            "content": "{code}",
+        },
         "output": "saved",
         "description": "Save to file",
     },

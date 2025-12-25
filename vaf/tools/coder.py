@@ -1291,7 +1291,7 @@ Thumbs.db
         except (subprocess.CalledProcessError, FileNotFoundError):
             # Git not available or failed - continue without git (graceful degradation)
             pass
-    
+
     def run(self, **kwargs) -> str:
         task = kwargs.get('task', '')
         if not task:
@@ -1793,8 +1793,8 @@ START by calling set_todos with your planned tasks."""
                         }
                     },
                     "required": []
-                }
-            }
+                        }
+                    }
         })
         
         if HAS_CODING_TOOLS:
@@ -1844,8 +1844,8 @@ START by calling set_todos with your planned tasks."""
                 tui.set_action("📝 Compressing context...")
                 live.update(tui.render())
                 history = context_manager.compress(history)
-                tui.set_action(f"🔄 Loop {loop.loop_count}")
-                live.update(tui.render())
+            tui.set_action(f"🔄 Loop {loop.loop_count}")
+            live.update(tui.render())
             
             # ═══════════════════════════════════════════════════════════════
             # LLM REQUEST
@@ -2672,8 +2672,8 @@ START by calling set_todos with your planned tasks."""
                     history.append({
                         "role": "system",
                         "content": nudge_content
-                    })
-                    continue
+                })
+                continue
             
             # Only accept completion if:
             # 1. TODO list is done AND at least 3 loops completed (minimum work done)
@@ -2777,7 +2777,7 @@ START by calling set_todos with your planned tasks."""
             # Track repeated errors to prevent infinite loops
             if not hasattr(loop, 'error_history'):
                 loop.error_history = []
-            
+
             for tc in tool_calls:
                 fn_name = tc['function']['name']
                 fn_args_str = tc['function']['arguments']
@@ -2851,26 +2851,26 @@ START by calling set_todos with your planned tasks."""
                         else:
                             # All tasks are done - allow completion
                             tui.append_stream("🎉 All tasks completed!")
-                            stop_live()
-                            files_list = _format_file_links(files_created, base_dir)
-                            dir_link = _get_clickable_path(base_dir)
-                            open_instructions = _get_open_instructions(files_created, base_dir)
+                        stop_live()
+                        files_list = _format_file_links(files_created, base_dir)
+                        dir_link = _get_clickable_path(base_dir)
+                        open_instructions = _get_open_instructions(files_created, base_dir)
                             
-                            # Try to open the folder automatically
-                            folder_opened = _open_folder(base_dir)
-                            folder_status = "✅ Folder opened in file manager" if folder_opened else "📂 Folder ready"
-                            
-                            # Check for placeholders
-                            placeholder_check = QualityChecker.check_placeholders(files_created, base_dir)
-                            placeholder_warning = ""
-                            if placeholder_check['has_placeholders']:
-                                placeholder_warning = "\n\n### ⚠️ Unchanged Placeholders Found\n"
-                                for fname, placeholders in placeholder_check['files_with_placeholders'].items():
-                                    placeholder_warning += f"\n**{fname}**:\n"
-                                    for p in placeholders[:5]:
-                                        placeholder_warning += f"- {p}\n"
-                            
-                            return (
+                        # Try to open the folder automatically
+                        folder_opened = _open_folder(base_dir)
+                        folder_status = "✅ Folder opened in file manager" if folder_opened else "📂 Folder ready"
+                        
+                        # Check for placeholders
+                        placeholder_check = QualityChecker.check_placeholders(files_created, base_dir)
+                        placeholder_warning = ""
+                        if placeholder_check['has_placeholders']:
+                            placeholder_warning = "\n\n### ⚠️ Unchanged Placeholders Found\n"
+                            for fname, placeholders in placeholder_check['files_with_placeholders'].items():
+                                placeholder_warning += f"\n**{fname}**:\n"
+                                for p in placeholders[:5]:
+                                    placeholder_warning += f"- {p}\n"
+                        
+                        return (
                                 f"### ✅ Task Completed\n\n"
                                 f"**📁 Project Directory**: {dir_link}\n"
                                 f"**Full Path**: `{base_dir}`\n"
@@ -2881,8 +2881,8 @@ START by calling set_todos with your planned tasks."""
                                 f"**🔄 Loops**: {loop.loop_count}\n\n"
                                 f"**🔧 To continue working on this project, use:**\n"
                                 f"`coding_agent(task=\"your task\", project_path=\"{base_dir}\")`"
-                                f"{placeholder_warning}"
-                            )
+                            f"{placeholder_warning}"
+                        )
                     
                     # CRITICAL: Cannot call task_done without TODOs!
                     if not task_mgr.todos:
@@ -3147,20 +3147,20 @@ START by calling set_todos with your planned tasks."""
                         else:
                             # Non-file task or no files created yet - allow completion
                             summary = fn_args.get("summary", "done")
-                            task_mgr.complete_current_task(summary)
-                            next_task = task_mgr.get_current_task()
-                            
-                            tui.append_stream(f"✅ Completed: {current[:40] if current else 'task'}")
-                            tui.set_action(f"📋 {task_mgr.get_progress()}")
-                            
-                            if next_task:
-                                result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
-                                tui.append_stream(f"➡️ Next: {next_task[:40]}")
-                            elif task_mgr.is_all_done():
-                                result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
-                                tui.append_stream("🎉 All tasks done!")
-                            else:
-                                result = "✅ Task completed. Continue with remaining work."
+                        task_mgr.complete_current_task(summary)
+                        next_task = task_mgr.get_current_task()
+                        
+                        tui.append_stream(f"✅ Completed: {current[:40] if current else 'task'}")
+                        tui.set_action(f"📋 {task_mgr.get_progress()}")
+                        
+                        if next_task:
+                            result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
+                            tui.append_stream(f"➡️ Next: {next_task[:40]}")
+                        elif task_mgr.is_all_done():
+                            result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
+                            tui.append_stream("🎉 All tasks done!")
+                        else:
+                            result = "✅ Task completed. Continue with remaining work."
                 
                 elif fn_name == "web_fetch":
                     url = fn_args.get("url", "")
@@ -3628,4 +3628,4 @@ START by calling set_todos with your planned tasks."""
                 f"**💡 Suggestion**: Try a more specific task description.\n\n"
                 f"**🔧 To retry, use:**\n"
                 f"`coding_agent(task=\"your task\", project_path=\"{base_dir}\")`"
-            )
+        )

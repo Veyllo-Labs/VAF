@@ -67,7 +67,7 @@ class ContextManager:
     
     def __init__(self, max_tokens: int = 8192):
         self.max_tokens = max_tokens
-        self.trigger_threshold = 0.75  # Trigger at 75%
+        self.trigger_threshold = 0.70  # Trigger at 70% (reduced from 75% to prevent overflow)
         self.recent_memory_size = 10   # Keep last N messages raw
         
         # Context layers

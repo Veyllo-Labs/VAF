@@ -187,6 +187,68 @@ class Platform:
         """Check if Git is installed."""
         return Platform.has_command("git")
     
+    @staticmethod
+    def open_new_terminal(command: str, title: str = None) -> bool:
+        """
+        Open a new terminal window and execute a command. OS-independent.
+        
+        Args:
+            command: Command to execute in the new terminal
+            title: Optional title for the terminal window
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        import subprocess
+        
+        try:
+            if Platform.is_windows():
+                # Windows: Use start cmd /k to open new window
+                if title:
+                    cmd = f'start "{title}" cmd /k "{command}"'
+                else:
+                    cmd = f'start cmd /k "{command}"'
+                subprocess.Popen(cmd, shell=True)
+                return True
+                
+            elif Platform.is_macos():
+                # macOS: Use osascript to open Terminal.app
+                script = f'''
+                tell application "Terminal"
+                    activate
+                    do script "{command.replace('"', '\\"')}"
+                end tell
+                '''
+                subprocess.Popen(['osascript', '-e', script])
+                return True
+                
+            else:
+                # Linux: Try different terminal emulators
+                terminals = [
+                    ('gnome-terminal', ['--', 'bash', '-c', f'{command}; exec bash']),
+                    ('xterm', ['-e', 'bash', '-c', f'{command}; exec bash']),
+                    ('konsole', ['-e', 'bash', '-c', f'{command}; exec bash']),
+                    ('x-terminal-emulator', ['-e', 'bash', '-c', f'{command}; exec bash']),
+                ]
+                
+                for term_name, term_args in terminals:
+                    if Platform.has_command(term_name):
+                        if title:
+                            # Some terminals support title
+                            if term_name == 'gnome-terminal':
+                                term_args.insert(0, f'--title={title}')
+                            elif term_name == 'xterm':
+                                term_args.insert(0, f'-T')
+                                term_args.insert(1, title)
+                        subprocess.Popen([term_name] + term_args)
+                        return True
+                
+                # Fallback: try xdg-terminal or just run in background
+                return False
+                
+        except Exception:
+            return False
+    
     # ═══════════════════════════════════════════════════════════════════════════
     # PATHS
     # ═══════════════════════════════════════════════════════════════════════════

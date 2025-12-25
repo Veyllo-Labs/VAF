@@ -25,11 +25,12 @@ class StepStatus(Enum):
 class WorkflowStep:
     """A single step in a workflow."""
     tool: str                           # Tool name to execute
-    input_template: str                 # Input with {variables}
+    input_template: str                 # Input with {variables} (single-arg tools)
     output_name: str                    # Name for this step's output
     description: str = ""               # Human-readable description
     optional: bool = False              # Skip on failure instead of abort
     condition: Optional[str] = None     # Only run if condition met
+    args_template: Optional[Dict[str, Any]] = None  # Multi-arg tool inputs (safer than JSON strings)
     
     # Runtime state
     status: StepStatus = StepStatus.PENDING
@@ -125,15 +126,22 @@ class WorkflowEngine:
                     break
                 continue
             
-            # Resolve input template with current outputs
+            # Build tool args (prefer args_template to avoid fragile JSON templating)
             try:
-                resolved_input = self._resolve_template(step.input_template, outputs)
+                if step.args_template is not None:
+                    args: Dict[str, Any] = {}
+                    for k, v in step.args_template.items():
+                        if isinstance(v, str):
+                            args[k] = self._resolve_template(v, outputs)
+                        else:
+                            args[k] = v
+                else:
+                    resolved_input = self._resolve_template(step.input_template, outputs)
             except KeyError as e:
                 step.status = StepStatus.FAILED
                 step.error = f"Missing variable: {e}"
                 error = step.error
                 UI.error(f"  → {step.error}")
-                
                 if stop_on_error and not step.optional:
                     break
                 continue
@@ -141,17 +149,18 @@ class WorkflowEngine:
             # Execute the tool
             try:
                 tool = self.tools[step.tool]
-                
-                # Parse input - could be JSON dict or simple string
-                if resolved_input.strip().startswith("{") and resolved_input.strip().endswith("}"):
-                    import json
-                    try:
-                        args = json.loads(resolved_input)
-                    except json.JSONDecodeError:
-                        # Not valid JSON, treat as single argument
+
+                # Parse input - could be explicit args_template, JSON dict, or simple string
+                if step.args_template is None:
+                    if resolved_input.strip().startswith("{") and resolved_input.strip().endswith("}"):
+                        import json
+                        try:
+                            args = json.loads(resolved_input)
+                        except json.JSONDecodeError:
+                            # Not valid JSON, treat as single argument
+                            args = self._infer_args(step.tool, resolved_input)
+                    else:
                         args = self._infer_args(step.tool, resolved_input)
-                else:
-                    args = self._infer_args(step.tool, resolved_input)
                 
                 # Run the tool
                 result = tool.run(**args)
@@ -166,7 +175,8 @@ class WorkflowEngine:
                 
                 # Truncate for display
                 display_result = str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
-                UI.event("Workflow", f"  ✓ {step.output_name}: {display_result}", style="success")
+                # Use ASCII markers for maximum terminal compatibility (avoid UnicodeEncodeError on some Windows consoles)
+                UI.event("Workflow", f"  [OK] {step.output_name}: {display_result}", style="success")
                 
                 self.callback("success", step, i, len(steps))
                 
@@ -176,7 +186,7 @@ class WorkflowEngine:
                 step.duration = time.time() - step_start
                 error = step.error
                 
-                UI.error(f"  ✗ Error: {step.error}")
+                UI.error(f"  [FAIL] Error: {step.error}")
                 self.callback("error", step, i, len(steps))
                 
                 if stop_on_error and not step.optional:
@@ -302,7 +312,8 @@ def create_workflow(template: Dict[str, Any]) -> List[WorkflowStep]:
     for i, step_def in enumerate(template.get("steps", [])):
         steps.append(WorkflowStep(
             tool=step_def["tool"],
-            input_template=step_def["input"],
+            input_template=step_def.get("input", ""),
+            args_template=step_def.get("args"),
             output_name=step_def.get("output", f"step_{i+1}"),
             description=step_def.get("description", ""),
             optional=step_def.get("optional", False),

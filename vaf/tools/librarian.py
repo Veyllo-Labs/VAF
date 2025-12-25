@@ -17,7 +17,7 @@ from rich.live import Live
 
 from vaf.tools.base import BaseTool
 from vaf.cli.ui import UI, AnimatedHeader
-from vaf.tools.filesystem import ReadFileTool, ListFilesTool, TreeTool, FinderTool, WriteFileTool
+from vaf.tools.filesystem import ReadFileTool, ListFilesTool, TreeTool, FinderTool, WriteFileTool, FolderSizeTool
 from vaf.tools.python_sandbox import PythonSandboxTool
 
 # Try to import psutil for better disk info (optional)
@@ -65,6 +65,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             "tree": TreeTool(),
             "find_files": FinderTool(),
             "python_sandbox": PythonSandboxTool(),
+            "folder_size": FolderSizeTool(),
         }
         
         # Cross-platform home directory
@@ -117,10 +118,12 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             header = AnimatedHeader("Collaboration Mode Active", "Main Agt", "Librarian")
             live = Live(header, refresh_per_second=12, console=UI.console)
             live.start()
-            time.sleep(0.5)  # Brief animation
-            UI.event("Sub-Agent", "Librarian activated...", style="bold cyan")
-            time.sleep(0.3)
-            live.stop()
+            try:
+                time.sleep(0.5)  # Brief animation
+                UI.event("Sub-Agent", "Librarian activated...", style="bold cyan")
+                time.sleep(0.3)
+            finally:
+                live.stop()
             return direct_result
         
         # ═══════════════════════════════════════════════════════════════════════
@@ -140,6 +143,18 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
         Returns result string or None if task is too complex.
         """
         task_lower = task.lower()
+        # Normalize common mojibake sequences seen in some Windows consoles (e.g., "groÃŸ" instead of "groß")
+        task_norm = (
+            task_lower
+            .replace("ÃŸ", "ß")
+            .replace("ãÿ", "ß")
+            .replace("Ã¶", "ö")
+            .replace("Ã¤", "ä")
+            .replace("Ã¼", "ü")
+            .replace("Ã–", "ö")
+            .replace("Ã„", "ä")
+            .replace("Ãœ", "ü")
+        )
         
         # ─────────────────────────────────────────────────────────────────────
         # PATTERN: Storage/Drive information ("how many drives", "datenträger")
@@ -157,7 +172,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
         ]
         
         for pattern in storage_patterns:
-            if re.search(pattern, task_lower):
+            if re.search(pattern, task_norm):
                 # Return storage information directly
                 disk_info = self._get_disk_info()
                 
@@ -183,6 +198,39 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
         
         # Extract path from task
         path = self._extract_path(task)
+
+        # ─────────────────────────────────────────────────────────────────────
+        # PATTERN: Folder size ("how big", "size of", "wie groß", "ordnergröße")
+        # ─────────────────────────────────────────────────────────────────────
+        size_patterns = [
+            r"how (big|large) is",
+            r"size of",
+            r"folder size",
+            r"directory size",
+            # German: allow flexible phrasing like "wie groß mein downloads folder ist"
+            r"wie gro(ß|ss)",
+            r"ordnergr(ö|oe)(ß|ss)e",
+            r"größe.*(downloads|download|ordner|folder)",
+            r"speicherverbrauch",
+        ]
+        for pattern in size_patterns:
+            if re.search(pattern, task_lower):
+                # Resolve aliases like "downloads"/"desktop" via _extract_path
+                # If path doesn't exist, give a precise actionable message
+                try:
+                    if not path.exists():
+                        return (
+                            "[ERROR] Folder not found.\n\n"
+                            f"Extracted path: {path}\n"
+                            "Try one of these:\n"
+                            f"- Use a full path (Windows example): {self.home / 'Downloads'}\n"
+                            "- Or mention a known folder alias: downloads / desktop / documents\n"
+                        )
+                except Exception:
+                    pass
+
+                # Compute size deterministically (no LLM)
+                return self.tools["folder_size"].run(path=str(path), top_n=10)
         
         # ─────────────────────────────────────────────────────────────────────
         # PATTERN: Count files ("how many files", "count files", "wie viele")
@@ -202,7 +250,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             file_type = ext_match.group(1)
         
         for pattern in count_patterns:
-            if re.search(pattern, task_lower):
+            if re.search(pattern, task_norm):
                 return self._count_files(path, file_type=file_type)
         
         # ─────────────────────────────────────────────────────────────────────
@@ -217,7 +265,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
         ]
         
         for pattern in list_patterns:
-            if re.search(pattern, task_lower):
+            if re.search(pattern, task_norm):
                 return self._list_files(path)
         
         # ─────────────────────────────────────────────────────────────────────
@@ -422,10 +470,10 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
         UI.event("Librarian", f"Counting files{filter_text} in {path}...", style="dim")
         
         if not path.exists():
-            return f"❌ Path does not exist: {path}"
+            return f"[ERROR] Path does not exist: {path}"
         
         if not path.is_dir():
-            return f"❌ Not a directory: {path}"
+            return f"[ERROR] Not a directory: {path}"
         
         try:
             # Count files (not directories), optionally filtered by extension
@@ -472,7 +520,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
                 top_ext = sorted(extensions.items(), key=lambda x: x[1], reverse=True)[:5]
                 ext_str = ", ".join([f"{ext}: {count}" for ext, count in top_ext])
             
-            return f"""### 📁 {path.name or path}
+            return f"""### Folder: {path.name or path}
 
 **Files:** {total_files}
 **Folders:** {total_dirs}
@@ -481,30 +529,30 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
 **Top Extensions:** {ext_str}"""
             
         except PermissionError:
-            return f"❌ Permission denied: {path}"
+            return f"[ERROR] Permission denied: {path}"
         except Exception as e:
-            return f"❌ Error counting files: {e}"
+            return f"[ERROR] Error counting files: {e}"
     
     def _list_files(self, path: Path, limit: int = 30) -> str:
         """List files in directory."""
         UI.event("Librarian", f"Listing files in {path}...", style="dim")
         
         if not path.exists():
-            return f"❌ Path does not exist: {path}"
+            return f"[ERROR] Path does not exist: {path}"
         
         if not path.is_dir():
-            return f"❌ Not a directory: {path}"
+            return f"[ERROR] Not a directory: {path}"
         
         try:
             items = list(path.iterdir())
             files = sorted([f for f in items if f.is_file()], key=lambda x: x.name.lower())
             dirs = sorted([d for d in items if d.is_dir()], key=lambda x: x.name.lower())
             
-            result = [f"### 📁 {path.name or path}\n"]
+            result = [f"### Folder: {path.name or path}\n"]
             
             # Directories first
             for d in dirs[:10]:
-                result.append(f"📁 {d.name}/")
+                result.append(f"[DIR] {d.name}/")
             
             if len(dirs) > 10:
                 result.append(f"   ... and {len(dirs) - 10} more folders")
@@ -520,7 +568,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
                     size_str = f"{size // 1024}KB"
                 else:
                     size_str = f"{size // (1024 * 1024)}MB"
-                result.append(f"📄 {f.name} ({size_str})")
+                result.append(f"[FILE] {f.name} ({size_str})")
             
             if len(files) > limit:
                 result.append(f"\n... and {len(files) - limit} more files")
@@ -530,16 +578,16 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             return "\n".join(result)
             
         except PermissionError:
-            return f"❌ Permission denied: {path}"
+            return f"[ERROR] Permission denied: {path}"
         except Exception as e:
-            return f"❌ Error listing files: {e}"
+            return f"[ERROR] Error listing files: {e}"
     
     def _find_files(self, path: Path, pattern: str) -> str:
         """Find files matching pattern."""
         UI.event("Librarian", f"Searching for '{pattern}' in {path}...", style="dim")
         
         if not path.exists():
-            return f"❌ Path does not exist: {path}"
+            return f"[ERROR] Path does not exist: {path}"
         
         try:
             # Use glob for pattern matching
@@ -555,7 +603,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             if not matches:
                 return f"No files found matching '{pattern}' in {path}"
             
-            result = [f"### 🔍 Search: '{pattern}'\n"]
+            result = [f"### Search: '{pattern}'\n"]
             result.append(f"Found {len(matches)} matches:\n")
             
             for f in matches[:30]:
@@ -564,7 +612,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
                 except ValueError:
                     rel_path = f
                 
-                icon = "📁" if f.is_dir() else "📄"
+                icon = "[DIR]" if f.is_dir() else "[FILE]"
                 result.append(f"{icon} {rel_path}")
             
             if len(matches) > 30:
@@ -573,7 +621,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             return "\n".join(result)
             
         except Exception as e:
-            return f"❌ Error searching: {e}"
+            return f"[ERROR] Error searching: {e}"
     
     def _write_file(self, file_path: Path, content: str) -> str:
         """Write content to a file."""
@@ -589,16 +637,16 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
         UI.event("Librarian", f"Reading {file_path}...", style="dim")
         
         if not file_path.exists():
-            return f"❌ File does not exist: {file_path}"
+            return f"[ERROR] File does not exist: {file_path}"
         
         if not file_path.is_file():
-            return f"❌ Not a file: {file_path}"
+            return f"[ERROR] Not a file: {file_path}"
         
         try:
             # Check file size
             size = file_path.stat().st_size
             if size > 100 * 1024:  # 100KB limit
-                return f"❌ File too large ({size // 1024}KB). Max 100KB."
+                return f"[ERROR] File too large ({size // 1024}KB). Max 100KB."
             
             content = file_path.read_text(encoding='utf-8', errors='replace')
             
@@ -606,23 +654,23 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             if len(content) > 5000:
                 content = content[:5000] + "\n\n... (truncated)"
             
-            return f"### 📄 {file_path.name}\n\n```\n{content}\n```"
+            return f"### File: {file_path.name}\n\n```\n{content}\n```"
             
         except Exception as e:
-            return f"❌ Error reading file: {e}"
+            return f"[ERROR] Error reading file: {e}"
     
     def _show_tree(self, path: Path, max_depth: int = 3) -> str:
         """Show directory tree."""
         UI.event("Librarian", f"Building tree for {path}...", style="dim")
         
         if not path.exists():
-            return f"❌ Path does not exist: {path}"
+            return f"[ERROR] Path does not exist: {path}"
         
         try:
             result = self.tools["tree"].run(path=str(path), depth=max_depth)
-            return f"### 🌲 Directory Tree\n\n```\n{result}\n```"
+            return f"### Directory Tree\n\n```\n{result}\n```"
         except Exception as e:
-            return f"❌ Error building tree: {e}"
+            return f"[ERROR] Error building tree: {e}"
     
     # ═══════════════════════════════════════════════════════════════════════════
     # DISK/STORAGE INFORMATION (Cross-Platform)
@@ -691,7 +739,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
                     drives_info = self._get_linux_disk_info()
         except Exception as e:
             # If all fails, return basic info
-            return f"⚠️ Could not retrieve disk information: {e}"
+            return f"[WARN] Could not retrieve disk information: {e}"
         
         if not drives_info:
             return "No storage devices found."
@@ -927,34 +975,44 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             ]
             existing_paths = [str(p) for p in possible_paths if p.exists()]
             if existing_paths:
-                path_hint = f"\n💡 **Hint:** The Documents folder exists at: {existing_paths[0]}"
+                path_hint = f"\nHint: The Documents folder exists at: {existing_paths[0]}"
             else:
-                path_hint = f"\n💡 **Hint:** Documents folder not found. Try checking: {self.home}"
+                path_hint = f"\nHint: Documents folder not found. Try checking: {self.home}"
         
         # Analyze what might be wrong
         suggestions = []
         
         if status_code == 400:
-            suggestions.append("• **Invalid request format** - The task description might be unclear")
-            suggestions.append("• **Missing parameters** - The task might need more specific information")
-            suggestions.append("• **Path not found** - The folder path might be incorrect or not exist")
+            suggestions.append("- **Invalid request format** - The task description might be unclear")
+            suggestions.append("- **Missing parameters** - The task might need more specific information")
+            suggestions.append("- **Path not found** - The folder path might be incorrect or not exist")
             
             # Check if path extraction failed
             extracted_path = self._extract_path(task)
             if not extracted_path.exists():
-                suggestions.append(f"• **Path issue** - Extracted path '{extracted_path}' does not exist")
+                suggestions.append(f"- **Path issue** - Extracted path '{extracted_path}' does not exist")
                 # Suggest alternatives
                 if "dokumen" in task_lower:
-                    suggestions.append(f"• **Try:** Use full path like '{self.home / 'Documents'}' or '{self.home / 'Dokumente'}'")
+                    suggestions.append(f"- **Try:** Use full path like '{self.home / 'Documents'}' or '{self.home / 'Dokumente'}'")
         
         elif status_code == 404:
-            suggestions.append("• **Resource not found** - The requested path or file does not exist")
+            suggestions.append("- **Resource not found** - The requested path or file does not exist")
         
         elif status_code == 500:
-            suggestions.append("• **Server error** - Internal server problem, not your fault")
+            suggestions.append("- **Server error** - Internal server problem, not your fault")
         
+        # Detect common server-side format issues for more actionable retries
+        extra_retry = ""
+        if "Cannot have 2 or more assistant messages" in (error_message or ""):
+            extra_retry = (
+                "\n\n**Retry Hint (Main Agent):**\n"
+                "- This is a server-side request ordering error.\n"
+                "- Retry with a fresh tool call (new librarian_agent invocation) and a single, explicit objective.\n"
+                "- Prefer deterministic tools for OS queries (folder_size, list_files, tree) instead of LLM reasoning.\n"
+            )
+
         # Build helpful error message
-        error_report = f"""❌ **Librarian Agent Error Report**
+        error_report = f"""[ERROR] **Librarian Agent Error Report**
 
 **Status Code:** {status_code}
 **Error Type:** {error_type or 'Unknown'}
@@ -963,7 +1021,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
 **Original Task:** "{task}"
 
 **What went wrong:**
-{chr(10).join(suggestions) if suggestions else "• Unable to determine specific issue"}
+{chr(10).join(suggestions) if suggestions else "- Unable to determine specific issue"}
 
 **Available Tools:**
 {chr(10).join([f"- {t.name}: {t.description[:60]}..." for t in self.tools.values()])}
@@ -973,6 +1031,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
 2. **Rephrase the task** - Be more specific about what you want (e.g., "Count PDF files in Documents folder")
 3. **Use direct path** - Instead of "Dokumen", try "Documents" or the full path
 4. **Check permissions** - Ensure the path is accessible{path_hint}
+{extra_retry}
 
 **Context:**
 - Home directory: {self.home}
@@ -982,15 +1041,15 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
     
     def _format_connection_error(self, error: str, task: str) -> str:
         """Format connection error with helpful context."""
-        return f"""❌ **Librarian Agent Connection Error**
+        return f"""[ERROR] **Librarian Agent Connection Error**
 
 **Error:** {error}
 
 **Original Task:** "{task}"
 
 **What happened:**
-• Could not connect to the LLM server (http://127.0.0.1:8080)
-• The server might be down or not responding
+- Could not connect to the LLM server (http://127.0.0.1:8080)
+- The server might be down or not responding
 
 **Suggestions for Main Agent:**
 1. **Check server status** - Verify the LLM server is running
@@ -1028,6 +1087,7 @@ Available Tools:
 - list_files(path, sort_by='name'|'date'|'size', limit=100): Lists files and folders in a directory. Use this to see what folders exist on a drive.
 - tree(path, depth): Shows directory tree structure. Use this to explore folder structure on a drive.
 - find_files(path, pattern): Finds files by name pattern (glob) recursively
+- folder_size(path, top_n=10): Calculates total size of a folder recursively and shows largest files
 - python_sandbox(code): Execute Python code safely for mathematical calculations, data processing, and algorithms
 
 RULES:
@@ -1037,12 +1097,20 @@ RULES:
 4. If unsure about path, use the home directory
 
 TOOL SELECTION GUIDE:
-- "Read file content" / "Read file X" → Use read_file(path)
-- "Write to file" / "Create file" / "Save content to file" → Use write_file(path, content)
-- "What folders on drive X?" / "Welche Ordner auf Laufwerk X?" → Use list_files(path) to see all folders
-- "Show folder structure" → Use tree(path, depth) for visual tree
-- "Find files matching pattern" → Use find_files(path, pattern)
-- "Calculate" / "Math" / "Compute" / "Algorithm" → Use python_sandbox(code) for mathematical calculations and data processing
+- "Read file content" / "Read file X" -> Use read_file(path)
+- "Write to file" / "Create file" / "Save content to file" -> Use write_file(path, content)
+- "What folders on drive X?" / "Welche Ordner auf Laufwerk X?" -> Use list_files(path) to see all folders
+- "Show folder structure" -> Use tree(path, depth) for visual tree
+- "Find files matching pattern" -> Use find_files(path, pattern)
+- "Largest files" / "Biggest files" / "Größte Dateien" -> Use list_files(path, sort_by='size', limit=20) to find largest files
+- "Files by size" / "Dateien nach Größe" -> Use list_files(path, sort_by='size') to sort files by size
+- "Multiple files analysis" / "Mehrere Dateien analysieren" -> Use list_files with sort_by='size' or find_files, then analyze results
+- "Calculate" / "Math" / "Compute" / "Algorithm" -> Use python_sandbox(code) for mathematical calculations and data processing
+
+COMPLEX FILE QUERIES:
+- For "largest files" / "biggest files" / "größte Dateien": Use list_files(path, sort_by='size', limit=20) to get top files by size
+- For "analyze data files" / "multiple files": Use find_files to find all matching files, then list_files with sort_by='size' to analyze
+- For complex analysis: Combine find_files + list_files + python_sandbox if needed for calculations
 
 Common paths:
 - Downloads: {self.folder_aliases.get('downloads', 'N/A')}
@@ -1055,22 +1123,38 @@ Common paths:
         from vaf.core.context import ContextManager
         max_tokens = 8192  # Same as main agent
         context_manager = ContextManager(max_tokens=max_tokens)
-        
+
         history = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Task: {task}"}
         ]
+
+        def _sanitize_history(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            """
+            The local OpenAI-compatible server is strict about message ordering.
+            In particular it may reject requests if the message list ends with
+            multiple assistant messages (e.g. after retries with empty outputs).
+            """
+            if not messages:
+                return messages
+
+            # Remove trailing assistant messages if there are 2+ at the end
+            while len(messages) >= 2 and messages[-1].get("role") == "assistant" and messages[-2].get("role") == "assistant":
+                messages.pop(-2)
+
+            return messages
         
         # Reduced max steps
         max_steps = 5
         
         # Descriptive status messages
+        # ASCII-only status strings for maximum terminal compatibility
         status_messages = [
-            "🧠 Thinking...",
-            "🔍 Analyzing...",
-            "📊 Processing...",
-            "🔄 Refining...",
-            "✨ Finalizing..."
+            "Thinking...",
+            "Analyzing...",
+            "Processing...",
+            "Refining...",
+            "Finalizing...",
         ]
         
         for step in range(max_steps):
@@ -1079,7 +1163,7 @@ Common paths:
             
             # Context management - prevent token overflow
             if context_manager.should_compress(history):
-                UI.event("Librarian", "📝 Compressing context...", style="dim")
+                UI.event("Librarian", "Compressing context...", style="dim")
                 history = context_manager.compress(history)
             
             try:
@@ -1119,6 +1203,7 @@ Common paths:
                 
                 # API call with better error handling
                 try:
+                    history = _sanitize_history(history)
                     res = requests.post(
                         "http://127.0.0.1:8080/v1/chat/completions",
                         json={
@@ -1127,9 +1212,9 @@ Common paths:
                             "max_tokens": 1024,
                             "temperature": 0.1,
                             "tools": tools_schema,
-                            "tool_choice": "auto"
+                            "tool_choice": "auto",
                         },
-                        timeout=60
+                        timeout=60,
                     )
                     
                     if res.status_code != 200:
@@ -1144,6 +1229,16 @@ Common paths:
                 tool_calls = msg.get('tool_calls', [])
                 
                 history.append(msg)
+
+                # If model returned neither tool calls nor content, don't loop forever:
+                if not tool_calls and not content:
+                    live.stop()
+                    return (
+                        "[ERROR] Librarian LLM returned an empty response.\n\n"
+                        "Suggested retry for Main Agent:\n"
+                        "- Re-ask with an explicit tool call (e.g. folder_size/path), or\n"
+                        "- Provide an explicit absolute path."
+                    )
                 
                 # If no tool calls and has content → done
                 if not tool_calls and content:
@@ -1160,12 +1255,13 @@ Common paths:
                     
                     # Show tool action with icon
                     tool_icons = {
-                        "list_files": "📋 Listing",
-                        "read_file": "📖 Reading",
-                        "find_files": "🔍 Searching",
-                        "tree": "🌲 Mapping",
+                        "list_files": "Listing",
+                        "read_file": "Reading",
+                        "find_files": "Searching",
+                        "tree": "Mapping",
+                        "folder_size": "Sizing",
                     }
-                    icon = tool_icons.get(fn_name, "🔧 Calling")
+                    icon = tool_icons.get(fn_name, "Calling")
                     UI.event("Librarian", f"{icon}: {fn_name}", style="bold green")
                     
                     if fn_name in self.tools:

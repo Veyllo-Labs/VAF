@@ -31,21 +31,47 @@ WORKFLOW = {
     "steps": [
         {
             "tool": "web_search",
+            "args": {
+                "query": "{query}",
+                "max_results": 5,
+                "deep": True
+            },
             "input": "{query}",
             "output": "research",
             "description": "Search the web for relevant information",
         },
         {
             "tool": "coding_agent",
-            "input": "Based on this research, create code:\n\n{research}\n\nTask: {query}",
+            "input": (
+                "Based on the research below, create working code.\n"
+                "- Return ONLY the code (no Markdown fences, no explanation)\n"
+                "- Prefer clean structure and comments where needed\n\n"
+                "Task: {query}\n\n"
+                "Research:\n{research}\n"
+            ),
             "output": "code",
             "description": "Generate code based on research findings",
         },
         {
             "tool": "write_file",
-            "input": '{"path": "{filename}", "content": "{code}"}',
+            "args": {
+                "path": "{filename}",
+                "content": "{code}",
+            },
+            "input": "{filename}",
             "output": "saved",
             "description": "Save the generated code to file",
+        },
+        {
+            "tool": "librarian_agent",
+            "input": (
+                "Write a short completion message.\n"
+                "Include: where the file was saved, how to run it, and any dependencies.\n\n"
+                "Filename: {filename}\n"
+                "Save result: {saved}\n"
+            ),
+            "output": "final",
+            "description": "Return a helpful completion message",
         },
     ],
 }

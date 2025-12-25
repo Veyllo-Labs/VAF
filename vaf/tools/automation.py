@@ -76,18 +76,63 @@ The automation will run even when VAF is not actively in use (requires scheduler
             
             task = manager.create(task)
             
+            # Check if the scheduled time has already passed today
+            from datetime import datetime
+            now = datetime.now()
+            task_time = datetime.strptime(task.time, "%H:%M").time()
+            current_time = now.time()
+            
+            # If time has passed and it's a daily task, run it immediately
+            should_run_now = False
+            if task.frequency == "daily" and current_time >= task_time:
+                # Time has passed today, run immediately
+                should_run_now = True
+            
+            # Try to auto-start scheduler if not already running
+            scheduler_started = False
+            try:
+                if not manager._running:
+                    manager.start_scheduler()
+                    scheduler_started = True
+            except Exception:
+                # Scheduler might not be available or already running
+                pass
+            
             result = f"""✅ **Automation Created Successfully!**
 
 **Name:** {task.name}
 **ID:** {task.id}
 **Schedule:** {task.frequency} at {task.time}
 **Next Run:** {task.next_run}
-**Output:** {task.output_path}
+**Output:** {task.output_path}"""
+            
+            if should_run_now:
+                result += f"""
 
-**To start the scheduler:**
+⚡ **Running immediately in new terminal** (scheduled time {task.time} has passed today)"""
+                # Run the task in a new terminal window
+                try:
+                    manager.run_task(task, new_terminal=True)
+                except Exception as e:
+                    # Fallback: try without new terminal
+                    try:
+                        manager.run_task(task, new_terminal=False)
+                    except Exception:
+                        pass  # Errors are logged by run_task
+            
+            if scheduler_started:
+                result += f"""
+
+✅ **Scheduler started automatically** (running in background)"""
+            else:
+                result += f"""
+
+**To start the scheduler manually:**
 ```bash
 vaf automation start
-```
+```"""
+            
+            result += f"""
 
 **Other commands:**
 - `vaf automation list` - View all automations

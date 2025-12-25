@@ -49,7 +49,14 @@ WORKFLOW = {
     "steps": [
         {
             "tool": "coding_agent",
-            "input": "Create a complete, responsive website: {description}",
+            "input": (
+                "Create a complete, responsive website based on this description.\n"
+                "Requirements:\n"
+                "- Produce a real, usable website (no placeholders, no lorem ipsum)\n"
+                "- Ensure links/buttons have sensible targets\n"
+                "- Save all files to disk and return a clear completion message with the file list\n\n"
+                "Description: {description}\n"
+            ),
             "output": "result",
             "description": "Create complete website with HTML, CSS, JS",
         },

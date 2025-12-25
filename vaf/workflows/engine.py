@@ -163,7 +163,21 @@ class WorkflowEngine:
                         args = self._infer_args(step.tool, resolved_input)
                 
                 # Run the tool
-                result = tool.run(**args)
+                #
+                # NOTE: Some tools (e.g. research_agent) use Rich Live/ANSI animations.
+                # When running inside the workflow engine, those animations can spam the
+                # output because workflow execution isn't always a "true" interactive TTY.
+                # We set an env flag so tools can gracefully switch to a non-Live mode.
+                import os
+                prev_in_workflow = os.environ.get("VAF_IN_WORKFLOW")
+                os.environ["VAF_IN_WORKFLOW"] = "1"
+                try:
+                    result = tool.run(**args)
+                finally:
+                    if prev_in_workflow is None:
+                        os.environ.pop("VAF_IN_WORKFLOW", None)
+                    else:
+                        os.environ["VAF_IN_WORKFLOW"] = prev_in_workflow
                 
                 step.status = StepStatus.SUCCESS
                 step.result = result

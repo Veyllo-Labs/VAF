@@ -49,7 +49,10 @@ See [Installation](#installation) below for detailed platform-specific instructi
 - ⚡ **Scheduled Automations** - Time-based tasks (daily news, weather reports)
 - 🔄 **Workflows** - Plug-and-play multi-step pipelines (create website, research & code, etc.)
 - 🛠️ **Powerful Tools** - Bash execution, web fetching, parallel operations
-- 🤖 **Sub-Agents** - Specialized agents for coding and file navigation
+- 🤖 **Sub-Agents** - Specialized agents for coding, research, and file navigation
+- 🚀 **Non-Interactive Mode** - Run one-shot prompts: `vaf prompt "..."` or `vaf run "..."`
+- 🔒 **Privacy-First** - Links open in incognito/private mode by default
+- 📊 **Live Progress** - Real-time TUI for research and coding tasks
 
 ---
 
@@ -263,14 +266,18 @@ vaf snapshot clean --keep 50
 - **Sub-Agent Architecture:** 
   - **Librarian:** Smart file navigation with descriptive status
   - **Coder:** Handles coding tasks with "Collaboration Mode" UI
+  - **Researcher:** Topic-by-topic research with live TUI (similar to Coder)
 
-**Sub-Agent Status (new):**
+**Sub-Agent Status:**
 ```
 | Coder  🧠 Analyzing task...
 | Coder  📝 Planning approach...
 | Coder  💻 Writing code...
 | Coder  📝 Writing: write_file
 | Coder  ✅ Finalizing...
+
+| Research  Section 3/10: Methods & Techniques
+| Research  🔍 Searching... | ⏱ 0:45 | 🔄 1 | ● Summarizing...
 ```
 
 ### 🔄 Workflows - Plug & Play Pipelines
@@ -280,7 +287,7 @@ VAF includes pre-built workflows that automatically execute multi-step tasks. Ju
 **Built-in Workflows:**
 - **Create Website** - "Erstelle eine Website für ein Umzugsunternehmen in Berlin"
 - **Research & Code** - "Recherchiere Python async/await und erstelle Beispielcode"
-- **Deep Research** - "Tiefgehende Recherche über Machine Learning"
+- **Deep Research** - "Tiefgehende Recherche über Machine Learning" (with live TUI, topic-by-topic)
 - **Code Review** - "Review diesen Code und verbessere ihn"
 - **Analyze Website** - "Analysiere diese URL und fasse zusammen"
 - **Generate Docs** - "Erstelle Dokumentation für dieses Projekt"
@@ -500,10 +507,31 @@ vaf run
 ## Usage
 
 ### Start the Agent
+
+**Interactive Mode (Chat):**
 ```bash
 vaf run
 ```
 *First run downloads the model (~4GB) and backend binary (~20MB).*
+
+**Non-Interactive Mode (One-shot):**
+```bash
+# Quick one-shot prompt
+vaf run "What is Python?"
+
+# Or use the dedicated command
+vaf prompt "Explain async/await in Python"
+
+# With JSON output (for automation/scripts)
+vaf prompt "List all files in current directory" --output-format json
+
+# Stream JSON (real-time updates)
+vaf prompt "Research machine learning" --output-format stream-json
+```
+
+**Aliases:**
+- `vaf run prompt "..."` → same as `vaf prompt "..."`
+- Both support `--output-format text|json|stream-json`
 
 ### Interactive Shortcuts
 Inside chat session:

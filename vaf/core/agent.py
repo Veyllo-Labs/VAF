@@ -1207,6 +1207,7 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                 ) else "en"
 
                 # If this workflow produced a saved report/file, prefer a direct "saved at" message over "project ready".
+                report_saved_msg = None
                 if workflow_id in ("deep_research",) or ("output_file" in workflow_result.outputs and "saved" in workflow_result.outputs):
                     try:
                         from pathlib import Path
@@ -1218,13 +1219,17 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                             link = f"[link=file:///{ps.replace(chr(92), '/')}]{ps}[/link]"
                         target = link or out_file or str(workflow_result.outputs.get("saved") or "")
                         if user_lang == "de":
-                            return f"**✓ Fertig!** Report gespeichert:\n{target}"
-                        return f"**✓ Done!** Report saved:\n{target}"
+                            report_saved_msg = f"**✓ Fertig!** Report gespeichert:\n{target}"
+                        else:
+                            report_saved_msg = f"**✓ Done!** Report saved:\n{target}"
                     except Exception:
                         pass
                 
                 # Build completion message based on language and completion status
-                if incomplete_tasks_hint:
+                if report_saved_msg:
+                    # Use the report saved message instead of generic completion
+                    completion_msg = report_saved_msg
+                elif incomplete_tasks_hint:
                     # Tasks still incomplete even after intervention
                     if user_lang == "de":
                         completion_msg = "**Möchtest du, dass ich hier noch etwas verbessere?** Sag mir einfach, was du ändern möchtest!"
@@ -1630,8 +1635,8 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                     from vaf.cli.ui import UI as UI_Class
                     result = None
                     try:
-                        # Special Case: Coding Agent has its own immersive UI
-                        if function_name == "coding_agent":
+                        # Special Case: Tools with their own immersive UI (no spinner needed)
+                        if function_name in ("coding_agent", "research_agent"):
                             # No spinner, just run. The tool will print its own updates.
                             result = self.execute_tool(function_name, arguments)
                         else:

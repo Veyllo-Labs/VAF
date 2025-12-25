@@ -11,6 +11,7 @@ This tool is designed to avoid "exceed_context_size_error" by:
 from __future__ import annotations
 
 import re
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -18,18 +19,52 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
 import requests
+import os
+import sys
 
 from vaf.cli.ui import UI, AnimatedHeader
 from vaf.core.config import Config
 from vaf.core.platform import Platform
+from vaf.core.trust_map import filter_results_by_quality, find_optimal_threshold, rate_url_quality
 from vaf.tools.base import BaseTool
 from vaf.tools.search import WebSearchTool
+
+# Rich UI primitives (optional but expected in VAF)
+from rich.align import Align
+from rich.console import Group
+from rich.panel import Panel
+from rich.text import Text
 
 
 @dataclass(frozen=True)
 class SectionSpec:
     title: str
     query_suffix: str
+
+
+class _StaticHeader:
+    """Non-animated header (safe for environments where frequent Live refresh spams output)."""
+
+    def __init__(self, title: str, left_agt: str, right_agt: str):
+        self.title = title
+        self.left_agt = left_agt
+        self.right_agt = right_agt
+
+    def __rich__(self) -> Panel:
+        arrow_str = Text("<=====>", style="bold cyan")
+        art_grid = Text()
+        art_grid.append(" \n")
+        art_grid.append("   ( OO)     ", style="white")
+        art_grid.append_text(arrow_str)
+        art_grid.append("     (OO )\n", style="white")
+        row3 = f" {self.left_agt:<13}           {self.right_agt:<12}"
+        art_grid.append(row3 + "\n", style="white")
+        return Panel(
+            Align.center(art_grid),
+            title=f"[bold cyan]{self.title}[/bold cyan]",
+            border_style="bold cyan",
+            padding=(0, 2),
+        )
 
 
 def _extract_urls(web_search_output: str) -> List[str]:
@@ -105,6 +140,151 @@ def _strip_untrusted_links(html: str, allowed: Sequence[str]) -> str:
     # <a href="URL">label</a>
     html = re.sub(r'<a\s+[^>]*href="([^"]+)"[^>]*>(.*?)</a>', repl, html, flags=re.IGNORECASE | re.DOTALL)
     return html
+
+
+class ResearchTUI:
+    """
+    Mini-IDE style TUI for the Research Agent (modeled after CoderTUI).
+    Shows:
+    - Animated collaboration header
+    - Status line: elapsed, loop counter, stage
+    - Section progress + word target progress
+    - Scrolling log (events)
+    """
+
+    LOG_LINES = 14
+
+    def __init__(self, console, topic: str, *, animate: bool = True):
+        self.console = console
+        self.topic = topic
+        self.start_time = time.time()
+        self.loop_count = 0
+        self.stage = "Initializing..."
+        self.section_title = ""
+        self.section_idx = 0
+        self.section_total = 0
+        self.word_count = 0
+        self.word_target = 0
+        self.word_ok = 0
+        self._lock = threading.RLock()
+        self._header = (
+            AnimatedHeader("Collaboration Mode Active", "Main Agt", "Researcher")
+            if animate
+            else _StaticHeader("Collaboration Mode Active", "Main Agt", "Researcher")
+        )
+        self._logs: List[str] = []
+        self._on_change = None  # Live updater callback (optional)
+
+    def set_on_change(self, cb):
+        """Register a callback invoked after state changes (used for event-driven Live refresh)."""
+        self._on_change = cb
+
+    def log(self, msg: str):
+        cb = None
+        with self._lock:
+            ts = time.strftime("%H:%M:%S")
+            self._logs.append(f"{ts} {msg}")
+            if len(self._logs) > self.LOG_LINES:
+                self._logs = self._logs[-self.LOG_LINES:]
+            cb = self._on_change
+        if cb:
+            cb()
+
+    def set_stage(self, stage: str):
+        cb = None
+        with self._lock:
+            self.stage = stage or ""
+            cb = self._on_change
+        if cb:
+            cb()
+
+    def increment_loop(self):
+        cb = None
+        with self._lock:
+            self.loop_count += 1
+            cb = self._on_change
+        if cb:
+            cb()
+
+    def set_section(self, idx: int, total: int, title: str):
+        cb = None
+        with self._lock:
+            self.section_idx = int(idx)
+            self.section_total = int(total)
+            self.section_title = title or ""
+            cb = self._on_change
+        if cb:
+            cb()
+
+    def set_word_progress(self, current_words: int, target_words: int, ok_words: int):
+        cb = None
+        with self._lock:
+            self.word_count = max(0, int(current_words))
+            self.word_target = max(0, int(target_words))
+            self.word_ok = max(0, int(ok_words))
+            cb = self._on_change
+        if cb:
+            cb()
+
+    def _progress_bar(self, current: int, total: int, width: int = 28) -> str:
+        if total <= 0:
+            return "░" * width
+        pct = max(0.0, min(1.0, current / total))
+        filled = int(pct * width)
+        return ("█" * filled) + ("░" * (width - filled))
+
+    def render(self) -> Group:
+        with self._lock:
+            elapsed = int(time.time() - self.start_time)
+            elapsed_str = f"{elapsed//60}:{elapsed%60:02d}"
+
+            # Status line
+            status = Text()
+            status.append(f"Time: {elapsed_str}", style="dim")
+            status.append("  │  ", style="dim")
+            status.append(f"Loop: {self.loop_count}", style="dim")
+            status.append("  │  ", style="dim")
+            status.append(self.stage or "Working...", style="white")
+
+            # Section line
+            sec = Text()
+            if self.section_total:
+                sec.append(f"Section {self.section_idx}/{self.section_total}: ", style="cyan")
+                sec.append(self.section_title or "-", style="white")
+            else:
+                sec.append("Section: -", style="dim")
+
+            # Word progress line
+            wc = self.word_count
+            tgt = self.word_target
+            ok = self.word_ok
+            bar_total = tgt if tgt > 0 else 0
+            bar = self._progress_bar(min(wc, bar_total), bar_total, width=28)
+            word_line = Text()
+            if tgt > 0:
+                word_line.append("Words: ", style="dim")
+                # Color: red < ok, yellow < target, green >= target
+                if wc < ok:
+                    color = "red"
+                elif wc < tgt:
+                    color = "yellow"
+                else:
+                    color = "green"
+                word_line.append(bar, style=color)
+                word_line.append(f"  {wc}/{tgt} (ok≥{ok})", style="dim")
+            else:
+                word_line.append("Words: (n/a)", style="dim")
+
+            logs = "\n".join(self._logs) if self._logs else "…"
+            log_panel = Panel(logs, title="Research Log", border_style="cyan", padding=(0, 1))
+
+            return Group(
+                self._header,
+                status,
+                sec,
+                word_line,
+                log_panel,
+            )
 
 
 class ResearchAgentTool(BaseTool):
@@ -198,69 +378,108 @@ class ResearchAgentTool(BaseTool):
         else:
             specs = defaults
 
-        # Lightweight "sub-agent" banner (similar feel to Librarian/Coder)
+        # Research TUI (Coder-like): shows loop, section progress, word progress, and logs.
         try:
-            UI.console.print(AnimatedHeader("Collaboration Mode Active", "Main Agt", "Researcher"))
+            from rich.live import Live
         except Exception:
-            pass
-        UI.event("Research", f"Starting topic-by-topic research: {topic} (lang={lang})", style="dim")
+            Live = None  # type: ignore[assignment]
 
-        web = WebSearchTool()
-        rendered_sections: List[str] = []
-        all_sources: List[str] = []
+        in_workflow = os.environ.get("VAF_IN_WORKFLOW", "").strip().lower() in ("1", "true", "yes")
+        noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip().lower() in ("1", "true", "yes")
+        is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
+        # Live only makes sense on a real TTY. If we try Live on a non-TTY, Rich prints each frame as new lines (spam).
+        # CRITICAL: If format is "html_fragment" (called by repair_report for single sections), disable Live
+        # to prevent multiple Live instances from spamming the console when repair_report fixes multiple sections.
+        # Note: We do NOT disable Live for in_workflow (like coding_agent), because Live works fine in workflows.
+        is_fragment_mode = (out_format == "html_fragment")
+        use_live = (Live is not None) and (not noninteractive) and is_tty and (not is_fragment_mode)
+        # User preference: run FULL Live TUI (animated) even inside workflows.
+        # Note: Some terminals/workflow outputs may not support true in-place updates.
+        animate_tui = True
 
-        for idx, spec in enumerate(specs, 1):
-            section_query = topic if not spec.query_suffix else f"{topic} {spec.query_suffix}"
-            UI.event("Research", f"Section {idx}/{len(specs)}: {spec.title}", style="info")
+        tui = ResearchTUI(UI.console, topic, animate=animate_tui)
 
-            # Do NOT auto-open per-section; open sources once at the end if enabled.
-            results = web.run(query=section_query, max_results=max_results, deep=deep, open_in_browser=False)
-            sources = _extract_urls(results)
-            for u in sources:
-                if u not in all_sources:
-                    all_sources.append(u)
+        def _run_research_loop() -> str:
+            tui.set_stage(f"Starting (lang={lang})")
+            tui.log(f"Start: {topic}")
+            if in_workflow and not use_live:
+                UI.event("Research", f"Starting research: {topic}", style="dim")
 
-            section_html = self._summarize_section_html(
-                topic=topic,
-                title=spec.title,
-                web_results=_truncate(results, 4500),
-                sources=sources,
-                lang=lang,
-                min_words_target=min_words_target,
-                attempt="initial",
-                existing_section_html=(existing_section_html if (existing_section_html and len(specs) == 1) else ""),
-            )
+            web = WebSearchTool()
+            rendered_sections: List[str] = []
+            all_sources: List[str] = []
+            global_quality_warning = ""  # Collect warnings across all sections
 
-            # Quality check + retry/expand (word-based, with internal buffer).
-            word_count = _visible_word_count(section_html)
-            text_len = _visible_text_len(section_html)
+            for idx, spec in enumerate(specs, 1):
+                tui.increment_loop()
+                tui.set_section(idx, len(specs), spec.title)
+                tui.set_word_progress(0, min_words_target, min_words_ok)
+                section_query = topic if not spec.query_suffix else f"{topic} {spec.query_suffix}"
+                tui.set_stage("Searching web")
+                tui.log(f"web_search: {spec.title}")
+                if in_workflow and not use_live:
+                    UI.event("Research", f"[{idx}/{len(specs)}] {spec.title}: searching sources...", style="dim")
 
-            # "Empty" = basically no usable content
-            is_empty = (word_count == 0 and text_len < min_chars_empty) or (word_count > 0 and word_count < max(30, min_words_ok // 8))
-            if is_empty:
-                UI.event("Research", f"↻ Section empty/too thin — retrying with deep search", style="warning")
-                retry_results = web.run(query=section_query, max_results=min(10, max_results + 2), deep=True, open_in_browser=False)
-                retry_sources = _extract_urls(retry_results)
-                for u in retry_sources:
-                    if u not in all_sources:
+                # Get raw results for trust filtering (fetch more initially to have buffer)
+                raw_results = None
+                try:
+                    raw_results = web.run(query=section_query, max_results=max_results * 3, deep=deep, open_in_browser=False, return_raw=True)
+                except Exception as e:
+                    tui.log(f"Error in web_search (return_raw): {str(e)[:100]}")
+                    raw_results = None
+                
+                if not isinstance(raw_results, list):
+                    # Fallback: use regular search and extract URLs
+                    tui.log("Using fallback: regular web_search")
+                    results = web.run(query=section_query, max_results=max_results, deep=deep, open_in_browser=False)
+                    sources = _extract_urls(results)
+                else:
+                    # Multi-layer filtering: Try high threshold first, then lower if needed
+                    # Step 1: Try Score >= 7 (Science/Gov)
+                    filtered_results, lowest_score, quality_warning = filter_results_by_quality(
+                        raw_results, min_score=7, max_results=max_results
+                    )
+                    
+                    # Step 2: If too few results, try Score >= 4 (Wikipedia, academic)
+                    if len(filtered_results) < max_results:
+                        tui.log(f"Few high-quality sources, expanding to medium quality...")
+                        filtered_medium, _, _ = filter_results_by_quality(
+                            raw_results, min_score=4, max_results=max_results
+                        )
+                        if len(filtered_medium) > len(filtered_results):
+                            filtered_results = filtered_medium
+                            quality_warning = "Note: Some sources have medium quality. For critical information, additional sources should be consulted."
+                    
+                    # Step 3: If still too few, allow Score >= 1 (Blogs, forums) with warning
+                    if len(filtered_results) < 3:
+                        tui.log(f"Very few results, allowing lower quality sources with warning...")
+                        filtered_low, _, _ = filter_results_by_quality(
+                            raw_results, min_score=1, max_results=max_results
+                        )
+                        if len(filtered_low) > len(filtered_results):
+                            filtered_results = filtered_low
+                            quality_warning = "Warning: Information is based on unverified sources. Please verify critically."
+                    
+                    # Collect warning if present
+                    if quality_warning:
+                        if quality_warning not in global_quality_warning:
+                            if global_quality_warning:
+                                global_quality_warning += " " + quality_warning
+                            else:
+                                global_quality_warning = quality_warning
+                        tui.log(f"{quality_warning}")
+                    
+                    # Format filtered results (similar to web_search output)
+                    results = self._format_search_results(section_query, filtered_results, deep=deep)
+                    sources = [r.get("href", "") or r.get("link", "") for r in filtered_results if r.get("href") or r.get("link")]
+                
+                for u in sources:
+                    if u and u not in all_sources:
                         all_sources.append(u)
-                section_html = self._summarize_section_html(
-                    topic=topic,
-                    title=spec.title,
-                    web_results=_truncate(retry_results, 4500),
-                    sources=retry_sources,
-                    lang=lang,
-                    min_words_target=min_words_target,
-                    attempt="retry",
-                    existing_section_html="",
-                )
-                word_count = _visible_word_count(section_html)
-                text_len = _visible_text_len(section_html)
 
-            # Short = below buffer threshold (e.g., < 400 words if target is 500)
-            is_short = (word_count > 0 and word_count < min_words_ok) or (word_count == 0 and min_chars_empty <= text_len < min_chars_ok)
-            if is_short:
-                UI.event("Research", f"↻ Section short (<{min_words_ok} words) — expanding (append) once", style="dim")
+                tui.set_stage("Summarizing")
+                if in_workflow and not use_live:
+                    UI.event("Research", f"[{idx}/{len(specs)}] {spec.title}: summarizing...", style="dim")
                 section_html = self._summarize_section_html(
                     topic=topic,
                     title=spec.title,
@@ -268,21 +487,158 @@ class ResearchAgentTool(BaseTool):
                     sources=sources,
                     lang=lang,
                     min_words_target=min_words_target,
-                    attempt="append",
-                    existing_section_html=section_html,
+                    attempt="initial",
+                    existing_section_html=(existing_section_html if (existing_section_html and len(specs) == 1) else ""),
                 )
-            rendered_sections.append(section_html)
 
-        if out_format == "html_fragment":
-            # Return only fragments (useful for patching missing sections)
-            return "\n\n".join(rendered_sections).strip()
+                # Quality check + retry/expand (word-based, with internal buffer).
+                word_count = _visible_word_count(section_html)
+                text_len = _visible_text_len(section_html)
+                tui.set_word_progress(word_count, min_words_target, min_words_ok)
 
-        if out_format == "markdown":
-            md = self._assemble_markdown(topic, rendered_sections, all_sources)
-            return md
+                # "Empty" = basically no usable content
+                is_empty = (word_count == 0 and text_len < min_chars_empty) or (word_count > 0 and word_count < max(30, min_words_ok // 8))
+                if is_empty:
+                    tui.set_stage("Retry (deep search)")
+                    tui.log(f"retry: {spec.title} (empty/too thin)")
+                    if in_workflow and not use_live:
+                        UI.event("Research", f"[{idx}/{len(specs)}] {spec.title}: retrying (deeper search)...", style="dim")
+                    # Retry with trust filtering (but allow lower quality if needed)
+                    retry_raw = web.run(query=section_query, max_results=min(15, max_results + 5), deep=True, open_in_browser=False, return_raw=True)
+                    if not isinstance(retry_raw, list):
+                        retry_results = web.run(query=section_query, max_results=min(10, max_results + 2), deep=True, open_in_browser=False)
+                        retry_sources = _extract_urls(retry_results)
+                    else:
+                        # Allow lower threshold for retry (Score >= 1)
+                        retry_filtered, _, retry_warning = filter_results_by_quality(retry_raw, min_score=1, max_results=min(10, max_results + 2))
+                        retry_results = self._format_search_results(section_query, retry_filtered, deep=True)
+                        retry_sources = [r.get("href", "") or r.get("link", "") for r in retry_filtered if r.get("href") or r.get("link")]
+                        if retry_warning and retry_warning not in global_quality_warning:
+                            if global_quality_warning:
+                                global_quality_warning += " " + retry_warning
+                            else:
+                                global_quality_warning = retry_warning
+                    
+                    for u in retry_sources:
+                        if u and u not in all_sources:
+                            all_sources.append(u)
+                    tui.set_stage("Summarizing (retry)")
+                    section_html = self._summarize_section_html(
+                        topic=topic,
+                        title=spec.title,
+                        web_results=_truncate(retry_results, 4500),
+                        sources=retry_sources,
+                        lang=lang,
+                        min_words_target=min_words_target,
+                        attempt="retry",
+                        existing_section_html="",
+                    )
+                    word_count = _visible_word_count(section_html)
+                    text_len = _visible_text_len(section_html)
+                    tui.set_word_progress(word_count, min_words_target, min_words_ok)
 
-        html = self._assemble_html(topic, rendered_sections, all_sources, lang=lang)
-        return html
+                # Short = below buffer threshold (e.g., < 400 words if target is 500)
+                is_short = (word_count > 0 and word_count < min_words_ok) or (word_count == 0 and min_chars_empty <= text_len < min_chars_ok)
+                if is_short:
+                    tui.set_stage("Append expand")
+                    tui.log(f"append: {spec.title} ({word_count} words)")
+                    if in_workflow and not use_live:
+                        UI.event("Research", f"[{idx}/{len(specs)}] {spec.title}: expanding content...", style="dim")
+                    section_html = self._summarize_section_html(
+                        topic=topic,
+                        title=spec.title,
+                        web_results=_truncate(results, 4500),
+                        sources=sources,
+                        lang=lang,
+                        min_words_target=min_words_target,
+                        attempt="append",
+                        existing_section_html=section_html,
+                    )
+                    word_count = _visible_word_count(section_html)
+                    tui.set_word_progress(word_count, min_words_target, min_words_ok)
+                rendered_sections.append(section_html)
+
+            if out_format == "html_fragment":
+                # Return only fragments (useful for patching missing sections)
+                return "\n\n".join(rendered_sections).strip()
+
+            if out_format == "markdown":
+                md = self._assemble_markdown(topic, rendered_sections, all_sources)
+                return md
+
+            html = self._assemble_html(topic, rendered_sections, all_sources, lang=lang, quality_warning=global_quality_warning)
+            if in_workflow and not use_live:
+                UI.event("Research", "Research completed.", style="success")
+            return html
+
+        if not use_live:
+            # No Live: In workflow mode we emit progress events above.
+            # Outside workflow mode, print one static render for user feedback.
+            if not in_workflow:
+                try:
+                    UI.console.print(tui.render())
+                except Exception:
+                    pass
+            return _run_research_loop()
+
+        # Live animation while we work (smooth refresh like coding_agent).
+        # CRITICAL: Render once before starting Live to prevent multiple empty renders
+        tui.set_stage("Initializing...")
+        initial_render = tui.render()
+        
+        # Live rendering (match coding_agent): use the shared UI.console.
+        live = Live(
+            initial_render,
+            console=UI.console,
+            refresh_per_second=15,
+            transient=False,  # Keep final output visible after stop
+        )
+        live.start()
+
+        # Background refresh thread (match coding_agent): update Live regularly for smooth animations.
+        animation_running = threading.Event()
+        animation_running.set()
+
+        def _refresher():
+            while animation_running.is_set():
+                try:
+                    # IMPORTANT: do NOT force refresh=True; let Live handle in-place updates.
+                    live.update(tui.render())
+                    time.sleep(1.0 / 15)  # 15 FPS
+                except Exception:
+                    break
+
+        t = threading.Thread(target=_refresher, daemon=True)
+        t.start()
+
+        try:
+            # Suppress web_search "Reading ..." prints while Live is active (prevents console spam / broken Live updates)
+            prev_suppress = os.environ.get("VAF_SUPPRESS_WEB_SEARCH_EVENTS")
+            os.environ["VAF_SUPPRESS_WEB_SEARCH_EVENTS"] = "1"
+            try:
+                result = _run_research_loop()
+            finally:
+                if prev_suppress is None:
+                    os.environ.pop("VAF_SUPPRESS_WEB_SEARCH_EVENTS", None)
+                else:
+                    os.environ["VAF_SUPPRESS_WEB_SEARCH_EVENTS"] = prev_suppress
+            # Ensure we stop the animation before returning
+            animation_running.clear()
+            try:
+                live.stop()
+            except Exception:
+                pass
+            return result
+        except Exception as e:
+            # On any error, stop animation and re-raise
+            animation_running.clear()
+            try:
+                live.stop()
+            except Exception:
+                pass
+            # Log error to TUI before raising
+            UI.event("Research Agent", f"Error: {str(e)[:100]}", style="error")
+            raise
 
     def _summarize_section_html(
         self,
@@ -357,24 +713,31 @@ class ResearchAgentTool(BaseTool):
             )
 
         def call(max_tokens: int, temperature: float) -> str:
-            res = requests.post(
-                "http://127.0.0.1:8080/v1/chat/completions",
-                json={
-                    "model": model_name,
-                    "messages": [
-                        {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                },
-                timeout=90,
-            )
-            if res.status_code != 200:
-                err = (res.text or "")[:250]
-                return f"<h2>{title}</h2><p><strong>Error:</strong> Server {res.status_code}: {err}</p>"
-            msg = res.json()["choices"][0]["message"]
-            return (msg.get("content") or "").strip()
+            try:
+                res = requests.post(
+                    "http://127.0.0.1:8080/v1/chat/completions",
+                    json={
+                        "model": model_name,
+                        "messages": [
+                            {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                    },
+                    timeout=90,
+                )
+                if res.status_code != 200:
+                    err = (res.text or "")[:250]
+                    return f"<h2>{title}</h2><p><strong>Error:</strong> Server returned {res.status_code}: {err}</p>"
+                msg = res.json()["choices"][0]["message"]
+                return (msg.get("content") or "").strip()
+            except requests.exceptions.Timeout:
+                return f"<h2>{title}</h2><p><strong>Error:</strong> Request timeout (90s). The model may be overloaded.</p>"
+            except requests.exceptions.RequestException as e:
+                return f"<h2>{title}</h2><p><strong>Error:</strong> Connection error: {str(e)[:200]}</p>"
+            except Exception as e:
+                return f"<h2>{title}</h2><p><strong>Error:</strong> Unexpected error: {str(e)[:200]}</p>"
 
         try:
             content = call(max_tokens=2200, temperature=0.2)
@@ -421,7 +784,7 @@ class ResearchAgentTool(BaseTool):
         except Exception as e:
             return f"<h2>{title}</h2><p><strong>Error:</strong> {type(e).__name__}: {e}</p>"
 
-    def _assemble_html(self, topic: str, sections: Sequence[str], sources: Sequence[str], lang: str) -> str:
+    def _assemble_html(self, topic: str, sections: Sequence[str], sources: Sequence[str], lang: str, quality_warning: str = "") -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         source_items = "\n".join(f'<li><a href="{u}">{u}</a></li>' for u in sources[:30])
         sections_html = "\n\n".join(sections)
@@ -454,6 +817,57 @@ class ResearchAgentTool(BaseTool):
             "</body>\n"
             "</html>\n"
         )
+
+    def _format_search_results(self, query: str, results: List[Dict[str, str]], deep: bool = False) -> str:
+        """
+        Format raw search results (from DDGS) into the same format as web_search output.
+        This allows us to filter by trust map and then format consistently.
+        """
+        if not results:
+            return "No results found."
+        
+        title = "### Web Search Results\n"
+        title += f"Query: {query}\n\n"
+        
+        summary = title
+        preview_count = 0
+        preview_limit = min(len(results), 10) if deep else 0
+        
+        # Helper to fetch text (same as in web_search)
+        def fetch_text(url):
+            try:
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+                r = requests.get(url, timeout=4, headers=headers)
+                if r.status_code != 200:
+                    return None
+                html = r.text
+                html = re.sub(r'<(script|style|noscript)[^>]*>.*?</\1>', ' ', html, flags=re.DOTALL | re.IGNORECASE)
+                text = re.sub(r'<[^>]+>', ' ', html)
+                text = re.sub(r'\s+', ' ', text).strip()
+                return text[:3000]
+            except:
+                return None
+        
+        for i, res in enumerate(results, 1):
+            page_title = res.get("title", "").strip()
+            link = res.get("href", "") or res.get("link", "").strip()
+            snippet = res.get("body", "") or res.get("snippet", "").strip()
+            
+            summary += f"{i}. **{page_title}**\n"
+            if snippet:
+                summary += f"   - Snippet: {snippet}\n"
+            if link:
+                summary += f"   - Source: {link}\n"
+            
+            if deep and link and preview_count < preview_limit:
+                page_text = fetch_text(link)
+                if page_text:
+                    summary += f"   - Preview: {page_text[:800]}...\n"
+                preview_count += 1
+            
+            summary += "\n"
+        
+        return summary.strip()
 
     def _assemble_markdown(self, topic: str, sections: Sequence[str], sources: Sequence[str]) -> str:
         # Sections are HTML fragments; keep it simple and include them as-is.

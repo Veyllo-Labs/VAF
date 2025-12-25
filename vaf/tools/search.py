@@ -1,6 +1,7 @@
 import re
 import requests
 import warnings
+import os
 
 # Best Practice: Try new package first, fallback to legacy with suppression
 try:
@@ -45,8 +46,9 @@ class WebSearchTool(BaseTool):
         max_results = int(kwargs.get("max_results", 5) or 5)
         deep = bool(kwargs.get("deep", False))
         open_in_browser = kwargs.get("open_in_browser", None)
+        return_raw = bool(kwargs.get("return_raw", False))  # Internal: return raw results dict
         if not query:
-            return "Error: No query provided."
+            return "Error: No query provided." if not return_raw else []
 
         try:
             max_results = max(1, min(max_results, 10))
@@ -55,7 +57,11 @@ class WebSearchTool(BaseTool):
             raw = DDGS().text(query, max_results=max_results, safesearch="strict")
             results = list(raw) if raw else []
             if not results:
-                return "No results found."
+                return [] if return_raw else "No results found."
+            
+            # If return_raw is True, return the raw results list
+            if return_raw:
+                return results
 
             title = "### Web Search Results\n"
             title += f"Query: {query}\n\n"
@@ -103,8 +109,10 @@ class WebSearchTool(BaseTool):
                     if link and link not in seen:
                         seen.add(link)
                         links.append(link)
-                    # Always show link in TUI
-                    UI.event("Web Search", f"Reading {link[:60]}...", style="dim")
+                    # Always show link in TUI (unless suppressed, e.g. when a Live TUI is active)
+                    suppress = os.environ.get("VAF_SUPPRESS_WEB_SEARCH_EVENTS", "").strip().lower() in ("1", "true", "yes")
+                    if not suppress:
+                        UI.event("Web Search", f"Reading {link[:60]}...", style="dim")
 
                 if deep and link and preview_count < preview_limit:
                     page_text = fetch_text(link)

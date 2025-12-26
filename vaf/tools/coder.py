@@ -679,9 +679,9 @@ class AgenticLoop:
         if idle_minutes > 5:
             return False, f"Model stopped responding (idle for {int(idle_minutes)} min)"
         
-        # Too many empty responses
-        if self.consecutive_empty >= self.max_empty:
-            return False, f"Too many empty responses ({self.max_empty})"
+        # NOTE: Empty response handling is now done via context reset in the main loop
+        # No need to stop the loop here - it will reset context and continue
+        # This allows the loop to continue until we get a response
         
         return True, ""
     
@@ -1389,6 +1389,21 @@ Thumbs.db
         tui.set_action("📁 Creating project...")
         live.update(tui.render())
         
+        # ═══════════════════════════════════════════════════════════════════
+        # CHECK FOR CONTENT_ONLY MODE (before creating project directory)
+        # ═══════════════════════════════════════════════════════════════════
+        
+        # Skip template if task explicitly requests content-only (no project structure)
+        # This is used by automations that need just HTML/content, not a full project
+        skip_template = (
+            "CONTENT_ONLY" in task.upper() or 
+            "NO_TEMPLATE" in task.upper() or
+            "ONLY THE" in task.upper() or  # "Generate ONLY the HTML..."
+            "RETURN ONLY" in task.upper() or  # "Return ONLY the HTML code..."
+            "NO PROJECT" in task.upper() or
+            "NO FILE PATHS" in task.upper()
+        )
+        
         # Check if continuing existing project
         project_path = kwargs.get('project_path', '')
         if project_path:
@@ -1397,14 +1412,20 @@ Thumbs.db
             if not os.path.exists(base_dir):
                 return f"❌ Error: Project directory not found: {base_dir}\nPlease provide a valid path to an existing project."
             tui.append_stream(f"📂 Continuing project: {os.path.basename(base_dir)}")
+        elif skip_template:
+            # CONTENT_ONLY mode: Use a temporary directory instead of creating a project
+            import tempfile
+            base_dir = tempfile.mkdtemp(prefix="vaf_content_")
+            tui.append_stream("📝 Content-only mode: Using temporary directory")
         else:
-            # Create new project with intelligent naming
+            # Normal mode: Create project directory
             base_dir = self._generate_project_directory(task)
             os.makedirs(base_dir, exist_ok=True)
             tui.append_stream(f"📂 New project: {os.path.basename(base_dir)}")
         
-        # Initialize Git repository if not already initialized
-        self._ensure_git_repo(base_dir)
+        # Initialize Git repository if not already initialized (skip for CONTENT_ONLY)
+        if not skip_template:
+            self._ensure_git_repo(base_dir)
         
         # Add Git tools with base_dir context (create wrappers that pass base_dir)
         def make_git_tool_wrapper(tool_class, base_dir):
@@ -1420,17 +1441,18 @@ Thumbs.db
             
             return GitToolWrapper(tool_class(), base_dir)
         
-        # Add Git tools with base_dir context
-        self.local_tools["git_init"] = make_git_tool_wrapper(GitInitTool, base_dir)
-        self.local_tools["git_add_commit"] = make_git_tool_wrapper(GitAddCommitTool, base_dir)
-        self.local_tools["git_status"] = make_git_tool_wrapper(GitStatusTool, base_dir)
-        self.local_tools["git_log"] = make_git_tool_wrapper(GitLogTool, base_dir)
+        # Add Git tools with base_dir context (only if not CONTENT_ONLY)
+        if not skip_template:
+            self.local_tools["git_init"] = make_git_tool_wrapper(GitInitTool, base_dir)
+            self.local_tools["git_add_commit"] = make_git_tool_wrapper(GitAddCommitTool, base_dir)
+            self.local_tools["git_status"] = make_git_tool_wrapper(GitStatusTool, base_dir)
+            self.local_tools["git_log"] = make_git_tool_wrapper(GitLogTool, base_dir)
         
         # ═══════════════════════════════════════════════════════════════════
         # CHECK FOR TEMPLATE
         # ═══════════════════════════════════════════════════════════════════
         
-        template_type = TemplateManager.detect_template_type(task)
+        template_type = None if skip_template else TemplateManager.detect_template_type(task)
         template_files = []
         
         if template_type:
@@ -1518,11 +1540,22 @@ set_todos(tasks=["Task 1", "Task 2", "Task 3", ...])
 </tool_call>
 ```
 
-Example:
+**CRITICAL: Create TODOs that MATCH the actual task!**
+- If task says "CONTENT_ONLY" or "ONLY THE" → Create simple TODOs for single file/content
+- If task says "multi-page website" → Create TODOs for multiple pages
+- If task says "weather report HTML" → Create TODOs for weather HTML, not multi-page website
+- Analyze the task carefully and create appropriate TODOs
+
+Examples:
 ```
-<tool_call>
-set_todos(tasks=["Customize index.html for Berlin craftsman", "Update styles.css with brand colors", "Modify script.js for contact form", "Test all pages"])
-</tool_call>
+Task: "CONTENT_ONLY: Generate ONLY the complete HTML document content for a weather report"
+✅ CORRECT: set_todos(tasks=["Generate complete HTML document with weather data", "Add embedded CSS styling", "Verify HTML is complete and valid"])
+❌ WRONG: set_todos(tasks=["Read and customize index.html", "Create additional pages", ...])  # Too complex for single file!
+❌ WRONG: set_todos(tasks=["Generate HTML", "Embed YouTube video", ...])  # Don't add features not mentioned in task!
+
+Task: "Create a multi-page website for a restaurant"
+✅ CORRECT: set_todos(tasks=["Create index.html (homepage)", "Create about.html page", "Create menu.html page", "Create contact.html page", "Add navigation", "Style all pages"])
+❌ WRONG: set_todos(tasks=["Generate HTML document"])  # Too simple for multi-page!
 ```
 
 ### PHASE 2: EXECUTION (work through each task)
@@ -1537,6 +1570,7 @@ After all tasks are done, say "ALL TASKS COMPLETED"
 
 ## RULES
 - You MUST call `set_todos` in your FIRST response
+- **CRITICAL**: Create TODOs that MATCH the task complexity and requirements
 - You MUST call `task_done` after completing each task
 - Work on ONE task at a time (the system tracks progress)
 - Do NOT skip tasks or do multiple at once
@@ -1568,9 +1602,22 @@ After all tasks are done, say "ALL TASKS COMPLETED"
 - CSS: Reset, typography, colors, responsive, min 400 bytes
 - JS: Working code, error handling
 
+## ASKING QUESTIONS TO MAIN AGENT
+If you need information that's not in the task, you can ask the main agent questions!
+Simply include your question in your response using this format:
+❓ QUESTION: [Your question here]
+
+Examples:
+- ❓ QUESTION: What should the company name be?
+- ❓ QUESTION: Which color scheme should I use for the website?
+- ❓ QUESTION: What should the headline say?
+
+The main agent will answer your questions based on the original user task and call you again with the information.
+You can continue working once you have the answers.
+
 Current Task: {task}
 
-START by calling set_todos with your planned tasks."""
+START by calling set_todos with your planned tasks - make sure the TODOs match the task requirements!"""
         
         # Build user message with STRONG emphasis on set_todos first
         user_msg = f"Task: {task}\n\n"
@@ -2384,11 +2431,81 @@ START by calling set_todos with your planned tasks."""
             # ═══════════════════════════════════════════════════════════════
             
             if not tool_calls:
-                # Empty response? Check both msg_content and content
-                has_content = (msg_content and len(msg_content.strip()) >= 30) or (content and len(content.strip()) >= 30)
+                # Empty response handler: Check if we have a final answer (not just thinking)
+                # NOTE: This checks final answer content, NOT reasoning/thinking
+                # The model can think as much as it wants, but must provide a final answer
                 
-                if not has_content:
-                    loop.record_empty()
+                # Clean content similar to main agent
+                import re
+                clean_content = re.sub(r'<[^>]*>', '', msg_content or content or '')  # Remove XML tags
+                clean_content = re.sub(r'```[\s\S]*?```', '', clean_content)  # Remove code blocks
+                clean_content = clean_content.replace(".", "").replace("\n", "").replace(":", "").strip()
+                
+                # Strip common "empty answer" patterns
+                empty_patterns = ["answer", "antwort", "response", "here", "hier", "ok", "okay"]
+                temp_content = clean_content.lower()
+                for pattern in empty_patterns:
+                    temp_content = temp_content.replace(pattern, "")
+                temp_content = temp_content.strip()
+                
+                # Consider empty if: no final answer OR only filler words (< 3 real chars after cleaning)
+                is_effectively_empty = len(temp_content) < 3
+                
+                if is_effectively_empty:
+                    # Empty Response Handler: Remove responses without final answer and restart from last tool call or user message
+                    # NO RETRY LIMITS - will loop until we get a response
+                    
+                    # Find the last tool call or user message to restart from
+                    last_tool_idx = None
+                    last_user_idx = None
+                    
+                    # Search backwards through history to find last tool or user message
+                    for i in range(len(history) - 1, -1, -1):
+                        msg = history[i]
+                        if msg.get('role') == 'tool':
+                            last_tool_idx = i
+                            break
+                        elif msg.get('role') == 'user' and last_user_idx is None:
+                            last_user_idx = i
+                    
+                    # Determine where to restart from
+                    if last_tool_idx is not None:
+                        # Restart from after the last tool result
+                        # Keep everything up to and including the tool result:
+                        # - Assistant with tool_calls (before tool result) - KEPT
+                        # - Tool result (role: 'tool') - KEPT
+                        # - Assistant messages without final answer after tool result - REMOVED
+                        restart_idx = last_tool_idx + 1
+                        restart_from = "tool call"
+                    elif last_user_idx is not None:
+                        # Restart from the user message (no tool calls yet)
+                        # Keep everything up to and including the user message
+                        # Remove all assistant messages without final answer after the user message
+                        restart_idx = last_user_idx
+                        restart_from = "user message"
+                    else:
+                        # No history to restart from, keep everything
+                        restart_idx = 0
+                        restart_from = "beginning"
+                    
+                    # Remove all assistant/system messages after the restart point that have no final answer
+                    # IMPORTANT: Tool results (role: 'tool') and assistant with tool_calls are KEPT
+                    # Only assistant messages without final answer are removed (even if they contain reasoning)
+                    removed_count = 0
+                    while len(history) > restart_idx:
+                        last_msg = history[-1]
+                        # Remove assistant and system messages that came after the restart point
+                        if last_msg.get('role') in ('assistant', 'system'):
+                            history.pop()
+                            removed_count += 1
+                        else:
+                            # Stop if we hit a non-assistant/system message (e.g., tool, user)
+                            # This ensures we never remove tool results or user messages
+                            break
+                    
+                    if removed_count > 0:
+                        tui.set_action(f"Removed {removed_count} response(s) without final answer, restarting from {restart_from}...")
+                        live.update(tui.render())
                     
                     # CRITICAL: If no TODOs set, nudge agent to set them FIRST!
                     # This is the most common cause of "doing nothing" - agent skips TODO setup
@@ -2407,15 +2524,13 @@ START by calling set_todos with your planned tasks."""
                         })
                         continue
                     
-                    tui.set_action("Empty response - nudging...")
+                    # Add a simple prompt to encourage action
+                    history.append({
+                        "role": "system",
+                        "content": "You generated an empty or near-empty response. Please process the request and generate a valid Tool Call or provide a REAL, SUBSTANTIVE answer."
+                    })
                     
-                    if loop.consecutive_empty >= 3:
-                        tui.set_action("⚠️ Empty responses - nudging")
-                        history.append({
-                            "role": "system",
-                            "content": "⚠️ You've sent empty responses. Call write_file NOW."
-                        })
-                    # DO NOT record activity for empty responses - prevents infinite loops
+                    # Continue the loop (no retry limit - will loop until we get a response)
                     continue
             
             # Only record activity if we have content or tool calls
@@ -2463,18 +2578,56 @@ START by calling set_todos with your planned tasks."""
                     # Generate sensible TODOs from the task description
                     auto_todos = []
                     task_lower = task.lower()
+                    task_upper = task.upper()
                     
-                    # Detect if it's a website task
-                    if any(kw in task_lower for kw in ['website', 'webseite', 'homepage', 'page', 'seite']):
-                        auto_todos = [
-                            "Read and analyze existing template files",
-                            "Customize index.html with task-specific content",
-                            "Update styles.css with appropriate styling",
-                            "Modify script.js for required functionality",
-                            "Verify all files are complete and working"
-                        ]
-                    # Detect multi-page website
-                    if any(kw in task_lower for kw in ['multi-page', 'pages', 'seiten', 'about', 'contact', 'services']):
+                    # Check for CONTENT_ONLY mode first (highest priority)
+                    is_content_only = (
+                        "CONTENT_ONLY" in task_upper or 
+                        "ONLY THE" in task_upper or 
+                        "RETURN ONLY" in task_upper or
+                        "NO PROJECT" in task_upper or
+                        "NO FILE PATHS" in task_upper
+                    )
+                    
+                    if is_content_only:
+                        # CONTENT_ONLY: Analyze what type of content is needed
+                        if "html" in task_lower or "webpage" in task_lower or "web page" in task_lower:
+                            # Check if it mentions specific content
+                            if "weather" in task_lower:
+                                auto_todos = [
+                                    "Generate complete HTML document with weather data",
+                                    "Embed YouTube video in HTML (if mentioned)",
+                                    "Add embedded CSS styling",
+                                    "Verify HTML is complete and valid"
+                                ]
+                            elif "video" in task_lower or "youtube" in task_lower:
+                                auto_todos = [
+                                    "Generate complete HTML document",
+                                    "Embed YouTube video in HTML",
+                                    "Add embedded CSS styling",
+                                    "Verify HTML is complete and valid"
+                                ]
+                            else:
+                                auto_todos = [
+                                    "Generate complete HTML document with embedded CSS",
+                                    "Include all required content from task description",
+                                    "Verify HTML is complete and valid"
+                                ]
+                        elif "markdown" in task_lower or "md" in task_lower:
+                            auto_todos = [
+                                "Generate markdown content",
+                                "Format according to task requirements",
+                                "Verify content is complete"
+                            ]
+                        else:
+                            # Generic content generation
+                            auto_todos = [
+                                "Analyze task requirements",
+                                "Generate requested content",
+                                "Verify content is complete"
+                            ]
+                    # Detect if it's EXPLICITLY a multi-page website (not just "page" in text)
+                    elif any(kw in task_lower for kw in ['multi-page', 'multiple pages', 'several pages', 'about page', 'contact page', 'services page', 'create pages']):
                         auto_todos = [
                             "Read and customize index.html (homepage)",
                             "Create additional pages (about, contact, services)",
@@ -2482,8 +2635,17 @@ START by calling set_todos with your planned tasks."""
                             "Add navigation between pages",
                             "Test all pages and links"
                         ]
+                    # Detect if it's a website project (but not CONTENT_ONLY)
+                    elif any(kw in task_lower for kw in ['website', 'webseite', 'homepage', 'landing page']) and not is_content_only:
+                        auto_todos = [
+                            "Read and analyze existing template files (if any)",
+                            "Create or customize index.html with task-specific content",
+                            "Update styles.css with appropriate styling",
+                            "Add JavaScript functionality if needed",
+                            "Verify all files are complete and working"
+                        ]
                     # Fallback for other tasks
-                    if not auto_todos:
+                    else:
                         auto_todos = [
                             "Analyze task requirements",
                             "Create main files",

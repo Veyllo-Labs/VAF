@@ -4,10 +4,12 @@ import platform
 import shutil
 import subprocess
 import zipfile
+import tarfile
 import time
 import requests
 from vaf.cli.ui import UI
 from vaf.core.config import Config
+from vaf.core.gpu_detection import get_primary_gpu
 
 class ServerManager:
     """
@@ -53,12 +55,28 @@ class ServerManager:
             
             # Check if process is still running
             if self._is_process_running(old_pid):
+                # WICHTIG: Prüfe zuerst, ob der Server noch antwortet
+                # Wenn er antwortet, ist er NICHT orphaned, sondern aktiv!
+                try:
+                    response = requests.get("http://127.0.0.1:8080/health", timeout=1)
+                    if response.status_code == 200:
+                        # Server läuft und antwortet - NICHT orphaned, sondern aktiv!
+                        # Lass ihn laufen, entferne nur die PID-Datei nicht
+                        return
+                except:
+                    # Server läuft, aber antwortet nicht - wirklich orphaned
+                    pass
+                
+                # Server läuft, aber antwortet nicht - wirklich orphaned
                 UI.event("System", f"Found orphaned server (PID {old_pid}), cleaning up...", style="yellow")
                 self._kill_process(old_pid)
                 time.sleep(0.5)
             
-            # Remove stale PID file
-            os.remove(self.pid_file)
+            # Remove stale PID file (nur wenn Server nicht mehr läuft oder nicht antwortet)
+            try:
+                os.remove(self.pid_file)
+            except:
+                pass
         except (ValueError, FileNotFoundError, PermissionError):
             # PID file corrupt or inaccessible, try to remove it
             try:
@@ -155,16 +173,54 @@ class ServerManager:
                         return a["browser_download_url"], name
                 return None, None
 
+            # Detect GPU to choose appropriate binary
+            primary_gpu = get_primary_gpu()
+            gpu_type = primary_gpu.vendor if primary_gpu else None
+            
             if self.system == "Windows":
-                 main_url, main_name = find_asset(["bin-win-cuda", "x64.zip"], exclude=["cudart"])
-                 dep_url, dep_name = find_asset(["cudart-llama", "bin-win-cuda", "x64.zip"])
+                # Try GPU-specific binaries first
+                if gpu_type == "amd":
+                    # AMD - HIP/Radeon binary
+                    main_url, main_name = find_asset(["bin-win-hip-radeon", "x64.zip"])
+                    if not main_url:
+                        # Fallback to Vulkan (works with AMD too)
+                        main_url, main_name = find_asset(["bin-win-vulkan", "x64.zip"])
+                elif gpu_type == "intel":
+                    # Intel - SYCL binary
+                    main_url, main_name = find_asset(["bin-win-sycl", "x64.zip"])
+                    if not main_url:
+                        # Fallback to Vulkan
+                        main_url, main_name = find_asset(["bin-win-vulkan", "x64.zip"])
+                elif gpu_type == "nvidia":
+                    # NVIDIA - CUDA binary (prefer CUDA 13, fallback to CUDA 12)
+                    main_url, main_name = find_asset(["bin-win-cuda-13", "x64.zip"], exclude=["cudart"])
+                    if not main_url:
+                        main_url, main_name = find_asset(["bin-win-cuda-12", "x64.zip"], exclude=["cudart"])
+                    if main_url:
+                        dep_url, dep_name = find_asset(["cudart-llama", "bin-win-cuda", "x64.zip"])
+                else:
+                    # No GPU or unknown - try Vulkan (universal), then CPU
+                    main_url, main_name = find_asset(["bin-win-vulkan", "x64.zip"])
+                    if not main_url:
+                        main_url, main_name = find_asset(["bin-win-cpu", "x64.zip"])
 
             elif self.system == "Darwin":
-                 keyword = "bin-macos-arm64.zip" if ("arm64" in self.machine or "aarch64" in self.machine) else "bin-macos-x64.zip"
+                 # macOS binaries are .tar.gz, not .zip
+                 keyword = "bin-macos-arm64.tar.gz" if ("arm64" in self.machine or "aarch64" in self.machine) else "bin-macos-x64.tar.gz"
                  main_url, main_name = find_asset([keyword])
 
             elif self.system == "Linux":
-                 main_url, main_name = find_asset(["bin-linux-x64.zip"])
+                # Linux: Try GPU-specific, then fallback
+                if gpu_type == "amd":
+                    # AMD - Try Vulkan (ROCm binaries might not be available)
+                    main_url, main_name = find_asset(["bin-ubuntu-vulkan", "x64.tar.gz"])
+                elif gpu_type == "nvidia":
+                    # NVIDIA - CUDA (might not be in releases, but try anyway)
+                    main_url, main_name = find_asset(["bin-ubuntu-cuda", "x64.tar.gz"])
+                
+                # Fallback to CPU if GPU-specific not found
+                if not main_url:
+                    main_url, main_name = find_asset(["bin-ubuntu-x64.tar.gz"])
 
         # 2. Check if we found it. If NOT, Fallback.
         if main_url:
@@ -176,15 +232,32 @@ class ServerManager:
         base_url = f"https://github.com/ggerganov/llama.cpp/releases/download/{tag}"
         
         if self.system == "Windows":
-             main_name = "llama-b4320-bin-win-cuda-cu12.2.0-x64.zip" 
-             main_url = f"{base_url}/{main_name}"
-             dep_name = "cudart-llama-bin-win-cuda-cu12.2.0-x64.zip" 
-             dep_url = f"{base_url}/{dep_name}"
-             return main_url, main_name, dep_url, dep_name
+            # Fallback: Use GPU detection to choose binary
+            primary_gpu = get_primary_gpu()
+            gpu_type = primary_gpu.vendor if primary_gpu else None
+            
+            if gpu_type == "amd":
+                # AMD - HIP/Radeon
+                main_name = f"llama-{tag}-bin-win-hip-radeon-x64.zip"
+            elif gpu_type == "intel":
+                # Intel - SYCL
+                main_name = f"llama-{tag}-bin-win-sycl-x64.zip"
+            elif gpu_type == "nvidia":
+                # NVIDIA - CUDA 12.4 (most common)
+                main_name = f"llama-{tag}-bin-win-cuda-12.4-x64.zip"
+                dep_name = f"cudart-llama-bin-win-cuda-12.4-x64.zip"
+                dep_url = f"{base_url}/{dep_name}"
+            else:
+                # No GPU or unknown - Vulkan (universal)
+                main_name = f"llama-{tag}-bin-win-vulkan-x64.zip"
+            
+            main_url = f"{base_url}/{main_name}"
+            return main_url, main_name, dep_url if gpu_type == "nvidia" else None, dep_name if gpu_type == "nvidia" else None
              
         elif self.system == "Darwin":
              is_arm = "arm64" in self.machine or "aarch64" in self.machine
-             main_name = f"llama-{tag}-bin-macos-{'arm64' if is_arm else 'x64'}.zip"
+             # macOS binaries are .tar.gz, not .zip
+             main_name = f"llama-{tag}-bin-macos-{'arm64' if is_arm else 'x64'}.tar.gz"
              main_url = f"{base_url}/{main_name}"
              return main_url, main_name, None, None
              
@@ -221,8 +294,14 @@ class ServerManager:
                         f.write(chunk)
                         
             UI.event("System", "Extracting backend...", style="dim")
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(self.bin_dir)
+            # Handle both .zip and .tar.gz files
+            if filename.endswith('.tar.gz') or filename.endswith('.tgz'):
+                with tarfile.open(zip_path, 'r:gz') as tar_ref:
+                    tar_ref.extractall(self.bin_dir)
+            else:
+                # Assume .zip
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(self.bin_dir)
             
             os.remove(zip_path)
             
@@ -239,8 +318,32 @@ class ServerManager:
     def start_server(self, model_path, n_gpu_layers=99, n_ctx=8192, port=8080):
         if not self.ensure_server_exists():
             return False
-            
-        # Stop existing if any (naive check)
+        
+        # PRÜFE ZUERST, OB SERVER BEREITS LÄUFT
+        # Check if server is already running by checking PID file and health endpoint
+        if os.path.exists(self.pid_file):
+            try:
+                with open(self.pid_file, 'r', encoding='utf-8') as f:
+                    existing_pid = int(f.read().strip())
+                
+                # Check if process is still running
+                if self._is_process_running(existing_pid):
+                    # Check if server is responding
+                    try:
+                        response = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
+                        if response.status_code == 200:
+                            # Server läuft bereits, verwende ihn
+                            self.process = None  # Wir verwalten diesen Prozess nicht direkt
+                            UI.event("Server", f"Reusing existing server on :{port}...", style="dim")
+                            return True
+                    except:
+                        # Server läuft, aber antwortet nicht - kill und neu starten
+                        pass
+            except (ValueError, FileNotFoundError):
+                pass
+        
+        # Server läuft nicht oder antwortet nicht - starte neu
+        # Stop existing if any (nur wenn wirklich nötig)
         self.stop_server()
         
         cmd = [
@@ -312,8 +415,12 @@ class ServerManager:
             return False
 
     def stop_server(self):
+        # WICHTIG: Prüfe zuerst PID-Datei, falls self.process nicht gesetzt ist
+        # (z.B. wenn Server von anderem Prozess gestartet wurde)
+        pid_to_kill = None
+        
         if self.process:
-            pid = self.process.pid
+            pid_to_kill = self.process.pid
             
             # Try graceful termination first
             self.process.terminate()
@@ -327,19 +434,34 @@ class ServerManager:
                 except:
                     pass
             
-            # Windows: Double-check with taskkill (most reliable)
-            if self.system == "Windows" and pid:
+            self.process = None
+        elif os.path.exists(self.pid_file):
+            # Server wurde von anderem Prozess gestartet, lese PID aus Datei
+            try:
+                with open(self.pid_file, 'r', encoding='utf-8') as f:
+                    pid_to_kill = int(f.read().strip())
+            except (ValueError, FileNotFoundError):
+                pass
+        
+        # Kill process by PID (wenn noch nicht beendet)
+        if pid_to_kill and self._is_process_running(pid_to_kill):
+            # Windows: Use taskkill (most reliable)
+            if self.system == "Windows":
                 try:
                     subprocess.run(
-                        ["taskkill", "/F", "/PID", str(pid)],
+                        ["taskkill", "/F", "/PID", str(pid_to_kill)],
                         capture_output=True, encoding='utf-8', errors='replace',
                         creationflags=subprocess.CREATE_NO_WINDOW,
                         timeout=2
                     )
                 except:
                     pass
-            
-            self.process = None
+            else:
+                # Unix/Linux/macOS: Use kill
+                try:
+                    os.kill(pid_to_kill, 9)  # SIGKILL
+                except:
+                    pass
         
         # Close log file if open
         if hasattr(self, '_log_file') and self._log_file:

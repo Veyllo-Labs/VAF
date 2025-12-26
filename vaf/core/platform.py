@@ -337,12 +337,25 @@ class Platform:
         try:
             if Platform.is_windows():
                 # Windows: Use start cmd /k to open new window
+                # Note: start command needs special handling for quotes
+                import os
+                cwd = os.getcwd()
                 if title:
-                    cmd = f'start "{title}" cmd /k "{command}"'
+                    # Use /D to set working directory and ensure command is properly quoted
+                    cmd = f'start "{title}" /D "{cwd}" cmd /k "{command}"'
                 else:
-                    cmd = f'start cmd /k "{command}"'
-                subprocess.Popen(cmd, shell=True)
-                return True
+                    cmd = f'start /D "{cwd}" cmd /k "{command}"'
+                try:
+                    subprocess.Popen(cmd, shell=True, cwd=cwd)
+                    return True
+                except Exception as e:
+                    # Fallback: try without title
+                    try:
+                        cmd = f'start cmd /k "{command}"'
+                        subprocess.Popen(cmd, shell=True, cwd=cwd)
+                        return True
+                    except:
+                        return False
                 
             elif Platform.is_macos():
                 # macOS: Use osascript to open Terminal.app

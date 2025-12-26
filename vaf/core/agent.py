@@ -72,12 +72,17 @@ class Agent:
         self._noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip() in ("1", "true", "yes")
         self._event_sink = None  # optional callable(dict)
 
+        # Session tracking for server shutdown management
+        self._session_id = None
+        self._register_session()
+
         # Initialize Tools (Dynamic Loading)
         self.tools = {}
         self._load_tools()
         
         # Register Cleanup Handler (Cross-Platform)
-        atexit.register(self.shutdown)
+        # WICHTIG: Nur _atexit_cleanup registrieren, nicht shutdown direkt
+        # shutdown() wird von Signal-Handlern aufgerufen
         signal.signal(signal.SIGINT, self.shutdown)
         signal.signal(signal.SIGTERM, self.shutdown)
         
@@ -106,45 +111,536 @@ class Agent:
             kernel32 = ctypes.windll.kernel32
             kernel32.SetConsoleCtrlHandler(self._win_handler_ref, True)
         
-        # Register atexit handler as final backup
+        # Register atexit handler as final backup (nur einmal)
         atexit.register(self._atexit_cleanup)
+        
+        # Flag to prevent multiple shutdown calls
+        self._shutdown_called = False
+    
+    def _register_session(self):
+        """Register this agent instance as an active session."""
+        import uuid
+        from pathlib import Path
+        
+        self._session_id = str(uuid.uuid4())
+        # OS-unabhängiger Pfad
+        from vaf.core.platform import Platform
+        sessions_file = Platform.vaf_dir() / "active_sessions.txt"
+        sessions_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            # Append session ID to file
+            with open(sessions_file, "a", encoding="utf-8") as f:
+                f.write(f"{self._session_id}\n")
+        except Exception:
+            pass  # Ignore errors, session tracking is best-effort
+    
+    def _unregister_session(self):
+        """Unregister this agent instance from active sessions."""
+        from pathlib import Path
+        
+        if not self._session_id:
+            return
+        
+        # OS-unabhängiger Pfad
+        from vaf.core.platform import Platform
+        sessions_file = Platform.vaf_dir() / "active_sessions.txt"
+        
+        try:
+            if sessions_file.exists():
+                # Read all sessions, remove this one
+                with open(sessions_file, "r", encoding="utf-8") as f:
+                    sessions = [line.strip() for line in f if line.strip() != self._session_id]
+                
+                # Write back (or delete file if empty)
+                if sessions:
+                    with open(sessions_file, "w", encoding="utf-8") as f:
+                        f.write("\n".join(sessions) + "\n")
+                else:
+                    sessions_file.unlink()
+        except Exception:
+            pass  # Ignore errors
+    
+    def _count_active_sessions(self) -> int:
+        """Count how many active agent sessions exist, with cleanup of dead sessions."""
+        from pathlib import Path
+        
+        # OS-unabhängiger Pfad
+        from vaf.core.platform import Platform
+        sessions_file = Platform.vaf_dir() / "active_sessions.txt"
+        
+        if not sessions_file.exists():
+            return 0
+        
+        try:
+            # Prüfe, ob der Server überhaupt noch läuft
+            # Wenn nicht und persist_server=False, können wir die Session-Datei bereinigen
+            persist = self.config.get("persist_server", False)
+            
+            # Prüfe Server-Status durch PID-Datei
+            server_running = False
+            try:
+                from vaf.core.backend import ServerManager
+                server_mgr = ServerManager()
+                pid_file = Path(server_mgr.pid_file)
+                
+                if pid_file.exists():
+                    try:
+                        with open(pid_file, 'r', encoding='utf-8') as f:
+                            pid = int(f.read().strip())
+                        server_running = server_mgr._is_process_running(pid)
+                    except (ValueError, OSError):
+                        # PID-Datei ist korrupt oder Prozess existiert nicht
+                        server_running = False
+            except Exception:
+                # ServerManager nicht verfügbar oder Fehler, annehmen dass Server nicht läuft
+                server_running = False
+            
+            # Wenn Server nicht läuft und persist_server=False, bereinige Sessions
+            if not server_running and not persist:
+                # Server läuft nicht mehr, also gibt es keine aktiven Sessions
+                try:
+                    sessions_file.unlink()
+                except Exception:
+                    pass
+                return 0
+            
+            # Server läuft noch oder persist_server=True, zähle Sessions in Datei
+            with open(sessions_file, "r", encoding="utf-8") as f:
+                sessions = [line.strip() for line in f if line.strip()]
+            return len(sessions)
+        except Exception:
+            return 0
+    
+    def _check_other_vaf_processes(self) -> int:
+        """Check if other VAF processes are still running (more reliable than session file)."""
+        import os
+        from pathlib import Path
+        current_pid = os.getpid()
+        count = 0
+        
+        try:
+            # DEBUG: Ausgabe für Diagnose
+            # print(f"[VAF DEBUG] _check_other_vaf_processes: current_pid={current_pid}")
+            
+            # Try using psutil if available (more reliable)
+            try:
+                import psutil
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'ppid']):
+                    try:
+                        if proc.info['pid'] == current_pid:
+                            continue  # Skip ourselves
+                        
+                        # Skip if it's a child process of this one
+                        if proc.info.get('ppid') == current_pid:
+                            continue
+                        
+                        cmdline = proc.info.get('cmdline', [])
+                        if not cmdline:
+                            continue
+                        
+                        # Check if it's a VAF process
+                        cmdline_str = ' '.join(cmdline).lower()
+                        # Look for vaf commands: 'vaf run', 'vaf chat', or python scripts with vaf
+                        # WICHTIG: Prüfe auch auf 'vaf' allein, da der Befehl variieren kann
+                        is_vaf_process = False
+                        if any(keyword in cmdline_str for keyword in ['vaf run', 'vaf chat', 'vaf/main.py', '-m vaf', 'vaf\\main.py']):
+                            is_vaf_process = True
+                        # Auch prüfen, ob 'vaf' im Pfad vorkommt (für verschiedene Installationsarten)
+                        elif 'vaf' in cmdline_str and ('python' in cmdline_str or 'pythonw' in cmdline_str):
+                            # Prüfe, ob es nicht ein Automation-Subprozess ist
+                            if 'automation run' not in cmdline_str:
+                                is_vaf_process = True
+                        
+                        if is_vaf_process:
+                            # Verify it's actually a Python process running VAF
+                            proc_name = proc.info.get('name', '').lower()
+                            if 'python' in proc_name or 'pythonw' in proc_name:
+                                print(f"[VAF System] Found VAF process: PID={proc.info['pid']}, cmdline={cmdline_str[:80]}")
+                                count += 1
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        continue
+                if count > 0:
+                    print(f"[VAF System] Found {count} other VAF process(es) via psutil")
+                return count
+            except ImportError:
+                # psutil not available, use platform-specific methods
+                pass
+            
+            # Fallback: Platform-specific process checking
+            if platform.system() == "Windows":
+                try:
+                    # Try wmic first (more reliable)
+                    result = subprocess.run(
+                        ["wmic", "process", "where", "name='python.exe'", "get", "processid,commandline", "/format:csv"],
+                        capture_output=True, text=True, encoding='utf-8', errors='replace',
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                        timeout=3
+                    )
+                    lines = result.stdout.split('\n')
+                    for line in lines:
+                        line_lower = line.lower()
+                        # Prüfe auf VAF-Prozesse (verschiedene Varianten)
+                        if 'vaf' in line_lower and str(current_pid) not in line:
+                            # Exclude automation subprocesses
+                            if 'automation run' not in line_lower:
+                                # Prüfe auf typische VAF-Befehle
+                                if any(keyword in line_lower for keyword in ['vaf run', 'vaf chat', 'vaf\\main.py', 'vaf/main.py', '-m vaf']):
+                                    print(f"[VAF System] Found VAF process: {line[:80]}")
+                                    count += 1
+                                # Oder wenn 'vaf' im Pfad vorkommt (für verschiedene Installationsarten)
+                                elif 'vaf' in line_lower and 'python.exe' in line_lower:
+                                    print(f"[VAF System] Found VAF process: {line[:80]}")
+                                    count += 1
+                except Exception:
+                    # Fallback to tasklist
+                    try:
+                        result = subprocess.run(
+                            ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV", "/NH"],
+                            capture_output=True, text=True, encoding='utf-8', errors='replace',
+                            creationflags=subprocess.CREATE_NO_WINDOW,
+                            timeout=2
+                        )
+                        lines = result.stdout.split('\n')
+                        for line in lines:
+                            line_lower = line.lower()
+                            if 'vaf' in line_lower and str(current_pid) not in line:
+                                if 'automation run' not in line_lower:
+                                    count += 1
+                    except Exception:
+                        pass
+            else:
+                # Unix/Linux/macOS: Use ps command with better filtering
+                try:
+                    result = subprocess.run(
+                        ["ps", "aux"],
+                        capture_output=True, text=True, encoding='utf-8', errors='replace',
+                        timeout=2
+                    )
+                    lines = result.stdout.split('\n')
+                    for line in lines:
+                        line_lower = line.lower()
+                        if 'vaf' in line_lower and 'python' in line_lower and str(current_pid) not in line:
+                            # Exclude automation subprocesses and child processes
+                            if 'automation run' not in line_lower:
+                                # Make sure it's a main process, not a subprocess
+                                # Look for 'vaf run' or 'vaf chat' in the command
+                                if any(keyword in line_lower for keyword in ['vaf run', 'vaf chat', 'vaf/main.py', '-m vaf']):
+                                    count += 1
+                except Exception:
+                    pass
+            
+            if count > 0:
+                print(f"[VAF System] Found {count} other VAF process(es) via platform-specific check")
+            return count
+        except Exception:
+            # If all else fails, fall back to session file count
+            return self._count_active_sessions()
+    
+    def _acquire_shutdown_lock(self, timeout=2.0):
+        """Acquire a file lock to ensure only one process shuts down the server (Crash-Safe on Windows & Unix)."""
+        from pathlib import Path
+        import time
+        from vaf.core.platform import Platform
+        
+        lock_file = Platform.vaf_dir() / "shutdown.lock"
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                if os.name == 'nt':  # Windows
+                    try:
+                        import msvcrt
+                        # Datei öffnen (nicht exklusiv erstellen, sondern öffnen/erstellen)
+                        fd = os.open(str(lock_file), os.O_RDWR | os.O_CREAT, 0o666)
+                        
+                        # Versuche, die ersten Bytes zu locken (Non-Blocking)
+                        # LK_NBLCK = Non-blocking lock, wirft OSError wenn belegt
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                        
+                        # PID schreiben (optional, für Debugging)
+                        os.ftruncate(fd, 0)
+                        os.write(fd, str(os.getpid()).encode())
+                        os.fsync(fd)  # Sicherstellen, dass geschrieben wurde
+                        
+                        return fd  # WICHTIG: FD zurückgeben und OFFEN lassen!
+                    except (OSError, IOError, ImportError):
+                        # Lock belegt oder msvcrt nicht verfügbar
+                        try:
+                            if 'fd' in locals():
+                                os.close(fd)
+                        except:
+                            pass
+                        time.sleep(0.1)
+                        continue
+                else:  # Unix/Linux/macOS
+                    try:
+                        import fcntl
+                        fd = os.open(str(lock_file), os.O_RDWR | os.O_CREAT, 0o666)
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        
+                        os.ftruncate(fd, 0)
+                        os.write(fd, str(os.getpid()).encode())
+                        os.fsync(fd)  # Sicherstellen, dass geschrieben wurde
+                        
+                        return fd  # WICHTIG: FD zurückgeben und OFFEN lassen!
+                    except (OSError, IOError, ImportError):
+                        # Lock belegt oder fcntl nicht verfügbar
+                        try:
+                            if 'fd' in locals():
+                                os.close(fd)
+                        except:
+                            pass
+                        time.sleep(0.1)
+                        continue
+            except Exception:
+                time.sleep(0.1)
+        
+        return None  # Could not acquire lock
+    
+    def _release_shutdown_lock(self, lock_fd=None):
+        """Release the shutdown lock."""
+        if lock_fd is None:
+            return
+        
+        try:
+            if os.name == 'nt':  # Windows
+                try:
+                    import msvcrt
+                    msvcrt.locking(lock_fd, msvcrt.LK_UNLCK, 1)
+                except:
+                    pass
+            else:  # Unix/Linux/macOS
+                try:
+                    import fcntl
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                except:
+                    pass
+            
+            # File descriptor schließen (gibt Lock automatisch frei)
+            os.close(lock_fd)
+            
+            # Optional: Lock-Datei löschen (nicht zwingend nötig, da Lock weg ist)
+            try:
+                from vaf.core.platform import Platform
+                lock_file = Platform.vaf_dir() / "shutdown.lock"
+                if lock_file.exists():
+                    lock_file.unlink()
+            except:
+                pass
+        except Exception:
+            pass
     
     def _atexit_cleanup(self):
         """Called by atexit - kill server if still running."""
-        if self.server and self.use_server:
-            persist = self.config.get("persist_server", False)
-            if not persist:
-                try:
+        # Prevent multiple calls
+        if hasattr(self, '_atexit_called') and self._atexit_called:
+            return
+        self._atexit_called = True
+        
+        # Check config preference first
+        persist = self.config.get("persist_server", False)
+        if persist:
+            # User wants server to persist, don't shutdown
+            return
+        
+        # WICHTIG: Verwende File-Lock, damit nur ein Prozess den Server stoppt
+        # Dies verhindert Race Conditions wenn beide Terminal-Fenster gleichzeitig beendet werden
+        # Lock wird auf offenem File Descriptor gehalten (Crash-Safe auf Windows & Unix)
+        lock_fd = self._acquire_shutdown_lock(timeout=2.0)
+        if lock_fd is None:
+            # Another process is handling shutdown, just exit
+            return
+        
+        try:
+            # VEREINFACHTE LOGIK: Kurze Wartezeit, dann prüfen und stoppen
+            import time
+            time.sleep(0.3)  # Kurze Verzögerung für Race Conditions
+            
+            # WICHTIG: Vertraue NUR auf die Prozess-Liste, NICHT auf die Session-Datei
+            # Die Session-Datei könnte veraltet sein, wenn shutdown() bereits _unregister_session() aufgerufen hat
+            # aber die Datei noch nicht aktualisiert wurde
+            other_processes = self._check_other_vaf_processes()
+            
+            # Prüfe, ob andere Prozesse existieren
+            if other_processes > 0:
+                return
+            
+            # WICHTIG: Auch wenn wir keine anderen Prozesse finden, prüfe nochmal nach kurzer Wartezeit
+            # für den Fall, dass beide Fenster gleichzeitig beendet werden
+            time.sleep(0.2)
+            other_processes = self._check_other_vaf_processes()
+            
+            if other_processes > 0:
+                return
+            
+            # Keine anderen Prozesse/Sessions gefunden - Server stoppen
+            # Prüfe ob Server überhaupt läuft
+            server_running = False
+            try:
+                from pathlib import Path
+                from vaf.core.backend import ServerManager
+                server_mgr = ServerManager()
+                pid_file = Path(server_mgr.pid_file)
+                if pid_file.exists():
+                    with open(pid_file, 'r', encoding='utf-8') as f:
+                        server_pid = int(f.read().strip())
+                    if server_mgr._is_process_running(server_pid):
+                        try:
+                            response = requests.get("http://127.0.0.1:8080/health", timeout=1)
+                            if response.status_code == 200:
+                                server_running = True
+                        except:
+                            pass
+            except Exception:
+                pass
+            
+            # Server stoppen (WICHTIG: Immer stoppen, wenn wir hier sind und keine anderen Prozesse existieren)
+            print(f"\n[VAF] Stopping server (no active sessions remaining)...")
+            
+            try:
+                if self.server and self.use_server:
                     self.server.stop_server()
+                else:
+                    from vaf.core.backend import ServerManager
+                    server_mgr = ServerManager()
+                    server_mgr.stop_server()
+            except Exception as e:
+                # Versuche es nochmal
+                try:
+                    from vaf.core.backend import ServerManager
+                    server_mgr = ServerManager()
+                    server_mgr.stop_server()
                 except:
                     pass
+        finally:
+            # Lock freigeben
+            self._release_shutdown_lock(lock_fd)
 
     def shutdown(self, signum=None, frame=None):
         """Cleanup resources on exit - works for both signal handlers and manual calls."""
+        # Prevent multiple shutdown calls
+        if hasattr(self, '_shutdown_called') and self._shutdown_called:
+            return
+        self._shutdown_called = True
+        
+        # CRITICAL: Check for other sessions BEFORE unregistering this one
+        should_keep_server = False
         if self.server and self.use_server:
-            # Check config preference
+            # Check config preference FIRST
+            persist = self.config.get("persist_server", False)
+            if persist:
+                should_keep_server = True
+                if signum:
+                    print(f"\n[VAF] Server process left running (persist_server=True).")
+            else:
+                # Prüfe ZUERST ob Server überhaupt noch läuft
+                # Wenn Server nicht läuft, müssen wir ihn nicht stoppen
+                server_still_running = False
+                try:
+                    from pathlib import Path
+                    from vaf.core.backend import ServerManager
+                    server_mgr = ServerManager()
+                    pid_file = Path(server_mgr.pid_file)
+                    if pid_file.exists():
+                        with open(pid_file, 'r', encoding='utf-8') as f:
+                            server_pid = int(f.read().strip())
+                        if server_mgr._is_process_running(server_pid):
+                            # Prüfe ob Server antwortet
+                            try:
+                                response = requests.get("http://127.0.0.1:8080/health", timeout=1)
+                                if response.status_code == 200:
+                                    server_still_running = True
+                            except:
+                                pass
+                except Exception:
+                    pass
+                
+                if not server_still_running:
+                    # Server läuft nicht mehr, müssen wir nicht stoppen
+                    self._unregister_session()
+                    # Don't call sys.exit() here - let the process exit naturally
+                    # sys.exit() causes SystemExit which is caught by atexit handlers
+                    return
+                
+                # Server läuft noch - prüfe andere Sessions
+                other_processes = self._check_other_vaf_processes()
+                active_sessions = self._count_active_sessions()
+                
+                # WICHTIG: Wenn wir die letzte Session sind, sollten wir > 1 zählen
+                # Aber nach _unregister_session() wird es 0 sein
+                # Deshalb prüfen wir BEVOR wir uns entfernen
+                if other_processes > 0 or active_sessions > 1:
+                    should_keep_server = True
+                    if signum:
+                        print(f"\n[VAF] Other active sessions detected (processes: {other_processes}, sessions: {active_sessions - 1}), keeping server running.")
+        
+        # JETZT unregister diese Session
+        self._unregister_session()
+        
+        if should_keep_server:
+            # Don't call sys.exit() - let the process exit naturally
+            # This prevents SystemExit exception in atexit handlers
+            return
+        
+        if self.server and self.use_server:
+            # Double-check mit Verzögerung
+            import time
+            time.sleep(0.3)  # Etwas länger für Race Conditions
+            
             persist = self.config.get("persist_server", False)
             if not persist:
+                # Finale Prüfung
+                other_processes = self._check_other_vaf_processes()
+                active_sessions = self._count_active_sessions()
+                
+                # Zusätzlich: Prüfe ob Server noch läuft und antwortet
+                server_still_running = False
                 try:
-                    print(f"\n[VAF] Stopping server (Signal: {signum or 'Exit'})...")
+                    response = requests.get("http://127.0.0.1:8080/health", timeout=1)
+                    if response.status_code == 200:
+                        server_still_running = True
+                except:
+                    pass
+                
+                # WICHTIG: Nur prüfen, ob andere PROZESSE/SESSIONS existieren
+                # server_still_running sollte NICHT verhindern, dass der Server gestoppt wird!
+                # Wenn keine anderen Prozesse/Sessions existieren, stoppen wir den Server
+                if other_processes > 0 or active_sessions > 0:
+                    if signum:
+                        print(f"\n[VAF] Other active sessions/processes detected after delay, keeping server running.")
+                    return
+                
+                # Wirklich keine anderen Sessions - Server stoppen (egal ob er läuft oder nicht)
+                print(f"\n[VAF] Stopping server ({signum or 'Exit'})...")
+                try:
                     self.server.stop_server()
                     self.use_server = False
                 except Exception as e:
-                    # Force kill if graceful stop failed
                     try:
                         if self.server: 
                             self.server.stop_server()
                     except:
                         pass
+                    # Fallback: Versuche über ServerManager
+                    try:
+                        from vaf.core.backend import ServerManager
+                        server_mgr = ServerManager()
+                        server_mgr.stop_server()
+                    except:
+                        pass
                 
-                # If triggered by signal, force exit
+                # For signal handlers, we might need to force exit
+                # But don't use sys.exit() as it causes SystemExit in atexit
                 if signum:
                     import os
-                    os._exit(0)  # Force exit - sys.exit might not work in signal handlers
+                    os._exit(0)  # Force exit without calling atexit handlers
             else:
                 if signum:
                     print(f"\n[VAF] Server process left running (persist_server=True).")
-                    sys.exit(0)
+                    # Don't call sys.exit() - let process exit naturally
+                    return
 
     def _load_tools(self):
         """
@@ -198,8 +694,43 @@ class Agent:
 
     def load_model(self, skip_download_check: bool = False):
         from vaf.cli.ui import UI
+        from vaf.core.gpu_detection import get_primary_gpu, _check_cuda_available
+        
         if not skip_download_check:
             self.ensure_model_exists()
+        
+        # Check for NVIDIA GPU without CUDA and offer auto-install
+        primary_gpu = get_primary_gpu()
+        if primary_gpu and primary_gpu.vendor == "nvidia" and not primary_gpu.compute_available:
+            if not _check_cuda_available():
+                UI.warning("NVIDIA GPU detected but CUDA not available.")
+                UI.print("[yellow]VAF can automatically install CUDA-enabled llama-cpp-python.[/yellow]")
+                try:
+                    response = input("  Auto-install CUDA support? [Y/n]: ").strip().lower()
+                    if response in ('', 'y', 'yes', 'j', 'ja'):
+                        UI.event("System", "Installing CUDA support...", style="warning")
+                        # Install CUDA-enabled llama-cpp-python inline
+                        import subprocess
+                        system = platform.system()
+                        env = os.environ.copy()
+                        pip_cmd = [sys.executable, "-m", "pip", "install", "llama-cpp-python", "--no-cache-dir", "--force-reinstall"]
+                        
+                        if system == "Windows":
+                            env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
+                            pip_cmd.extend(["--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124"])
+                        elif system == "Linux":
+                            env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
+                            pip_cmd.extend(["--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124"])
+                        
+                        subprocess.check_call(pip_cmd, env=env)
+                        UI.event("Success", "CUDA support installed! Restarting model load...", style="success")
+                        # Re-check after installation
+                        primary_gpu = get_primary_gpu()
+                except (KeyboardInterrupt, EOFError):
+                    UI.print("[dim]Skipping CUDA installation. Using CPU mode.[/dim]")
+                except Exception as e:
+                    UI.error(f"CUDA installation failed: {e}")
+                    UI.print("[yellow]You can manually install with: vaf install-gpu[/yellow]")
         
         n_gpu = self.config.get("gpu_layers", 99) # Default to max for server
         n_ctx = self.config.get("n_ctx", 8192)
@@ -214,7 +745,14 @@ class Agent:
             self.server = ServerManager()
             if self.server.start_server(self.model_path, n_gpu_layers=n_gpu, n_ctx=n_ctx):
                 self.use_server = True
-                UI.event("Info", "Using HTTP Backend", style="dim")
+                # Show GPU status
+                if primary_gpu:
+                    if primary_gpu.compute_available:
+                        UI.event("Info", f"Using HTTP Backend ({primary_gpu.vendor.upper()} GPU)", style="dim")
+                    else:
+                        UI.event("Info", f"Using HTTP Backend (CPU Mode - GPU compute not available)", style="yellow")
+                else:
+                    UI.event("Info", "Using HTTP Backend (CPU Mode)", style="dim")
                 return # Success
             else:
                 UI.error("Server backend failed. Falling back to internal library (CPU).")
@@ -416,6 +954,63 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
 - DO NOT call web_search, git_init, or other tools AFTER creating automation
 - The automation's prompt should be self-contained (e.g., "Create weather summary for Berlin tomorrow as HTML")
 """
+        
+        # Add automation-specific instructions if running in automation mode
+        if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
+            # Check if communication tools are available (telegram, discord, slack, etc.)
+            comm_tools = [name for name in self.tools.keys() if any(
+                keyword in name.lower() for keyword in ["telegram", "discord", "slack", "whatsapp", "signal", "messaging", "chat", "notify", "mail", "email"]
+            )]
+            has_comm_tools = len(comm_tools) > 0
+            
+            system_prompt += """
+## AUTOMATION MODE - CRITICAL RULES
+
+You are running as an AUTOMATION. This means:
+- You are executing a scheduled task WITHOUT direct user interaction
+- By default, there is NO user present to answer questions or provide input
+- You MUST complete the task autonomously
+
+**MANDATORY BEHAVIOR IN AUTOMATION MODE:**
+1. **NEVER ask for missing information** - You cannot wait for user input (unless communication tools are available, see below)
+2. **Use reasonable defaults** when information is missing:
+   - Weather without location → Use "current location" or a sensible default (e.g., "Berlin" if context suggests it)
+   - Dates without specification → Use "today" or the most recent/relevant date
+   - Any missing info → Make the best reasonable assumption based on context
+3. **If no reasonable default exists**, clearly state what information is missing in your response, but DO NOT block execution
+4. **Complete the task** - Even if some information is missing, produce the best possible output with available information
+5. **DO NOT wait** - Automations run unattended and must finish without user interaction
+
+**EXCEPTION: Communication Tools Available**
+"""
+            if has_comm_tools:
+                system_prompt += f"""
+✅ **Communication tools detected**: {', '.join(comm_tools)}
+
+If the automation prompt explicitly states that you should wait for user input (e.g., "wait for my answer", "ask the user", "request confirmation"), 
+you MAY use these communication tools to send a message and wait for a response. However:
+- Only do this if the prompt EXPLICITLY requests it
+- Use the communication tool to send your question
+- Wait for the response before continuing
+- If no response comes within a reasonable time, proceed with defaults
+
+**Example with communication tools:**
+- Prompt: "Ask the user via Telegram which city they want weather for, then create a report"
+- ✅ CORRECT: Send message via telegram tool asking for city, wait for response, then create report
+- Prompt: "Create weather report" (no mention of asking user)
+- ✅ CORRECT: Use default location and create report (don't ask, even if telegram is available)
+"""
+            else:
+                system_prompt += """
+❌ **No communication tools available** - You cannot wait for user input under any circumstances.
+
+**Example in Automation Mode:**
+- User prompt: "Create weather report" (no location specified)
+- ✅ CORRECT: Use a default location (e.g., "Berlin" or "current location") and create the report
+- ❌ WRONG: Ask "Which city?" - there is no user to answer!
+
+Remember: You are an automation. Your job is to complete tasks autonomously, not to ask questions (unless communication tools are available AND the prompt explicitly requests it).
+"""
 
         self.history = [
             {"role": "system", "content": system_prompt}
@@ -476,10 +1071,98 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
 
         return "auto"
 
+    def _detect_mixed_languages(self, text: str) -> list[str]:
+        """
+        Detects mixed languages in text by splitting it into sections.
+        Returns a list of detected languages (without duplicates).
+        """
+        if not text or len(text.strip()) < 10:
+            return []
+        
+        # Split text into sentences/phrases (at punctuation or line breaks)
+        import re
+        # Split at punctuation but keep it
+        sentences = re.split(r'([.!?]\s+|\.\s+|,\s+|\n+)', text)
+        sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) >= 5]
+        
+        detected_langs = set()
+        
+        # Analyze each sentence individually
+        for sentence in sentences:
+            lang = self._detect_user_language(sentence)
+            if lang != "auto":
+                detected_langs.add(lang)
+        
+        # If no sentences detected, try the whole text
+        if not detected_langs:
+            lang = self._detect_user_language(text)
+            if lang != "auto":
+                detected_langs.add(lang)
+        
+        return list(detected_langs)
+
+    def _user_requested_translation(self, user_input: str, detected_response_lang: str) -> bool:
+        """
+        Intelligently checks if the user explicitly requested a translation,
+        WITHOUT using hardcoded words.
+        
+        Strategy:
+        1. Detect mixed languages in user input
+        2. If response language is one of the mixed languages (but not the main language),
+           then it's probably a translation request
+        3. If user input is mainly in language A, but response is in language B,
+           AND language B appears in user input → translation request
+        
+        Returns:
+            True if user likely requested a translation, False otherwise
+        """
+        if not user_input or not detected_response_lang:
+            return False
+        
+        # Detect main language of user input
+        main_user_lang = self._detect_user_language(user_input)
+        
+        # If main language is "auto", we can't be sure
+        if main_user_lang == "auto":
+            return False
+        
+        # If response language = main language, it's not a translation request
+        if detected_response_lang == main_user_lang:
+            return False
+        
+        # Detect mixed languages in user input
+        mixed_langs = self._detect_mixed_languages(user_input)
+        
+        # If response language appears in mixed languages,
+        # but is not the main language → probably translation request
+        if detected_response_lang in mixed_langs and detected_response_lang != main_user_lang:
+            return True
+        
+        # Additional check: Split input into words/phrases
+        # and check if parts are detected in response language
+        import re
+        words = re.findall(r'\b\w+\b', user_input)
+        
+        # Check if there are significant parts in response language
+        # (at least 2 words that together are detected in response language)
+        if len(words) >= 2:
+            # Test phrases of 2-4 words
+            for phrase_length in [2, 3, 4]:
+                for i in range(len(words) - phrase_length + 1):
+                    phrase = ' '.join(words[i:i+phrase_length])
+                    phrase_lang = self._detect_user_language(phrase)
+                    if phrase_lang == detected_response_lang and phrase_lang != main_user_lang:
+                        # Found: A phrase in user input is in response language
+                        return True
+        
+        return False
+
     def _check_language_mismatch(self, user_input: str, assistant_response: str) -> None:
         """
         Check if the assistant responded in a different language than the user.
         If mismatch detected, add a warning to history prompting the model to translate/reformulate.
+        
+        IMPORTANT: Intelligently ignores mismatches when the user likely requested a translation.
         
         This helps catch cases where the model ignores LANGUAGE_HINT and responds in English
         when the user asked in Turkish, Spanish, etc.
@@ -494,6 +1177,14 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
         if user_lang == "auto" or response_lang == "auto":
             return
         if user_lang == response_lang:
+            return
+        
+        # INTELLIGENT check: Did the user explicitly request a translation?
+        # Uses existing language detection, no hardcoded words!
+        if self._user_requested_translation(user_input, response_lang):
+            # User likely requested a translation - that's OK
+            from vaf.cli.ui import UI
+            UI.debug(f"Language mismatch ignored: User likely requested translation to {response_lang}")
             return
         
         # Language names for friendly messages (comprehensive list for langid's 97 languages)
@@ -528,36 +1219,37 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
         user_lang_name = language_names.get(user_lang, user_lang.upper())
         response_lang_name = language_names.get(response_lang, response_lang.upper())
         
-        # Generate warning message in the user's language (if we can) or bilingual
+        # Sofortige, direkte Warnung in der Nutzersprache
         if user_lang == "de":
             warning = (
                 f"⚠️ **Sprach-Mismatch erkannt**: Du hast auf {response_lang_name} geantwortet, "
                 f"aber der Nutzer spricht {user_lang_name}. "
-                f"Bitte übersetze deine Antwort ins {user_lang_name} oder formuliere sie auf {user_lang_name} um."
+                f"Bitte übersetze deine Antwort sofort ins {user_lang_name} oder formuliere sie auf {user_lang_name} um."
             )
         elif user_lang in language_names:
             # Try to generate a warning in the user's language (simple approach)
             warning = (
                 f"⚠️ **Language mismatch detected**: You responded in {response_lang_name}, "
                 f"but the user is speaking {user_lang_name}. "
-                f"Please translate your response to {user_lang_name} or reformulate it in {user_lang_name}."
+                f"Please translate your response immediately to {user_lang_name} or reformulate it in {user_lang_name}."
             )
         else:
             # Fallback: bilingual
             warning = (
                 f"⚠️ **Language mismatch**: You answered in {response_lang_name}, "
                 f"but user speaks {user_lang_name}. "
-                f"Please respond in {user_lang_name}."
+                f"Please respond immediately in {user_lang_name}."
             )
         
-        # Add warning to history so model sees it and can correct on next turn
+        # Insert immediate warning into history (before the response!)
+        # This forces the model to correct the response immediately
         self.history.append({
             "role": "system",
             "content": warning
         })
         
         from vaf.cli.ui import UI
-        UI.event("Language", f"Mismatch: User={user_lang_name}, Response={response_lang_name}", style="warning")
+        UI.event("Language", f"Mismatch: User={user_lang_name}, Response={response_lang_name} - Auto-correction requested", style="warning")
 
     def _refresh_language_hint(self, user_input: str) -> None:
         """
@@ -794,7 +1486,6 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                  except: pass
             
             # Parse Float
-            import re
             match = re.search(r"\d+(\.\d+)?", content)
             if match:
                 temp = float(match.group())
@@ -869,7 +1560,6 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                     return None
             
             # Parse workflow ID (same pattern as analyze_intent parses float)
-            import re
             # Dynamically build regex from all available workflow IDs (plug and play!)
             workflow_ids_pattern = '|'.join(re.escape(wf_id) for wf_id in WORKFLOW_TEMPLATES.keys())
             match = re.search(rf'\b({workflow_ids_pattern})\b', content.lower())
@@ -914,12 +1604,12 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
             # BRAIN-BASED WORKFLOW SELECTION (multi-language support!)
             # Instead of hardcoded pattern matching, use LLM to understand intent in ANY language
             from vaf.cli.ui import UI as UI_Class
-            with UI_Class.console.status("[bold cyan]🧠 Brain: Analyzing workflow match...[/bold cyan]", spinner="dots"):
+            with UI_Class.console.status("[bold cyan](O_O)  Step 1/2: Analyzing workflow match...[/bold cyan]", spinner="dots"):
                 workflow_id = self.analyze_workflow(user_input)
             
             if not workflow_id:
                 # No workflow match - fall back to LLM agent
-                UI.event("Brain", "No workflow match", style="dim")
+                UI.event("Step 1/2", "Workflow", style="dim")
                 return None
             
             UI.event("Brain", f"Workflow matched: {workflow_id}", style="bold cyan")
@@ -932,77 +1622,52 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
             
             UI.event("Workflow", f"Brain matched: {template['name']} (multi-language support!)", style="bold cyan")
             
-            # Extract variables using selector (still useful for variable extraction)
-            selector = WorkflowSelector()
-            result = selector.select(user_input)
+            # Extract variables using LLM (more accurate than pattern matching)
+            from vaf.cli.ui import UI
+            UI.event("Brain", "Extracting variables from user input...", style="dim")
             
-            # Use selector's variable extraction even if pattern matching didn't work
-            # (Brain found the workflow, but selector can still extract variables)
-            variables = result.variables if result.matched else {}
+            variables = self._extract_workflow_variables_with_llm(user_input, template)
             
-            # Get required variables from template (in case selector didn't match)
+            # Get required variables from template
             template_variables = template.get("variables", {})
             required_vars = set(template_variables.keys())
+            defaults = template.get("defaults", {})
             
             # Determine which variables are missing
             missing = [var for var in required_vars if var not in variables]
             
+            # Fill in defaults for missing variables
+            for var_name in missing:
+                if var_name in defaults:
+                    variables[var_name] = defaults[var_name]
+                    missing.remove(var_name)
+            
             # Debug: Log extracted variables
             if variables:
-                from vaf.cli.ui import UI
                 UI.event("Debug", f"Extracted variables: {list(variables.keys())}", style="dim")
             
-            # If variables are missing, try to extract them from the input using improved extraction
+            # If variables are still missing, use selector as fallback
             if missing:
-                from vaf.cli.ui import UI
-                UI.event("Debug", f"Missing variables: {missing}", style="dim")
-                # Use selector's improved _extract_value method for better extraction
+                UI.event("Debug", f"Missing variables (using fallback): {missing}", style="dim")
+                selector = WorkflowSelector()
                 missing_copy = list(missing)  # Use copy to avoid modification during iteration
                 for var_name in missing_copy:
                     extracted = selector._extract_value(user_input, var_name, template_variables.get(var_name, ""))
                     if extracted:
                         variables[var_name] = extracted
                         missing.remove(var_name)
-                    else:
-                        # For description/query/topic/task_description variables, use cleaned input as fallback
-                        if var_name in ("description", "query", "topic", "task_description"):
-                            # Try to extract a cleaned version first
-                            cleaned = selector._extract_value(user_input, var_name, template_variables.get(var_name, ""))
-                            if cleaned and len(cleaned) > 5:
-                                variables[var_name] = cleaned
-                            else:
-                                # Last resort: use full input but clean it
-                                # Remove time patterns, frequency words, etc.
-                                import re
-                                cleaned_input = user_input
-                                # Remove time patterns (HH:MM format)
-                                cleaned_input = re.sub(r'\b\d{1,2}:\d{2}\b', '', cleaned_input)
-                                # Remove frequency words (works in any language)
-                                frequency_words = ["immer", "täglich", "daily", "always", "every day", "um", "at"]
-                                for word in frequency_words:
-                                    cleaned_input = re.sub(rf'\b{word}\b', '', cleaned_input, flags=re.IGNORECASE)
-                                # Remove format mentions
-                                format_words = ["html", "markdown", "txt", "text"]
-                                for word in format_words:
-                                    cleaned_input = re.sub(rf'\b{word}\b', '', cleaned_input, flags=re.IGNORECASE)
-                                # Remove path mentions
-                                path_words = ["desktop", "documents", "downloads", "on my", "to my"]
-                                for word in path_words:
-                                    cleaned_input = re.sub(rf'\b{word}\b', '', cleaned_input, flags=re.IGNORECASE)
-                                # Clean up whitespace
-                                cleaned_input = re.sub(r'\s+', ' ', cleaned_input).strip()
-                                if cleaned_input:
-                                    variables[var_name] = cleaned_input
-                                else:
-                                    variables[var_name] = user_input
-                            missing.remove(var_name)
-                        else:
-                            UI.event("Workflow", f"Missing input: {var_name}", style="warning")
+                    elif var_name in defaults:
+                        variables[var_name] = defaults[var_name]
+                        missing.remove(var_name)
                 
                 # If still missing critical variables, fall back to LLM
                 if missing:
-                    UI.event("Workflow", f"Missing inputs: {', '.join(missing)} - falling back to LLM", style="warning")
-                return None
+                    UI.event("Workflow", f"Missing inputs: {', '.join(missing)} - using defaults or falling back", style="warning")
+                    # Use defaults for remaining missing variables
+                    for var_name in missing:
+                        if var_name in defaults:
+                            variables[var_name] = defaults[var_name]
+                            missing.remove(var_name)
             
             # Create a SelectorResult for compatibility
             from vaf.workflows.selector import SelectorResult
@@ -1054,7 +1719,9 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
             engine = WorkflowEngine(all_tools, callback=workflow_callback)
             
             # Execute workflow
-            workflow_result = engine.execute(steps, variables=result.variables)
+            # Get defaults from template if available
+            template_defaults = result.template.get("defaults", {}) if result.template else {}
+            workflow_result = engine.execute(steps, variables=result.variables, defaults=template_defaults)
             
             if workflow_result.success:
                 # Format the final output
@@ -1092,7 +1759,6 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                 
                 if coding_agent_used:
                     # Extract project path from output if available
-                    import re
                     path_match = re.search(r'`([^`]+)`', final_output)
                     if path_match:
                         project_path_hint = path_match.group(1)
@@ -1109,7 +1775,6 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                             coding_tool = all_tools.get("coding_agent")
                             if coding_tool:
                                 # Extract current task status from output
-                                import re
                                 task_match = re.search(r'Tasks:\s*(\d+)/(\d+)', final_output)
                                 completed_tasks = int(task_match.group(1)) if task_match else 0
                                 total_tasks = int(task_match.group(2)) if task_match else 0
@@ -1315,10 +1980,10 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
         if not auto_retry and not skip_input:
              # Sub-Agent Intent Analysis (can take time)
              from vaf.cli.ui import UI as UI_Class
-             with UI_Class.console.status("[bold magenta](O_O) Analyzing Intent...[/bold magenta]", spinner="dots"):
+             with UI_Class.console.status("[bold cyan](O_O)  Step 2/2: Analyzing Intent...[/bold cyan]", spinner="dots"):
                  dynamic_temp = self.analyze_intent(user_input)
              
-             UI.event("Brain", f"Adaptive State: Temperature set to {dynamic_temp} based on intent.", style="dim")
+             UI.event("Step 2/2", f"Adaptive State: Temperature set to {dynamic_temp} based on intent.", style="dim")
              target_temp = dynamic_temp
 
         UI.event("Agent", "Thinking...", style="dim")
@@ -1631,12 +2296,34 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
 
                     UI.event("Tool", f"{function_name}", style="highlight")
                     
+                    # Extract user question for web_search to enable per-page analysis
+                    if function_name == "web_search":
+                        # Find the last user message to get the original question
+                        user_question = arguments.get('query', '')  # Default to query
+                        for msg in reversed(self.history):
+                            if msg.get('role') == 'user':
+                                user_question = msg.get('content', user_question)
+                                break
+                        # Add user_question to arguments for web_search
+                        arguments['user_question'] = user_question
+                    
                     # Show spinner while tool works
                     from vaf.cli.ui import UI as UI_Class
                     result = None
                     try:
                         # Special Case: Tools with their own immersive UI (no spinner needed)
                         if function_name in ("coding_agent", "research_agent"):
+                            # Log agent-to-agent communication
+                            if function_name == "coding_agent":
+                                # Check if this is a follow-up call (after answering questions)
+                                tool_args_str = str(arguments)
+                                is_followup = any(keyword in tool_args_str.lower() for keyword in [
+                                    "answer", "based on", "use", "should be", "according to"
+                                ])
+                                if is_followup:
+                                    from vaf.cli.ui import UI
+                                    answer_preview = tool_args_str[:100] if len(tool_args_str) > 100 else tool_args_str
+                                    UI.event("? Agent Chat", f"? ? Main Agent → Coding Agent: {answer_preview}...", style="green")
                             # No spinner, just run. The tool will print its own updates.
                             result = self.execute_tool(function_name, arguments)
                         else:
@@ -1693,7 +2380,7 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                     # Compress if we're approaching the limit
                     self.manage_context()
                 
-                UI.event("Debug", "Tool finished. Sending result to model...", style="dim")
+                UI.event("Debug", "Summarizing intel...", style="dim")
                 continue
             
             # 2. Handle Empty / Think-Only Responses
@@ -1710,309 +2397,138 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
                 temp_content = temp_content.replace(pattern, "")
             temp_content = temp_content.strip()
             
-            # Consider empty if: no content OR only filler words (< 3 real chars after cleaning)
+            # Consider empty if: no final answer OR only filler words (< 3 real chars after cleaning)
+            # NOTE: This checks full_content (final answer), NOT full_reasoning (thinking)
+            # The model can think as much as it wants, but must provide a final answer
             is_effectively_empty = len(temp_content) < 3
             
-            # Case A: Totally Empty (Server failure or silent stop)
-            if (not full_response or is_effectively_empty) and retries < MAX_RETRIES:
-                 # Silent retry for empty response
-                 self.history.append({"role": "system", "content": "You generated an empty or near-empty response (just 'Answer:' or similar). Please process the user request and generate a valid Tool Call or provide a REAL, SUBSTANTIVE answer."})
-                 retries += 1
-                 continue
-
-            # Case B: Think Only (No answer)
-            # If we have reasoning but NO content (or empty-ish content)
-            if full_reasoning and is_effectively_empty and retries < MAX_RETRIES:
-                # We append the thought process so proper context is maintained
-                self.history.append({"role": "assistant", "content": full_response})
-                # Graduated Retry Strategy
+            # Empty Response Handler: Remove responses without final answer and restart from last tool call or user message
+            # NO RETRY LIMITS - will loop until we get a response
+            # IMPORTANT: This removes assistant messages that have NO final answer (even if they have reasoning)
+            # CRITICAL: At this point, the stream is COMPLETE (finish_reason="stop" equivalent)
+            # We can immediately check for tool-intent without waiting, as the model has finished generating
+            if (not full_response or is_effectively_empty):
+                # CRITICAL: Check if agent mentioned a tool name (but didn't actually call it yet)
+                # This prevents us from interrupting the agent while it's trying to call a tool
+                # Tool names are language-independent - they're always the same regardless of thinking language
+                # IMPORTANT: No time-based waiting needed - stream is already complete, so we can check immediately
                 
-                # Check if we just finished a tool call
-                last_was_tool = len(self.history) >= 2 and self.history[-2].get('role') == 'tool'
+                # Get available tool names dynamically (supports user-added tools)
+                available_tool_names = list(self.tools.keys()) if self.tools else []
                 
-                if last_was_tool:
-                     tool_name = self.history[-2].get('name', '')
-                     tool_result = self.history[-2].get('content', '')
-                     tool_result_str = str(tool_result).lower()
-                     
-                     # Check if tool returned an error (multiple error patterns)
-                     is_error = (
-                         "error executing tool" in tool_result_str or
-                         "error:" in tool_result_str or
-                         "server returned" in tool_result_str and ("400" in tool_result_str or "500" in tool_result_str or "404" in tool_result_str) or
-                         "failed" in tool_result_str and ("tool" in tool_result_str or "execution" in tool_result_str) or
-                         tool_result_str.startswith("error")
-                     )
-                     
-                     # CRITICAL: Check librarian_agent FIRST (before generic error handling)
-                     # This ensures the specific prompt is always used, even on errors
-                     if tool_name == "librarian_agent":
-                         # ALWAYS use specific prompt for librarian_agent (even on errors)
-                         # This ensures the model gives a final answer instead of just thinking
-                         if is_error:
-                             prompt = (
-                                 f"⚠️ The librarian_agent FAILED: {tool_result}\n\n"
-                                 f"STOP thinking. You MUST immediately inform the user about this error.\n"
-                                 f"Tell them: 'The librarian tool failed with error: [error details]'\n"
-                                 f"Do not explain what you tried. Just report the error directly."
-                             )
-                         else:
-                             # Success case: Get the answer from tool result
-                             prompt = "The librarian agent has finished. You have the answer in the tool result. STOP thinking and output the FINAL ANSWER directly to the user now. Do not explain the process, just give the answer."
-                     elif is_error:
-                         # CRITICAL: Prevent retrying the same tool - force error message to user
-                         prompt = (
-                             f"⚠️ CRITICAL: The tool '{tool_name}' FAILED with error: {tool_result}\n\n"
-                             f"DO NOT call '{tool_name}' again. DO NOT retry. DO NOT think about alternatives.\n"
-                             f"You MUST immediately inform the user about this error in plain language.\n"
-                             f"Tell them what went wrong and that the tool failed. Do not generate more thoughts."
-                         )
-                     elif tool_name == "write_file":
-                         prompt = "File written successfully. Analyze the result and inform the user."
-                     elif tool_name == "web_search":
-                         prompt = (
-                             "🚨 CRITICAL: Web search is COMPLETE. You have ALL the search results.\n\n"
-                             "STOP thinking. STOP analyzing. STOP planning.\n"
-                             "DO NOT call web_search again. DO NOT call any other tools.\n"
-                             "You MUST output the FINAL ANSWER to the user RIGHT NOW.\n\n"
-                             "Extract the key information from the search results and give a direct, concise answer.\n"
-                             "Do NOT explain your process. Do NOT mention the tool. Just give the answer."
-                         )
-                     elif tool_name == "coding_agent":
-                         # Extract original user task from history (look for the most recent user message that triggered coding_agent)
-                         original_task = None
-                         for msg in reversed(self.history):
-                             if msg.get("role") == "user" and "coding_agent" not in str(msg.get("content", "")).lower():
-                                 original_task = msg.get("content", "")
-                                 break
-                         
-                         # Check if coding agent result indicates incomplete work or questions
-                         tool_result_str = str(tool_result).lower()
-                         
-                         # Check for incomplete tasks (e.g., "Tasks: 0/5", "Tasks: 2/5")
-                         task_match = re.search(r'tasks?\s*:\s*(\d+)/(\d+)', tool_result_str, re.IGNORECASE)
-                         has_incomplete_tasks = False
-                         if task_match:
-                             completed = int(task_match.group(1))
-                             total = int(task_match.group(2))
-                             has_incomplete_tasks = completed < total
-                         
-                         # Also check for explicit incomplete indicators
-                         has_incomplete_tasks = has_incomplete_tasks or any(pattern in tool_result_str for pattern in [
-                             "tasks remaining", "remaining tasks", "incomplete", "not finished",
-                             "still working", "continue", "next task"
-                         ])
-                         
-                         # Check for questions or help requests
-                         has_questions = any(pattern in tool_result_str for pattern in [
-                             "what should", "how should", "which", "should i", "do you want",
-                             "what do you", "can you tell", "please specify", "need to know",
-                             "unclear", "not sure", "help", "question", "?", "what is",
-                             "i need", "i don't know", "unsure"
-                         ])
-                         
-                         # Check for placeholders that need filling
-                         has_placeholders = any(pattern in tool_result_str for pattern in [
-                             "placeholder", "template", "muster", "example", "todo:", "fix placeholders",
-                             "unchanged placeholders", "generic text", "replace placeholders"
-                         ])
-                         
-                         # Check if coding agent claims completion but has incomplete work
-                         claims_completion = any(pattern in tool_result_str for pattern in [
-                             "task completed", "all tasks completed", "finished", "done", "complete"
-                         ])
-                         
-                         # Build context about original task
-                         task_context = f"\n\n**Original user task:** {original_task[:200]}" if original_task else ""
-                         
-                         if (has_incomplete_tasks or has_placeholders) and not claims_completion:
-                             # Coding agent has incomplete work - help it complete
-                             remaining_info = f"Tasks: {task_match.group(1)}/{task_match.group(2)} incomplete" if task_match else "Tasks incomplete"
-                             prompt = (
-                                 f"⚠️ The coding agent has INCOMPLETE work. {remaining_info}.\n\n"
-                                 f"Result excerpt: {tool_result[:400]}{task_context}\n\n"
-                                 f"**Your job:** Help the coding agent complete ALL remaining tasks.\n"
-                                 f"1. Read the original user task above to understand the full requirements\n"
-                                 f"2. If placeholders exist, instruct the coding agent to fill them with relevant content based on the task context\n"
-                                 f"3. If tasks are incomplete, instruct the coding agent to continue working on ALL remaining tasks\n"
-                                 f"4. DO NOT report to the user yet - help the coding agent finish first\n"
-                                 f"5. Call coding_agent again with clear instructions to complete the work\n\n"
-                                 f"Example instruction: 'Fill all placeholders with content relevant to the task. Complete all remaining tasks in the TODO list.'"
-                             )
-                         elif has_questions:
-                             # Coding agent has questions - answer them based on task context
-                             prompt = (
-                                 f"❓ The coding agent has QUESTIONS that need answers.\n\n"
-                                 f"Result excerpt: {tool_result[:400]}{task_context}\n\n"
-                                 f"**Your job:** Answer the coding agent's questions based on the original user task above.\n"
-                                 f"1. Review the original user task to understand what they want\n"
-                                 f"2. Answer the coding agent's questions with specific, helpful information derived from the task context\n"
-                                 f"3. If the task doesn't specify something, make reasonable assumptions based on the task context\n"
-                                 f"4. DO NOT report to the user yet - answer the coding agent first\n"
-                                 f"5. Call coding_agent again with your answers\n\n"
-                                 f"Example: If asked 'What should the company name be?' and the task mentions 'craftsman in Berlin', answer: 'Use a generic craftsman business name like \"Berlin Handwerkskunst\" or similar based on the task context.'"
-                             )
-                         elif has_placeholders and claims_completion:
-                             # Coding agent claims completion but has placeholders - force it to fill them
-                             prompt = (
-                                 f"🚨 The coding agent claims completion but has UNFILLED PLACEHOLDERS!\n\n"
-                                 f"Result excerpt: {tool_result[:400]}{task_context}\n\n"
-                                 f"**Your job:** Force the coding agent to fill ALL placeholders before completion.\n"
-                                 f"1. Read the original user task above to understand what content should replace placeholders\n"
-                                 f"2. Instruct the coding agent to fill ALL placeholders with relevant content based on the task context\n"
-                                 f"3. DO NOT accept completion until ALL placeholders are filled\n"
-                                 f"4. Call coding_agent again with: 'Fill all remaining placeholders with content relevant to the task. Replace generic text with specific details.'\n\n"
-                                 f"DO NOT report to the user until placeholders are filled!"
-                             )
-                         elif has_incomplete_tasks and claims_completion:
-                             # Coding agent claims completion but has incomplete tasks - force it to finish
-                             remaining_info = f"Only {task_match.group(1)}/{task_match.group(2)} tasks completed" if task_match else "Tasks incomplete"
-                             prompt = (
-                                 f"🚨 The coding agent claims completion but has INCOMPLETE TASKS! {remaining_info}.\n\n"
-                                 f"Result excerpt: {tool_result[:400]}{task_context}\n\n"
-                                 f"**Your job:** Force the coding agent to complete ALL remaining tasks.\n"
-                                 f"1. Read the original user task above to understand what needs to be done\n"
-                                 f"2. Instruct the coding agent to continue working on ALL remaining tasks in the TODO list\n"
-                                 f"3. DO NOT accept completion until ALL tasks are done\n"
-                                 f"4. Call coding_agent again with: 'Continue working on all remaining tasks. Complete the TODO list before claiming completion.'\n\n"
-                                 f"DO NOT report to the user until all tasks are completed!"
-                             )
-                         else:
-                             # Coding agent is truly done - now inform user with brief summary
-                             prompt = (
-                                 f"✅ The coding agent has COMPLETED its work successfully.\n\n"
-                                 f"Result excerpt: {tool_result[:400]}\n\n"
-                                 f"**Your job:** Give the user a brief, friendly summary.\n"
-                                 f"1. Summarize what was created (e.g., 'I've created a website for...')\n"
-                                 f"2. Mention the project location/path if provided\n"
-                                 f"3. Ask if the user wants any changes or additions\n"
-                                 f"4. Keep it concise - the coding agent already provided technical details\n\n"
-                                 f"Example: 'I've created your website! The files are in [path]. Would you like me to make any changes or additions?'"
-                             )
-                     else:
-                         prompt = "The tool has finished execution. Analyze the result and proceed with the next step."
+                # Check if any tool name appears in the response (case-insensitive)
+                lower_response = (full_response or "").lower()
+                mentioned_tools = [tool_name for tool_name in available_tool_names if tool_name.lower() in lower_response]
+                
+                # If agent mentioned a tool but didn't call it, reset context (like empty response)
+                # Don't give aggressive prompts - just reset and let model try again naturally
+                if mentioned_tools and not tool_calls_detected:
+                    tool_hint = mentioned_tools[0]  # Use first mentioned tool
+                    UI.event("Debug", f"Tool-Intent detected for '{tool_hint}' without action - resetting context", style="dim")
+                    
+                    # Reset context (same logic as empty response)
+                    # Find the last tool call or user message to restart from
+                    last_tool_idx = None
+                    last_user_idx = None
+                    
+                    for i in range(len(self.history) - 1, -1, -1):
+                        msg = self.history[i]
+                        if msg.get('role') == 'tool':
+                            last_tool_idx = i
+                            break
+                        elif msg.get('role') == 'user' and last_user_idx is None:
+                            last_user_idx = i
+                    
+                    if last_tool_idx is not None:
+                        restart_idx = last_tool_idx + 1
+                        restart_from = "tool call"
+                    elif last_user_idx is not None:
+                        restart_idx = last_user_idx
+                        restart_from = "user message"
+                    else:
+                        restart_idx = 0
+                        restart_from = "beginning"
+                    
+                    # Remove all assistant/system messages after the restart point
+                    removed_count = 0
+                    while len(self.history) > restart_idx:
+                        last_msg = self.history[-1]
+                        if last_msg.get('role') in ('assistant', 'system'):
+                            self.history.pop()
+                            removed_count += 1
+                        else:
+                            break
+                    
+                    if removed_count > 0:
+                        UI.event("Debug", f"Removed {removed_count} response(s) - tool '{tool_hint}' mentioned but not called, restarting from {restart_from}...", style="dim")
+                    
+                    # Simple prompt (not aggressive) - just encourage tool use naturally
+                    self.history.append({
+                        "role": "system",
+                        "content": f"You mentioned using '{tool_hint}'. Please use the '{tool_hint}' tool to complete the request."
+                    })
+                    continue
+                
+                # No tool mentioned - this is truly an empty response
+                # Find the last tool call or user message to restart from
+                last_tool_idx = None
+                last_user_idx = None
+                
+                # Search backwards through history to find last tool or user message
+                for i in range(len(self.history) - 1, -1, -1):
+                    msg = self.history[i]
+                    if msg.get('role') == 'tool':
+                        last_tool_idx = i
+                        break
+                    elif msg.get('role') == 'user' and last_user_idx is None:
+                        last_user_idx = i
+                
+                # Determine where to restart from
+                if last_tool_idx is not None:
+                    # Restart from after the last tool result
+                    # Keep everything up to and including the tool result:
+                    # - Assistant with tool_calls (before tool result) - KEPT
+                    # - Tool result (role: 'tool') - KEPT
+                    # - Assistant messages without final answer after tool result - REMOVED
+                    restart_idx = last_tool_idx + 1
+                    restart_from = "tool call"
+                elif last_user_idx is not None:
+                    # Restart from the user message (no tool calls yet)
+                    # Keep everything up to and including the user message
+                    # Remove all assistant messages without final answer after the user message
+                    restart_idx = last_user_idx
+                    restart_from = "user message"
                 else:
-                    # Did the model plan a tool use but fail to execute?
-                    lower_response = full_response.lower()
-
-                    def _is_missing_info_clarification(resp: str) -> bool:
-                        """
-                        If the assistant is asking for missing info (e.g., city for weather),
-                        do NOT force a tool call. Clarification is the correct next step.
-                        """
-                        r = (resp or "").strip().lower()
-                        if not r:
-                            return False
-                        has_q = "?" in r
-                        patterns = [
-                            # German
-                            "welche stadt", "welchen ort", "für welche stadt", "für welchen ort",
-                            "wo (stadt", "wo (stadt/ort", "wo soll ich", "welche region",
-                            "bitte den namen der stadt", "stadt oder ort", "stadt/ort",
-                            # English
-                            "which city", "what city", "which location", "what location",
-                            "where should i", "which region", "what region",
-                        ]
-                        asks_location = any(p in r for p in patterns)
-                        asks_more = any(p in r for p in ["need more information", "please specify", "bitte gib", "bitte sag"])
-                        return (has_q and (asks_location or asks_more)) or asks_location
-
-                    detected_tools = [t for t in ["write_file", "read_file", "list_files", "web_search", "run_command", "librarian_agent", "find_files"] if t in lower_response]
-                    if detected_tools and retries < 2 and not _is_missing_info_clarification(lower_response):
-                        prompt = f"You planned to use '{detected_tools[0]}'. Stop thinking and output the JSON for '{detected_tools[0]}' now."
-                    elif retries < 3:
-                        prompt = "You have reflected enough. Now strictly output the next Tool Call (JSON) or your Final Answer."
-                    else:
-                        prompt = "STOP THINKING. You MUST now output a JSON Tool Call or a text Answer. Do not generate more thoughts."
-
-                self.history.append({"role": "system", "content": prompt})
+                    # No history to restart from, keep everything
+                    restart_idx = 0
+                    restart_from = "beginning"
                 
-                # Silent retry
-                retries += 1
+                # Remove all assistant/system messages after the restart point that have no final answer
+                # IMPORTANT: Tool results (role: 'tool') and assistant with tool_calls are KEPT
+                # Only assistant messages without final answer are removed (even if they contain reasoning)
+                removed_count = 0
+                while len(self.history) > restart_idx:
+                    last_msg = self.history[-1]
+                    # Remove assistant and system messages that came after the restart point
+                    if last_msg.get('role') in ('assistant', 'system'):
+                        self.history.pop()
+                        removed_count += 1
+                    else:
+                        # Stop if we hit a non-assistant/system message (e.g., tool, user)
+                        # This ensures we never remove tool results or user messages
+                        break
+                
+                if removed_count > 0:
+                    UI.event("Debug", f"Removed {removed_count} response(s) without final answer, restarting from {restart_from}...", style="dim")
+                
+                # Add a simple prompt to encourage action
+                self.history.append({
+                    "role": "system",
+                    "content": "You generated an empty or near-empty response. Please process the request and generate a valid Tool Call or provide a REAL, SUBSTANTIVE answer."
+                })
+                
+                # Continue the loop (no retry limit - will loop until we get a response)
                 continue
-            
-            # ═══════════════════════════════════════════════════════════════════════
-            # Case C: "Tool Talk" without Tool Action
-            # Model says "I'll use web_search" but didn't actually call it!
-            # IMPORTANT: Only trigger if response is SHORT or has intent patterns.
-            # Long explanatory answers that MENTION tools are OK!
-            # ═══════════════════════════════════════════════════════════════════════
-            
-            # Track tool-talk retries separately (max 2)
-            if not hasattr(self, '_tool_talk_retries'):
-                self._tool_talk_retries = 0
-            
-            # Only check if: no tools called, not too many retries, and response is short
-            response_length = len(full_content.strip())
-            is_short_response = response_length < 300  # Short responses are suspicious
-            
-            # CRITICAL: Don't trigger tool-intent detection if web_search was already executed in this conversation
-            # (The model might mention it in "thinking" after getting results, but shouldn't be forced to call it again)
-            web_search_already_executed = any(
-                msg.get("role") == "tool" and msg.get("name") == "web_search"
-                for msg in self.history[-10:]  # Check last 10 messages
-            )
-            
-            if not tool_calls_detected and self._tool_talk_retries < 2 and is_short_response and not web_search_already_executed:
-                lower_response = full_response.lower()
-                
-                # STRICT patterns: These indicate INTENT to use a tool (not just mentioning)
-                intent_patterns = [
-                    "i'll use", "i will use", "let me use", "i'll perform", "i'll search",
-                    "ich werde nutzen", "ich werde verwenden", "lass mich suchen",
-                    "let me search", "i need to search", "ich muss suchen",
-                    "i should search", "ich sollte suchen",
-                    "perform a search", "eine suche durchführen",
-                ]
-                
-                # Check for intent patterns (NOT just tool name mentions!)
-                has_intent = any(pattern in lower_response for pattern in intent_patterns)
-                
-                # Only trigger on clear intent, not just tool mentions
-                if has_intent:
-                    # If the assistant is asking for missing info (e.g., city/location), allow it.
-                    # We should only force tool calls when we have enough info to execute.
-                    def _is_missing_info_clarification(resp: str) -> bool:
-                        r = (resp or "").strip().lower()
-                        if not r:
-                            return False
-                        has_q = "?" in r
-                        patterns = [
-                            "welche stadt", "welchen ort", "für welche stadt", "für welchen ort",
-                            "wo (stadt", "wo (stadt/ort", "wo soll ich", "welche region",
-                            "bitte den namen der stadt", "stadt oder ort", "stadt/ort",
-                            "which city", "what city", "which location", "what location",
-                            "where should i", "which region", "what region",
-                        ]
-                        asks_location = any(p in r for p in patterns)
-                        asks_more = any(p in r for p in ["need more information", "please specify", "bitte gib", "bitte sag"])
-                        return (has_q and (asks_location or asks_more)) or asks_location
-
-                    if _is_missing_info_clarification(lower_response):
-                        self._tool_talk_retries = 0
-                        # Skip tool-talk forcing; clarification is acceptable.
-                    else:
-                        # Detect WHICH tool was mentioned for specific guidance
-                        tool_names = ["web_search", "webfetch", "coding_agent", "librarian_agent", 
-                                     "write_file", "read_file", "bash", "list_files"]
-                        mentioned_tools = [t for t in tool_names if t in lower_response]
-                        tool_hint = mentioned_tools[0] if mentioned_tools else "web_search"
-                        
-                        UI.event("Debug", f"Tool-Intent '{tool_hint}' without action. Retry {self._tool_talk_retries + 1}/2", style="warning")
-                        
-                        # DON'T add failed response - give SPECIFIC instruction
-                        self.history.append({
-                            "role": "system", 
-                            "content": f"⚠️ You said you would use '{tool_hint}' but DIDN'T!\n"
-                                       f"Your NEXT message MUST be a tool call to '{tool_hint}'.\n"
-                                       f"NO explanations. NO apologies. OUTPUT '{tool_hint}' TOOL CALL NOW."
-                        })
-                        self._tool_talk_retries += 1
-                        retries += 1
-                        continue
-            
-            # Reset tool-talk counter on successful response
-            self._tool_talk_retries = 0
             
             # Clean History: Store ONLY the final content (Answer), discarding the reasoning trace.
             history_content = full_content if full_content else full_response
@@ -2240,7 +2756,6 @@ User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my
             # 2. Deep Dive: Fetch content of top 2 results
             # We use a simple fetcher to get the actual page text
             import requests
-            import re
             
             def fetch_text(url):
                 try:

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from vaf.core.config import Config
 from vaf.cli.ui import UI
+from vaf.core.gpu_detection import detect_all_gpus, get_primary_gpu, get_gpu_support_info
 import importlib.metadata
 
 app = typer.Typer()
@@ -26,22 +27,59 @@ def info():
     except:
         UI.print("[bold]llama-cpp-python:[/bold] [red]Not Installed[/red]")
 
-    # GPU Check
+    # GPU Check - Enhanced with multi-vendor support
     UI.print("\n[bold cyan]--- GPU Detection ---[/bold cyan]")
     try:
-        if shutil.which("nvidia-smi"):
-            result = subprocess.run(["nvidia-smi"], capture_output=True, text=True)
-            if result.returncode == 0:
-                UI.print("[green]✓ NVIDIA GPU detected via nvidia-smi[/green]")
-                # Print first few lines of output
-                for line in result.stdout.splitlines()[:10]:
-                    UI.print(f"  [dim]{line}[/dim]")
-            else:
-                UI.error("nvidia-smi found but returned error code.")
+        gpus = detect_all_gpus()
+        primary = get_primary_gpu()
+        support_info = get_gpu_support_info()
+        
+        if not gpus:
+            UI.print("[yellow]⚠ No GPU detected. VAF will use CPU mode.[/yellow]")
         else:
-             UI.print("[yellow]⚠ nvidia-smi not found in PATH.[/yellow]")
+            # Show primary GPU
+            if primary:
+                vendor_colors = {
+                    "nvidia": "green",
+                    "amd": "magenta",
+                    "intel": "blue",
+                    "apple": "cyan"
+                }
+                vendor_icons = {
+                    "nvidia": "✓",
+                    "amd": "✓",
+                    "intel": "✓",
+                    "apple": "✓"
+                }
+                color = vendor_colors.get(primary.vendor, "white")
+                icon = vendor_icons.get(primary.vendor, "•")
+                
+                status = "[green]GPU Compute Available[/green]" if primary.compute_available else "[yellow]GPU Detected (Compute Not Available)[/yellow]"
+                
+                UI.print(f"[{color}]{icon} {primary.vendor.upper()} GPU:[/{color}] {primary.model}")
+                if primary.vram_mb > 0:
+                    UI.print(f"  VRAM: {primary.vram_mb} MB")
+                UI.print(f"  Status: {status}")
+                UI.print(f"  Recommended Backend: [bold]{support_info['recommended_backend']}[/bold]")
+                
+                # Show warning if GPU detected but compute not available
+                if primary.vendor == "nvidia" and not primary.compute_available:
+                    UI.print(f"  [yellow]⚠ CUDA not available. Run 'vaf install-gpu' to install CUDA support.[/yellow]")
+                elif primary.vendor == "amd" and not primary.compute_available:
+                    UI.print(f"  [yellow]⚠ ROCm not available. Install ROCm drivers for GPU acceleration.[/yellow]")
+                elif primary.vendor == "intel" and not primary.compute_available:
+                    UI.print(f"  [yellow]⚠ SYCL/oneAPI not available. Install Intel oneAPI for GPU acceleration.[/yellow]")
+            
+            # Show all GPUs if multiple
+            if len(gpus) > 1:
+                UI.print(f"\n  [dim]Total GPUs detected: {len(gpus)}[/dim]")
+                for i, gpu in enumerate(gpus[1:], 1):
+                    UI.print(f"  [dim]  {i+1}. {gpu.vendor.upper()}: {gpu.model}[/dim]")
+                    
     except Exception as e:
         UI.error(f"Error checking GPU: {e}")
+        import traceback
+        UI.print(f"[dim]{traceback.format_exc()}[/dim]")
 
     # Config
     UI.print("\n[bold cyan]--- Current Config ---[/bold cyan]")
@@ -55,14 +93,26 @@ def info():
 @app.command("install-gpu")
 def install_gpu():
     """Force reinstall of GPU-accelerated dependencies."""
+    from vaf.core.gpu_detection import get_primary_gpu
+    
     system = platform.system()
-    UI.event("System", f"Starting GPU Repair for {system}...", style="warning")
+    UI.event("System", f"Starting GPU Setup for {system}...", style="warning")
+    
+    # Detect GPU
+    primary_gpu = get_primary_gpu()
+    
+    if not primary_gpu:
+        UI.warning("No GPU detected. Installing CPU-only version.")
+        gpu_type = "cpu"
+    else:
+        gpu_type = primary_gpu.vendor
+        UI.event("Info", f"Detected {primary_gpu.vendor.upper()} GPU: {primary_gpu.model}", style="dim")
     
     # 1. Uninstall
     UI.event("Setup", "Uninstalling existing llama-cpp-python...", style="dim")
     subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "llama-cpp-python"], capture_output=True)
     
-    # 2. Reinstall
+    # 2. Reinstall with appropriate backend
     UI.event("Setup", "Installing Hardware-Accelerated llama-cpp-python...", style="highlight")
     
     env = os.environ.copy()
@@ -73,21 +123,40 @@ def install_gpu():
             # macOS - Apple Silicon (Metal)
             env["CMAKE_ARGS"] = "-DGGML_METAL=on"
             UI.event("Info", "Targeting Apple Metal (M1/M2/M3)...", style="dim")
-            # Build from source, no wheel URL needed usually for Metal auto-discovery, 
-            # but defining CMAKE_ARGS enforces it.
             
         elif system == "Linux":
-            # Linux - Defaulting to CUDA for now, theoretically could check for ROCm
-            env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
-            # Linux often uses the same prebuilt wheels repo or builds from source
-            pip_cmd.extend(["--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124"])
-            UI.event("Info", "Targeting CUDA (Linux)...", style="dim")
+            if gpu_type == "amd":
+                # AMD - ROCm
+                env["CMAKE_ARGS"] = "-DGGML_ROCM=on"
+                UI.event("Info", "Targeting AMD ROCm (Linux)...", style="dim")
+                UI.print("[yellow]Note: Ensure ROCm drivers are installed. See: https://rocm.docs.amd.com/[/yellow]")
+            elif gpu_type == "intel":
+                # Intel - SYCL (experimental)
+                env["CMAKE_ARGS"] = "-DGGML_SYCL=on"
+                UI.event("Info", "Targeting Intel SYCL (Linux)...", style="dim")
+                UI.print("[yellow]Note: Ensure Intel oneAPI is installed. See: https://www.intel.com/content/www/us/en/developer/tools/oneapi/overview.html[/yellow]")
+            else:
+                # Default to CUDA for NVIDIA or fallback
+                env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
+                pip_cmd.extend(["--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124"])
+                UI.event("Info", "Targeting CUDA (Linux)...", style="dim")
             
         elif system == "Windows":
-            # Windows - CUDA
-            env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
-            pip_cmd.extend(["--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124"])
-            UI.event("Info", "Targeting CUDA (Windows)...", style="dim")
+            if gpu_type == "amd":
+                # AMD on Windows - OpenCL (limited support)
+                env["CMAKE_ARGS"] = "-DGGML_OPENCL=on"
+                UI.event("Info", "Targeting AMD OpenCL (Windows)...", style="dim")
+                UI.print("[yellow]Note: OpenCL support is limited. Consider using Linux with ROCm for better AMD support.[/yellow]")
+            elif gpu_type == "intel":
+                # Intel Arc on Windows - SYCL
+                env["CMAKE_ARGS"] = "-DGGML_SYCL=on"
+                UI.event("Info", "Targeting Intel SYCL (Windows)...", style="dim")
+                UI.print("[yellow]Note: Ensure Intel oneAPI is installed. See: https://www.intel.com/content/www/us/en/developer/tools/oneapi/overview.html[/yellow]")
+            else:
+                # Default to CUDA for NVIDIA or fallback
+                env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
+                pip_cmd.extend(["--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124"])
+                UI.event("Info", "Targeting CUDA (Windows)...", style="dim")
             
         else:
             UI.event("Warning", f"Unknown platform {system}, attempting standard install...", style="warning")
@@ -95,5 +164,16 @@ def install_gpu():
         subprocess.check_call(pip_cmd, env=env)
         UI.event("Success", "GPU Setup Complete! Please restart vaf.", style="success")
         
-    except subprocess.CalledProcessError:
-        UI.error(f"Failed to install GPU version for {system}. Ensure build tools (cmake, xcode, cuda) are installed.")
+        if primary_gpu and not primary_gpu.compute_available:
+            UI.print(f"\n[yellow]⚠ Warning: GPU detected but compute drivers may not be installed.[/yellow]")
+            if primary_gpu.vendor == "nvidia":
+                UI.print(f"[yellow]   Install CUDA Toolkit from: https://developer.nvidia.com/cuda-downloads[/yellow]")
+            elif primary_gpu.vendor == "amd":
+                UI.print(f"[yellow]   Install ROCm from: https://rocm.docs.amd.com/[/yellow]")
+            elif primary_gpu.vendor == "intel":
+                UI.print(f"[yellow]   Install Intel oneAPI from: https://www.intel.com/content/www/us/en/developer/tools/oneapi/overview.html[/yellow]")
+        
+    except subprocess.CalledProcessError as e:
+        UI.error(f"Failed to install GPU version for {system}.")
+        UI.print(f"[dim]Error: {e}[/dim]")
+        UI.print(f"[yellow]Ensure build tools are installed (cmake, compiler, GPU drivers).[/yellow]")

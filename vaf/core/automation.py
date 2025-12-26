@@ -48,7 +48,8 @@ class AutomationTask:
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     name: str = ""
     description: str = ""
-    prompt: str = ""  # The prompt to send to VAF
+    prompt: str = ""  # The prompt to send to VAF (legacy, for backwards compatibility)
+    workflow_steps: List[Dict[str, Any]] = field(default_factory=list)  # Structured workflow steps (n8n-like)
     frequency: str = "daily"
     time: str = "06:00"  # HH:MM format
     weekday: Optional[str] = None  # For weekly: monday, tuesday, etc.
@@ -131,12 +132,18 @@ class AutomationManager:
         if storage_dir:
             self.storage_dir = Path(storage_dir)
         else:
-            self.storage_dir = Path.home() / ".vaf" / "automations"
+            # OS-unabhängiger Pfad
+            from vaf.core.platform import Platform
+            self.storage_dir = Platform.vaf_dir() / "automations"
         
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         # Trash directory (system-independent)
         self.trash_dir = self.storage_dir / "trash"
         self.trash_dir.mkdir(parents=True, exist_ok=True)
+        
+        # OS-unabhängiger Pfad für letzte Ausführungszeit
+        from vaf.core.platform import Platform
+        self.last_run_file = Platform.vaf_dir() / "last_automation_run.json"
         
         self.tasks: Dict[str, AutomationTask] = {}
         self._scheduler_thread: Optional[threading.Thread] = None
@@ -241,6 +248,46 @@ vaf automation delete <id>   # Delete task
         
         return task
     
+    def check_can_create_automation(self, new_time: str = None, new_frequency: str = None) -> tuple[bool, Optional[str]]:
+        """
+        Check if a new automation can be created (cooldown check).
+        Only applies cooldown if the new automation would run at the same time as an existing one.
+        
+        Args:
+            new_time: Time of the new automation (HH:MM format)
+            new_frequency: Frequency of the new automation (daily, hourly, etc.)
+        
+        Returns: (can_create, error_message)
+        """
+        # If time and frequency are provided, check if there's a conflict with existing automations
+        if new_time and new_frequency:
+            existing_tasks = self.list(enabled_only=True)
+            for task in existing_tasks:
+                # Check if same time and frequency
+                if task.time == new_time and task.frequency == new_frequency:
+                    # There's a conflict - check cooldown
+                    can_run, seconds_remaining = self._check_cooldown()
+                    if not can_run:
+                        minutes_remaining = int(seconds_remaining // 60)
+                        seconds_part = int(seconds_remaining % 60)
+                        error_msg = (
+                            f"⏳ **Automatisierung kann nicht erstellt werden:** "
+                            f"Es existiert bereits eine Automatisierung '{task.name}' ({task.id}), "
+                            f"die zur gleichen Zeit ({new_time}) mit der gleichen Frequenz ({new_frequency}) läuft.\n\n"
+                            f"**Zeitkonflikt:** Es wurde vor {minutes_remaining}min {seconds_part}s eine Automatisierung ausgeführt. "
+                            f"Bitte warte noch {minutes_remaining}min {seconds_part}s, bevor du eine Automatisierung zur gleichen Zeit erstellst.\n\n"
+                            f"**Lösung:**\n"
+                            f"- Wähle eine andere Zeit für die neue Automatisierung (mindestens 3 Minuten später)\n"
+                            f"- Oder aktualisiere die bestehende Automatisierung '{task.name}' mit `update_automation`\n\n"
+                            f"**Hinweis:** Automatisierungen zur gleichen Zeit benötigen einen 3-Minuten-Puffer zwischen den Ausführungen."
+                        )
+                        return (False, error_msg)
+                    # No cooldown active, but same time - warn but allow
+                    return (True, None)
+        
+        # No time conflict - allow creation
+        return (True, None)
+    
     def update(self, task_id: str, **kwargs) -> Optional[AutomationTask]:
         """Update an existing task."""
         if task_id not in self.tasks:
@@ -338,6 +385,53 @@ vaf automation delete <id>   # Delete task
             tasks = [t for t in tasks if t.enabled]
         return sorted(tasks, key=lambda t: t.next_run or "")
     
+    def _get_last_run_time(self) -> Optional[datetime]:
+        """Get the timestamp of the last automation run."""
+        if not self.last_run_file.exists():
+            return None
+        
+        try:
+            with open(self.last_run_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                last_run_str = data.get("last_run")
+                if last_run_str:
+                    return datetime.fromisoformat(last_run_str)
+        except Exception:
+            return None
+        return None
+    
+    def _save_last_run_time(self):
+        """Save the current time as the last automation run time."""
+        try:
+            data = {
+                "last_run": datetime.now().isoformat()
+            }
+            with open(self.last_run_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+    
+    def _check_cooldown(self) -> tuple[bool, Optional[float]]:
+        """
+        Check if enough time has passed since the last automation run.
+        Returns: (can_run, seconds_remaining)
+        """
+        MIN_COOLDOWN_SECONDS = 180  # 3 minutes
+        
+        last_run_time = self._get_last_run_time()
+        if last_run_time is None:
+            # No previous run, allow execution
+            return (True, None)
+        
+        time_since_last = datetime.now() - last_run_time
+        seconds_passed = time_since_last.total_seconds()
+        
+        if seconds_passed >= MIN_COOLDOWN_SECONDS:
+            return (True, None)
+        else:
+            seconds_remaining = MIN_COOLDOWN_SECONDS - seconds_passed
+            return (False, seconds_remaining)
+    
     def run_task(self, task: AutomationTask, callback: Callable = None, new_terminal: bool = True) -> str:
         """
         Execute an automation task.
@@ -352,8 +446,11 @@ vaf automation delete <id>   # Delete task
         import sys
         import subprocess
         
-        UI.event("Automation", f"Running: {task.name}", style="info")
+        # Speichere aktuelle Zeit als letzte Ausführung (für Cooldown beim Erstellen neuer Automatisierungen)
+        # WICHTIG: Cooldown wird nur beim ERSTELLEN geprüft, nicht bei geplanten Ausführungen!
+        self._save_last_run_time()
         
+        # Silent execution - don't show notifications in main terminal to keep input area free
         # If new_terminal is True, open in new terminal window
         if new_terminal:
             # Build command to run automation
@@ -363,44 +460,240 @@ vaf automation delete <id>   # Delete task
             # Try to open in new terminal
             title = f"VAF Automation: {task.name}"
             if Platform.open_new_terminal(vaf_cmd, title=title):
-                UI.success(f"Automation started in new terminal window: {task.name}")
+                # Silent - don't show notification in main terminal
                 return f"Automation '{task.name}' started in new terminal window"
             else:
-                # Fallback: run in current process if new terminal fails
-                UI.warning(f"Could not open new terminal, running in background...")
-        
-        # Build the prompt with parameters
-        prompt = task.prompt
-        for key, value in task.parameters.items():
-            prompt = prompt.replace(f"{{{key}}}", str(value))
+                # Fallback: run in background thread if new terminal fails (never block!)
+                # Silent - don't show notification in main terminal
+                import threading
+                def run_in_background():
+                    try:
+                        self.run_task(task, callback=callback, new_terminal=False)
+                    except Exception as e:
+                        # Silent - only log to debug, don't show in main terminal
+                        UI.debug(f"Background execution failed: {e}")
+                thread = threading.Thread(target=run_in_background, daemon=True)
+                thread.start()
+                return f"Automation '{task.name}' started in background thread (new terminal unavailable)"
         
         result = ""
         
         try:
-            # Import agent and run
-            from vaf.core.agent import Agent
+            # Set environment variables for non-interactive automation mode
+            # This prevents user prompts during automation execution
+            import os
+            os.environ["VAF_NONINTERACTIVE"] = "1"
+            os.environ["VAF_IN_AUTOMATION"] = "1"
             
-            agent = Agent(verbose=False)
-            agent.load_model()
-            agent.init_chat()
-            
-            # Capture response
-            response_parts = []
-            def capture(text):
-                response_parts.append(text)
-                if callback:
-                    callback(text)
-            
-            agent.chat_step(prompt, stream_callback=capture)
-            result = "".join(response_parts)
+            # If workflow_steps exist, use workflow engine (n8n-like)
+            if task.workflow_steps and len(task.workflow_steps) > 0:
+                from vaf.workflows.engine import WorkflowEngine, WorkflowStep
+                from vaf.core.agent import Agent
+                
+                # Initialize agent to get tools
+                agent = Agent(verbose=False)
+                agent.load_model()
+                agent.init_chat()
+                
+                # Get all available tools
+                all_tools = {**agent.tools}
+                
+                # Load additional tools that might be needed
+                try:
+                    from vaf.tools.filesystem import WriteFileTool, ReadFileTool, ListFilesTool
+                    from vaf.tools.search import WebSearchTool
+                    from vaf.tools.coder import CodingAgentTool
+                    from vaf.tools.librarian import LibrarianTool
+                    from vaf.tools.python_sandbox import PythonSandboxTool
+                    
+                    all_tools["write_file"] = WriteFileTool()
+                    all_tools["read_file"] = ReadFileTool()
+                    all_tools["list_files"] = ListFilesTool()
+                    all_tools["web_search"] = WebSearchTool()
+                    all_tools["coding_agent"] = CodingAgentTool()
+                    all_tools["librarian_agent"] = LibrarianTool()
+                    all_tools["python_sandbox"] = PythonSandboxTool()
+                except ImportError:
+                    pass
+                
+                # Convert workflow_steps to WorkflowStep objects
+                steps = []
+                date_str = datetime.now().strftime("%Y-%m-%d")
+                for i, step_def in enumerate(task.workflow_steps):
+                    # Replace date placeholder in paths (both {date} and {{date}})
+                    step_args = step_def.get("args", {}).copy()
+                    if "path" in step_args:
+                        path_str = str(step_args["path"])
+                        # Replace both single and double braces
+                        path_str = path_str.replace("{{date}}", date_str).replace("{date}", date_str)
+                        step_args["path"] = path_str
+                    
+                    steps.append(WorkflowStep(
+                        tool=step_def["tool"],
+                        args_template=step_args,
+                        input_template=step_def.get("input", ""),
+                        output_name=step_def.get("output", f"step_{i+1}"),
+                        description=step_def.get("description", f"Execute {step_def['tool']}")
+                    ))
+                
+                # Execute workflow
+                def workflow_callback(event, step, current, total):
+                    if callback:
+                        callback(f"\n⚙️ Step {current}/{total}: {step.description}\n")
+                
+                engine = WorkflowEngine(all_tools, callback=workflow_callback)
+                # Add 'date' to workflow defaults so {date} can be resolved in templates
+                engine._workflow_defaults = {"date": date_str}
+                workflow_result = engine.execute(steps, variables=task.parameters)
+                
+                if workflow_result.success:
+                    result = str(workflow_result.final_output or "Workflow completed successfully")
+                    # IMPORTANT: If workflow has write_file step, it already saved the output
+                    # Skip legacy output_path saving to avoid duplicate files
+                    workflow_saved_file = True
+                else:
+                    result = f"Workflow failed: {workflow_result.error}"
+                    workflow_saved_file = False
+                
+                agent.shutdown()
+                
+                # Skip legacy output saving if workflow already saved the file
+                if workflow_saved_file:
+                    # Workflow's write_file step already saved the output
+                    # Update task and return
+                    task.last_run = datetime.now().isoformat()
+                    task.next_run = task.calculate_next_run().isoformat()
+                    self._save_task(task)
+                    return result
+            else:
+                # Legacy: Use prompt-based execution (backwards compatibility)
+                prompt = task.prompt
+                for key, value in task.parameters.items():
+                    prompt = prompt.replace(f"{{{key}}}", str(value))
+                
+                # Import agent and run
+                from vaf.core.agent import Agent
+                
+                agent = Agent(verbose=False)
+                agent.load_model()
+                agent.init_chat()
+                
+                # Capture response
+                response_parts = []
+                def capture(text):
+                    response_parts.append(text)
+                    if callback:
+                        callback(text)
+                
+                agent.chat_step(prompt, stream_callback=capture)
+                result = "".join(response_parts)
+                agent.shutdown()
             
             # Save output if path specified
             if task.output_path:
-                output_path = Path(task.output_path).expanduser()
+                # Resolve path properly (handle "Desktop", "Documents", etc.)
+                output_path_str = str(task.output_path).strip()
+                output_path = Path(output_path_str).expanduser()
+                
+                # If path doesn't exist and looks like a folder alias, try to resolve it
+                if not output_path.exists():
+                    from vaf.core.platform import Platform
+                    home = Path.home()
+                    output_lower = output_path_str.lower()
+                    
+                    # Common folder aliases (cross-platform)
+                    folder_aliases = {
+                        "desktop": home / "Desktop",
+                        "documents": home / "Documents",
+                        "downloads": home / "Downloads",
+                        "pictures": home / "Pictures",
+                        "videos": home / "Videos",
+                        "music": home / "Music",
+                    }
+                    
+                    # German folder names (Windows often uses these)
+                    if Platform.is_windows():
+                        german_mappings = {
+                            "desktop": ["Desktop", "Arbeitsplatz"],
+                            "documents": ["Documents", "Dokumente"],
+                            "pictures": ["Pictures", "Bilder"],
+                            "videos": ["Videos"],
+                            "music": ["Music", "Musik"],
+                            "downloads": ["Downloads", "Herunterladen"],
+                        }
+                        
+                        for key, variants in german_mappings.items():
+                            for variant in variants:
+                                path = home / variant
+                                if path.exists():
+                                    folder_aliases[key] = path
+                    
+                    # Check if output_path_str matches any alias
+                    for alias, alias_path in folder_aliases.items():
+                        if alias in output_lower or output_path_str.lower() == alias:
+                            if alias_path.exists():
+                                output_path = alias_path
+                                break
                 
                 # Create filename with date
                 date_str = datetime.now().strftime("%Y-%m-%d")
-                if task.output_format == "markdown":
+                if task.output_format == "html":
+                    filename = f"{task.name}_{date_str}.html"
+                    # If result already contains HTML structure, use it directly
+                    # Otherwise, wrap it in a basic HTML structure
+                    if result.strip().startswith("<!DOCTYPE") or result.strip().startswith("<html"):
+                        content = result
+                    else:
+                        content = f"""<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{task.name}</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+            background: #f5f5f5;
+        }}
+        .container {{
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        h1 {{
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }}
+        .meta {{
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 20px;
+        }}
+        pre {{
+            background: #f4f4f4;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{task.name}</h1>
+        <div class="meta">Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
+        <div>
+{result}
+        </div>
+    </div>
+</body>
+</html>"""
+                elif task.output_format == "markdown":
                     filename = f"{task.name}_{date_str}.md"
                     content = f"# {task.name}\n\n*Generated: {datetime.now().isoformat()}*\n\n{result}"
                 elif task.output_format == "json":
@@ -411,7 +704,20 @@ vaf automation delete <id>   # Delete task
                     content = result
                 
                 output_file = output_path / filename
-                output_path.mkdir(parents=True, exist_ok=True)
+                # Ensure parent directory exists (don't try to create Desktop itself)
+                if not output_path.exists():
+                    try:
+                        output_path.mkdir(parents=True, exist_ok=True)
+                    except PermissionError:
+                        # Desktop might have permission issues on Windows, try Documents as fallback
+                        from vaf.core.platform import Platform
+                        if Platform.is_windows():
+                            fallback = Path.home() / "Documents"
+                            if fallback.exists():
+                                output_path = fallback
+                                output_file = output_path / filename
+                                UI.warning(f"Could not write to Desktop, using Documents instead: {output_file}")
+                
                 output_file.write_text(content, encoding='utf-8')
                 
                 UI.success(f"Output saved: {output_file}")
@@ -426,8 +732,15 @@ vaf automation delete <id>   # Delete task
         except Exception as e:
             result = f"Error: {e}"
             UI.error(f"Automation failed: {e}")
+        finally:
+            # Clean up environment variables
+            import os
+            os.environ.pop("VAF_IN_AUTOMATION", None)
+            # Keep VAF_NONINTERACTIVE if it was set before
         
-        return result
+        # Always exit cleanly after automation completes
+        import sys
+        sys.exit(0)
     
     def start_scheduler(self):
         """Start the background scheduler."""

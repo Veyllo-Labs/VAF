@@ -13,9 +13,104 @@ BLOCKED_DIRS = [
     ".git", ".ssh", "node_modules", ".env", "id_rsa"
 ]
 
+def _resolve_folder_alias(path_str: str) -> str:
+    """Resolve folder aliases like 'Desktop', 'Documents' to actual paths.
+    If Desktop is not accessible, automatically falls back to Documents."""
+    from pathlib import Path
+    from vaf.core.platform import Platform
+    
+    path_lower = path_str.lower()
+    home = Path.home()
+    
+    # Check if path contains folder alias
+    folder_aliases = {
+        "desktop": home / "Desktop",
+        "documents": home / "Documents",
+        "downloads": home / "Downloads",
+        "pictures": home / "Pictures",
+        "videos": home / "Videos",
+        "music": home / "Music",
+    }
+    
+    # German folder names (Windows often uses these, but check on all platforms)
+    # Some Linux/macOS users might also have German folder names
+    german_mappings = {
+        "desktop": ["Desktop", "Arbeitsplatz"],
+        "documents": ["Documents", "Dokumente"],
+        "pictures": ["Pictures", "Bilder"],
+        "videos": ["Videos"],
+        "music": ["Music", "Musik"],
+        "downloads": ["Downloads", "Herunterladen"],
+    }
+    
+    for key, variants in german_mappings.items():
+        for variant in variants:
+            variant_path = home / variant
+            if variant_path.exists():
+                folder_aliases[key] = variant_path
+    
+    # Helper to check if a path is writable
+    def is_writable(path: Path) -> bool:
+        """Check if a directory is writable."""
+        if not path.exists():
+            return False
+        try:
+            # Try to create a test file
+            test_file = path / ".vaf_write_test"
+            test_file.touch()
+            test_file.unlink()
+            return True
+        except (PermissionError, OSError):
+            return False
+    
+    # Check if path starts with or contains a folder alias
+    for alias, alias_path in folder_aliases.items():
+        # Check if path starts with alias (e.g., "Desktop\file.txt")
+        if path_str.startswith(alias) or path_str.startswith(alias.capitalize()):
+            # Replace alias with actual path
+            remaining = path_str[len(alias):].lstrip('\\/')
+            
+            # Special handling for Desktop: check if writable, fallback to Documents
+            if alias.lower() == "desktop":
+                if not is_writable(alias_path):
+                    # Desktop not writable, use Documents as fallback
+                    documents_path = folder_aliases.get("documents", home / "Documents")
+                    if documents_path.exists():
+                        if remaining:
+                            return str(documents_path / remaining)
+                        else:
+                            return str(documents_path)
+            
+            if remaining:
+                return str(alias_path / remaining)
+            else:
+                return str(alias_path)
+        # Also check for Windows-style paths (Desktop\file.txt)
+        if '\\' in path_str or '/' in path_str:
+            parts = path_str.replace('\\', '/').split('/')
+            if parts[0].lower() == alias:
+                remaining = '/'.join(parts[1:])
+                
+                # Special handling for Desktop: check if writable, fallback to Documents
+                if alias.lower() == "desktop":
+                    if not is_writable(alias_path):
+                        # Desktop not writable, use Documents as fallback
+                        documents_path = folder_aliases.get("documents", home / "Documents")
+                        if documents_path.exists():
+                            if remaining:
+                                return str(documents_path / remaining)
+                            else:
+                                return str(documents_path)
+                
+                return str(alias_path / remaining) if remaining else str(alias_path)
+    
+    return path_str
+
 def is_safe_path(path):
     try:
-         abs_path = os.path.abspath(os.path.expanduser(path))
+         # First resolve folder aliases
+         resolved = _resolve_folder_alias(path)
+         abs_path = os.path.abspath(os.path.expanduser(resolved))
          for blocked in BLOCKED_DIRS:
              if blocked in abs_path:
                  return False, f"Access denied: {blocked}"
@@ -245,7 +340,26 @@ class WriteFileTool(BaseTool):
                 # Ensure parent directory exists
                 parent_dir = os.path.dirname(res)
                 if parent_dir and not os.path.exists(parent_dir):
-                    os.makedirs(parent_dir, exist_ok=True)
+                    try:
+                        os.makedirs(parent_dir, exist_ok=True)
+                    except PermissionError as pe:
+                        # Desktop might have permission issues, try Documents as fallback (cross-platform)
+                        from vaf.core.platform import Platform
+                        if "desktop" in res.lower():
+                            from pathlib import Path
+                            fallback = Path.home() / "Documents"
+                            if fallback.exists():
+                                # Replace Desktop with Documents in path
+                                filename = os.path.basename(res)
+                                res = str(fallback / filename)
+                                parent_dir = str(fallback)
+                                try:
+                                    os.makedirs(parent_dir, exist_ok=True)
+                                except:
+                                    return f"❌ Permission error: Could not write to Desktop or Documents. Path: {res}"
+                        else:
+                            # Generic permission error message (OS-independent)
+                            return f"❌ Permission error: Access denied to '{parent_dir}'"
                 
                 # On Windows, files can be locked even after closing
                 # Use atomic write pattern: write to temp file, then rename
@@ -283,15 +397,47 @@ class WriteFileTool(BaseTool):
                             raise
                     
                     # Atomic rename
-                    shutil.move(temp_path, res)
+                    try:
+                        shutil.move(temp_path, res)
+                    except PermissionError:
+                        # Desktop might not be writable, try Documents as fallback (cross-platform)
+                        from vaf.core.platform import Platform
+                        if "desktop" in res.lower():
+                            from pathlib import Path
+                            fallback = Path.home() / "Documents"
+                            if fallback.exists():
+                                # Replace Desktop with Documents in path
+                                filename = os.path.basename(res)
+                                fallback_path = str(fallback / filename)
+                                # Move temp file to Documents instead
+                                try:
+                                    shutil.move(temp_path, fallback_path)
+                                    res = fallback_path  # Update res for verification
+                                except Exception as e:
+                                    os.remove(temp_path)  # Clean up temp file
+                                    if attempt < max_retries - 1:
+                                        time.sleep(retry_delay * (attempt + 1))
+                                        continue
+                                    raise
+                        else:
+                            # Not a Desktop path, re-raise
+                            os.remove(temp_path)  # Clean up temp file
+                            raise
                     
                     # Verify file was written correctly
+                    # Check if we used Documents fallback (original path had Desktop but res now has Documents)
+                    used_fallback = "desktop" in path.lower() and "documents" in res.lower()
+                    
                     if os.path.exists(res) and os.path.getsize(res) == len(data):
+                        if used_fallback:
+                            return f"File written successfully to {res} (Desktop not writable, saved to Documents instead)"
                         return f"File written successfully to {res}"
                     else:
                         # If the file exists and is non-empty, treat as success (best-effort verification).
                         try:
                             if os.path.exists(res) and os.path.getsize(res) > 0:
+                                if used_fallback:
+                                    return f"File written successfully to {res} (Desktop not writable, saved to Documents instead)"
                                 return f"File written successfully to {res}"
                         except Exception:
                             pass

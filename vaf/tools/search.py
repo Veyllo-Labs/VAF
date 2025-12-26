@@ -47,6 +47,7 @@ class WebSearchTool(BaseTool):
         deep = bool(kwargs.get("deep", False))
         open_in_browser = kwargs.get("open_in_browser", None)
         return_raw = bool(kwargs.get("return_raw", False))  # Internal: return raw results dict
+        user_question = kwargs.get("user_question", query)  # Extract original user question (fallback to query)
         if not query:
             return "Error: No query provided." if not return_raw else []
 
@@ -84,17 +85,68 @@ class WebSearchTool(BaseTool):
                     # 3. Clean whitespace
                     text = re.sub(r'\s+', ' ', text).strip()
                     
-                    return text[:3000] # Limit to 3000 chars
+                    return text[:5000]  # Increased for better context
                 except: return None
 
+            def answer_question_with_page(user_question: str, page_title: str, page_content: str, page_url: str) -> str:
+                """Use separate LLM context to answer user question based on single page."""
+                try:
+                    model_name = Config.get("model", "") or ""
+                    if not model_name:
+                        return None
+                    
+                    # Detect language from user question
+                    lang = "German" if any(word in user_question.lower() for word in ["wie", "was", "wann", "wo", "wer", "warum"]) else "English"
+                    lang_instruction = "Antworte auf Deutsch." if lang == "German" else "Answer in English."
+                    
+                    prompt = f"""User Question: "{user_question}"
+
+Page Title: {page_title}
+Page URL: {page_url}
+
+Page Content:
+{page_content}
+
+{lang_instruction}
+
+Based ONLY on the information from this page, answer the user's question.
+- If the page contains the answer, provide it clearly and accurately
+- If the page doesn't contain relevant information, say so
+- Be concise but complete
+- Use dates, times, and facts from the page (not from your training data)
+
+Answer:"""
+
+                    res = requests.post(
+                        "http://127.0.0.1:8080/v1/chat/completions",
+                        json={
+                            "model": model_name,
+                            "messages": [
+                                {"role": "system", "content": "You are a helpful assistant that answers questions based on web page content. Always use information from the provided page, not your training data."},
+                                {"role": "user", "content": prompt}
+                            ],
+                            "max_tokens": 400,
+                            "temperature": 0.2,
+                        },
+                        timeout=30,
+                    )
+                    
+                    if res.status_code == 200:
+                        msg = res.json()["choices"][0]["message"]
+                        answer = msg.get("content", "").strip()
+                        return answer
+                    return None
+                except Exception as e:
+                    UI.event("Debug", f"LLM answer failed: {e}", style="dim")
+                    return None
+
             summary = title
-            preview_count = 0
-            # When deep previews are enabled, fetch previews for up to 10 results (or fewer if max_results < 10)
             preview_limit = min(max_results, 10) if deep else 0
 
             # Collect links for optional auto-open (dedupe)
             links = []
             seen = set()
+            all_answers = []  # Collect answers from each page
 
             for i, res in enumerate(results, 1):
                 page_title = res.get("title", "").strip()
@@ -114,13 +166,39 @@ class WebSearchTool(BaseTool):
                     if not suppress:
                         UI.event("Web Search", f"Reading {link[:60]}...", style="dim")
 
-                if deep and link and preview_count < preview_limit:
-                    page_text = fetch_text(link)
-                    if page_text:
-                        summary += f"   - Preview: {page_text[:800]}...\n"
-                    preview_count += 1
+                # For each result, analyze it with separate LLM context
+                page_content = None
+                if deep and link and i <= preview_limit:
+                    # Fetch full page content if deep=True
+                    page_content = fetch_text(link)
+                elif snippet:
+                    # Use snippet if deep=False
+                    page_content = snippet
+                
+                if page_content:
+                    UI.event("Web Search", f"Analyzing {page_title[:40]}...", style="dim")
+                    answer = answer_question_with_page(user_question, page_title, page_content, link or "")
+                    if answer:
+                        all_answers.append({
+                            "title": page_title,
+                            "url": link,
+                            "answer": answer
+                        })
+                        summary += f"   - Answer: {answer}\n"
+                    elif deep:
+                        # Fallback to preview if LLM fails
+                        summary += f"   - Preview: {page_content[:800]}...\n"
 
                 summary += "\n"
+
+            # Add summary of all answers at the end
+            if all_answers:
+                summary += "\n### Summary of Answers\n"
+                for idx, ans in enumerate(all_answers, 1):
+                    summary += f"{idx}. **{ans['title']}**: {ans['answer']}\n"
+                    if ans['url']:
+                        summary += f"   Source: {ans['url']}\n"
+                    summary += "\n"
 
             # Optional UX: auto-open links in browser (tabs)
             if open_in_browser is None:

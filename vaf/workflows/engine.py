@@ -93,8 +93,15 @@ class WorkflowEngine:
         """
         from vaf.cli.ui import UI
         
+        # Store defaults for use in template resolution (defaults not passed for automations)
+        self._workflow_defaults = {}
+        
         start_time = time.time()
         outputs: Dict[str, Any] = dict(variables or {})
+        # Merge defaults into outputs if not already present
+        for key, value in self._workflow_defaults.items():
+            if key not in outputs:
+                outputs[key] = value
         final_output = None
         error = None
         
@@ -127,16 +134,42 @@ class WorkflowEngine:
                 continue
             
             # Build tool args (prefer args_template to avoid fragile JSON templating)
+            # Get defaults from workflow template if available
+            defaults = getattr(self, '_workflow_defaults', {})
             try:
                 if step.args_template is not None:
                     args: Dict[str, Any] = {}
+                    # Debug: Prepare variable info for coding_agent
+                    available_vars = list(outputs.keys()) if step.tool == "coding_agent" else []
+                    
                     for k, v in step.args_template.items():
                         if isinstance(v, str):
-                            args[k] = self._resolve_template(v, outputs)
+                            # Debug: Show variable resolution for coding_agent
+                            if step.tool == "coding_agent" and k == "task":
+                                UI.event("System", f"Resolving variables in {step.tool} task parameter...", style="dim")
+                                if available_vars:
+                                    UI.event("System", f"Available variables: {', '.join(available_vars)}", style="dim")
+                                # Show template before resolution
+                                template_preview = v[:200] + "..." if len(v) > 200 else v
+                                UI.event("System", f"Template (before): {template_preview}", style="dim")
+                            
+                            resolved_value = self._resolve_template(v, outputs, defaults)
+                            args[k] = resolved_value
+                            
+                            # Debug: Show resolved value for coding_agent
+                            if step.tool == "coding_agent" and k == "task":
+                                resolved_preview = resolved_value[:300] + "..." if len(resolved_value) > 300 else resolved_value
+                                UI.event("System", f"Resolved task (first 300 chars): {resolved_preview}", style="dim")
+                                # Show variable sizes
+                                if available_vars:
+                                    for var_name in available_vars:
+                                        var_value = str(outputs.get(var_name, ""))
+                                        var_size = len(var_value)
+                                        UI.event("System", f"  Variable '{var_name}': {var_size} chars", style="dim")
                         else:
                             args[k] = v
                 else:
-                    resolved_input = self._resolve_template(step.input_template, outputs)
+                    resolved_input = self._resolve_template(step.input_template, outputs, defaults)
             except KeyError as e:
                 step.status = StepStatus.FAILED
                 step.error = f"Missing variable: {e}"
@@ -178,6 +211,32 @@ class WorkflowEngine:
                         os.environ.pop("VAF_IN_WORKFLOW", None)
                     else:
                         os.environ["VAF_IN_WORKFLOW"] = prev_in_workflow
+                
+                # Check if result indicates failure (even if no exception was raised)
+                result_str = str(result)
+                is_error_result = (
+                    result_str.startswith("### ❌") or
+                    result_str.startswith("❌") or
+                    result_str.startswith("Error:") or
+                    "Task Failed" in result_str or
+                    "task failed" in result_str.lower() or
+                    (result_str.startswith("###") and "❌" in result_str[:200]) or
+                    ("error:" in result_str.lower() and result_str.lower().startswith("error"))
+                )
+                
+                if is_error_result:
+                    step.status = StepStatus.FAILED
+                    step.error = f"Tool returned error message: {result_str[:200]}"
+                    step.result = result
+                    step.duration = time.time() - step_start
+                    error = step.error
+                    
+                    UI.error(f"  [FAIL] {step.error}")
+                    self.callback("error", step, i, len(steps))
+                    
+                    if stop_on_error and not step.optional:
+                        break
+                    continue
                 
                 step.status = StepStatus.SUCCESS
                 step.result = result
@@ -228,7 +287,7 @@ class WorkflowEngine:
             error=error
         )
     
-    def _resolve_template(self, template: str, variables: Dict[str, Any]) -> str:
+    def _resolve_template(self, template: str, variables: Dict[str, Any], defaults: Dict[str, Any] = None) -> str:
         """
         Replace {variable} placeholders with actual values.
         
@@ -237,6 +296,9 @@ class WorkflowEngine:
         - Nested: {step1.field}
         - Default: {var|default_value}
         """
+        if defaults is None:
+            defaults = {}
+        
         def replacer(match):
             key = match.group(1)
             
@@ -258,10 +320,13 @@ class WorkflowEngine:
                         raise KeyError(key)
                 return str(value)
             
-            # Simple variable
-            if key not in variables:
+            # Simple variable - check variables first, then defaults
+            if key in variables:
+                return str(variables[key])
+            elif key in defaults:
+                return str(defaults[key])
+            else:
                 raise KeyError(key)
-            return str(variables[key])
         
         return re.sub(r"\{([^}]+)\}", replacer, template)
     

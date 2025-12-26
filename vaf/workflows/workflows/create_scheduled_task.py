@@ -21,6 +21,12 @@ WORKFLOW = {
         "automatic at",
         "scheduled",
         "zeitplan",
+        "wetter bericht",
+        "weather report",
+        "jeden tag um",
+        "every day at",
+        "täglich um",
+        "daily um",
     ],
     "trigger_patterns": [
         r"erstell.*automatisier",
@@ -31,6 +37,9 @@ WORKFLOW = {
         r"immer.*um",
         r"every.*day.*at",
         r"automatisch.*um",
+        r"jeden.*tag.*um",
+        r"wetter.*bericht",
+        r"weather.*report",
     ],
     "variables": {
         "task_description": "What the automation should do (e.g., 'weather summary for Berlin tomorrow')",
@@ -50,37 +59,31 @@ WORKFLOW = {
             "args": {
                 "name": "{task_description}",
                 "prompt": (
-                    "You are running as an automation.\n"
-                    "Goal: {task_description}\n\n"
-                    "MANDATORY STEPS:\n"
-                    "1) Use web_search to fetch up-to-date information needed for the goal.\n"
-                    "2) Create a clean output file in {format} format.\n"
-                    "   - If HTML: produce a complete HTML document with embedded CSS.\n"
-                    "   - If Markdown: produce a well-structured .md report.\n"
-                    "   - If txt: produce readable plain text.\n"
-                    "3) Save the file to {output_path}.\n\n"
-                    "OUTPUT REQUIREMENTS:\n"
-                    "- Include sources (URLs) at the bottom.\n"
-                    "- Use a timestamp in the content.\n"
-                    "- Keep it concise and user-friendly.\n"
+                    "You are running as an automation. Your task: {task_description}\n\n"
+                    "EXECUTE THESE STEPS IN ORDER:\n"
+                    "1) Use web_search to get any needed information (weather, quotes, news, data, etc.)\n"
+                    "2) Generate the content as specified in the task description\n"
+                    "3) Create a complete {format} file with the content:\n"
+                    "   - HTML: Full HTML document with <!DOCTYPE html>, <head>, <body>, embedded CSS styling\n"
+                    "   - Markdown: Well-structured .md with headers, sections, proper formatting\n"
+                    "   - txt: Clean plain text with proper line breaks and formatting\n"
+                    "4) Save the file to {output_path} with a descriptive filename\n\n"
+                    "IMPORTANT REQUIREMENTS:\n"
+                    "- Include timestamps in the content (when generated, when data is for)\n"
+                    "- If weather: Include location, date, temperature, conditions, forecast\n"
+                    "- If quotes: Include the quote text and source if available\n"
+                    "- Make it visually appealing (especially for HTML - use CSS for styling)\n"
+                    "- Save with a descriptive filename (include date if needed, e.g., weather_berlin_2025-12-25.html)\n"
+                    "- Include sources/URLs at the bottom if you used web_search\n"
+                    "- Keep content concise but complete\n"
                 ),
                 "frequency": "{frequency}",
                 "time": "{time}",
                 "output_path": "{output_path}",
             },
             "input": "{task_description}",
-            "output": "automation_result",
-            "description": "Create the scheduled automation task with multi-tool prompt",
-        },
-        {
-            "tool": "librarian_agent",
-            "input": (
-                "Create a short confirmation message for the user.\n"
-                "Include schedule, output location, and how to list/run automations.\n\n"
-                "{automation_result}\n"
-            ),
             "output": "final",
-            "description": "Return a helpful confirmation message",
+            "description": "Create the scheduled automation task with multi-tool prompt",
         },
     ],
 }

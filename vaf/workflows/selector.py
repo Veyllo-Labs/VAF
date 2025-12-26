@@ -253,14 +253,21 @@ class WorkflowSelector:
         
         # Frequency extraction (daily, weekly, hourly, monthly)
         if "frequency" in var_name.lower():
-            if "täglich" in input_lower or "daily" in input_lower or "immer" in input_lower or "every day" in input_lower:
+            # Check for German and English patterns
+            if any(phrase in input_lower for phrase in ["täglich", "daily", "immer", "every day", "jeden tag", "jeden monat"]):
+                # "jeden monat" = monthly, "jeden tag" = daily
+                if "jeden monat" in input_lower or "every month" in input_lower:
+                    return "monthly"
                 return "daily"
-            elif "wöchentlich" in input_lower or "weekly" in input_lower:
+            elif any(phrase in input_lower for phrase in ["wöchentlich", "weekly", "jede woche", "every week"]):
                 return "weekly"
-            elif "stündlich" in input_lower or "hourly" in input_lower:
+            elif any(phrase in input_lower for phrase in ["stündlich", "hourly", "jede stunde", "every hour"]):
                 return "hourly"
-            elif "monatlich" in input_lower or "monthly" in input_lower:
+            elif any(phrase in input_lower for phrase in ["monatlich", "monthly"]):
                 return "monthly"
+            # Default: if user says "um 22:46" or similar, assume daily
+            if "um" in input_lower or "at" in input_lower:
+                return "daily"
         
         # URL extraction
         if "url" in var_name.lower() or "url" in var_desc.lower():
@@ -294,12 +301,13 @@ class WorkflowSelector:
         
         # Task description extraction - extract the main task content
         if "task_description" in var_name.lower() or ("description" in var_name.lower() and "task" in var_desc.lower()):
-            # Remove automation-related words and time/frequency mentions
+            # Remove automation-related words, time/frequency mentions, and time patterns
             cleaned = user_input
             # Remove trigger phrases
             trigger_phrases = [
                 "erstelle", "erstell", "create", "make", "generate",
                 "immer um", "täglich um", "daily at", "every day at",
+                "jeden tag um", "every day at",
                 "auf meinem", "auf meine", "on my", "to my",
                 "desktop", "schreibtisch", "documents", "dokumente",
                 "als", "as", "in", "auf", "on", "zu", "to",
@@ -308,8 +316,12 @@ class WorkflowSelector:
             for phrase in trigger_phrases:
                 cleaned = re.sub(rf'\b{phrase}\b', '', cleaned, flags=re.IGNORECASE)
             
-            # Remove time patterns (HH:MM)
+            # Remove time patterns (HH:MM) and frequency words
             cleaned = re.sub(r'\b\d{1,2}:\d{2}\b', '', cleaned)
+            # Remove frequency words
+            frequency_words = ["täglich", "daily", "immer", "every day", "jeden tag", "wöchentlich", "weekly", "stündlich", "hourly", "monatlich", "monthly"]
+            for word in frequency_words:
+                cleaned = re.sub(rf'\b{word}\b', '', cleaned, flags=re.IGNORECASE)
             
             # Clean up
             cleaned = re.sub(r'\s+', ' ', cleaned).strip()

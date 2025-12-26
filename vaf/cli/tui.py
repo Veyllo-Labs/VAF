@@ -506,6 +506,19 @@ O))         O))       O))))))))
         """Print info message."""
         self.event("ℹ Info", message, "info")
     
+    def notification(self, message: str, style: str = "info"):
+        """Print a subtle, non-blocking notification message."""
+        color_map = {
+            "info": self.primary,
+            "success": self.theme["success"],
+            "warning": self.theme["warning"],
+            "error": self.theme["error"],
+            "dim": self.muted,
+        }
+        color = color_map.get(style, self.muted)
+        # Simple one-line notification that doesn't interfere with input
+        self.console.print(f"[{self.muted}]→[/{self.muted}] [{color}]{message}[/{color}]")
+    
     # ═══════════════════════════════════════════════════════════════════════════
     # PROGRESS & LOADING
     # ═══════════════════════════════════════════════════════════════════════════
@@ -789,6 +802,20 @@ class UI:
         type_str = f"[dim] {type_name:<7}[/dim]"
         title_str = f"[{color}]{title}[/{color}]"
         UI.console.print(f"{bar}{type_str} {title_str}")
+
+    @staticmethod
+    def notification(message: str, style: str = "info"):
+        """Print a subtle, non-blocking notification message."""
+        color_map = {
+            "info": "cyan",
+            "warning": "yellow",
+            "error": "red",
+            "success": "green",
+            "dim": "dim"
+        }
+        color = color_map.get(style, "dim")
+        # Simple one-line notification that doesn't interfere with input
+        UI.console.print(f"[dim]→[/dim] [{color}]{message}[/{color}]")
 
     @staticmethod
     def prompt(prompt_text: str = "> ") -> str:

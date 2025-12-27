@@ -29,8 +29,8 @@ WORKFLOW = {
         {
             "tool": "coding_agent",
             "input": (
-                "Create the contents for this file.\n"
-                "Return ONLY the file content (no Markdown fences, no explanations).\n\n"
+                "CONTENT_ONLY: Generate ONLY the complete file content.\n"
+                "Return ONLY the file content (no Markdown fences, no explanations, no project structure).\n\n"
                 "Filename: {filename}\n"
                 "Requirements: {description}\n"
             ),

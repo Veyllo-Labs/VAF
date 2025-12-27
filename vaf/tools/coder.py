@@ -182,7 +182,7 @@ class CoderTUI:
         # Only create header once - it will be reused in render()
         self._header = AnimatedHeader("Collaboration Mode Active", "Main Agt", "Coder")
         self._header_rendered = False  # Track if header has been rendered
-        self._live_started = False  # Track if Live has been started
+        self._header_panel = None  # Cache the rendered Panel to prevent multiple renders
         self._live_started = False  # Track if Live has been started
     
     def add_file(self, filename: str, size: int = 0, status: str = "creating"):
@@ -347,16 +347,22 @@ class CoderTUI:
             
             # CRITICAL: Only show header ONCE when we have content
             # Once shown, keep it visible (don't hide it)
+            # Cache the rendered Panel to prevent multiple renders (animation_updater calls render() 15x/sec)
             if not self._header_rendered:
                 if has_content:
-                    header = self._header
+                    # Render header once and cache it
+                    if self._header_panel is None:
+                        self._header_panel = self._header.__rich__()
+                    header = self._header_panel
                     self._header_rendered = True
                 else:
                     # Don't show header yet - wait for actual content
                     header = None
             else:
-                # Once rendered, always show header (prevents flickering)
-                header = self._header
+                # Once rendered, always show cached header (prevents multiple renders)
+                if self._header_panel is None:
+                    self._header_panel = self._header.__rich__()
+                header = self._header_panel
             
             # ═══════════════════════════════════════════════════════════════
             # STATUS LINE (fixed - no markup in strings)
@@ -1373,11 +1379,13 @@ Thumbs.db
         
         # IMPORTANT: coding_agent must NOT have access to itself!
         # Note: base_dir will be set later, after project directory is created
+        from vaf.tools.linter import LinterTool
         self.local_tools = {
             "write_file": WriteFileTool(),
             "read_file": ReadFileTool(),
             "list_files": ListFilesTool(),
             "python_sandbox": PythonSandboxTool(),
+            "linter": LinterTool(),
             # Git tools will be added after base_dir is set
             # NO: coding_agent, librarian_agent - prevents recursion
         }
@@ -1522,6 +1530,7 @@ All files must use ABSOLUTE paths in this directory.
 - `read_file`: Read file contents (path)  
 - `list_files`: List directory (path)
 - `python_sandbox`: Execute Python code safely for calculations, algorithms, and data processing (code)
+- `linter`: Check code files for syntax errors and linting issues (path, optional file_type)
 - `web_fetch`: Fetch webpage HTML (url, optional selector)
 - `web_deep_search`: Deep search web for solutions/ideas (query, max_results). Use when you don't know how to fix an error or need inspiration. Returns summarized results without bloating context.
 - `git_init`: Initialize Git repository (if not already initialized)
@@ -1585,22 +1594,24 @@ After all tasks are done, say "ALL TASKS COMPLETED"
 
 **MANDATORY WORKFLOW:**
 1. **READ FIRST**: `read_file(path="...")` for EVERY template file BEFORE modifying
-2. **PRESERVE ALL**: Keep EVERY section, class, ID from template (nav, hero, services, about, contact, footer)
+2. **PRESERVE ALL**: Keep ALL structure from template (sections, classes, IDs, functions, imports, etc.)
 3. **ONLY REPLACE**: Replace `{{PLACEHOLDER}}` text with real content - nothing else
-4. **DO NOT REMOVE**: Never remove sections, classes, IDs, or structural elements
+4. **DO NOT REMOVE**: Never remove structural elements (sections, functions, classes, imports, etc.)
 5. **DO NOT REWRITE**: Never write new file from scratch - always modify existing template
 
-**Example:**
-- Template: `<nav class="nav"><div class="logo">{{BUSINESS_NAME}}</div></nav>`
-- ✅ Correct: `<nav class="nav"><div class="logo">Testler Handwerksmeister</div></nav>` (only replaced placeholder)
-- ❌ Wrong: `<header><h1>Testler Handwerksmeister</h1></header>` (removed nav structure - will be BLOCKED!)
+**Examples:**
+- **HTML**: Template `<nav class="nav"><div class="logo">{{BUSINESS_NAME}}</div></nav>` → Keep nav structure, only replace placeholder
+- **Python**: Template `def {{FUNCTION_NAME}}({{PARAMS}}):` → Keep function structure, only replace placeholders
+- **Any file**: Preserve all template structure, only replace `{{PLACEHOLDER}}` text
 
 **If you remove template structure, write_file will be BLOCKED!**
 
 ## QUALITY REQUIREMENTS
-- HTML: Full structure, navigation, real content, min 500 bytes
-- CSS: Reset, typography, colors, responsive, min 400 bytes
-- JS: Working code, error handling
+- **HTML**: Full structure, navigation, real content, min 500 bytes
+- **CSS**: Reset, typography, colors, responsive, min 400 bytes
+- **JavaScript**: Working code, error handling, min 100 bytes
+- **Python**: Complete functionality, error handling, docstrings, min 100 bytes
+- **Other files**: Complete, working code/content appropriate for the file type
 
 ## ASKING QUESTIONS TO MAIN AGENT
 If you need information that's not in the task, you can ask the main agent questions!
@@ -1641,6 +1652,223 @@ START by calling set_todos with your planned tasks - make sure the TODOs match t
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg}
         ]
+        
+        # Snapshot history (before processing)
+        history_snapshot_len = len(history)
+        
+        # ═══════════════════════════════════════════════════════════════
+        # HELPER: Create fresh context for a new task
+        # ═══════════════════════════════════════════════════════════════
+        def create_fresh_context_for_task(current_task: str) -> List[Dict[str, Any]]:
+            """
+            Creates a completely fresh context for a new task.
+            This isolates each task with its own context, preventing confusion from previous tasks.
+            """
+            # Detect task type for dynamic context
+            task_lower = current_task.lower()
+            is_html_task = any(kw in task_lower for kw in ['html', 'website', 'webpage', 'web seite'])
+            is_script_task = any(kw in task_lower for kw in ['script', 'python', 'skript', '.py'])
+            is_app_task = any(kw in task_lower for kw in ['app', 'application', 'anwendung'])
+            
+            # Rebuild existing_files_info (in case template files changed)
+            fresh_existing_files_info = ""
+            if template_files:
+                # Generic template rules that work for all file types
+                template_file_list = chr(10).join(['- ' + os.path.basename(f) for f in template_files])
+                template_example = ""
+                
+                # Add type-specific examples
+                if is_html_task:
+                    template_example = """
+**Example (HTML):**
+Template: `<nav class="nav"><div class="logo">{{BUSINESS_NAME}}</div></nav>`
+✅ Correct: `<nav class="nav"><div class="logo">Testler Handwerksmeister</div></nav>` (only replaced placeholder)
+❌ Wrong: `<header><h1>Testler Handwerksmeister</h1></header>` (removed nav structure - will be BLOCKED!)"""
+                elif is_script_task:
+                    template_example = """
+**Example (Python Script):**
+Template: `def {{FUNCTION_NAME}}({{PARAMS}}):\n    # {{DESCRIPTION}}\n    pass`
+✅ Correct: `def process_data(file_path):\n    # Process the input file\n    pass` (only replaced placeholders)
+❌ Wrong: `def new_function(): pass` (removed template structure - will be BLOCKED!)"""
+                else:
+                    template_example = """
+**Example:**
+Template: `{{PLACEHOLDER}}`
+✅ Correct: Replace `{{PLACEHOLDER}}` with actual content, keep all other structure
+❌ Wrong: Remove template structure or rewrite from scratch - will be BLOCKED!"""
+                
+                fresh_existing_files_info = f"""
+## ⚠️ CRITICAL: TEMPLATE FILES EXIST - DO NOT REPLACE THEM!
+
+The following files were already created from a template:
+{template_file_list}
+
+### 🚨 MANDATORY TEMPLATE WORKFLOW (Templates are REQUIRED structure!):
+
+**STEP 1: READ FIRST** - `read_file(path="...")` for EVERY template file BEFORE modifying
+**STEP 2: PRESERVE ALL** - Keep ALL structure, classes, IDs, functions, imports, etc. from template
+**STEP 3: ONLY REPLACE** - Replace `{{PLACEHOLDER}}` text with real content - nothing else
+**STEP 4: WRITE BACK** - Write modified version (not complete rewrite)
+
+### ❌ FORBIDDEN:
+- DO NOT rewrite from scratch
+- DO NOT remove sections, functions, classes, imports, or structural elements
+- DO NOT ignore template structure
+- DO NOT change file structure unless explicitly required by the task
+
+### ✅ CORRECT:
+{template_example}
+
+**If you remove template structure, write_file will be BLOCKED!**
+"""
+            
+            # Rebuild system prompt with current state
+            fresh_system_prompt = f"""You are the VAF Coding Sub-Agent - an autonomous code generator.
+
+## PROJECT DIRECTORY
+`{base_dir}`
+All files must use ABSOLUTE paths in this directory.
+{fresh_existing_files_info}
+
+## TOOLS
+- `set_todos`: REQUIRED FIRST - set your task breakdown
+- `task_done`: Mark current task complete, get next task
+- `write_file`: Create/write files (path, content)
+- `read_file`: Read file contents (path)  
+- `list_files`: List directory (path)
+- `python_sandbox`: Execute Python code safely for calculations, algorithms, and data processing (code)
+- `linter`: Check code files for syntax errors and linting issues (path, optional file_type)
+- `web_fetch`: Fetch webpage HTML (url, optional selector)
+- `web_deep_search`: Deep search web for solutions/ideas (query, max_results). Use when you don't know how to fix an error or need inspiration. Returns summarized results without bloating context.
+- `git_init`: Initialize Git repository (if not already initialized)
+- `git_add_commit`: Add files and commit changes with a message (message, optional files array)
+- `git_status`: Check Git status (shows modified/staged/untracked files)
+- `git_log`: View commit history (optional limit parameter)
+{"- `bash`: Execute shell commands" if HAS_CODING_TOOLS else ""}
+
+## MANDATORY WORKFLOW (you MUST follow this!)
+
+### PHASE 1: PLANNING (first response)
+Your FIRST action MUST be to call set_todos. Output it EXACTLY like this:
+```
+<tool_call>
+set_todos(tasks=["Task 1", "Task 2", "Task 3", ...])
+</tool_call>
+```
+
+**CRITICAL: Create TODOs that MATCH the actual task!**
+- If task says "CONTENT_ONLY" or "ONLY THE" → Create simple TODOs for single file/content
+- If task says "multi-page website" → Create TODOs for multiple pages
+- If task says "weather report HTML" → Create TODOs for weather HTML, not multi-page website
+- Analyze the task carefully and create appropriate TODOs
+
+Examples:
+```
+Task: "CONTENT_ONLY: Generate ONLY the complete HTML document content for a weather report"
+✅ CORRECT: set_todos(tasks=["Generate complete HTML document with weather data", "Add embedded CSS styling", "Verify HTML is complete and valid"])
+❌ WRONG: set_todos(tasks=["Read and customize index.html", "Create additional pages", ...])  # Too complex for single file!
+❌ WRONG: set_todos(tasks=["Generate HTML", "Embed YouTube video", ...])  # Don't add features not mentioned in task!
+
+Task: "Create a multi-page website for a restaurant"
+✅ CORRECT: set_todos(tasks=["Create index.html (homepage)", "Create about.html page", "Create menu.html page", "Create contact.html page", "Add navigation", "Style all pages"])
+❌ WRONG: set_todos(tasks=["Generate HTML document"])  # Too simple for multi-page!
+```
+
+### PHASE 2: EXECUTION (work through each task)
+For EACH task in your TODO list:
+1. Focus ONLY on the current task
+2. Call the necessary tools (write_file, etc.)
+3. When task is complete, call `task_done`
+4. The system will give you the next task
+
+### PHASE 3: COMPLETION
+After all tasks are done, say "ALL TASKS COMPLETED"
+
+## RULES
+- You MUST call `set_todos` in your FIRST response
+- **CRITICAL**: Create TODOs that MATCH the task complexity and requirements
+- You MUST call `task_done` after completing each task
+- Work on ONE task at a time (the system tracks progress)
+- Do NOT skip tasks or do multiple at once
+- Write COMPLETE code, not placeholders
+- **CRITICAL**: You MUST complete ALL tasks in the TODO list - DO NOT stop until every task is done
+- **CRITICAL**: You MUST use `write_file` to actually modify/create files - reading files alone is not enough
+- **CRITICAL**: DO NOT claim completion if any tasks remain incomplete
+- **CRITICAL**: DO NOT skip tasks or stop working prematurely - work through the entire TODO list
+
+## TEMPLATE FILES RULES (if templates exist above)
+🚨 **CRITICAL: Templates are REQUIRED structure - NOT suggestions!**
+
+**MANDATORY WORKFLOW:**
+1. **READ FIRST**: `read_file(path="...")` for EVERY template file BEFORE modifying
+2. **PRESERVE ALL**: Keep ALL structure from template (sections, classes, IDs, functions, imports, etc.)
+3. **ONLY REPLACE**: Replace `{{PLACEHOLDER}}` text with real content - nothing else
+4. **DO NOT REMOVE**: Never remove structural elements (sections, functions, classes, imports, etc.)
+5. **DO NOT REWRITE**: Never write new file from scratch - always modify existing template
+
+**Examples:**
+- **HTML**: Template `<nav class="nav"><div class="logo">{{BUSINESS_NAME}}</div></nav>` → Keep nav structure, only replace placeholder
+- **Python**: Template `def {{FUNCTION_NAME}}({{PARAMS}}):` → Keep function structure, only replace placeholders
+- **Any file**: Preserve all template structure, only replace `{{PLACEHOLDER}}` text
+
+**If you remove template structure, write_file will be BLOCKED!**
+
+## QUALITY REQUIREMENTS
+- **HTML**: Full structure, navigation, real content, min 500 bytes
+- **CSS**: Reset, typography, colors, responsive, min 400 bytes
+- **JavaScript**: Working code, error handling, min 100 bytes
+- **Python**: Complete functionality, error handling, docstrings, min 100 bytes
+- **Other files**: Complete, working code/content appropriate for the file type
+
+## ASKING QUESTIONS TO MAIN AGENT
+If you need information that's not in the task, you can ask the main agent questions!
+Simply include your question in your response using this format:
+❓ QUESTION: [Your question here]
+
+Examples:
+- ❓ QUESTION: What should the company name be?
+- ❓ QUESTION: Which color scheme should I use for the website?
+- ❓ QUESTION: What should the headline say?
+
+The main agent will answer your questions based on the original user task and call you again with the information.
+You can continue working once you have the answers.
+
+## CURRENT TASK
+You are working on a specific task from a TODO list. The TODO list has already been set.
+Your current task is: **{current_task}**
+
+{task_mgr.get_todos_for_prompt()}
+
+Focus ONLY on completing this task. Use the necessary tools (read_file, write_file, etc.) to complete it.
+When finished, call `task_done(summary="...")` to mark it complete and move to the next task."""
+            
+            # Build user message for this specific task
+            fresh_user_msg = f"""## CURRENT TASK
+
+**Task:** {current_task}
+
+**Original Project Task:** {task}
+
+**Project Directory:** `{base_dir}`
+
+**Instructions:**
+- Focus ONLY on completing the task above
+- Use the necessary tools (read_file, write_file, etc.) to complete it
+- When finished, call `task_done(summary="...")` to mark it complete"""
+            
+            if template_files:
+                fresh_user_msg += f"\n\n⚠️ TEMPLATE FILES EXIST! You MUST:\n"
+                fresh_user_msg += f"1. Call `read_file` to read each template file BEFORE modifying\n"
+                fresh_user_msg += f"2. Call `write_file` to modify (not replace) each file\n"
+                fresh_user_msg += f"3. Preserve ALL template structure (sections, functions, classes, imports, etc.)"
+            
+            fresh_user_msg += "\n\nStart working on this task now."
+            
+            # Return fresh context (only system + user, no old history)
+            return [
+                {"role": "system", "content": fresh_system_prompt},
+                {"role": "user", "content": fresh_user_msg}
+            ]
         
         # Tools schema - includes TODO management tools
         tools_schema = [
@@ -2435,9 +2663,15 @@ START by calling set_todos with your planned tasks - make sure the TODOs match t
                 # NOTE: This checks final answer content, NOT reasoning/thinking
                 # The model can think as much as it wants, but must provide a final answer
                 
+                # CRITICAL: First check if response is truly empty (BEFORE cleaning)
+                # This is for tool-intent detection - we need to check the original response
+                response_text = msg_content or content or ""
+                is_truly_empty = (not response_text) or (len(response_text.strip()) < 3)
+                
+                # Now perform cleaning for other purposes (empty response handler, etc.)
                 # Clean content similar to main agent
                 import re
-                clean_content = re.sub(r'<[^>]*>', '', msg_content or content or '')  # Remove XML tags
+                clean_content = re.sub(r'<[^>]*>', '', response_text)  # Remove XML tags
                 clean_content = re.sub(r'```[\s\S]*?```', '', clean_content)  # Remove code blocks
                 clean_content = clean_content.replace(".", "").replace("\n", "").replace(":", "").strip()
                 
@@ -2450,6 +2684,107 @@ START by calling set_todos with your planned tasks - make sure the TODOs match t
                 
                 # Consider empty if: no final answer OR only filler words (< 3 real chars after cleaning)
                 is_effectively_empty = len(temp_content) < 3
+                
+                # ═══════════════════════════════════════════════════════════════
+                # NEW: Tool-Intent Detection (like main agent)
+                # ═══════════════════════════════════════════════════════════════
+                # Check if agent mentioned a tool name (but didn't actually call it yet)
+                # This prevents the agent from getting stuck when it mentions a tool but doesn't call it
+                # For tool-intent detection, use is_truly_empty (checked BEFORE cleaning)
+                if is_truly_empty:
+                    # Get available tool names dynamically
+                    available_tool_names = []
+                    # Check if we have access to tools (coding_agent has its own tools)
+                    if hasattr(self, 'tools') and self.tools:
+                        available_tool_names = list(self.tools.keys())
+                    # Also check for common tool names used by coding_agent
+                    common_tool_names = ["set_todos", "read_file", "write_file", "task_done", "web_search", "coding_agent"]
+                    all_tool_names = list(set(available_tool_names + common_tool_names))
+                    
+                    # Check if any tool name appears in the response (case-insensitive)
+                    full_response_text = (msg_content or content or "").lower()
+                    mentioned_tools = [tool_name for tool_name in all_tool_names if tool_name.lower() in full_response_text]
+                    
+                    # CRITICAL: Only reset if BOTH conditions are met:
+                    # 1. Response is empty or effectively empty (checked by empty response handler above)
+                    # 2. Tool was mentioned but not called
+                    # This is language-independent - we only check if response is empty, not what language it's in
+                    if mentioned_tools and not tool_calls:
+                        tool_hint = mentioned_tools[0]
+                        tui.set_action(f"Tool-Intent detected for '{tool_hint}' without action - resetting...")
+                        live.update(tui.render())
+                        
+                        # Find the last tool call or user message to restart from
+                        last_tool_idx = None
+                        last_user_idx = None
+                        
+                        # Search backwards through history to find last tool or user message
+                        for i in range(len(history) - 1, -1, -1):
+                            msg = history[i]
+                            if msg.get('role') == 'tool':
+                                last_tool_idx = i
+                                break
+                            elif msg.get('role') == 'user' and last_user_idx is None:
+                                last_user_idx = i
+                        
+                        # Determine where to restart from
+                        if last_tool_idx is not None:
+                            restart_idx = last_tool_idx + 1
+                            restart_from = "tool call"
+                        elif last_user_idx is not None:
+                            # Check if there's thinking DIRECTLY after user prompt
+                            user_prompt_idx = last_user_idx
+                            
+                            # Check if there's an assistant message with content directly after user prompt
+                            first_assistant_after_user = None
+                            first_assistant_idx = None
+                            
+                            # Look at messages right after user prompt (within next 2 messages)
+                            for i in range(user_prompt_idx + 1, min(user_prompt_idx + 3, len(history))):
+                                msg = history[i]
+                                if msg.get('role') == 'assistant' and msg.get('content'):
+                                    content_str = str(msg.get('content', ''))
+                                    # Keep if it has substantial content (thinking/reasoning)
+                                    if len(content_str.strip()) > 20:
+                                        first_assistant_after_user = content_str
+                                        first_assistant_idx = i
+                                        break  # Only take the FIRST one directly after user prompt
+                            
+                            if first_assistant_after_user and first_assistant_idx is not None:
+                                # Keep user prompt + first thinking - this becomes the new snapshot
+                                restart_idx = first_assistant_idx + 1
+                                restart_from = f"thinking snapshot (user prompt + {len(first_assistant_after_user)} chars of first thinking)"
+                            else:
+                                # No thinking found - restart from user message (as before)
+                                restart_idx = last_user_idx
+                                restart_from = "user message"
+                        else:
+                            # No history to restart from, keep everything
+                            restart_idx = 0
+                            restart_from = "beginning"
+                        
+                        # Remove all assistant/system messages after the restart point
+                        removed_count = 0
+                        while len(history) > restart_idx:
+                            last_msg = history[-1]
+                            if last_msg.get('role') in ('assistant', 'system'):
+                                history.pop()
+                                removed_count += 1
+                            else:
+                                break
+                        
+                        if removed_count > 0:
+                            tui.set_action(f"Reset to {restart_from} (Tool-Intent: {tool_hint})")
+                            live.update(tui.render())
+                        
+                        # Add a brief system prompt (will work better now because first thinking is preserved)
+                        history.append({
+                            "role": "system",
+                            "content": "You didn't respond. Please answer or continue where you left off."
+                        })
+                        
+                        # Continue the loop - if it fails again, this system message will be removed with the reset
+                        continue
                 
                 if is_effectively_empty:
                     # Empty Response Handler: Remove responses without final answer and restart from last tool call or user message
@@ -2479,10 +2814,32 @@ START by calling set_todos with your planned tasks - make sure the TODOs match t
                         restart_from = "tool call"
                     elif last_user_idx is not None:
                         # Restart from the user message (no tool calls yet)
-                        # Keep everything up to and including the user message
-                        # Remove all assistant messages without final answer after the user message
-                        restart_idx = last_user_idx
-                        restart_from = "user message"
+                        # NEW: Check if there's thinking DIRECTLY after user prompt
+                        user_prompt_idx = last_user_idx
+                        
+                        # Check if there's an assistant message with content directly after user prompt
+                        first_assistant_after_user = None
+                        first_assistant_idx = None
+                        
+                        # Look at messages right after user prompt (within next 2 messages)
+                        for i in range(user_prompt_idx + 1, min(user_prompt_idx + 3, len(history))):
+                            msg = history[i]
+                            if msg.get('role') == 'assistant' and msg.get('content'):
+                                content_str = str(msg.get('content', ''))
+                                # Keep if it has substantial content (thinking/reasoning)
+                                if len(content_str.strip()) > 20:
+                                    first_assistant_after_user = content_str
+                                    first_assistant_idx = i
+                                    break  # Only take the FIRST one directly after user prompt
+                        
+                        if first_assistant_after_user and first_assistant_idx is not None:
+                            # Keep user prompt + first thinking - this becomes the new snapshot
+                            restart_idx = first_assistant_idx + 1  # Keep up to and including first thinking
+                            restart_from = f"thinking snapshot (user prompt + {len(first_assistant_after_user)} chars of first thinking)"
+                        else:
+                            # No thinking found - restart from user message (as before)
+                            restart_idx = last_user_idx
+                            restart_from = "user message"
                     else:
                         # No history to restart from, keep everything
                         restart_idx = 0
@@ -2524,13 +2881,14 @@ START by calling set_todos with your planned tasks - make sure the TODOs match t
                         })
                         continue
                     
-                    # Add a simple prompt to encourage action
+                    # Add a brief system prompt (will be removed on next retry if needed)
                     history.append({
                         "role": "system",
-                        "content": "You generated an empty or near-empty response. Please process the request and generate a valid Tool Call or provide a REAL, SUBSTANTIVE answer."
+                        "content": "You didn't respond. Please answer or continue where you left off."
                     })
                     
                     # Continue the loop (no retry limit - will loop until we get a response)
+                    # If it fails again, this system message will be removed with the reset
                     continue
             
             # Only record activity if we have content or tool calls
@@ -2590,29 +2948,15 @@ START by calling set_todos with your planned tasks - make sure the TODOs match t
                     )
                     
                     if is_content_only:
-                        # CONTENT_ONLY: Analyze what type of content is needed
+                        # CONTENT_ONLY: Generate generic TODOs based on content type only
+                        # CRITICAL: Do NOT hardcode specific features (weather, video, etc.)
+                        # The agent should decide what to include based on the task description.
                         if "html" in task_lower or "webpage" in task_lower or "web page" in task_lower:
-                            # Check if it mentions specific content
-                            if "weather" in task_lower:
-                                auto_todos = [
-                                    "Generate complete HTML document with weather data",
-                                    "Embed YouTube video in HTML (if mentioned)",
-                                    "Add embedded CSS styling",
-                                    "Verify HTML is complete and valid"
-                                ]
-                            elif "video" in task_lower or "youtube" in task_lower:
-                                auto_todos = [
-                                    "Generate complete HTML document",
-                                    "Embed YouTube video in HTML",
-                                    "Add embedded CSS styling",
-                                    "Verify HTML is complete and valid"
-                                ]
-                            else:
-                                auto_todos = [
-                                    "Generate complete HTML document with embedded CSS",
-                                    "Include all required content from task description",
-                                    "Verify HTML is complete and valid"
-                                ]
+                            auto_todos = [
+                                "Generate complete HTML document with all required content",
+                                "Add embedded CSS styling",
+                                "Verify HTML is complete and valid"
+                            ]
                         elif "markdown" in task_lower or "md" in task_lower:
                             auto_todos = [
                                 "Generate markdown content",
@@ -2881,6 +3225,37 @@ START by calling set_todos with your planned tasks - make sure the TODOs match t
                     # SUCCESS!
                     stop_live()
                     
+                    # CONTENT_ONLY mode: Return actual file content
+                    if skip_template and files_created:
+                        main_file = None
+                        main_file_patterns = ['index.html', 'main.py', 'app.py', 'script.py', 'main.js', 'app.js']
+                        for pattern in main_file_patterns:
+                            for f in files_created:
+                                if os.path.basename(f).lower() == pattern.lower():
+                                    main_file = f
+                                    break
+                            if main_file:
+                                break
+                        if not main_file and files_created:
+                            main_file = files_created[0]
+                        
+                        if main_file:
+                            try:
+                                full_path = main_file if os.path.isabs(main_file) else os.path.join(base_dir, main_file)
+                                if os.path.exists(full_path):
+                                    with open(full_path, 'r', encoding='utf-8') as f:
+                                        content = f.read()
+                                    # Clean up temporary directory
+                                    try:
+                                        import shutil
+                                        shutil.rmtree(base_dir)
+                                    except:
+                                        pass
+                                    return content
+                            except Exception:
+                                pass  # Fallback to summary
+                    
+                    # Normal mode: Return project summary
                     files_list = _format_file_links(files_created, base_dir)
                     dir_link = _get_clickable_path(base_dir)
                     open_instructions = _get_open_instructions(files_created, base_dir)
@@ -3014,6 +3389,38 @@ START by calling set_todos with your planned tasks - make sure the TODOs match t
                             # All tasks are done - allow completion
                             tui.append_stream("🎉 All tasks completed!")
                         stop_live()
+                        
+                        # CONTENT_ONLY mode: Return actual file content
+                        if skip_template and files_created:
+                            main_file = None
+                            main_file_patterns = ['index.html', 'main.py', 'app.py', 'script.py', 'main.js', 'app.js']
+                            for pattern in main_file_patterns:
+                                for f in files_created:
+                                    if os.path.basename(f).lower() == pattern.lower():
+                                        main_file = f
+                                        break
+                                if main_file:
+                                    break
+                            if not main_file and files_created:
+                                main_file = files_created[0]
+                            
+                            if main_file:
+                                try:
+                                    full_path = main_file if os.path.isabs(main_file) else os.path.join(base_dir, main_file)
+                                    if os.path.exists(full_path):
+                                        with open(full_path, 'r', encoding='utf-8') as f:
+                                            content = f.read()
+                                        # Clean up temporary directory
+                                        try:
+                                            import shutil
+                                            shutil.rmtree(base_dir)
+                                        except:
+                                            pass
+                                        return content
+                                except Exception:
+                                    pass  # Fallback to summary
+                        
+                        # Normal mode: Return project summary
                         files_list = _format_file_links(files_created, base_dir)
                         dir_link = _get_clickable_path(base_dir)
                         open_instructions = _get_open_instructions(files_created, base_dir)
@@ -3298,6 +3705,16 @@ START by calling set_todos with your planned tasks - make sure the TODOs match t
                                 tui.append_stream(f"✅ Completed: {current[:40] if current else 'task'}")
                                 tui.set_action(f"📋 {task_mgr.get_progress()}")
                                 
+                                # ═══════════════════════════════════════════════════════════════
+                                # CREATE FRESH CONTEXT FOR NEW TASK - Isolated context per task
+                                # ═══════════════════════════════════════════════════════════════
+                                if next_task:
+                                    # Create completely fresh context for the new task
+                                    # This isolates each task with its own context, preventing confusion
+                                    history = create_fresh_context_for_task(next_task)
+                                    history_snapshot_len = len(history)  # Update snapshot for new context
+                                    tui.append_stream("🔄 Fresh context created for new task")
+                                
                                 if next_task:
                                     result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
                                     tui.append_stream(f"➡️ Next: {next_task[:40]}")
@@ -3309,20 +3726,30 @@ START by calling set_todos with your planned tasks - make sure the TODOs match t
                         else:
                             # Non-file task or no files created yet - allow completion
                             summary = fn_args.get("summary", "done")
-                        task_mgr.complete_current_task(summary)
-                        next_task = task_mgr.get_current_task()
-                        
-                        tui.append_stream(f"✅ Completed: {current[:40] if current else 'task'}")
-                        tui.set_action(f"📋 {task_mgr.get_progress()}")
-                        
-                        if next_task:
-                            result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
-                            tui.append_stream(f"➡️ Next: {next_task[:40]}")
-                        elif task_mgr.is_all_done():
-                            result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
-                            tui.append_stream("🎉 All tasks done!")
-                        else:
-                            result = "✅ Task completed. Continue with remaining work."
+                            task_mgr.complete_current_task(summary)
+                            next_task = task_mgr.get_current_task()
+                            
+                            tui.append_stream(f"✅ Completed: {current[:40] if current else 'task'}")
+                            tui.set_action(f"📋 {task_mgr.get_progress()}")
+                            
+                            # ═══════════════════════════════════════════════════════════════
+                            # CREATE FRESH CONTEXT FOR NEW TASK - Isolated context per task
+                            # ═══════════════════════════════════════════════════════════════
+                            if next_task:
+                                # Create completely fresh context for the new task
+                                # This isolates each task with its own context, preventing confusion
+                                history = create_fresh_context_for_task(next_task)
+                                history_snapshot_len = len(history)  # Update snapshot for new context
+                                tui.append_stream("🔄 Fresh context created for new task")
+                            
+                            if next_task:
+                                result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
+                                tui.append_stream(f"➡️ Next: {next_task[:40]}")
+                            elif task_mgr.is_all_done():
+                                result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
+                                tui.append_stream("🎉 All tasks done!")
+                            else:
+                                result = "✅ Task completed. Continue with remaining work."
                 
                 elif fn_name == "web_fetch":
                     url = fn_args.get("url", "")
@@ -3627,6 +4054,33 @@ START by calling set_todos with your planned tasks - make sure the TODOs match t
                                 tui.update_file(os.path.basename(path), "done", size)
                                 tui.append_stream(f"✅ {os.path.basename(path)} ({size}B)")
                                 result = f"✓ Created {path} ({size} bytes)"
+                                
+                                # Automatically run linter after successful write_file
+                                try:
+                                    linter_tool = self.local_tools.get("linter")
+                                    if linter_tool:
+                                        tui.set_action("🔍 Linting...")
+                                        live.update(tui.render())
+                                        lint_result = linter_tool.run(path=path)
+                                        
+                                        # If linter found issues, add them to history for agent to see
+                                        if lint_result and not lint_result.startswith("✓") and not lint_result.startswith("[INFO]"):
+                                            # Issues found - add as system message so agent can fix them
+                                            lint_msg = (
+                                                f"🔍 Linter checked {os.path.basename(path)} and found issues:\n\n"
+                                                f"{lint_result}\n\n"
+                                                f"**Action required:** Review and fix the issues above before completing the task."
+                                            )
+                                            history.append({
+                                                "role": "system",
+                                                "content": lint_msg
+                                            })
+                                            tui.append_stream(f"⚠️ Linter found issues in {os.path.basename(path)}")
+                                        elif lint_result.startswith("✓"):
+                                            tui.append_stream(f"✓ Linter: No issues")
+                                except Exception as lint_error:
+                                    # Don't fail the write_file if linter fails
+                                    tui.append_stream(f"⚠️ Linter check failed: {str(lint_error)[:50]}")
                             else:
                                 # File not found after write
                                 tui.update_file(os.path.basename(path), "error")
@@ -3717,6 +4171,53 @@ START by calling set_todos with your planned tasks - make sure the TODOs match t
         stop_live()
         
         if files_created:
+            # ═══════════════════════════════════════════════════════════════
+            # CONTENT_ONLY MODE: Return actual file content instead of summary
+            # ═══════════════════════════════════════════════════════════════
+            if skip_template:
+                # CONTENT_ONLY mode: Return the actual content of the created file(s)
+                # Priority: Single file > Main file (index.html, main.py, etc.) > First file
+                main_file = None
+                
+                # Find main file (prioritize common main files)
+                main_file_patterns = ['index.html', 'main.py', 'app.py', 'script.py', 'main.js', 'app.js']
+                for pattern in main_file_patterns:
+                    for f in files_created:
+                        if os.path.basename(f).lower() == pattern.lower():
+                            main_file = f
+                            break
+                    if main_file:
+                        break
+                
+                # If no main file found, use first file
+                if not main_file and files_created:
+                    main_file = files_created[0]
+                
+                # If exactly one file, use it
+                if len(files_created) == 1:
+                    main_file = files_created[0]
+                
+                # Read and return the content
+                if main_file:
+                    try:
+                        full_path = main_file if os.path.isabs(main_file) else os.path.join(base_dir, main_file)
+                        if os.path.exists(full_path):
+                            with open(full_path, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                            
+                            # Clean up temporary directory in CONTENT_ONLY mode
+                            try:
+                                import shutil
+                                shutil.rmtree(base_dir)
+                            except:
+                                pass  # Ignore cleanup errors
+                            
+                            return content
+                    except Exception as e:
+                        # Fallback to summary if reading fails
+                        pass
+            
+            # Normal mode: Return project summary
             files_list = _format_file_links(files_created, base_dir)
             dir_link = _get_clickable_path(base_dir)
             open_instructions = _get_open_instructions(files_created, base_dir)

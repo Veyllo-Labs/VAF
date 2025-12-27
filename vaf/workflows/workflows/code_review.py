@@ -36,12 +36,12 @@ WORKFLOW = {
         {
             "tool": "coding_agent",
             "input": (
-                "Improve this code.\n"
+                "CONTENT_ONLY: Improve this code and return ONLY the improved file content.\n"
                 "- Fix bugs\n"
                 "- Improve readability\n"
                 "- Add/adjust comments where helpful\n"
-                "- Keep behavior unless a bug fix requires a change\n\n"
-                "Return ONLY the improved file content (no Markdown fences, no explanation).\n\n"
+                "- Keep behavior unless a bug fix requires a change\n"
+                "- Return ONLY the improved file content (no Markdown fences, no explanation, no project structure)\n\n"
                 "{original_code}\n"
             ),
             "output": "improved_code",

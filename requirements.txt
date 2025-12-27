@@ -27,6 +27,9 @@ langid>=1.1.6
 schedule>=1.2.0
 inquirer>=3.1.0
 
+# Code Quality & Linting
+ruff>=0.1.0  # Fast Python linter and formatter
+
 # System Requirements (must be installed separately)
 # Git: Required for version control in coding projects
 # - Windows: https://git-scm.com/download/win or `winget install Git.Git`

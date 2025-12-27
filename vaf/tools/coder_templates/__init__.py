@@ -20,9 +20,9 @@ class TemplateManager:
         "website": {
             "description": "Complete website with HTML, CSS, and JavaScript",
             "files": [
-                {"name": "index.html", "template": "website_html.html"},
-                {"name": "styles.css", "template": "website_css.css"},
-                {"name": "script.js", "template": "website_js.js"},
+                {"name": "index.html", "template": "websites/basic_website/index.html"},
+                {"name": "styles.css", "template": "websites/basic_website/styles.css"},
+                {"name": "script.js", "template": "websites/basic_website/script.js"},
             ],
             "placeholders": {
                 "{{TITLE}}": "Willkommen",
@@ -45,11 +45,87 @@ class TemplateManager:
             }
         },
         "python_script": {
-            "description": "Python script with main function",
+            "description": "Python script with main function and argparse",
             "files": [
-                {"name": "main.py", "template": "python_main.py"},
+                {"name": "main.py", "template": "python/script/main.py"},
             ],
-            "placeholders": {}
+            "placeholders": {
+                "{{SCRIPT_NAME}}": "MyScript",
+                "{{SCRIPT_DESCRIPTION}}": "A Python script",
+                "{{SCRIPT_DETAILS}}": "This script performs a specific task."
+            }
+        },
+        "python_server": {
+            "description": "Python local server (Flask) with API endpoints",
+            "files": [
+                {"name": "server.py", "template": "python/local_server/server.py"},
+                {"name": "requirements.txt", "template": "python/local_server/requirements.txt"},
+            ],
+            "placeholders": {
+                "{{APP_NAME}}": "MyApp",
+                "{{APP_DESCRIPTION}}": "A local development server",
+                "{{PORT}}": "8000",
+                "{{API_ENDPOINT}}": "data",
+                "{{API_MESSAGE}}": "API endpoint is working"
+            }
+        },
+        "python_cli": {
+            "description": "Python CLI tool with subcommands",
+            "files": [
+                {"name": "cli.py", "template": "python/cli_tool/cli.py"},
+            ],
+            "placeholders": {
+                "{{CLI_TOOL_NAME}}": "mytool",
+                "{{CLI_DESCRIPTION}}": "A command-line tool"
+            }
+        },
+        "java_application": {
+            "description": "Java application with main class",
+            "files": [
+                {"name": "Main.java", "template": "java/application/Main.java"},
+            ],
+            "placeholders": {
+                "{{APP_NAME}}": "MyApplication",
+                "{{APP_DESCRIPTION}}": "A Java application"
+            }
+        },
+        "java_server": {
+            "description": "Java HTTP server",
+            "files": [
+                {"name": "Server.java", "template": "java/web_server/Server.java"},
+            ],
+            "placeholders": {
+                "{{SERVER_NAME}}": "MyServer",
+                "{{SERVER_DESCRIPTION}}": "A simple HTTP server",
+                "{{PORT}}": "8080"
+            }
+        },
+        "node_app": {
+            "description": "Node.js application with HTTP server",
+            "files": [
+                {"name": "app.js", "template": "javascript/node_app/app.js"},
+            ],
+            "placeholders": {
+                "{{APP_NAME}}": "MyApp",
+                "{{APP_DESCRIPTION}}": "A Node.js application",
+                "{{PORT}}": "3000",
+                "{{API_ENDPOINT}}": "data",
+                "{{API_MESSAGE}}": "API endpoint is working"
+            }
+        },
+        "express_server": {
+            "description": "Express.js server with API routes",
+            "files": [
+                {"name": "server.js", "template": "javascript/express_server/server.js"},
+                {"name": "package.json", "template": "javascript/express_server/package.json"},
+            ],
+            "placeholders": {
+                "{{APP_NAME}}": "my-express-app",
+                "{{APP_DESCRIPTION}}": "An Express.js server",
+                "{{PORT}}": "3000",
+                "{{API_ENDPOINT}}": "data",
+                "{{API_MESSAGE}}": "API endpoint is working"
+            }
         },
     }
     
@@ -65,8 +141,15 @@ class TemplateManager:
     
     @classmethod
     def load_template(cls, template_file: str) -> Optional[str]:
-        """Load a template file's contents."""
+        """
+        Load a template file's contents.
+        Supports both flat files and nested paths (e.g., 'websites/basic_website/index.html').
+        """
+        # Support both flat and nested paths
+        # Normalize path separators for cross-platform compatibility
+        template_file = template_file.replace('\\', '/')
         template_path = TEMPLATE_DIR / template_file
+        
         if template_path.exists():
             return template_path.read_text(encoding='utf-8')
         return None
@@ -142,10 +225,40 @@ class TemplateManager:
         if any(kw in task_lower for kw in website_keywords):
             return "website"
         
+        # Python server detection (prioritize over script)
+        python_server_keywords = ['python server', 'flask', 'fastapi', 'local server', 'web server', 'api server']
+        if any(kw in task_lower for kw in python_server_keywords):
+            return "python_server"
+        
+        # Python CLI detection
+        python_cli_keywords = ['python cli', 'command line', 'cli tool', 'command-line']
+        if any(kw in task_lower for kw in python_cli_keywords):
+            return "python_cli"
+        
         # Python script detection
         python_keywords = ['python', 'script', 'skript', '.py']
         if any(kw in task_lower for kw in python_keywords):
             return "python_script"
+        
+        # Java server detection
+        java_server_keywords = ['java server', 'java http', 'java web server']
+        if any(kw in task_lower for kw in java_server_keywords):
+            return "java_server"
+        
+        # Java application detection
+        java_keywords = ['java', 'java application', 'java app']
+        if any(kw in task_lower for kw in java_keywords):
+            return "java_application"
+        
+        # Express.js detection (prioritize over node)
+        express_keywords = ['express', 'express.js', 'express server']
+        if any(kw in task_lower for kw in express_keywords):
+            return "express_server"
+        
+        # Node.js detection
+        node_keywords = ['node.js', 'nodejs', 'node app', 'node server']
+        if any(kw in task_lower for kw in node_keywords):
+            return "node_app"
         
         return None
     

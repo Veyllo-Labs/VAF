@@ -43,9 +43,10 @@ WORKFLOW = {
         {
             "tool": "coding_agent",
             "input": (
-                "Based on the research below, create working code.\n"
-                "- Return ONLY the code (no Markdown fences, no explanation)\n"
-                "- Prefer clean structure and comments where needed\n\n"
+                "CONTENT_ONLY: Generate ONLY the complete code content based on the research below.\n"
+                "- Return ONLY the code (no Markdown fences, no explanation, no project structure)\n"
+                "- Prefer clean structure and comments where needed\n"
+                "- Create a complete, working code file\n\n"
                 "Task: {query}\n\n"
                 "Research:\n{research}\n"
             ),

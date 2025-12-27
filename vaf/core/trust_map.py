@@ -24,6 +24,7 @@ SCIENCE_DOMAINS = [
     "acm.org",             # Computer Science
     "researchgate.net",    # (Caution: User uploads, but usually ok)
     "pubmed.ncbi.nlm.nih.gov", # Medicine & biology
+    "patents.google.com",  # Google Patents - official patent database
     "fraunhofer.de",       # German research
     "max-planck.de",       # German research
     "mpg.de",              # Max Planck Society
@@ -56,11 +57,18 @@ TECH_DOCS = [
     "golang.org",          # Official Go
 ]
 
+# D. Business & Professional Networks (Useful for business information, company profiles, professional contacts)
+BUSINESS_DOMAINS = [
+    "linkedin.com",        # Professional network - useful for business info, company profiles
+    "xing.com",            # German professional network - useful for business info, company profiles
+]
+
 # Trust Map (consolidated)
 TRUSTED_MAP: Dict[str, List[str]] = {
     "science": SCIENCE_DOMAINS,
     "gov": GOV_DOMAINS,
     "tech": TECH_DOCS,
+    "business": BUSINESS_DOMAINS,
 }
 
 # Domains to actively avoid (SEO spam, social media without login)
@@ -69,7 +77,6 @@ BLACKLIST = [
     "facebook.com",
     "instagram.com",
     "tiktok.com",
-    "linkedin.com",        # Often unreliable for facts
     "quora.com",
     "gutefrage.net",
     "bild.de",
@@ -104,7 +111,11 @@ def rate_url_quality(url: str) -> Tuple[int, str]:
     if any(blocked in netloc for blocked in BLACKLIST):
         return (0, "blacklisted")
     
-    # 2. Check high-trust domains
+    # 2. Special handling for Google Scholar (medium quality - broad search but not peer-reviewed)
+    if "scholar.google.com" in netloc or "scholar.google." in netloc:
+        return (6, "scholar")  # Medium quality - provides broad scholarly literature search
+    
+    # 3. Check high-trust domains
     for category, domains in TRUSTED_MAP.items():
         for domain in domains:
             # Check for exact domain or suffix (e.g., .gov)
@@ -115,6 +126,8 @@ def rate_url_quality(url: str) -> Tuple[int, str]:
                         return (10, category)  # Gold standard
                     elif category == "tech":
                         return (8, category)
+                    elif category == "business":
+                        return (5, category)  # Medium quality - useful for business info
             else:
                 # Exact domain or subdomain
                 if netloc == domain or netloc.endswith(f".{domain}"):
@@ -122,16 +135,18 @@ def rate_url_quality(url: str) -> Tuple[int, str]:
                         return (10, category)  # Gold standard
                     elif category == "tech":
                         return (8, category)
+                    elif category == "business":
+                        return (5, category)  # Medium quality - useful for business info
     
-    # 3. Bonus for educational institutions (universal)
+    # 4. Bonus for educational institutions (universal)
     if netloc.endswith(".edu") or netloc.endswith(".ac.uk") or netloc.endswith(".edu.au"):
         return (9, "academic")
     
-    # 4. Bonus for Wikipedia (good for overview, but not gold)
+    # 5. Bonus for Wikipedia (good for overview, but not gold)
     if "wikipedia.org" in netloc:
         return (6, "wikipedia")
     
-    # 5. Default: Low quality (blogs, forums, unknown domains)
+    # 6. Default: Low quality (blogs, forums, unknown domains)
     return (1, "low")
 
 

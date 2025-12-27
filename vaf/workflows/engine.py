@@ -73,6 +73,10 @@ class WorkflowEngine:
         """
         self.tools = tools
         self.callback = callback or (lambda *args: None)
+        
+        # Initialize context manager for workflow execution (like main agent)
+        from vaf.core.context import ContextManager
+        self.context_manager = ContextManager(max_tokens=8192)
     
     def execute(
         self, 
@@ -195,7 +199,24 @@ class WorkflowEngine:
                     else:
                         args = self._infer_args(step.tool, resolved_input)
                 
-                # Run the tool
+                # ═══════════════════════════════════════════════════════════════
+                # CONTEXT MANAGEMENT: Truncate large inputs before passing to tools
+                # ═══════════════════════════════════════════════════════════════
+                # For tools that accept large text inputs (like coding_agent),
+                # truncate very large variable values to prevent context overflow
+                MAX_INPUT_SIZE = 5000  # Max chars per input parameter
+                args_snapshot = {k: v for k, v in args.items()}  # Snapshot for retry
+                
+                for key, value in args.items():
+                    if isinstance(value, str) and len(value) > MAX_INPUT_SIZE:
+                        truncated = value[:MAX_INPUT_SIZE] + f"\n\n[... {len(value) - MAX_INPUT_SIZE} more characters truncated to prevent context overflow ...]"
+                        UI.event("Workflow", f"  [INFO] Truncated {key} input: {len(value)} → {MAX_INPUT_SIZE} chars", style="dim")
+                        args[key] = truncated
+                
+                # Snapshot outputs before tool execution (for retry on failure)
+                outputs_snapshot = {k: v for k, v in outputs.items()}
+                
+                # Run the tool with retry logic (like main agent)
                 #
                 # NOTE: Some tools (e.g. research_agent) use Rich Live/ANSI animations.
                 # When running inside the workflow engine, those animations can spam the
@@ -204,15 +225,123 @@ class WorkflowEngine:
                 import os
                 prev_in_workflow = os.environ.get("VAF_IN_WORKFLOW")
                 os.environ["VAF_IN_WORKFLOW"] = "1"
-                try:
-                    result = tool.run(**args)
-                finally:
-                    if prev_in_workflow is None:
-                        os.environ.pop("VAF_IN_WORKFLOW", None)
-                    else:
-                        os.environ["VAF_IN_WORKFLOW"] = prev_in_workflow
+                
+                # Retry logic for context errors (like main agent)
+                max_retries = 3
+                retry_count = 0
+                result = None
+                
+                while retry_count < max_retries:
+                    try:
+                        result = tool.run(**args)
+                        
+                        # Check if result contains context overflow error (like main agent)
+                        result_str = str(result)
+                        is_context_error_in_result = (
+                            "context" in result_str.lower() and 
+                            ("exceed" in result_str.lower() or "size" in result_str.lower() or "token" in result_str.lower())
+                        ) or (
+                            "400" in result_str and "context" in result_str.lower()
+                        )
+                        
+                        # If context error in result, retry with more aggressive truncation
+                        if is_context_error_in_result:
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                UI.event("Workflow", f"  [RETRY {retry_count}/{max_retries}] Context overflow in result, truncating inputs...", style="warning")
+                                
+                                # Restore args from snapshot
+                                args = {k: v for k, v in args_snapshot.items()}
+                                
+                                # More aggressive truncation on retry (like main agent's aggressive compression)
+                                new_max = MAX_INPUT_SIZE // (retry_count + 1)
+                                for key, value in args.items():
+                                    if isinstance(value, str) and len(value) > new_max:
+                                        args[key] = value[:new_max] + f"\n\n[... {len(value) - new_max} more characters truncated (retry {retry_count}) ...]"
+                                        UI.event("Workflow", f"  [RETRY] Aggressively truncated {key}: {len(value)} → {new_max} chars", style="dim")
+                                
+                                # Restore outputs from snapshot before retry
+                                outputs = {k: v for k, v in outputs_snapshot.items()}
+                                
+                                # Continue retry loop
+                                continue
+                            else:
+                                # Max retries reached - treat as error
+                                step.status = StepStatus.FAILED
+                                step.error = f"Context size error after {max_retries} retries"
+                                step.result = result
+                                step.duration = time.time() - step_start
+                                error = step.error
+                                
+                                UI.error(f"  [FAIL] {step.error}")
+                                self.callback("error", step, i, len(steps))
+                                
+                                if stop_on_error and not step.optional:
+                                    break
+                                continue
+                        
+                        # Success - exit retry loop
+                        break
+                        
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        # Check if it's a context size error (like main agent handles 500)
+                        is_context_error = (
+                            "context" in error_str and 
+                            ("exceed" in error_str or "size" in error_str or "token" in error_str)
+                        ) or (
+                            hasattr(e, 'response') and 
+                            hasattr(e.response, 'status_code') and 
+                            e.response.status_code == 500 and
+                            "context" in str(e.response.text or "").lower()
+                        )
+                        
+                        if is_context_error:
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                # Restore from snapshot and truncate more aggressively (like main agent)
+                                UI.event("Workflow", f"  [RETRY {retry_count}/{max_retries}] Context overflow detected, truncating inputs...", style="warning")
+                                
+                                # Restore args from snapshot
+                                args = {k: v for k, v in args_snapshot.items()}
+                                
+                                # More aggressive truncation on retry (like main agent's aggressive compression)
+                                new_max = MAX_INPUT_SIZE // (retry_count + 1)
+                                for key, value in args.items():
+                                    if isinstance(value, str) and len(value) > new_max:
+                                        args[key] = value[:new_max] + f"\n\n[... {len(value) - new_max} more characters truncated (retry {retry_count}) ...]"
+                                        UI.event("Workflow", f"  [RETRY] Aggressively truncated {key}: {len(value)} → {new_max} chars", style="dim")
+                                
+                                # Restore outputs from snapshot before retry
+                                outputs = {k: v for k, v in outputs_snapshot.items()}
+                                
+                                continue
+                            else:
+                                # Max retries reached
+                                raise Exception(f"Context size error after {max_retries} retries: {e}")
+                        else:
+                            # Not a context error - re-raise immediately
+                            raise
+                
+                # Cleanup environment variable (after while loop)
+                if prev_in_workflow is None:
+                    os.environ.pop("VAF_IN_WORKFLOW", None)
+                else:
+                    os.environ["VAF_IN_WORKFLOW"] = prev_in_workflow
                 
                 # Check if result indicates failure (even if no exception was raised)
+                if result is None:
+                    # Should not happen, but handle gracefully
+                    step.status = StepStatus.FAILED
+                    step.error = "Tool returned no result"
+                    step.duration = time.time() - step_start
+                    error = step.error
+                    UI.error(f"  [FAIL] {step.error}")
+                    self.callback("error", step, i, len(steps))
+                    if stop_on_error and not step.optional:
+                        break
+                    continue
+                
                 result_str = str(result)
                 is_error_result = (
                     result_str.startswith("### ❌") or

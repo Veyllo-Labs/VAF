@@ -350,37 +350,6 @@ def show_theme_menu():
     UI.console.input("\n[dim]Press Enter to continue...[/dim]")
 
 
-def show_ui_mode_menu():
-    """Toggle between classic and modern UI."""
-    UI.clear()
-    
-    current = Config.get("ui_mode", "modern")
-    
-    UI.panel(f"Current UI Mode: {current}", title="UI Mode Settings", style="highlight")
-    
-    choices = [
-        ('Modern TUI (Beautiful input box, themes)', 'modern'),
-        ('Classic (Simple prompt)', 'classic'),
-        ('Back', 'back'),
-    ]
-    
-    questions = [
-        inquirer.List('mode',
-                      message="Select UI Mode",
-                      choices=choices,
-        ),
-    ]
-    answers = inquirer.prompt(questions)
-    
-    if not answers or answers['mode'] == 'back':
-        return
-    
-    Config.set("ui_mode", answers['mode'])
-    UI.success(f"UI Mode set to: {answers['mode']}")
-    UI.print("[dim]Changes take effect on next startup.[/dim]")
-    UI.console.input("\n[dim]Press Enter to continue...[/dim]")
-
-
 def show_automations_menu():
     """Manage scheduled automations."""
     from rich.table import Table
@@ -571,9 +540,6 @@ def main_menu(agent=None):
         except ImportError:
             current_theme = "default"
             theme_label = f"Theme: {current_theme}"
-        
-        # Get current UI mode
-        ui_mode = Config.get("ui_mode", "modern")
 
         # UX toggles
         auto_links = bool(Config.get("ux_auto_open_links"))
@@ -606,7 +572,6 @@ def main_menu(agent=None):
                               ('Search & Download New Models', 'search'),
                               ('─────────────────', None),
                               (theme_label, 'theme'),
-                              (f'UI Mode: {ui_mode}', 'ui_mode'),
                               (links_label, 'ux_links'),
                               (outputs_label, 'ux_outputs'),
                               (auto_label, 'automations'),
@@ -646,8 +611,6 @@ def main_menu(agent=None):
             show_tools_menu(agent)
         elif action == 'theme':
             show_theme_menu()
-        elif action == 'ui_mode':
-            show_ui_mode_menu()
         elif action == 'automations':
             show_automations_menu()
         elif action == 'about':

@@ -1209,6 +1209,9 @@ Common paths:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Task: {task}"}
         ]
+        
+        # Snapshot history (before processing)
+        history_snapshot_len = len(history)
 
         def _sanitize_history(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             """
@@ -1311,15 +1314,123 @@ Common paths:
                 
                 history.append(msg)
 
-                # If model returned neither tool calls nor content, don't loop forever:
+                # If model returned neither tool calls nor content, retry with brief prompt
                 if not tool_calls and not content:
-                    live.stop()
-                    return (
-                        "[ERROR] Librarian LLM returned an empty response.\n\n"
-                        "Suggested retry for Main Agent:\n"
-                        "- Re-ask with an explicit tool call (e.g. folder_size/path), or\n"
-                        "- Provide an explicit absolute path."
-                    )
+                    # Remove the empty assistant message
+                    if history and history[-1].get('role') == 'assistant':
+                        history.pop()
+                    
+                    # ═══════════════════════════════════════════════════════════════
+                    # NEW: Tool-Intent Detection (like main agent)
+                    # ═══════════════════════════════════════════════════════════════
+                    # Check if agent mentioned a tool name (but didn't actually call it yet)
+                    # CRITICAL: First check if response is truly empty (content is already checked above)
+                    # In librarian, we already have `not content`, so response is truly empty
+                    is_truly_empty = not content
+                    
+                    # Only check tool intent if response is truly empty
+                    if is_truly_empty:
+                        # Get available tool names dynamically
+                        available_tool_names = list(self.tools.keys()) if hasattr(self, 'tools') and self.tools else []
+                        # Also check for common tool names used by librarian
+                        common_tool_names = ["read_file", "write_file", "list_files", "find_files", "tree", "folder_size", "python_sandbox"]
+                        all_tool_names = list(set(available_tool_names + common_tool_names))
+                        
+                        # Check if any tool name appears in the last assistant message (case-insensitive)
+                        last_assistant_msg = None
+                        for msg in reversed(history):
+                            if msg.get('role') == 'assistant' and msg.get('content'):
+                                last_assistant_msg = str(msg.get('content', '')).lower()
+                                break
+                        
+                        mentioned_tools = []
+                        if last_assistant_msg:
+                            # Check if any tool name appears in the response (case-insensitive)
+                            mentioned_tools = [tool_name for tool_name in all_tool_names if tool_name.lower() in last_assistant_msg]
+                        
+                        # CRITICAL: Only reset if BOTH conditions are met:
+                        # 1. Response is truly empty (content is None/empty) - checked BEFORE any cleaning
+                        # 2. Tool was mentioned but not called
+                        # This is language-independent - we only check if response is empty, not what language it's in
+                        if mentioned_tools and not tool_calls:
+                            tool_hint = mentioned_tools[0]
+                        UI.event("Librarian", f"Tool-Intent detected for '{tool_hint}' without action - resetting to snapshot", style="dim")
+                        
+                        # Check if there's thinking DIRECTLY after user prompt
+                        user_prompt_idx = 1  # User message is at index 1 (after system at 0)
+                        
+                        # Check if there's an assistant message with content directly after user prompt
+                        first_assistant_after_user = None
+                        first_assistant_idx = None
+                        
+                        # Look at messages right after user prompt (within next 2 messages)
+                        for i in range(user_prompt_idx + 1, min(user_prompt_idx + 3, len(history))):
+                            msg = history[i]
+                            if msg.get('role') == 'assistant' and msg.get('content'):
+                                content_str = str(msg.get('content', ''))
+                                # Keep if it has substantial content (thinking/reasoning)
+                                if len(content_str.strip()) > 20:
+                                    first_assistant_after_user = content_str
+                                    first_assistant_idx = i
+                                    break  # Only take the FIRST one directly after user prompt
+                        
+                        if first_assistant_after_user and first_assistant_idx is not None:
+                            # Keep user prompt + first thinking - this becomes the new snapshot
+                            history = history[:first_assistant_idx + 1]
+                            UI.event("Librarian", f"Reset to thinking snapshot (user prompt + {len(first_assistant_after_user)} chars of first thinking)", style="dim")
+                        else:
+                            # No thinking found - reset to user prompt snapshot (as before)
+                            history = history[:history_snapshot_len]
+                            UI.event("Librarian", f"Reset to user prompt snapshot", style="dim")
+                        
+                        # Add a brief system prompt (will work better now because first thinking is preserved)
+                        history.append({
+                            "role": "system",
+                            "content": "You didn't respond. Please answer or continue where you left off."
+                        })
+                        
+                        # Continue the loop - if it fails again, this system message will be removed with the reset
+                        continue
+                    
+                    # ═══════════════════════════════════════════════════════════════
+                    # Snapshot System with Thinking Preservation (like main agent)
+                    # ═══════════════════════════════════════════════════════════════
+                    # Check if there's thinking DIRECTLY after user prompt
+                    # The user prompt is at history_snapshot_len (index 1, after system prompt)
+                    user_prompt_idx = 1  # User message is at index 1 (after system at 0)
+                    
+                    # Check if there's an assistant message with content directly after user prompt
+                    first_assistant_after_user = None
+                    first_assistant_idx = None
+                    
+                    # Look at messages right after user prompt (within next 2 messages)
+                    for i in range(user_prompt_idx + 1, min(user_prompt_idx + 3, len(history))):
+                        msg = history[i]
+                        if msg.get('role') == 'assistant' and msg.get('content'):
+                            content_str = str(msg.get('content', ''))
+                            # Keep if it has substantial content (thinking/reasoning)
+                            if len(content_str.strip()) > 20:
+                                first_assistant_after_user = content_str
+                                first_assistant_idx = i
+                                break  # Only take the FIRST one directly after user prompt
+                    
+                    if first_assistant_after_user and first_assistant_idx is not None:
+                        # Keep user prompt + first thinking - this becomes the new snapshot
+                        history = history[:first_assistant_idx + 1]
+                        UI.event("Librarian", f"Reset to thinking snapshot (user prompt + {len(first_assistant_after_user)} chars of first thinking)", style="dim")
+                    else:
+                        # No thinking found - reset to user prompt snapshot (as before)
+                        history = history[:history_snapshot_len]
+                        UI.event("Librarian", f"Reset to user prompt snapshot", style="dim")
+                    
+                    # Add a brief system prompt (will work better now because first thinking is preserved)
+                    history.append({
+                        "role": "system",
+                        "content": "You didn't respond. Please answer or continue where you left off."
+                    })
+                    
+                    # Continue the loop - if it fails again, this system message will be removed with the reset
+                    continue
                 
                 # If no tool calls and has content → done
                 if not tool_calls and content:

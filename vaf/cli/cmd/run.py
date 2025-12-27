@@ -308,12 +308,8 @@ def run(
 
     from vaf.core.config import Config
     
-    # Determine UI mode from config or flag
-    ui_mode = Config.get("ui_mode", "modern")
-    
-    # Classic flag overrides config
-    if classic:
-        ui_mode = "classic"
+    # Determine UI mode from flag (default to modern)
+    ui_mode = "classic" if classic else "modern"
     
     # Get theme from config if not specified
     if not theme:

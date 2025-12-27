@@ -685,6 +685,22 @@ class Agent:
                         
                         if is_coder_only:
                             continue
+                        
+                        # Exclude automation management tools when running inside an automation
+                        # This prevents automations from creating/managing other automations (infinite loops, unexpected behavior)
+                        is_in_automation = os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
+                        if is_in_automation:
+                            AUTOMATION_EXCLUDED_TOOLS = [
+                                "create_automation",
+                                "update_automation",
+                                "delete_automation",
+                                "list_automations",
+                                "read_automation",
+                                "restore_automation",
+                                "list_trash",
+                            ]
+                            if instance.name in AUTOMATION_EXCLUDED_TOOLS:
+                                continue
                             
                         self.tools[instance.name] = instance
                         # Debug info (only if verbose)
@@ -1183,8 +1199,7 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
         # Uses existing language detection, no hardcoded words!
         if self._user_requested_translation(user_input, response_lang):
             # User likely requested a translation - that's OK
-            from vaf.cli.ui import UI
-            UI.debug(f"Language mismatch ignored: User likely requested translation to {response_lang}")
+            # (Silently ignored - no debug output needed)
             return
         
         # Language names for friendly messages (comprehensive list for langid's 97 languages)
@@ -1593,6 +1608,12 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
             Result string if workflow executed, None if no match
         """
         from vaf.cli.ui import UI
+        import os
+        
+        # Skip workflow matching in automation mode - automations should execute prompts directly
+        # Automations have their own workflow_steps if they need multi-step execution
+        if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
+            return None
         
         try:
             from vaf.workflows import WorkflowSelector, WorkflowEngine, create_workflow
@@ -1622,18 +1643,20 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
             
             UI.event("Workflow", f"Brain matched: {template['name']} (multi-language support!)", style="bold cyan")
             
-            # Extract variables using LLM (more accurate than pattern matching)
+            # Extract variables using WorkflowSelector (pattern matching + fallback)
             from vaf.cli.ui import UI
             UI.event("Brain", "Extracting variables from user input...", style="dim")
             
-            variables = self._extract_workflow_variables_with_llm(user_input, template)
+            # Use WorkflowSelector to extract variables
+            selector = WorkflowSelector()
+            variables, missing = selector._extract_variables(user_input, template)
             
             # Get required variables from template
             template_variables = template.get("variables", {})
             required_vars = set(template_variables.keys())
             defaults = template.get("defaults", {})
             
-            # Determine which variables are missing
+            # Determine which variables are still missing
             missing = [var for var in required_vars if var not in variables]
             
             # Fill in defaults for missing variables
@@ -1721,7 +1744,11 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
             # Execute workflow
             # Get defaults from template if available
             template_defaults = result.template.get("defaults", {}) if result.template else {}
-            workflow_result = engine.execute(steps, variables=result.variables, defaults=template_defaults)
+            # Set defaults on engine (not as parameter - execute() doesn't accept defaults)
+            engine._workflow_defaults = template_defaults
+            
+            # Execute workflow (without defaults parameter)
+            workflow_result = engine.execute(steps, variables=result.variables)
             
             if workflow_result.success:
                 # Format the final output
@@ -2384,6 +2411,11 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                 continue
             
             # 2. Handle Empty / Think-Only Responses
+            # CRITICAL: First check if response is truly empty (BEFORE cleaning)
+            # This is for tool-intent detection - we need to check the original response
+            is_truly_empty = (not full_response) or (len(full_response.strip()) < 3)
+            
+            # Now perform cleaning for other purposes (empty response handler, etc.)
             # A truly empty content means NO final answer was given to the user.
             # We must strip XML tags, filler words, and common "empty" patterns.
             clean_content = re.sub(r'<[^>]*>', '', full_content)  # Remove XML tags
@@ -2402,132 +2434,164 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
             # The model can think as much as it wants, but must provide a final answer
             is_effectively_empty = len(temp_content) < 3
             
-            # Empty Response Handler: Remove responses without final answer and restart from last tool call or user message
+            # Empty Response Handler: Remove responses without final answer and restart from snapshot
             # NO RETRY LIMITS - will loop until we get a response
             # IMPORTANT: This removes assistant messages that have NO final answer (even if they have reasoning)
             # CRITICAL: At this point, the stream is COMPLETE (finish_reason="stop" equivalent)
             # We can immediately check for tool-intent without waiting, as the model has finished generating
             if (not full_response or is_effectively_empty):
                 # CRITICAL: Check if agent mentioned a tool name (but didn't actually call it yet)
-                # This prevents us from interrupting the agent while it's trying to call a tool
                 # Tool names are language-independent - they're always the same regardless of thinking language
                 # IMPORTANT: No time-based waiting needed - stream is already complete, so we can check immediately
                 
-                # Get available tool names dynamically (supports user-added tools)
-                available_tool_names = list(self.tools.keys()) if self.tools else []
-                
-                # Check if any tool name appears in the response (case-insensitive)
-                lower_response = (full_response or "").lower()
-                mentioned_tools = [tool_name for tool_name in available_tool_names if tool_name.lower() in lower_response]
-                
-                # If agent mentioned a tool but didn't call it, reset context (like empty response)
-                # Don't give aggressive prompts - just reset and let model try again naturally
-                if mentioned_tools and not tool_calls_detected:
-                    tool_hint = mentioned_tools[0]  # Use first mentioned tool
-                    UI.event("Debug", f"Tool-Intent detected for '{tool_hint}' without action - resetting context", style="dim")
+                # For tool-intent detection, use is_truly_empty (checked BEFORE cleaning)
+                # This prevents false positives when agent has long thinking text
+                if is_truly_empty:
+                    # Get available tool names dynamically (supports user-added tools)
+                    available_tool_names = list(self.tools.keys()) if self.tools else []
                     
-                    # Reset context (same logic as empty response)
-                    # Find the last tool call or user message to restart from
+                    # Check if any tool name appears in the response (case-insensitive)
+                    lower_response = (full_response or "").lower()
+                    mentioned_tools = [tool_name for tool_name in available_tool_names if tool_name.lower() in lower_response]
+                    
+                    # CRITICAL: Only reset if BOTH conditions are met:
+                    # 1. Response is truly empty (< 3 chars) - checked BEFORE cleaning
+                    # 2. Tool was mentioned but not called
+                    # This is language-independent - we only check if response is empty, not what language it's in
+                    if mentioned_tools and not tool_calls_detected:
+                        tool_hint = mentioned_tools[0]
+                    UI.event("Debug", f"Tool-Intent detected for '{tool_hint}' without action - resetting to snapshot", style="dim")
+                    
+                    # Find if we have tool calls in history (after snapshot)
+                    has_tool_calls = False
                     last_tool_idx = None
-                    last_user_idx = None
-                    
-                    for i in range(len(self.history) - 1, -1, -1):
+                    for i in range(history_snapshot_len, len(self.history)):
                         msg = self.history[i]
                         if msg.get('role') == 'tool':
+                            has_tool_calls = True
                             last_tool_idx = i
-                            break
-                        elif msg.get('role') == 'user' and last_user_idx is None:
-                            last_user_idx = i
                     
-                    if last_tool_idx is not None:
-                        restart_idx = last_tool_idx + 1
-                        restart_from = "tool call"
-                    elif last_user_idx is not None:
-                        restart_idx = last_user_idx
-                        restart_from = "user message"
+                    # Reset to appropriate snapshot
+                    if has_tool_calls and last_tool_idx is not None:
+                        # Keep everything up to and including the tool result
+                        self.history = self.history[:last_tool_idx + 1]
+                        UI.event("Debug", f"Reset to tool call snapshot (after tool result)", style="dim")
                     else:
-                        restart_idx = 0
-                        restart_from = "beginning"
-                    
-                    # Remove all assistant/system messages after the restart point
-                    removed_count = 0
-                    while len(self.history) > restart_idx:
-                        last_msg = self.history[-1]
-                        if last_msg.get('role') in ('assistant', 'system'):
-                            self.history.pop()
-                            removed_count += 1
+                        # No tool calls - check if there's thinking DIRECTLY after user prompt
+                        # The user prompt is at history_snapshot_len (if skip_input) or history_snapshot_len (if not skip_input, user was added there)
+                        # We want to find the FIRST assistant message with content right after the user prompt
+                        
+                        # User prompt position: if skip_input, no user was added, so it's before snapshot
+                        # If not skip_input, user was added at history_snapshot_len
+                        user_prompt_idx = history_snapshot_len
+                        if skip_input:
+                            # No user input was added, so user prompt is before snapshot
+                            # Find the last user message before snapshot
+                            for i in range(history_snapshot_len - 1, -1, -1):
+                                if self.history[i].get('role') == 'user':
+                                    user_prompt_idx = i
+                                    break
+                        
+                        # Check if there's an assistant message with content directly after user prompt
+                        first_assistant_after_user = None
+                        first_assistant_idx = None
+                        
+                        # Look at messages right after user prompt (within next 2 messages)
+                        for i in range(user_prompt_idx + 1, min(user_prompt_idx + 3, len(self.history))):
+                            msg = self.history[i]
+                            if msg.get('role') == 'assistant' and msg.get('content'):
+                                content = str(msg.get('content', ''))
+                                # Keep if it has substantial content (thinking/reasoning)
+                                if len(content.strip()) > 20:
+                                    first_assistant_after_user = content
+                                    first_assistant_idx = i
+                                    break  # Only take the FIRST one directly after user prompt
+                        
+                        if first_assistant_after_user and first_assistant_idx is not None:
+                            # Keep user prompt + first thinking - this becomes the new snapshot
+                            self.history = self.history[:first_assistant_idx + 1]
+                            UI.event("Debug", f"Reset to thinking snapshot (user prompt + {len(first_assistant_after_user)} chars of first thinking)", style="dim")
                         else:
-                            break
+                            # No thinking found - reset to user prompt snapshot (as before)
+                            if skip_input:
+                                # No user was added, so just reset to snapshot
+                                self.history = self.history[:history_snapshot_len]
+                            else:
+                                # User was added, so keep it
+                                self.history = self.history[:history_snapshot_len + 1]  # +1 for user message
+                            UI.event("Debug", f"Reset to user prompt snapshot", style="dim")
                     
-                    if removed_count > 0:
-                        UI.event("Debug", f"Removed {removed_count} response(s) - tool '{tool_hint}' mentioned but not called, restarting from {restart_from}...", style="dim")
-                    
-                    # Simple prompt (not aggressive) - just encourage tool use naturally
+                    # Add a brief system prompt (will work better now because first thinking is preserved)
                     self.history.append({
                         "role": "system",
-                        "content": f"You mentioned using '{tool_hint}'. Please use the '{tool_hint}' tool to complete the request."
+                        "content": "You didn't respond. Please answer or continue where you left off."
                     })
+                    
+                    # Continue the loop - if it fails again, this system message will be removed with the reset
                     continue
                 
-                # No tool mentioned - this is truly an empty response
-                # Find the last tool call or user message to restart from
+                # No tool mentioned - truly empty response
+                # Find if we have tool calls in history (after snapshot)
+                has_tool_calls = False
                 last_tool_idx = None
-                last_user_idx = None
-                
-                # Search backwards through history to find last tool or user message
-                for i in range(len(self.history) - 1, -1, -1):
+                for i in range(history_snapshot_len, len(self.history)):
                     msg = self.history[i]
                     if msg.get('role') == 'tool':
+                        has_tool_calls = True
                         last_tool_idx = i
-                        break
-                    elif msg.get('role') == 'user' and last_user_idx is None:
-                        last_user_idx = i
                 
-                # Determine where to restart from
-                if last_tool_idx is not None:
-                    # Restart from after the last tool result
-                    # Keep everything up to and including the tool result:
-                    # - Assistant with tool_calls (before tool result) - KEPT
-                    # - Tool result (role: 'tool') - KEPT
-                    # - Assistant messages without final answer after tool result - REMOVED
-                    restart_idx = last_tool_idx + 1
-                    restart_from = "tool call"
-                elif last_user_idx is not None:
-                    # Restart from the user message (no tool calls yet)
-                    # Keep everything up to and including the user message
-                    # Remove all assistant messages without final answer after the user message
-                    restart_idx = last_user_idx
-                    restart_from = "user message"
+                # Reset to appropriate snapshot
+                if has_tool_calls and last_tool_idx is not None:
+                    # Keep everything up to and including the tool result
+                    self.history = self.history[:last_tool_idx + 1]
+                    UI.event("Debug", f"Removed empty response, restarting from tool call snapshot", style="dim")
                 else:
-                    # No history to restart from, keep everything
-                    restart_idx = 0
-                    restart_from = "beginning"
-                
-                # Remove all assistant/system messages after the restart point that have no final answer
-                # IMPORTANT: Tool results (role: 'tool') and assistant with tool_calls are KEPT
-                # Only assistant messages without final answer are removed (even if they contain reasoning)
-                removed_count = 0
-                while len(self.history) > restart_idx:
-                    last_msg = self.history[-1]
-                    # Remove assistant and system messages that came after the restart point
-                    if last_msg.get('role') in ('assistant', 'system'):
-                        self.history.pop()
-                        removed_count += 1
+                    # No tool calls - check if there's thinking DIRECTLY after user prompt
+                    user_prompt_idx = history_snapshot_len
+                    if skip_input:
+                        # No user input was added, so user prompt is before snapshot
+                        # Find the last user message before snapshot
+                        for i in range(history_snapshot_len - 1, -1, -1):
+                            if self.history[i].get('role') == 'user':
+                                user_prompt_idx = i
+                                break
+                    
+                    # Check if there's an assistant message with content directly after user prompt
+                    first_assistant_after_user = None
+                    first_assistant_idx = None
+                    
+                    # Look at messages right after user prompt (within next 2 messages)
+                    for i in range(user_prompt_idx + 1, min(user_prompt_idx + 3, len(self.history))):
+                        msg = self.history[i]
+                        if msg.get('role') == 'assistant' and msg.get('content'):
+                            content = str(msg.get('content', ''))
+                            # Keep if it has substantial content (thinking/reasoning)
+                            if len(content.strip()) > 20:
+                                first_assistant_after_user = content
+                                first_assistant_idx = i
+                                break  # Only take the FIRST one directly after user prompt
+                    
+                    if first_assistant_after_user and first_assistant_idx is not None:
+                        # Keep user prompt + first thinking - this becomes the new snapshot
+                        self.history = self.history[:first_assistant_idx + 1]
+                        UI.event("Debug", f"Removed empty response, restarting from thinking snapshot (user prompt + {len(first_assistant_after_user)} chars of first thinking)", style="dim")
                     else:
-                        # Stop if we hit a non-assistant/system message (e.g., tool, user)
-                        # This ensures we never remove tool results or user messages
-                        break
+                        # No thinking found - reset to user prompt snapshot (as before)
+                        if skip_input:
+                            # No user was added, so just reset to snapshot
+                            self.history = self.history[:history_snapshot_len]
+                        else:
+                            # User was added, so keep it
+                            self.history = self.history[:history_snapshot_len + 1]  # +1 for user message
+                        UI.event("Debug", f"Removed empty response, restarting from user prompt snapshot", style="dim")
                 
-                if removed_count > 0:
-                    UI.event("Debug", f"Removed {removed_count} response(s) without final answer, restarting from {restart_from}...", style="dim")
-                
-                # Add a simple prompt to encourage action
+                # Add a brief system prompt (will work better now because first thinking is preserved)
                 self.history.append({
                     "role": "system",
-                    "content": "You generated an empty or near-empty response. Please process the request and generate a valid Tool Call or provide a REAL, SUBSTANTIVE answer."
+                    "content": "You didn't respond. Please answer or continue where you left off."
                 })
                 
-                # Continue the loop (no retry limit - will loop until we get a response)
+                # Continue the loop - if it fails again, this system message will be removed with the reset
                 continue
             
             # Clean History: Store ONLY the final content (Answer), discarding the reasoning trace.

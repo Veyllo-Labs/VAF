@@ -2,6 +2,7 @@
 VAF Automation Tool - Allow the model to create scheduled tasks
 """
 import json
+import re
 from typing import List, Dict, Any
 from vaf.tools.base import BaseTool
 from vaf.core.automation import AutomationManager, AutomationTask, AutomationClarifier
@@ -86,12 +87,113 @@ Use this when user wants to schedule recurring tasks like:
         prompt = kwargs.get("prompt", "")
         frequency = kwargs.get("frequency", "daily")
         time = kwargs.get("time", "06:00")
-        # Default to Documents if not specified
-        output_path = kwargs.get("output_path", "Documents")
+        # IMPORTANT: Distinguish between "not provided" (None) and "default value"
+        # This allows us to detect if user explicitly passed a path or not
+        output_path_arg = kwargs.get("output_path")
+        output_path = output_path_arg or "Documents"  # Fallback only if not provided
         params = kwargs.get("parameters", {})
         
         if not prompt:
             return "Error: No prompt provided for automation."
+        
+        # IMPORTANT: Automatically extract parameters from prompt if not provided
+        # This ensures city, output_path, etc. are extracted even if agent doesn't pass them
+        clarifier = AutomationClarifier()
+        extracted_params = clarifier.extract_params(prompt)
+        
+        # Merge extracted params with any explicitly provided params (explicit takes precedence)
+        if not params or len(params) == 0:
+            params = extracted_params.copy()
+        else:
+            # Merge: extracted params as base, explicit params override
+            params = {**extracted_params, **params}
+        
+        # Also extract output_path from prompt if not explicitly provided or if it's invalid
+        # Check if output_path looks suspicious (time format, digits, too short)
+        is_suspicious_path = output_path and (
+            (":" in output_path and len(output_path) <= 6) or 
+            output_path.isdigit() or
+            len(output_path) <= 3
+        )
+        
+        # LOGIC FIX: Override path with extracted_params if:
+        # 1. No path was explicitly provided (output_path_arg is None)
+        # 2. OR the explicit path is the default "Documents" placeholder
+        # 3. OR the path looks suspicious/invalid (time format, etc.)
+        # This works regardless of system language (Documents vs Dokumente)
+        if (not output_path_arg or output_path == "Documents" or is_suspicious_path) and "output_path" in extracted_params:
+            output_path = extracted_params["output_path"]
+        
+        # Safety fallback: if path is still suspicious after extraction, use default
+        if is_suspicious_path and output_path == output_path_arg:
+            output_path = "Documents"
+        
+        # Generate a better name from prompt if name is generic (language-independent)
+        # Check if name is generic: untitled, just digits, time format (HH:MM), or very short
+        is_generic_name = (
+            name == "untitled" or 
+            name.isdigit() or 
+            (":" in name and len(name) <= 6) or
+            len(name) <= 3
+        )
+        
+        if is_generic_name:
+            # Language-independent name generation based on task_type and parameters
+            task_type = clarifier.detect_task_type(prompt)
+            
+            # Helper function: Safe name sanitization (Unicode-safe, removes invalid filename chars)
+            # Works with Chinese, Japanese, Cyrillic, etc. - \w matches Unicode word characters
+            def safe_name(text):
+                """Sanitize text for use in filenames/automation names. Unicode-safe."""
+                if not text:
+                    return ""
+                # Replace anything that's NOT a word character (letter, digit, underscore) with underscore
+                # \w in Python 3 matches Unicode word characters (Chinese, Japanese, etc.)
+                sanitized = re.sub(r'[^\w]', '_', str(text))
+                # Remove leading/trailing underscores and limit length
+                return sanitized.strip('_')[:30]
+            
+            # Build name parts based on task type (language-independent identifiers)
+            name_parts = []
+            
+            if task_type == "weather":
+                name_parts.append("weather")
+                if "city" in extracted_params:
+                    # Works for "New York", "München", "北京" (Beijing)
+                    city_name = safe_name(extracted_params["city"]).lower()
+                    if city_name:
+                        name_parts.append(city_name)
+            elif task_type == "news":
+                name_parts.append("news")
+                if "category" in extracted_params:
+                    category_name = safe_name(extracted_params["category"]).lower()
+                    if category_name:
+                        name_parts.append(category_name)
+            elif task_type == "stock":
+                name_parts.append("stock")
+                if "symbol" in extracted_params:
+                    # Stock symbols are usually uppercase ASCII
+                    symbol = safe_name(extracted_params["symbol"]).upper()
+                    if symbol:
+                        name_parts.append(symbol)
+            elif task_type == "reminder":
+                name_parts.append("reminder")
+            elif task_type == "email_summary":
+                name_parts.append("email")
+                if "email_account" in extracted_params:
+                    account_name = safe_name(extracted_params["email_account"]).lower()
+                    if account_name:
+                        name_parts.append(account_name)
+            elif task_type == "backup":
+                name_parts.append("backup")
+            
+            # If we have name parts, join them with underscore (language-independent)
+            if name_parts:
+                name = "_".join(name_parts)
+            else:
+                # Fallback: Use LLM to generate a descriptive name from prompt (language-independent)
+                # Similar to workflow matches - ask LLM to understand the intent
+                name = self._generate_name_with_llm(prompt, extracted_params)
         
         # Validate frequency - must be one of the valid values
         valid_frequencies = ["hourly", "daily", "weekly", "monthly"]
@@ -158,14 +260,14 @@ Use this when user wants to schedule recurring tasks like:
             
             if conflicting_task and conflicting_task.id != (existing_task.id if existing_task else None):
                 return (
-                    f"❌ **Fehler: Automatisierung zur gleichen Zeit existiert bereits!**\n\n"
-                    f"Es gibt bereits eine aktive Automatisierung '{conflicting_task.name}' ({conflicting_task.id}), "
-                    f"die zur gleichen Zeit ({time}) mit der gleichen Frequenz ({frequency}) läuft.\n\n"
-                    f"**Lösung:**\n"
-                    f"- Aktualisiere die bestehende Automatisierung '{conflicting_task.name}' mit `read_automation` und dann `update_automation`\n"
-                    f"- Oder wähle eine andere Zeit für die neue Automatisierung\n"
-                    f"- Oder deaktiviere die bestehende Automatisierung zuerst\n\n"
-                    f"**Hinweis:** Es kann nur eine Automatisierung zur gleichen Zeit ausgeführt werden."
+                    f"ERROR: Automation already exists at the same time!\n\n"
+                    f"❌ **DO NOT RETRY create_automation** - An active automation '{conflicting_task.name}' ({conflicting_task.id}) "
+                    f"already runs at the same time ({time}) with the same frequency ({frequency}).\n\n"
+                    f"**Solution:**\n"
+                    f"- Use `read_automation(task_id='{conflicting_task.id}')` to see details, then `update_automation(task_id='{conflicting_task.id}', ...)` to update it\n"
+                    f"- Or choose a different time for the new automation\n"
+                    f"- Or disable the existing automation first\n\n"
+                    f"**Note:** Only one automation can run at the same time."
                 )
             
             # If existing task found, check if it's at the same time or different time
@@ -175,17 +277,17 @@ Use this when user wants to schedule recurring tasks like:
                 if same_time:
                     # Same time - suggest updating
                     return (
-                        f"⚠️ **Automatisierung existiert bereits zur gleichen Zeit!**\n\n"
-                        f"Eine Automatisierung mit dem Namen '{existing_task.name}' ({existing_task.id}) existiert bereits "
-                        f"mit der gleichen Zeit ({time}) und Frequenz ({frequency}).\n\n"
-                        f"**Aktuelle Einstellungen:**\n"
+                        f"ERROR: Automation already exists with same name and time!\n\n"
+                        f"❌ **DO NOT RETRY create_automation** - An automation '{existing_task.name}' ({existing_task.id}) already exists "
+                        f"with the same time ({time}) and frequency ({frequency}).\n\n"
+                        f"**Current settings:**\n"
                         f"- Schedule: {existing_task.frequency} at {existing_task.time}\n"
                         f"- Prompt: {existing_task.prompt[:100]}{'...' if len(existing_task.prompt) > 100 else ''}\n"
-                        f"- Status: {'✅ Aktiv' if existing_task.enabled else '⏸️ Deaktiviert'}\n\n"
-                        f"**Um die bestehende Automatisierung zu aktualisieren:**\n"
-                        f"1. Verwende `read_automation(task_id='{existing_task.id}')` um die vollständigen Details zu sehen\n"
-                        f"2. Verwende dann `update_automation(task_id='{existing_task.id}', ...)` mit den neuen Werten\n\n"
-                        f"**Oder:** Wenn du wirklich eine neue Automatisierung erstellen möchtest, wähle einen anderen Namen oder eine andere Zeit."
+                        f"- Status: {'✅ Active' if existing_task.enabled else '⏸️ Disabled'}\n\n"
+                        f"**To update the existing automation:**\n"
+                        f"1. Use `read_automation(task_id='{existing_task.id}')` to see full details\n"
+                        f"2. Then use `update_automation(task_id='{existing_task.id}', ...)` with new values\n\n"
+                        f"**Or:** If you really want to create a new automation, choose a different name or time."
                     )
                 else:
                     # Different time - inform user but allow creation
@@ -309,7 +411,7 @@ Use this when user wants to schedule recurring tasks like:
 **Name:** {task.name}
 **ID:** {task.id}
 **Schedule:** {task.frequency} at {task.time}
-**Next Run:** {task.next_run}
+**Next Run:** {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}
 **Output:** {task.output_path}"""
             
             if should_run_now:
@@ -326,22 +428,15 @@ Use this when user wants to schedule recurring tasks like:
                         # Always use new terminal - never block the current one!
                         result_msg = manager.run_task(task, new_terminal=True)
                         # Only log to debug, don't show in main terminal
-                        try:
-                            UI.debug(f"Automation '{task.name}' started: {result_msg}")
-                        except AttributeError:
-                            # Fallback if debug method doesn't exist (shouldn't happen, but defensive)
-                            pass
+                        # (Silent execution - no debug output needed)
+                        pass
                     except Exception as e2:
                         # Log error but don't fail the creation
                         from vaf.cli.ui import UI
                         import traceback
                         # Only log to debug, don't show in main terminal
-                        try:
-                            UI.debug(f"Failed to run automation immediately: {e2}")
-                            UI.debug(f"Traceback: {traceback.format_exc()}")
-                        except AttributeError:
-                            # Fallback if debug method doesn't exist (shouldn't happen, but defensive)
-                            pass
+                        # (Silent execution - errors are silently ignored)
+                        pass
                 
                 # Run in background thread to not block the response
                 thread = threading.Thread(target=run_immediately, daemon=True)
@@ -447,14 +542,22 @@ Return ONLY valid JSON array, no explanations, no markdown code blocks."""
                         
                         # Try to extract JSON from response
                         json_match = re.search(r'\[.*\]', content, re.DOTALL)
-                        if json_match:
-                            content = json_match.group(0)
+                        if not json_match:
+                            from vaf.cli.ui import UI
+                            UI.event("Debug", "Workflow generation: No JSON array found in response, using prompt-based execution", style="dim")
+                            return []
+                        
+                        content = json_match.group(0).strip()
+                        if not content:
+                            from vaf.cli.ui import UI
+                            UI.event("Debug", "Workflow generation: Empty JSON content, using prompt-based execution", style="dim")
+                            return []
                         
                         try:
                             workflow_steps = json.loads(content)
-                        except json.JSONDecodeError:
+                        except json.JSONDecodeError as e:
                             from vaf.cli.ui import UI
-                            UI.event("Debug", "Workflow generation: JSON parse error, using prompt-based execution", style="dim")
+                            UI.event("Debug", f"Workflow generation: JSON parse error ({e}), using prompt-based execution", style="dim")
                             return []
                         
                         # Validate and return
@@ -490,14 +593,22 @@ Return ONLY valid JSON array, no explanations, no markdown code blocks."""
                     
                     # Try to extract JSON from response
                     json_match = re.search(r'\[.*\]', content, re.DOTALL)
-                    if json_match:
-                        content = json_match.group(0)
+                    if not json_match:
+                        from vaf.cli.ui import UI
+                        UI.event("Debug", "Workflow generation: No JSON array found in response, using prompt-based execution", style="dim")
+                        return []
+                    
+                    content = json_match.group(0).strip()
+                    if not content:
+                        from vaf.cli.ui import UI
+                        UI.event("Debug", "Workflow generation: Empty JSON content, using prompt-based execution", style="dim")
+                        return []
                     
                     try:
                         workflow_steps = json.loads(content)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
                         from vaf.cli.ui import UI
-                        UI.event("Debug", "Workflow generation: JSON parse error, using prompt-based execution", style="dim")
+                        UI.event("Debug", f"Workflow generation: JSON parse error ({e}), using prompt-based execution", style="dim")
                         return []
                     
                     # Validate and return
@@ -532,10 +643,23 @@ Return ONLY valid JSON array, no explanations, no markdown code blocks."""
                 
                 # Try to extract JSON from response (might be wrapped in markdown)
                 json_match = re.search(r'\[.*\]', content, re.DOTALL)
-                if json_match:
-                    content = json_match.group(0)
+                if not json_match:
+                    from vaf.cli.ui import UI
+                    UI.event("Debug", "Workflow generation: No JSON array found in response, using prompt-based execution", style="dim")
+                    return []
                 
-                workflow_steps = json.loads(content)
+                content = json_match.group(0).strip()
+                if not content:
+                    from vaf.cli.ui import UI
+                    UI.event("Debug", "Workflow generation: Empty JSON content, using prompt-based execution", style="dim")
+                    return []
+                
+                try:
+                    workflow_steps = json.loads(content)
+                except json.JSONDecodeError as e:
+                    from vaf.cli.ui import UI
+                    UI.event("Debug", f"Workflow generation: JSON parse error ({e}), using prompt-based execution", style="dim")
+                    return []
                 
                 # Validate workflow steps
                 if isinstance(workflow_steps, list) and len(workflow_steps) > 0:
@@ -576,6 +700,125 @@ Return ONLY valid JSON array, no explanations, no markdown code blocks."""
         except Exception as e:
             # Fallback: return empty list, will use prompt-based execution
             return []
+    
+    def _generate_name_with_llm(self, prompt: str, extracted_params: Dict[str, Any]) -> str:
+        """
+        Generate automation name using LLM (language-independent, like workflow matches).
+        
+        Instead of hardcoded stop-words, we ask the LLM to understand the prompt
+        and generate a short, descriptive name. Uses the same approach as workflow matches.
+        """
+        try:
+            import requests
+            from vaf.cli.ui import UI
+            
+            # Use same animation style as workflow matches
+            with UI.console.status("[bold cyan](O_O)  Analyzing automation name...[/bold cyan]", spinner="dots"):
+                # Build context about extracted parameters
+                params_context = ""
+                if extracted_params:
+                    params_list = []
+                    if "city" in extracted_params:
+                        params_list.append(f"city: {extracted_params['city']}")
+                    if "category" in extracted_params:
+                        params_list.append(f"category: {extracted_params['category']}")
+                    if "symbol" in extracted_params:
+                        params_list.append(f"symbol: {extracted_params['symbol']}")
+                    if params_list:
+                        params_context = f"\n\nExtracted parameters: {', '.join(params_list)}"
+                
+                # Simple prompt to LLM: "Generate a short name for this automation"
+                llm_prompt = f"""Generate a short, descriptive name for this automation task.
+
+Task description: {prompt}{params_context}
+
+Requirements:
+- Maximum 30 characters
+- Use underscores instead of spaces (e.g., "weather_berlin" not "weather berlin")
+- Language-independent (use English identifiers like "weather", "news", "stock")
+- Include key parameters if available (city, category, etc.)
+- Remove common words like "create", "make", "generate", "daily", "schedule", "automation"
+- Make it descriptive but concise
+
+Examples:
+- "Weather report for Berlin" → "weather_berlin"
+- "Daily news summary" → "news_daily"
+- "Stock price for AAPL" → "stock_aapl"
+- "Create backup of documents" → "backup_documents"
+
+Return ONLY the name, no explanations, no quotes, no markdown, just the name:"""
+
+                messages = [{"role": "user", "content": llm_prompt}]
+                
+                try:
+                    # Try server first (same as workflow generation)
+                    payload = {
+                        "messages": messages, 
+                        "max_tokens": 50,  # Names are short, 50 is enough
+                        "temperature": 0.2  # Low temperature for consistent, predictable names
+                    }
+                    res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=5)
+                    if res.status_code == 200:
+                        response_data = res.json()
+                        if 'choices' in response_data and len(response_data['choices']) > 0:
+                            name = response_data['choices'][0]['message']['content'].strip()
+                            # Clean up: remove quotes, extra whitespace, markdown code blocks
+                            name = name.strip('"\'` \n\t')
+                            # Remove markdown code blocks if present
+                            if name.startswith('```'):
+                                lines = name.split('\n')
+                                name = '\n'.join(lines[1:-1]) if len(lines) > 2 else name
+                                name = name.strip()
+                            # Validate and sanitize
+                            if name and len(name) <= 50:
+                                # Use safe_name helper to ensure valid filename
+                                def safe_name(text):
+                                    if not text:
+                                        return ""
+                                    sanitized = re.sub(r'[^\w]', '_', str(text))
+                                    return sanitized.strip('_')[:30]
+                                return safe_name(name)
+                except requests.exceptions.RequestException:
+                    # Server not running - fallback to Agent initialization
+                    from vaf.core.agent import Agent
+                    agent = Agent(verbose=False)
+                    agent.load_model()
+                    agent.init_chat()
+                    
+                    # Use agent's chat_step to get response
+                    response_parts = []
+                    agent.chat_step(llm_prompt, stream_callback=lambda x: response_parts.append(x), skip_input=True)
+                    content = "".join(response_parts).strip()
+                    agent.shutdown()
+                    
+                    # Clean up response
+                    name = content.strip('"\'` \n\t')
+                    if name.startswith('```'):
+                        lines = name.split('\n')
+                        name = '\n'.join(lines[1:-1]) if len(lines) > 2 else name
+                        name = name.strip()
+                    
+                    if name and len(name) <= 50:
+                        def safe_name(text):
+                            if not text:
+                                return ""
+                            sanitized = re.sub(r'[^\w]', '_', str(text))
+                            return sanitized.strip('_')[:30]
+                        return safe_name(name)
+                
+        except Exception as e:
+            # Silent fallback - don't show error to user
+            pass
+        
+        # Fallback: Simple extraction if LLM unavailable
+        import re
+        words = re.findall(r'\b\w{3,}\b', prompt.lower())
+        # Just take first 2-3 meaningful words (no stop-words needed)
+        if words:
+            return "_".join(words[:3])[:30]
+        else:
+            # Last resort
+            return "automation"
 
 
 class ListAutomationsTool(BaseTool):
@@ -604,7 +847,7 @@ class ListAutomationsTool(BaseTool):
                 status = "✅ Active" if task.enabled else "⏸️ Disabled"
                 result += f"• **{task.name}** ({task.id}) - {status}\n"
                 result += f"  Schedule: {task.frequency} at {task.time}\n"
-                result += f"  Next: {task.next_run[:16] if task.next_run else 'N/A'}\n"
+                result += f"  Next: {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}\n"
                 result += f"  Status: {status}\n"
                 result += f"  **Prompt:** {task.prompt[:100]}{'...' if len(task.prompt) > 100 else ''}\n"
                 if task.parameters:
@@ -652,7 +895,7 @@ class ReadAutomationTool(BaseTool):
 **ID:** {task.id}
 **Status:** {'✅ Active' if task.enabled else '⏸️ Disabled'}
 **Schedule:** {task.frequency} at {task.time}
-**Next Run:** {task.next_run or 'Not scheduled'}
+**Next Run:** {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}
 **Last Run:** {task.last_run or 'Never'}
 **Created:** {task.created_at}
 **Output Path:** {task.output_path or 'Not specified'}
@@ -747,13 +990,13 @@ class UpdateAutomationTool(BaseTool):
                     if existing_task.id != task_id and existing_task.enabled:
                         if existing_task.time == new_time and existing_task.frequency == new_frequency:
                             return (
-                                f"❌ **Fehler: Automatisierung zur gleichen Zeit existiert bereits!**\n\n"
-                                f"Es gibt bereits eine aktive Automatisierung '{existing_task.name}' ({existing_task.id}), "
-                                f"die zur gleichen Zeit ({new_time}) mit der gleichen Frequenz ({new_frequency}) läuft.\n\n"
-                                f"**Lösung:**\n"
-                                f"- Wähle eine andere Zeit für diese Automatisierung\n"
-                                f"- Oder deaktiviere die andere Automatisierung '{existing_task.name}' zuerst\n\n"
-                                f"**Hinweis:** Es kann nur eine Automatisierung zur gleichen Zeit ausgeführt werden."
+                                f"ERROR: Automation already exists at the same time!\n\n"
+                                f"❌ **DO NOT RETRY update_automation** - An active automation '{existing_task.name}' ({existing_task.id}) "
+                                f"already runs at the same time ({new_time}) with the same frequency ({new_frequency}).\n\n"
+                                f"**Solution:**\n"
+                                f"- Choose a different time for this automation\n"
+                                f"- Or disable the other automation '{existing_task.name}' first\n\n"
+                                f"**Note:** Only one automation can run at the same time."
                             )
             
             # Prepare update parameters (only include non-None values)
@@ -802,7 +1045,7 @@ class UpdateAutomationTool(BaseTool):
 **Name:** {updated_task.name}
 **ID:** {updated_task.id}
 **Schedule:** {updated_task.frequency} at {updated_task.time}
-**Next Run:** {updated_task.next_run}
+**Next Run:** {updated_task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}
 **Output:** {updated_task.output_path}
 
 **Updated fields:** {', '.join(update_params.keys())}"""
@@ -914,7 +1157,7 @@ Use this when user wants to recover a previously deleted automation."""
 **Name:** {task.name}
 **ID:** {task_id}
 **Schedule:** {task.frequency} at {task.time}
-**Next Run:** {task.next_run}
+**Next Run:** {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}
 
 The automation has been restored and is now active again."""
             else:

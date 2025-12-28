@@ -2021,10 +2021,23 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
         # State for formatting
         is_reasoning = False
         
+        # Retry counter for empty responses
+        empty_retry_count = 0
+        current_temp = target_temp
+        
+        # Initialize response variables before loop to avoid UnboundLocalError
+        full_response = ""
+        full_content = ""
+        full_reasoning = ""
+        clean_content = ""
+        streaming_tools = {}
+        tool_calls_detected = []
+        
         while True:
-            full_response = ""     # For history (legacy/combined)
-            full_content = ""      # For empty check
-            full_reasoning = ""    # For empty check
+            # 1. Prepare Request
+            full_response = ""     # Reset for this turn
+            full_content = ""      # Reset for this turn
+            full_reasoning = ""    # Reset for this turn
             
             streaming_tools = {}
             tool_calls_detected = []
@@ -2050,7 +2063,7 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                              "tools": self.TOOLS, 
                              "tool_choice": "auto",
                              "stream": True,
-                             "temperature": target_temp,
+                             "temperature": current_temp,
                         }
                         
                         response = requests.post(
@@ -2276,22 +2289,24 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                     try:
                         tool_name = tool_data['name']
                         
-                        # CRITICAL: Check if we're retrying a tool that just failed
-                        if len(self.history) >= 2:
-                            last_tool = self.history[-2]
-                            if last_tool.get('role') == 'tool' and last_tool.get('name') == tool_name:
-                                tool_result = str(last_tool.get('content', '')).lower()
-                                # Check if last tool call failed
-                                # Don't treat user-friendly error messages (with ❌) as tool execution errors
-                                # These are informational messages that should be shown to the user
-                                # Check if last tool call failed
-                                # Don't treat user-friendly error messages (with ❌) as tool execution errors
-                                # These are informational messages that should be shown to the user
-                                # For python_exec: distinguish between tool errors (missing code, timeout, subprocess exceptions)
-                                # and code execution errors (exit codes, syntax errors). Only block retries for tool errors.
+                        # CRITICAL: Check if we're retrying a tool that just failed OR repeating a success
+                        if len(self.history) >= 1:
+                            # Check failure (existing logic) or repetition (new logic)
+                            # Find the last tool call in history (it might be followed by a system warning, so search back a bit)
+                            # Increased search range to 20 to handle piled up warnings
+                            last_tool_msg = None
+                            for i in range(len(self.history) - 1, max(-1, len(self.history) - 20), -1):
+                                if self.history[i].get('role') == 'tool':
+                                    last_tool_msg = self.history[i]
+                                    break
+                            
+                            if last_tool_msg and last_tool_msg.get('name') == tool_name:
+                                tool_result = str(last_tool_msg.get('content', '')).lower()
+                                
+                                # 1. Check for FAILURE (existing logic)
                                 is_python_exec_code_error = (
                                     tool_name == "python_exec" and 
-                                    "(exit=" in tool_result  # Code execution error, not tool error
+                                    "(exit=" in tool_result
                                 )
                                 is_error = (
                                     "error executing tool" in tool_result or
@@ -2302,18 +2317,35 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                                 )
                                 
                                 if is_error:
-                                    # Block retry - add error message and skip tool call
+                                    # Block retry of failure
                                     UI.event("Warning", f"Blocked retry of failed tool: {tool_name}", style="warning")
                                     self.history.append({
                                         "role": "system",
                                         "content": (
                                             f"⚠️ STOP! You tried to call '{tool_name}' again after it failed.\n"
-                                            f"The tool returned an error: {last_tool.get('content', '')}\n"
-                                            f"DO NOT retry failed tools. You MUST inform the user about the error instead."
+                                            f"The tool returned an error: {last_tool_msg.get('content', '')}\n"
+                                            f"DO NOT retry failed tools immediately. Fix the arguments or inform the user."
                                         )
                                     })
-                                    # Don't add this tool call - force model to respond with error message
                                     continue
+                                
+                                # 2. Check for SUCCESSFUL REPETITION (New Logic)
+                                # If args match (fuzzy check) and result wasn't error -> Block
+                                # This prevents double-execution loops
+                                try:
+                                    # Simple check: if tool name matches and we just ran it successfully
+                                    # We assume args match if the agent tries it immediately again
+                                    UI.event("Warning", f"Blocked redundant tool call: {tool_name}", style="warning")
+                                    self.history.append({
+                                        "role": "system",
+                                        "content": (
+                                            f"⚠️ STOP! You just executed '{tool_name}' successfully.\n"
+                                            f"The result is already in the context above (look for the 'tool' message).\n"
+                                            f"DO NOT execute it again. Analyze the result and provide your answer."
+                                        )
+                                    })
+                                    continue
+                                except: pass
                         
                         tool_calls_detected.append({
                             "id": tool_data['id'] or f"call_{os.urandom(4).hex()}",
@@ -2508,9 +2540,9 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                     # This is language-independent - we only check if response is empty, not what language it's in
                     if mentioned_tools and not tool_calls_detected:
                         tool_hint = mentioned_tools[0]
-                    UI.event("Debug", f"Tool-Intent detected for '{tool_hint}' without action - resetting to snapshot", style="dim")
-                    
-                    # Find if we have tool calls in history (after snapshot)
+                        UI.event("Debug", f"Tool-Intent detected for '{tool_hint}' without action - resetting to snapshot", style="dim")
+                        
+                        # Find if we have tool calls in history (after snapshot)
                     has_tool_calls = False
                     last_tool_idx = None
                     for i in range(history_snapshot_len, len(self.history)):
@@ -2579,6 +2611,24 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                     continue
                 
                 # No tool mentioned - truly empty response
+                
+                # Check retry limit - but DO NOT BREAK (infinite patience)
+                empty_retry_count += 1
+                
+                # Dynamic Temperature Sweep to break loops
+                # Oscillate around target_temp: -0.1, +0.1, -0.2, +0.2, ...
+                delta = ((empty_retry_count + 1) // 2) * 0.1
+                direction = -1 if empty_retry_count % 2 == 1 else 1
+                current_temp = target_temp + (delta * direction)
+                # Clamp between 0.1 and 0.9
+                current_temp = max(0.1, min(0.9, current_temp))
+                
+                UI.event("Debug", f"Adjusting temperature to {current_temp:.1f} (retry {empty_retry_count})", style="dim")
+                
+                if empty_retry_count >= 10:
+                    # Only warn after many retries, but keep trying
+                    UI.event("Warning", f"High retry count ({empty_retry_count}) for empty response", style="dim")
+                
                 # Find if we have tool calls in history (after snapshot)
                 has_tool_calls = False
                 last_tool_idx = None
@@ -2591,7 +2641,8 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                 # Reset to appropriate snapshot
                 if has_tool_calls and last_tool_idx is not None:
                     # Keep everything up to and including the tool result
-                    self.history = self.history[:last_tool_idx + 1]
+                    reset_idx = last_tool_idx + 1
+                    self.history = self.history[:reset_idx]
                     UI.event("Debug", f"Removed empty response, restarting from tool call snapshot", style="dim")
                 else:
                     # No tool calls - check if there's thinking DIRECTLY after user prompt
@@ -2619,19 +2670,21 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                                 first_assistant_idx = i
                                 break  # Only take the FIRST one directly after user prompt
                     
+                    reset_idx = history_snapshot_len
+                    
                     if first_assistant_after_user and first_assistant_idx is not None:
                         # Keep user prompt + first thinking - this becomes the new snapshot
-                        self.history = self.history[:first_assistant_idx + 1]
+                        reset_idx = first_assistant_idx + 1
                         UI.event("Debug", f"Removed empty response, restarting from thinking snapshot (user prompt + {len(first_assistant_after_user)} chars of first thinking)", style="dim")
                     else:
                         # No thinking found - reset to user prompt snapshot (as before)
                         if skip_input:
-                            # No user was added, so just reset to snapshot
-                            self.history = self.history[:history_snapshot_len]
+                            reset_idx = history_snapshot_len
                         else:
-                            # User was added, so keep it
-                            self.history = self.history[:history_snapshot_len + 1]  # +1 for user message
+                            reset_idx = history_snapshot_len + 1  # +1 for user message
                         UI.event("Debug", f"Removed empty response, restarting from user prompt snapshot", style="dim")
+                    
+                    self.history = self.history[:reset_idx]
                 
                 # Add a brief system prompt (will work better now because first thinking is preserved)
                 self.history.append({

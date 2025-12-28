@@ -190,6 +190,11 @@ class CoderTUI:
         
         # Active Code Preview (for showing what's being written)
         self.active_code_preview = None  # {filename, content, language}
+        
+        # Stream Code Detection
+        self._code_buffer = ""
+        self._in_code_block = False
+        self._code_lang = "text"
 
     def set_code_preview(self, filename: str, content: str, language: str = "python"):
         """Set the code preview to show at the top."""
@@ -279,6 +284,13 @@ class CoderTUI:
             if len(self.stream_buffer) > self.STREAM_LINES * 2:
                 self.stream_buffer = self.stream_buffer[-self.STREAM_LINES * 2:]
             
+            # Remove trailing empty lines
+            while len(self.stream_buffer) > 1 and not self.stream_buffer[-1].strip():
+                self.stream_buffer.pop()
+            # Keep only last N*2 lines to prevent memory issues
+            if len(self.stream_buffer) > self.STREAM_LINES * 2:
+                self.stream_buffer = self.stream_buffer[-self.STREAM_LINES * 2:]
+            
             # Remove trailing empty lines (but keep at least one line if buffer is not empty)
             while len(self.stream_buffer) > 1 and not self.stream_buffer[-1].strip():
                 self.stream_buffer.pop()
@@ -360,6 +372,34 @@ class CoderTUI:
                 # Fallback for all platforms if console.width fails
                 TERM_WIDTH = 120
                 WIDTH = 118
+            
+            # ═══════════════════════════════════════════════════════════════
+            # AUTO-DETECT CODE IN STREAM (Robust)
+            # ═══════════════════════════════════════════════════════════════
+            
+            # Reconstruct full stream text from buffer to check for code blocks
+            full_text = "\n".join(self.stream_buffer)
+            
+            # Find the last unclosed code block
+            # We look for the last ``` that doesn't have a closing ``` after it
+            matches = list(re.finditer(r'```(\w*)', full_text))
+            
+            if matches and len(matches) % 2 == 1:
+                # We are inside a code block!
+                last_match = matches[-1]
+                start_idx = last_match.end()
+                language = last_match.group(1) or "text"
+                
+                code_content = full_text[start_idx:].strip()
+                
+                # Only show if substantial content
+                if len(code_content) > 20:
+                    self.active_code_preview = {
+                        "filename": "Generating...",
+                        "content": code_content,
+                        "language": language,
+                        "timestamp": time.time()  # Always fresh
+                    }
             
             # ═══════════════════════════════════════════════════════════════
             # CODE PREVIEW - Show what's being written/read (Topmost)
@@ -636,6 +676,31 @@ class CoderTUI:
             main_content_items.append(Panel(output_text, title="[bold cyan]Coding Agent[/bold cyan]", border_style="dim cyan", width=WIDTH, padding=(0, 1)))  # Full width
             
             main_content = Group(*main_content_items)
+            
+            # ═══════════════════════════════════════════════════════════════
+            # FOOTER - Fake Input Box (Sticky at Bottom)
+            # ═══════════════════════════════════════════════════════════════
+            
+            # Get terminal height to push footer to bottom
+            try:
+                term_height = self.console.height
+            except:
+                term_height = 24
+            
+            # Calculate border parts
+            label = " Message (Agent working) "
+            label_len = len(label)
+            left_border = "─" * 2
+            right_border = "─" * (WIDTH - label_len - 4)
+            
+            # Use theme color from header for consistency
+            color = self.active_code_preview["language"] if self.active_code_preview else "cyan"
+            # Fallback if color is not a valid rich color
+            if color not in ["cyan", "yellow", "green", "magenta", "blue", "red", "white"]:
+                color = "cyan"
+                
+            footer_header = Text.from_markup(f"╭{left_border}[bold {color}]{label}[/]{right_border}╮", style="dim")
+            footer_prompt = Text.from_markup(f"[bold {color}]❯[/] ...", style="dim")
             
             # Combine header and main content
             group_items = []
@@ -1319,7 +1384,8 @@ Do NOT plan or describe - just call this tool with the task."""
         try:
             import subprocess
             # Initialize git repo - OS-independent (git works on all platforms)
-            subprocess.run(['git', 'init'], cwd=base_dir, check=True, capture_output=True)
+            # Add timeout to prevent hanging
+            subprocess.run(['git', 'init'], cwd=base_dir, check=True, capture_output=True, timeout=30)
             
             # Create .gitignore - OS-independent
             gitignore_path = os.path.join(base_dir, '.gitignore')
@@ -1357,12 +1423,13 @@ Thumbs.db
             
             # Initial commit if there are files - OS-independent
             try:
-                subprocess.run(['git', 'add', '.'], cwd=base_dir, check=True, capture_output=True)
-                subprocess.run(['git', 'commit', '-m', 'Initial commit'], cwd=base_dir, check=True, capture_output=True)
+                subprocess.run(['git', 'add', '.'], cwd=base_dir, check=True, capture_output=True, timeout=30)
+                subprocess.run(['git', 'commit', '-m', 'Initial commit'], cwd=base_dir, check=True, capture_output=True, timeout=30)
             except:
-                pass  # No files to commit yet
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            # Git not available or failed - continue without git (graceful degradation)
+                pass  # No files to commit yet or commit failed - ignore
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired, Exception):
+            # Git not available, failed or timed out - continue without git (graceful degradation)
+            # Do NOT crash the agent for git issues
             pass
 
     def run(self, **kwargs) -> str:
@@ -1683,27 +1750,10 @@ Your FIRST action MUST be to call set_todos. Output it EXACTLY like this:
 set_todos(tasks=["Task 1", "Task 2", "Task 3", ...])
 </tool_call>
 ```
-**IMPORTANT: Call `set_todos` ONLY ONCE at the very beginning! Do not call it again after you start working.**
+**IMPORTANT: Call `set_todos` ONLY ONCE at the very beginning!**
 
-**CRITICAL: Create TODOs that MATCH the actual task!**
-- If task says "CONTENT_ONLY" or "ONLY THE" → Create simple TODOs for single file/content
-- If task says "multi-page website" → Create TODOs for multiple pages
-- If task says "weather report HTML" → Create TODOs for weather HTML, not multi-page website
-- Analyze the task carefully and create appropriate TODOs
-
-Examples:
-```
-Task: "CONTENT_ONLY: Generate ONLY the complete HTML document content for a weather report"
-✅ CORRECT: set_todos(tasks=["Generate complete HTML document with weather data", "Add embedded CSS styling", "Verify HTML is complete and valid"])
-❌ WRONG: set_todos(tasks=["Read and customize index.html", "Create additional pages", ...])  # Too complex for single file!
-❌ WRONG: set_todos(tasks=["Generate HTML", "Embed YouTube video", ...])  # Don't add features not mentioned in task!
-
-Task: "Create a multi-page website for a restaurant"
-✅ CORRECT: set_todos(tasks=["Create index.html (homepage)", "Create about.html page", "Create menu.html page", "Create contact.html page", "Add navigation", "Style all pages"])
-❌ WRONG: set_todos(tasks=["Generate HTML document"])  # Too simple for multi-page!
-```
-
-### PHASE 2: EXECUTION (work through each task)
+### PHASE 2: EXECUTION (IMMEDIATELY AFTER PLANNING)
+**DO NOT WAIT** after calling `set_todos`. Immediately start working on the first task!
 For EACH task in your TODO list:
 1. Focus ONLY on the current task
 2. Call the necessary tools (write_file, etc.)
@@ -1714,7 +1764,9 @@ For EACH task in your TODO list:
 After all tasks are done, say "ALL TASKS COMPLETED"
 
 ## RULES
-- You MUST call `set_todos` in your FIRST response
+- You MUST call `set_todos` in your FIRST response (and ONLY ONCE)
+- **CRITICAL**: **DO NOT WAIT** after `set_todos` - start coding immediately!
+- **CRITICAL**: DO NOT call `coding_agent`! You ARE the coding agent. Use `write_file` directly.
 - **CRITICAL**: Create TODOs that MATCH the task complexity and requirements
 - You MUST call `task_done` after completing each task
 - Work on ONE task at a time (the system tracks progress)
@@ -2859,32 +2911,23 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 # CRITICAL: First check if response is truly empty (BEFORE cleaning)
                 # This is for tool-intent detection - we need to check the original response
                 response_text = msg_content or content or ""
-                is_truly_empty = (not response_text) or (len(response_text.strip()) < 3)
                 
-                # Now perform cleaning for other purposes (empty response handler, etc.)
-                # Clean content similar to main agent
-                import re
-                clean_content = re.sub(r'<[^>]*>', '', response_text)  # Remove XML tags
-                clean_content = re.sub(r'```[\s\S]*?```', '', clean_content)  # Remove code blocks
-                clean_content = clean_content.replace(".", "").replace("\n", "").replace(":", "").strip()
+                # RELAXED CHECK: Only consider truly empty if very short
+                # VQ-1 and smaller models might give short answers like "Okay, I'll do it."
+                clean_content = response_text.strip()
+                is_effectively_empty = len(clean_content) < 5
                 
-                # Strip common "empty answer" patterns
-                empty_patterns = ["answer", "antwort", "response", "here", "hier", "ok", "okay"]
-                temp_content = clean_content.lower()
-                for pattern in empty_patterns:
-                    temp_content = temp_content.replace(pattern, "")
-                temp_content = temp_content.strip()
-                
-                # Consider empty if: no final answer OR only filler words (< 3 real chars after cleaning)
-                is_effectively_empty = len(temp_content) < 3
+                if is_effectively_empty:
+                    # Log why we are restarting
+                    tui.append_stream(f"Empty response detected (len={len(clean_content)}) - retrying...")
                 
                 # ═══════════════════════════════════════════════════════════════
                 # NEW: Tool-Intent Detection (like main agent)
                 # ═══════════════════════════════════════════════════════════════
                 # Check if agent mentioned a tool name (but didn't actually call it yet)
                 # This prevents the agent from getting stuck when it mentions a tool but doesn't call it
-                # For tool-intent detection, use is_truly_empty (checked BEFORE cleaning)
-                if is_truly_empty:
+                # For tool-intent detection, use is_effectively_empty (checked BEFORE cleaning)
+                if is_effectively_empty:
                     # Get available tool names dynamically
                     available_tool_names = []
                     # Check if we have access to tools (coding_agent has its own tools)
@@ -3210,8 +3253,8 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 f"**Current task:** {current_task}\n\n"
                                 f"**MANDATORY WORKFLOW:**\n"
                                 f"1. Start working on the FIRST task: {current_task}\n"
-                                f"2. Use tools (read_file, write_file, etc.) to complete it\n"
-                                f"3. Call `task_done` when finished\n"
+                                f"2. You MUST call `write_file` to create the code for this task. `task_done` does NOT write code.\n"
+                                f"3. Call `task_done` ONLY when the file is created\n"
                                 f"4. Move to the next task\n\n"
                                 f"DO NOT stop - work through ALL {len(auto_todos)} tasks!"
                             )
@@ -3539,8 +3582,18 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 # Execute tool
                 result = "Error: Tool not found"
                 
+                # CRITICAL: Prevent recursion (calling self)
+                if fn_name == "coding_agent":
+                    result = (
+                        "⚠️ ERROR: RECURSION DETECTED!\n\n"
+                        "You are ALREADY the Coding Agent.\n"
+                        "DO NOT call `coding_agent` again.\n"
+                        "Use `write_file`, `read_file`, etc. directly to complete the task."
+                    )
+                    tui.append_stream("Recursion blocked: Agent tried to call itself")
+                
                 # ===== TODO MANAGEMENT TOOLS =====
-                if fn_name == "set_todos":
+                elif fn_name == "set_todos":
                     tasks = fn_args.get("tasks", [])
                     
                     # CRITICAL: Prevent resetting TODOs if work has already started!
@@ -3674,9 +3727,24 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         # VALIDATE: Check if current task is actually done
                         # For file-related tasks, check if files were created/modified
                         task_lower = current.lower() if current else ""
-                        is_file_task = any(kw in task_lower for kw in ['create', 'write', 'update', 'modify', 'customize', 'add'])
+                        is_create_task = any(kw in task_lower for kw in ['create', 'generate', 'write', 'build', 'implement', 'make'])
                         
-                        if is_file_task and files_created:
+                        # CRITICAL: If task is to create something, but no files were created -> BLOCK
+                        # We check if ANY files were created in the whole session (files_created)
+                        # Ideally we should check if files were created *during this task*, but checking total is a good baseline safe-guard against "lazy" agents
+                        if is_create_task and not files_created:
+                            result = (
+                                f"⚠️ ERROR: You claimed to complete '{current}', but you haven't created any files!\n\n"
+                                f"For a task like '{current}', you MUST call `write_file` to generate the content.\n"
+                                f"Calling `task_done` alone does NOT create files.\n\n"
+                                f"**Action required:**\n"
+                                f"1. Call `write_file(path='...', content='...')` with the code\n"
+                                f"2. THEN call `task_done`"
+                            )
+                            tui.append_stream(f"task_done blocked - no files created!")
+                            tui.set_action("Waiting for write_file...")
+                        
+                        elif is_file_task and files_created:
                             # Check if recently created files have placeholders
                             recent_files = files_created[-5:]  # Check last 5 files
                             placeholder_check = QualityChecker.check_placeholders(recent_files, base_dir)

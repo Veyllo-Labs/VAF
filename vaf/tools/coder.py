@@ -4610,12 +4610,11 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
 #      all `UI.event` and `stream_callback` output if an active Coder instance 
 #      is detected.
 #
-# 🏁 FINAL RESULT: 
+# FINAL RESULT: 
 # A rock-solid, transparent, and persistent coding environment that handles 
 # failures autonomously and keeps the user informed at every millisecond.
 #
 # Date: Sonntag, 28. Dezember 2025
-# Lead Developer: Gemini CLI Agent
 # ═══════════════════════════════════════════════════════════════════════════════
 
 #   - Stop previous instance when new one starts

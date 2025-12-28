@@ -23,11 +23,52 @@ def search_models_menu():
         UI.event("System", f"Searching for '{query}'...", style="dim")
         try:
             api = HfApi()
-            models = api.list_models(search=query, filter="gguf", limit=5, sort="downloads", direction=-1)
+            # Search with more fields
+            models = api.list_models(
+                search=query, 
+                filter="gguf", 
+                limit=10, 
+                sort="downloads", 
+                direction=-1,
+                full=True # Get full details like likes, created_at
+            )
             
+            # Prioritize exact match if query looks like "user/repo"
+            results = list(models)
+            exact_match = None
+            if "/" in query:
+                for i, m in enumerate(results):
+                    if m.modelId.lower() == query.lower():
+                        exact_match = results.pop(i)
+                        break
+                
+                # If exact match found (or forced fetch needed), put it top
+                if exact_match:
+                    results.insert(0, exact_match)
+                elif not results:
+                    # Try fetching direct if search failed but it looks like an ID
+                    try:
+                        direct = api.model_info(repo_id=query)
+                        # Check if it has GGUF
+                        if any(f.rfilename.endswith(".gguf") for f in direct.siblings):
+                            results.append(direct)
+                    except: pass
+
             choices = []
-            for m in models:
-                choices.append((f"{m.modelId} ({m.downloads} downloads)", m.modelId))
+            for m in results:
+                # Format date (YYYY-MM)
+                date_str = str(m.created_at)[:7] if hasattr(m, 'created_at') and m.created_at else "?"
+                
+                # Format metrics
+                downloads = f"{m.downloads}"
+                if m.downloads > 1000: downloads = f"{m.downloads/1000:.1f}k"
+                if m.downloads > 1000000: downloads = f"{m.downloads/1000000:.1f}M"
+                
+                likes = f"{m.likes}"
+                if m.likes > 1000: likes = f"{m.likes/1000:.1f}k"
+                
+                label = f"{m.modelId:<40} | ⬇ {downloads:<6} | ❤️ {likes:<5} | 📅 {date_str}"
+                choices.append((label, m.modelId))
             
             if not choices:
                 UI.error("No GGUF models found.")

@@ -51,8 +51,15 @@ class Agent:
         
         # Determine model filename from config path or just name
         model_name = self.config.get("model")
-        # If it's a path or full huggingface ID, extract filename or use as is
-        if "/" in model_name: 
+        # Handle full HuggingFace paths (e.g. user/repo/filename.gguf)
+        if model_name.count("/") >= 2:
+            parts = model_name.rsplit("/", 1)
+            self.repo_id = parts[0]
+            self.filename = parts[1]
+            if not self.filename.endswith(".gguf"):
+                self.filename += ".gguf"
+        # Handle standard Repo ID (user/repo) -> assumes default filename or directory
+        elif "/" in model_name: 
              self.filename = model_name.split("/")[-1] + ".gguf" 
              self.repo_id = model_name
         else:
@@ -2540,7 +2547,7 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                     # This is language-independent - we only check if response is empty, not what language it's in
                     if mentioned_tools and not tool_calls_detected:
                         tool_hint = mentioned_tools[0]
-                        UI.event("Debug", f"Tool-Intent detected for '{tool_hint}' without action - resetting to snapshot", style="dim")
+                        UI.event("Insight", f"Detected intent: '{tool_hint}' (resetting to activate)", style="dim")
                         
                         # Find if we have tool calls in history (after snapshot)
                     has_tool_calls = False
@@ -2623,7 +2630,7 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                 # Clamp between 0.1 and 0.9
                 current_temp = max(0.1, min(0.9, current_temp))
                 
-                UI.event("Debug", f"Adjusting temperature to {current_temp:.1f} (retry {empty_retry_count})", style="dim")
+                UI.event("Adaptive", f"Tuning creativity: {current_temp:.1f} (attempt {empty_retry_count})", style="info")
                 
                 if empty_retry_count >= 10:
                     # Only warn after many retries, but keep trying
@@ -2643,7 +2650,7 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                     # Keep everything up to and including the tool result
                     reset_idx = last_tool_idx + 1
                     self.history = self.history[:reset_idx]
-                    UI.event("Debug", f"Removed empty response, restarting from tool call snapshot", style="dim")
+                    UI.event("Self-Fix", f"Agent silent - auto-correcting context (snapshot {reset_idx})", style="dim")
                 else:
                     # No tool calls - check if there's thinking DIRECTLY after user prompt
                     user_prompt_idx = history_snapshot_len
@@ -2675,14 +2682,14 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                     if first_assistant_after_user and first_assistant_idx is not None:
                         # Keep user prompt + first thinking - this becomes the new snapshot
                         reset_idx = first_assistant_idx + 1
-                        UI.event("Debug", f"Removed empty response, restarting from thinking snapshot (user prompt + {len(first_assistant_after_user)} chars of first thinking)", style="dim")
+                        UI.event("Self-Fix", "Agent silent - preserving thought trace", style="dim")
                     else:
                         # No thinking found - reset to user prompt snapshot (as before)
                         if skip_input:
                             reset_idx = history_snapshot_len
                         else:
                             reset_idx = history_snapshot_len + 1  # +1 for user message
-                        UI.event("Debug", f"Removed empty response, restarting from user prompt snapshot", style="dim")
+                        UI.event("Self-Fix", "Agent silent - auto-correcting context", style="dim")
                     
                     self.history = self.history[:reset_idx]
                 

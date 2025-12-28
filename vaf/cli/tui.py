@@ -789,6 +789,16 @@ class UI:
     @staticmethod
     def event(type_name: str, title: str, style: str = "info"):
         """Print event in OpenCode style."""
+        
+        # CRITICAL: Suppress Main Agent events if Coder TUI is active!
+        # This prevents debug messages from breaking the active TUI layout
+        try:
+            from vaf.tools.coder import CodingAgentTool
+            if CodingAgentTool._active_instance is not None:
+                return
+        except ImportError:
+            pass
+            
         color_map = {
             "info": "cyan",
             "warning": "yellow",

@@ -10,6 +10,7 @@ This tool is designed to avoid "exceed_context_size_error" by:
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -756,6 +757,36 @@ class ResearchAgentTool(BaseTool):
                     },
                     timeout=90,
                 )
+                # Handle Context Size Error (400) - truncate prompt and retry
+                if res.status_code == 400:
+                    try:
+                        error_data = res.json()
+                        error_msg = error_data.get("error", {}).get("message", "")
+                        if "exceed_context_size" in error_msg.lower() or "exceed" in error_msg.lower():
+                            # Truncate prompt significantly and retry once
+                            truncated_prompt = prompt[:len(prompt)//2]  # Cut in half
+                            retry_res = requests.post(
+                                "http://127.0.0.1:8080/v1/chat/completions",
+                                json={
+                                    "model": model_name,
+                                    "messages": [
+                                        {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
+                                        {"role": "user", "content": truncated_prompt},
+                                    ],
+                                    "max_tokens": max_tokens,
+                                    "temperature": temperature,
+                                },
+                                timeout=90,
+                            )
+                            if retry_res.status_code == 200:
+                                msg = retry_res.json()["choices"][0]["message"]
+                                return (msg.get("content") or "").strip()
+                            # If retry also fails, return error
+                            err = (retry_res.text or "")[:250]
+                            return f"<h2>{title}</h2><p><strong>Error:</strong> Context too large even after truncation: {err}</p>"
+                    except (json.JSONDecodeError, KeyError, ValueError, requests.exceptions.RequestException):
+                        pass  # Not a context size error or retry failed, fall through to normal error handling
+                
                 if res.status_code != 200:
                     err = (res.text or "")[:250]
                     return f"<h2>{title}</h2><p><strong>Error:</strong> Server returned {res.status_code}: {err}</p>"
@@ -790,6 +821,39 @@ class ResearchAgentTool(BaseTool):
                 },
                 timeout=90,
             )
+            # Handle Context Size Error (400) - truncate prompt and retry
+            if res.status_code == 400:
+                try:
+                    error_data = res.json()
+                    error_msg = error_data.get("error", {}).get("message", "")
+                    if "exceed_context_size" in error_msg.lower() or "exceed" in error_msg.lower():
+                        # Truncate prompt significantly and retry once
+                        truncated_retry_prompt = retry_prompt[:len(retry_prompt)//2]  # Cut in half
+                        retry_res = requests.post(
+                            "http://127.0.0.1:8080/v1/chat/completions",
+                            json={
+                                "model": model_name,
+                                "messages": [
+                                    {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
+                                    {"role": "user", "content": truncated_retry_prompt},
+                                ],
+                                "max_tokens": 1800,
+                                "temperature": 0.25,
+                            },
+                            timeout=90,
+                        )
+                        if retry_res.status_code == 200:
+                            msg = retry_res.json()["choices"][0]["message"]
+                            content = _strip_answer_artifacts((msg.get("content") or "").strip())
+                            content = _strip_untrusted_links(content, sources)
+                            if content:
+                                return content
+                        # If retry also fails, return error
+                        err = (retry_res.text or "")[:250]
+                        return f"<h2>{title}</h2><p><strong>Error:</strong> Context too large even after truncation: {err}</p>"
+                except (json.JSONDecodeError, KeyError, ValueError, requests.exceptions.RequestException):
+                    pass  # Not a context size error or retry failed, fall through to normal error handling
+            
             if res.status_code == 200:
                 msg = res.json()["choices"][0]["message"]
                 content = _strip_answer_artifacts((msg.get("content") or "").strip())

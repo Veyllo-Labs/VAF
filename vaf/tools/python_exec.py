@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import sys
 import subprocess
+from pathlib import Path
 
 from vaf.tools.base import BaseTool
 
@@ -34,7 +35,9 @@ class PythonExecTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
-        code = (kwargs.get("code") or "").strip()
+        # Convert Path objects to strings (OS-independent defensive handling)
+        # str() works for both strings and Path objects
+        code = str(kwargs.get("code") or "").strip()
         timeout = int(kwargs.get("timeout") or 30)
 
         if not code:

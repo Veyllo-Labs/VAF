@@ -1246,7 +1246,13 @@ Common paths:
             UI.event("Librarian", status, style="dim")
             
             # Context management - prevent token overflow
-            if context_manager.should_compress(history):
+            # Proactive compression: Check token usage and compress if > 85% of limit
+            estimated_tokens = context_manager.estimate_tokens(history)
+            if estimated_tokens > int(context_manager.max_tokens * 0.85):
+                UI.event("Librarian", f"Proactive compression: {estimated_tokens}/{context_manager.max_tokens} tokens...", style="dim")
+                history = context_manager.compress(history)
+            # Also check normal threshold
+            elif context_manager.should_compress(history):
                 UI.event("Librarian", "Compressing context...", style="dim")
                 history = context_manager.compress(history)
             
@@ -1300,6 +1306,38 @@ Common paths:
                         },
                         timeout=60,
                     )
+                    
+                    # Handle Context Size Error (400) - automatically compress and retry
+                    if res.status_code == 400:
+                        try:
+                            error_data = res.json()
+                            error_msg = error_data.get("error", {}).get("message", "")
+                            if "exceed_context_size" in error_msg.lower() or "exceed" in error_msg.lower():
+                                UI.event("Librarian", "Context size exceeded. Compressing...", style="warning")
+                                # Aggressively compress context
+                                history = context_manager.compress(history)
+                                # Also truncate old messages if still too large
+                                if len(history) > 20:
+                                    # Keep system prompt, last user message, and last 10 messages
+                                    system_msgs = [m for m in history if m.get("role") == "system"]
+                                    user_msgs = [m for m in history if m.get("role") == "user"]
+                                    assistant_msgs = [m for m in history if m.get("role") == "assistant"]
+                                    
+                                    # Keep first system message, last user message, last 5 assistant messages
+                                    new_history = []
+                                    if system_msgs:
+                                        new_history.append(system_msgs[0])  # Keep first system prompt
+                                    if user_msgs:
+                                        new_history.append(user_msgs[-1])  # Keep last user message
+                                    if assistant_msgs:
+                                        new_history.extend(assistant_msgs[-5:])  # Keep last 5 assistant messages
+                                    
+                                    history = new_history
+                                UI.event("Librarian", f"Compressed to {len(history)} messages. Retrying...", style="info")
+                                # Retry the request with compressed context (continue loop)
+                                continue
+                        except (json.JSONDecodeError, KeyError, ValueError):
+                            pass  # Not a context size error, fall through to normal error handling
                     
                     if res.status_code != 200:
                         live.stop()

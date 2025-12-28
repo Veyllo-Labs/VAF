@@ -263,6 +263,105 @@ class TemplateManager:
         return None
     
     @classmethod
+    def detect_template_type_with_llm(cls, task: str) -> tuple[Optional[str], str]:
+        """
+        Use LLM to intelligently detect which template type matches a task.
+        This has its own context and runs BEFORE the main coding work begins.
+        More accurate than keyword matching, especially for ambiguous cases.
+        
+        Args:
+            task: Task description from the main agent
+            
+        Returns:
+            Tuple of (template_type, decision_info):
+            - template_type: Template type or None if no template should be used
+            - decision_info: Detailed information about the decision process
+        """
+        import requests
+        
+        # Get available template types with descriptions
+        available_templates = list(cls.TEMPLATES.keys())
+        template_list = []
+        for ttype in available_templates:
+            desc = cls.TEMPLATES[ttype].get("description", ttype)
+            files = cls.TEMPLATES[ttype].get("files", [])
+            file_names = [f.get("name", "") for f in files]
+            template_list.append(f"- {ttype}: {desc} (creates: {', '.join(file_names)})")
+        
+        prompt = f"""You are a template selection assistant for a coding agent. Your job is to analyze a task and determine which template (if any) should be used.
+
+Available Templates:
+{chr(10).join(template_list)}
+
+Task from Main Agent: "{task}"
+
+DECISION PROCESS:
+1. **First, review all available templates above**
+2. **If a template matches the task well, use it** (e.g., "python_script", "website", etc.)
+3. **If NO template matches or you think you can do better without a template, return "none"**
+4. **When you return "none", the coding agent will:**
+   - Use `web_deep_search` to get information on how to implement this (returns a simple answer, no separate context)
+   - Use that information to create a TODO list with `set_todos`
+   - Then implement the solution from scratch
+
+
+Output ONLY the template type (e.g., "python_script", "website", "python_server", "none") - no explanation, no markdown, just the type."""
+        
+        try:
+            payload = {
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 50,  # Very short response
+                "temperature": 0.1  # Low temperature for deterministic choice
+            }
+            
+            res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=10)
+            res.raise_for_status()
+            response_data = res.json()
+            
+            if 'choices' not in response_data or len(response_data['choices']) == 0:
+                # LLM returned empty response - no fallback, return None
+                decision_info = "Warning: LLM returned empty response\n"
+                decision_info += "No template selected - will use web_deep_search and create from scratch"
+                return None, decision_info
+            
+            content = response_data['choices'][0]['message']['content'].strip().lower()
+            
+            # Clean up response (remove quotes, markdown, etc.)
+            content = content.strip('"\'` \n\t')
+            if content.startswith('```'):
+                lines = content.split('\n')
+                content = '\n'.join(lines[1:-1]) if len(lines) > 2 else content
+                content = content.strip()
+            
+            # Build decision info
+            decision_info = f"Available templates: {', '.join(available_templates)}\n"
+            decision_info += f"Task analyzed: {task[:80]}{'...' if len(task) > 80 else ''}\n"
+            decision_info += f"LLM response: '{content}'\n"
+            
+            # Check if it's a valid template type
+            if content in available_templates:
+                decision_info += f"Decision: Using template '{content}'"
+                return content, decision_info
+            elif content == "none":
+                decision_info += "Decision: No template matches\n"
+                decision_info += "-> Will use web_deep_search to research implementation\n"
+                decision_info += "-> Then create TODO list and implement from scratch"
+                return None, decision_info
+            else:
+                # Invalid response - no fallback, return None
+                decision_info += f"Warning: Invalid LLM response '{content}'\n"
+                decision_info += "No template selected - will use web_deep_search and create from scratch"
+                return None, decision_info
+                
+        except Exception as e:
+            # If LLM call fails, return None (no fallback)
+            from vaf.cli.ui import UI
+            UI.event("Debug", f"LLM template detection failed: {e}", style="dim")
+            decision_info = f"Warning: LLM call failed: {str(e)[:60]}\n"
+            decision_info += "No template selected - will use web_deep_search and create from scratch"
+            return None, decision_info
+    
+    @classmethod
     def extract_placeholders_from_task(cls, task: str, template_type: str) -> Dict[str, str]:
         """
         Extract placeholder values from task description using simple heuristics.

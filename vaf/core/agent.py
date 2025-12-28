@@ -2031,9 +2031,16 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
             
             if self.use_server:
                 # Proactive Context Management: Compress before request to prevent overflow
-                self.manage_context()
+                # Check token usage and compress if > 85% of limit
+                current_tokens, max_tokens = self.get_token_usage()
+                if current_tokens > int(max_tokens * 0.85):  # 85% threshold (e.g., > 6963 of 8192)
+                    UI.event("Context", f"Proactive compression: {current_tokens}/{max_tokens} tokens ({current_tokens/max_tokens:.0%})", style="info")
+                    self.manage_context()
+                else:
+                    # Still check normal threshold
+                    self.manage_context()
                 
-                # Retry loop for 503 (Model Loading) and 500 (Context Overflow)
+                # Retry loop for 503 (Model Loading), 500 (Context Overflow), and 400 (Context Size Error)
                 response = None
                 for _ in range(15): # Try for ~30 seconds
                     try:
@@ -2088,6 +2095,38 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                                     UI.event("Context", f"Compressed to {len(self.history)} messages. Retrying...", style="info")
                                     # Retry the request with compressed context (payload will be rebuilt in next iteration)
                                     continue
+                        
+                        # Handle Context Size Error (400) - automatically compress and retry
+                        if response.status_code == 400:
+                            try:
+                                error_data = response.json()
+                                error_msg = error_data.get("error", {}).get("message", "")
+                                if "exceed_context_size" in error_msg.lower() or "exceed" in error_msg.lower():
+                                    UI.event("Context", "Context size exceeded. Compressing history...", style="warning")
+                                    # Aggressively compress context
+                                    self.manage_context()
+                                    # Also truncate old messages if still too large
+                                    if len(self.history) > 20:
+                                        # Keep system prompt, last user message, and last 10 messages
+                                        system_msgs = [m for m in self.history if m.get("role") == "system"]
+                                        user_msgs = [m for m in self.history if m.get("role") == "user"]
+                                        assistant_msgs = [m for m in self.history if m.get("role") == "assistant"]
+                                        
+                                        # Keep first system message, last user message, last 5 assistant messages
+                                        new_history = []
+                                        if system_msgs:
+                                            new_history.append(system_msgs[0])  # Keep first system prompt
+                                        if user_msgs:
+                                            new_history.append(user_msgs[-1])  # Keep last user message
+                                        if assistant_msgs:
+                                            new_history.extend(assistant_msgs[-5:])  # Keep last 5 assistant messages
+                                        
+                                        self.history = new_history
+                                        UI.event("Context", f"Compressed to {len(self.history)} messages. Retrying...", style="info")
+                                        # Retry the request with compressed context (payload will be rebuilt in next iteration)
+                                        continue
+                            except (json.JSONDecodeError, KeyError):
+                                pass  # Not a context size error, fall through to normal error handling
                             
                         if response.status_code != 200:
                             UI.error(f"Server returned {response.status_code}: {response.text}")
@@ -2245,12 +2284,21 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                                 # Check if last tool call failed
                                 # Don't treat user-friendly error messages (with ❌) as tool execution errors
                                 # These are informational messages that should be shown to the user
+                                # Check if last tool call failed
+                                # Don't treat user-friendly error messages (with ❌) as tool execution errors
+                                # These are informational messages that should be shown to the user
+                                # For python_exec: distinguish between tool errors (missing code, timeout, subprocess exceptions)
+                                # and code execution errors (exit codes, syntax errors). Only block retries for tool errors.
+                                is_python_exec_code_error = (
+                                    tool_name == "python_exec" and 
+                                    "(exit=" in tool_result  # Code execution error, not tool error
+                                )
                                 is_error = (
                                     "error executing tool" in tool_result or
-                                    ("error:" in tool_result and not "❌" in tool_result) or  # Allow ❌ errors (user-friendly)
+                                    ("error:" in tool_result and not "❌" in tool_result and not is_python_exec_code_error) or
                                     "server returned" in tool_result and ("400" in tool_result or "500" in tool_result or "404" in tool_result) or
                                     "failed" in tool_result and ("tool" in tool_result or "execution" in tool_result) or
-                                    (tool_result.startswith("error") and not "❌" in tool_result)
+                                    (tool_result.startswith("error") and not "❌" in tool_result and not is_python_exec_code_error)
                                 )
                                 
                                 if is_error:
@@ -2723,6 +2771,20 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                     self._event_sink(evt)
                 except Exception:
                     pass
+        
+        def make_json_serializable(obj):
+            """
+            Recursively convert Path objects and other non-serializable types to strings.
+            OS-independent: works with WindowsPath, PosixPath, and PurePath.
+            """
+            if isinstance(obj, Path):
+                return str(obj)
+            elif isinstance(obj, dict):
+                return {k: make_json_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [make_json_serializable(item) for item in obj]
+            else:
+                return obj
 
         # Gate risky tools with once/always/cancel (no persistent deny)
         if should_gate_tool(name):
@@ -2750,7 +2812,9 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                     emit({"type": "gate_decision", "tool": name, "decision": "cancel"})
                     return f"[CANCELLED] Tool '{name}' cancelled by user."
 
-        emit({"type": "tool_start", "tool": name, "args": args})
+        # Convert Path objects in args to strings for JSON serialization (OS-independent)
+        serializable_args = make_json_serializable(args) if args else {}
+        emit({"type": "tool_start", "tool": name, "args": serializable_args})
         try:
             if name in self.tools:
                 result = self.tools[name].run(**args)
@@ -2785,7 +2849,9 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                 # Execute unsandboxed python if allowed
                 if get_tool_policy("python_exec") == "allow" or is_trusted_dir(cwd) or ("python_exec" in self._allow_once_tools):
                     code = (args or {}).get("code", "")
-                    emit({"type": "tool_start", "tool": "python_exec", "args": {"timeout": 30}})
+                    # Convert args to JSON-serializable format (OS-independent)
+                    python_exec_args = make_json_serializable({"timeout": 30})
+                    emit({"type": "tool_start", "tool": "python_exec", "args": python_exec_args})
                     try:
                         unsafe_result = self.tools["python_exec"].run(code=code, timeout=30)
                     except Exception as e:

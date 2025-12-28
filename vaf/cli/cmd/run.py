@@ -892,8 +892,20 @@ def _process_agent_message(agent, user_input: str, tui, session):
     """Process a message through the agent."""
     response_parts = []
     
+    # Delayed import to avoid circular dependencies
+    try:
+        from vaf.tools.coder import CodingAgentTool
+    except ImportError:
+        CodingAgentTool = None
+    
     def stream_callback(text):
         response_parts.append(text)
+        
+        # CRITICAL: Suppress Main Agent output if Coder TUI is active!
+        # This prevents "leaking stdout" that breaks the TUI layout
+        if CodingAgentTool and CodingAgentTool._active_instance is not None:
+            return
+            
         tui.console.print(text, end="", markup=True, style=f"bold {tui.primary}")
     
     try:

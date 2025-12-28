@@ -8,6 +8,7 @@ No external dependencies required - works on Windows, Linux, and macOS.
 import io
 import contextlib
 from typing import Dict, Any, Tuple
+from pathlib import Path
 from vaf.tools.base import BaseTool
 
 # Blocked modules and functions for security
@@ -161,7 +162,9 @@ Returns the result or any output from print statements."""
     
     def run(self, **kwargs) -> str:
         """Execute Python code safely."""
-        code = kwargs.get("code", "")
+        # Convert Path objects to strings (OS-independent defensive handling)
+        # str() works for both strings and Path objects
+        code = str(kwargs.get("code", ""))
         
         if not code:
             return "Error: No code provided."

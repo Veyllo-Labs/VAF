@@ -178,12 +178,44 @@ class CoderTUI:
         self.current_stream = ""
         self.current_line_buffer = ""  # Current incomplete line being built
         
-        # Cache the animated header to prevent multiple instances
-        # Only create header once - it will be reused in render()
+        # Create animated header once - it will be reused in render()
+        # Render fresh each time when Live is running to keep animation alive
         self._header = AnimatedHeader("Collaboration Mode Active", "Main Agt", "Coder")
-        self._header_rendered = False  # Track if header has been rendered
-        self._header_panel = None  # Cache the rendered Panel to prevent multiple renders
         self._live_started = False  # Track if Live has been started
+        self._header_visible = False  # Track if header has been shown (sticky - once shown, stays visible)
+        
+        # Store Live and animation_running so they can be stopped from outside
+        self._live = None  # Will be set when Live is created
+        self._animation_running = None  # Will be set when animation thread starts
+        
+        # Active Code Preview (for showing what's being written)
+        self.active_code_preview = None  # {filename, content, language}
+
+    def set_code_preview(self, filename: str, content: str, language: str = "python"):
+        """Set the code preview to show at the top."""
+        with self._lock:
+            # Auto-detect language from extension if generic
+            if language == "code":
+                ext = os.path.splitext(filename)[1].lower()
+                if ext in ['.py']: language = "python"
+                elif ext in ['.js', '.ts']: language = "javascript"
+                elif ext in ['.html']: language = "html"
+                elif ext in ['.css']: language = "css"
+                elif ext in ['.json']: language = "json"
+                elif ext in ['.md']: language = "markdown"
+                elif ext in ['.sh', '.bash']: language = "bash"
+                
+            self.active_code_preview = {
+                "filename": filename,
+                "content": content,
+                "language": language,
+                "timestamp": time.time()
+            }
+    
+    def clear_code_preview(self):
+        """Clear the code preview."""
+        with self._lock:
+            self.active_code_preview = None
     
     def add_file(self, filename: str, size: int = 0, status: str = "creating"):
         """Add a file to the display."""
@@ -268,7 +300,7 @@ class CoderTUI:
         with self._lock:
             if not self.stream_buffer and not self.current_stream:
                 if self.stream_active:
-                    return "[yellow]⏳ Waiting for model response...[/yellow]"
+                    return "[yellow]Waiting for model response...[/yellow]"
                 return "[dim]Ready[/dim]"
             
             # Use current_stream if buffer is empty
@@ -330,45 +362,73 @@ class CoderTUI:
                 WIDTH = 118
             
             # ═══════════════════════════════════════════════════════════════
-            # HEADER - Use same AnimatedHeader as Librarian (cached)
+            # CODE PREVIEW - Show what's being written/read (Topmost)
             # ═══════════════════════════════════════════════════════════════
             
-            # HEADER - Only show if we have actual content to display
-            # This prevents multiple empty headers from appearing
-            # Show header only if we have REAL content (not just placeholder actions)
-            has_content = (
-                len(self.files) > 0 or  # Files have been created
-                len(self.stream_buffer) > 0 or  # Stream content exists
-                (self.current_action and 
-                 self.current_action not in ["Initializing...", "🚀 Starting...", "Ready", ""] and
-                 len(self.current_action.strip()) > 0 and
-                 any(indicator in self.current_action for indicator in ["🔄", "📋", "✅", "🔌", "📝", "🔧", "⚠️", "📖"]))  # Only show if we're actually working
-            )
-            
-            # CRITICAL: Only show header ONCE when we have content
-            # Once shown, keep it visible (don't hide it)
-            # Cache the rendered Panel to prevent multiple renders (animation_updater calls render() 15x/sec)
-            if not self._header_rendered:
-                if has_content:
-                    # Render header once and cache it
-                    if self._header_panel is None:
-                        self._header_panel = self._header.__rich__()
-                    header = self._header_panel
-                    self._header_rendered = True
+            preview_panel = None
+            if self.active_code_preview:
+                # Expire preview after 10 seconds to keep UI clean
+                if time.time() - self.active_code_preview["timestamp"] > 10:
+                    self.active_code_preview = None
                 else:
-                    # Don't show header yet - wait for actual content
-                    header = None
+                    content = self.active_code_preview["content"]
+                    # Truncate content if too long (keep first 15 lines)
+                    lines = content.split('\n')
+                    if len(lines) > 15:
+                        content = '\n'.join(lines[:15]) + f"\n... ({len(lines)-15} more lines)"
+                    
+                    syntax = Syntax(
+                        content, 
+                        self.active_code_preview["language"], 
+                        theme="monokai", 
+                        line_numbers=True,
+                        word_wrap=True
+                    )
+                    
+                    preview_panel = Panel(
+                        syntax,
+                        title=f"[bold yellow]📝 Editing: {self.active_code_preview['filename']}[/bold yellow]",
+                        border_style="yellow",
+                        padding=(1, 2),
+                        width=WIDTH
+                    )
+
+            # ═══════════════════════════════════════════════════════════════
+            # HEADER - Render fresh for animation, but only when Live is running AND we have content
+            # ═══════════════════════════════════════════════════════════════
+            
+            # FIX: Only show header after Live has started AND we have content
+            # Use a flag to ensure header is only shown once Live is fully running
+            # Once shown, keep it visible (sticky) to prevent flickering
+            if not self._live_started:
+                # Don't show header yet - wait for Live to start
+                header = None
             else:
-                # Once rendered, always show cached header (prevents multiple renders)
-                if self._header_panel is None:
-                    self._header_panel = self._header.__rich__()
-                header = self._header_panel
+                # Live is running - check if we have content OR if header was already shown
+                has_content = (
+                    self._header_visible or  # Sticky: once shown, stays visible
+                    len(self.files) > 0 or  # Files have been created
+                    len(self.stream_buffer) > 0 or  # Stream content exists
+                    (self.current_action and 
+                     self.current_action not in ["Initializing...", "Starting...", "Ready", ""] and
+                     len(self.current_action.strip()) > 0)
+                )
+                
+                if has_content:
+                    # Render fresh each time to keep animation alive
+                    header = self._header.__rich__()
+                    # Mark as visible once we have content (sticky)
+                    if not self._header_visible:
+                        self._header_visible = True
+                else:
+                    # No content yet - don't show header
+                    header = None
             
             # ═══════════════════════════════════════════════════════════════
             # STATUS LINE (fixed - no markup in strings)
             # ═══════════════════════════════════════════════════════════════
             
-            indicator = "●" if self.stream_active else "○"
+            indicator = "*" if self.stream_active else "o"
             indicator_style = "green" if self.stream_active else "yellow"
             
             # Clean current_action from any markup
@@ -378,9 +438,9 @@ class CoderTUI:
             clean_action = clean_action.replace("[dim]", "").replace("[/dim]", "")
             
             status = Text()
-            status.append(f"⏱ {elapsed_str}", style="dim")
+            status.append(f"Time: {elapsed_str}", style="dim")
             status.append("  │  ", style="dim")
-            status.append(f"🔄 {self.loop_count}", style="dim")
+            status.append(f"Loop: {self.loop_count}", style="dim")
             status.append("  │  ", style="dim")
             status.append(indicator, style=indicator_style)
             status.append(f" {clean_action}", style="white")
@@ -395,12 +455,12 @@ class CoderTUI:
             files_table.add_column("Size", justify="right", style="dim", width=12, no_wrap=True)
             files_table.add_column("Status", width=10, no_wrap=True)
             
-            icons = {"creating": "⏳", "writing": "📝", "done": "✅", "error": "❌"}
+            icons = {"creating": "[", "writing": "|", "done": "]", "error": "X"}
             
             for fname, info in self.files.items():
                 icon = icons.get(info["status"], "•")
                 size_str = f"{info['size']:,}B" if info["size"] else "-"
-                # Add space after icon for compact spacing: "✅ index.html"
+                # Add space after icon for compact spacing
                 files_table.add_row(f"{icon} ", fname[:24], size_str, info["status"])
             
             if not self.files:
@@ -426,13 +486,13 @@ class CoderTUI:
                     
                     for i, todo in enumerate(self.task_mgr.todos):
                         if todo["status"] == "completed":
-                            icon = "⬤"
+                            icon = "*"
                             style = "green"
                         elif i == self.task_mgr.current_task_idx:
                             icon = spinner  # Animated spinner for current task
                             style = "yellow"
                         else:
-                            icon = "○"
+                            icon = "o"
                             style = "dim"
                         
                         # Truncate long task names
@@ -444,7 +504,7 @@ class CoderTUI:
                     
                     # Create TODO text
                     todo_text = Text()
-                    todo_text.append(f"📋 Tasks: {completed_count}/{total_count} ", style="cyan")
+                    todo_text.append(f"Tasks: {completed_count}/{total_count} ", style="cyan")
                     if todo_lines:
                         todo_text.append("\n")
                     for i, (icon, task_text, style) in enumerate(todo_lines):
@@ -462,7 +522,7 @@ class CoderTUI:
                 else:
                     # Show planning status if no TODOs set yet
                     planning_text = Text()
-                    planning_text.append("📋 Planning tasks...", style="dim yellow")
+                    planning_text.append("Planning tasks...", style="dim yellow")
                     todo_section = Panel(
                         planning_text,
                         title="[bold cyan]TODO Progress[/bold cyan]",
@@ -561,7 +621,7 @@ class CoderTUI:
             # Main content panel (without outer border, header has its own)
             main_content_items = [
                 Text(""),  # Spacer after header
-                Text(f"📁 {self.task[:WIDTH-10]}{'...' if len(self.task) > WIDTH-10 else ''}", style="bold"),
+                Text(f"Task: {self.task[:WIDTH-10]}{'...' if len(self.task) > WIDTH-10 else ''}", style="bold"),
                 status,
                 Text("─" * (WIDTH-2), style="dim cyan"),  # Full width separator
                 files_table,
@@ -578,14 +638,16 @@ class CoderTUI:
             main_content = Group(*main_content_items)
             
             # Combine header and main content
+            group_items = []
+            if preview_panel:
+                group_items.append(preview_panel)
+            
             if header:
-                return Group(
-                    header,  # AnimatedHeader (already a Panel)
-                    main_content
-                )
-            else:
-                # No header yet - just show main content (prevents empty headers)
-                return main_content
+                group_items.append(header)
+            
+            group_items.append(main_content)
+            
+            return Group(*group_items)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1160,6 +1222,11 @@ class GitLogTool(BaseTool):
 
 class CodingAgentTool(BaseTool):
     name = "coding_agent"
+    
+    # Class-level lock to prevent multiple instances running simultaneously
+    _instance_lock = threading.Lock()
+    _active_instance = None  # Track active CoderTUI instance
+    
     description = """Autonomous code generation Sub-Agent. USE THIS FOR:
 - Creating websites (HTML, CSS, JavaScript)
 - Building web applications
@@ -1304,6 +1371,33 @@ Thumbs.db
             return "Error: No task provided."
 
         # ═══════════════════════════════════════════════════════════════════
+        # PREVENT MULTIPLE INSTANCES - Stop previous instance if running
+        # ═══════════════════════════════════════════════════════════════════
+        
+        with CodingAgentTool._instance_lock:
+            # If there's an active instance, stop it cleanly before starting new one
+            if CodingAgentTool._active_instance is not None:
+                try:
+                    old_tui = CodingAgentTool._active_instance
+                    # Stop the previous instance's Live display completely
+                    old_tui._live_started = False
+                    # Stop animation thread
+                    if old_tui._animation_running is not None:
+                        old_tui._animation_running.clear()
+                    # Stop Live display
+                    if old_tui._live is not None:
+                        try:
+                            old_tui._live.stop()
+                        except Exception:
+                            pass
+                    
+                    # Give Rich time to clear the screen
+                    time.sleep(0.5)
+                except Exception:
+                    pass  # Ignore errors when stopping previous instance
+            # Mark this as the new active instance (will be set after TUI creation)
+
+        # ═══════════════════════════════════════════════════════════════════
         # START TUI - SMOOTH UPDATES (like OpenCode)
         # ═══════════════════════════════════════════════════════════════════
         
@@ -1312,14 +1406,15 @@ Thumbs.db
         
         tui = CoderTUI(UI.console, task, task_mgr)
         
-        # Set initial action before first render to avoid empty header displays
-        # Use a minimal action that won't trigger header display
+        # Mark this as the active instance
+        with CodingAgentTool._instance_lock:
+            CodingAgentTool._active_instance = tui
+        
+        # Set initial action before first render
         tui.set_action("Initializing...")
         
         # CRITICAL: Render once before starting Live to prevent multiple empty renders
-        # This ensures the header is only shown when there's actual content
-        # Set a non-empty action to trigger content detection
-        tui.set_action("🚀 Starting...")
+        tui.set_action("Starting...")
         initial_render = tui.render()
         
         # Use Rich's Live with auto-refresh for animation
@@ -1331,13 +1426,29 @@ Thumbs.db
             refresh_per_second=15,  # Higher rate for smooth spinner animation
             transient=False,  # Keep final output visible after stop
         )
+        
+        # Store Live in TUI so it can be stopped from outside
+        tui._live = live
+        
         live.start()
+        
+        # CRITICAL: Mark Live as started AFTER live.start() to prevent race conditions
+        # This ensures no header is rendered before Live takes over
+        tui._live_started = True
+        
+        # CRITICAL: Force first update AFTER _live_started is True
+        # This ensures header appears only after Live is fully running
+        # This prevents empty headers from appearing before Live takes over
+        live.update(tui.render())
         
         # Start a background thread to update Live regularly for smooth animations
         # This ensures the spinner and time display update continuously
         import threading
         animation_running = threading.Event()
         animation_running.set()  # Start as running
+        
+        # Store animation_running in TUI so it can be stopped from outside
+        tui._animation_running = animation_running
         
         def animation_updater():
             """Continuously update Live display for smooth animations."""
@@ -1354,27 +1465,27 @@ Thumbs.db
         def stop_live():
             """Stop animation and live display cleanly."""
             animation_running.clear()  # Stop animation thread
-            live.stop()
+            try:
+                live.stop()
+            except Exception:
+                pass  # Ignore errors when stopping
         
         # Server health check
-        tui.set_action("🔌 Checking server...")
+        tui.set_action("Checking server...")
         try:
             health = requests.get("http://127.0.0.1:8080/health", timeout=5)
             if health.status_code != 200:
-                stop_live()
                 return f"❌ Server Error: VAF Server nicht bereit (Status {health.status_code}). Bitte starten Sie den VAF Server auf Port 8080."
-            tui.set_action("✅ Server ready")
+            tui.set_action("Server ready")
         except requests.exceptions.ConnectionError:
-            stop_live()
             return "❌ Connection Error: VAF Server nicht erreichbar (Port 8080). Bitte starten Sie den VAF Server."
         except Exception as e:
-            stop_live()
             return f"❌ Server Check Failed: {e}. Bitte überprüfen Sie, ob der VAF Server läuft."
         
         # ═══════════════════════════════════════════════════════════════════
         # TOOLS - File tools + TODO management (NOT coding_agent!)
         # ═══════════════════════════════════════════════════════════════════
-        tui.set_action("🔧 Loading tools...")
+        tui.set_action("Loading tools...")
         live.update(tui.render())
         
         # IMPORTANT: coding_agent must NOT have access to itself!
@@ -1394,7 +1505,7 @@ Thumbs.db
             self.local_tools["codesearch"] = CodeSearchTool()
 
         # Setup working directory
-        tui.set_action("📁 Creating project...")
+        tui.set_action("Creating project...")
         live.update(tui.render())
         
         # ═══════════════════════════════════════════════════════════════════
@@ -1419,17 +1530,17 @@ Thumbs.db
             base_dir = os.path.abspath(os.path.expanduser(project_path))
             if not os.path.exists(base_dir):
                 return f"❌ Error: Project directory not found: {base_dir}\nPlease provide a valid path to an existing project."
-            tui.append_stream(f"📂 Continuing project: {os.path.basename(base_dir)}")
+            tui.append_stream(f"Continuing project: {os.path.basename(base_dir)}")
         elif skip_template:
             # CONTENT_ONLY mode: Use a temporary directory instead of creating a project
             import tempfile
             base_dir = tempfile.mkdtemp(prefix="vaf_content_")
-            tui.append_stream("📝 Content-only mode: Using temporary directory")
+            tui.append_stream("Content-only mode: Using temporary directory")
         else:
             # Normal mode: Create project directory
             base_dir = self._generate_project_directory(task)
             os.makedirs(base_dir, exist_ok=True)
-            tui.append_stream(f"📂 New project: {os.path.basename(base_dir)}")
+            tui.append_stream(f"New project: {os.path.basename(base_dir)}")
         
         # Initialize Git repository if not already initialized (skip for CONTENT_ONLY)
         if not skip_template:
@@ -1457,14 +1568,38 @@ Thumbs.db
             self.local_tools["git_log"] = make_git_tool_wrapper(GitLogTool, base_dir)
         
         # ═══════════════════════════════════════════════════════════════════
-        # CHECK FOR TEMPLATE
+        # TEMPLATE ANALYSIS - Use LLM with own context BEFORE starting work
         # ═══════════════════════════════════════════════════════════════════
         
-        template_type = None if skip_template else TemplateManager.detect_template_type(task)
+        template_type = None
         template_files = []
         
+        if not skip_template:
+            tui.set_action("Analyzing task for template...")
+            live.update(tui.render())
+            
+            # Use LLM to intelligently detect template type (has its own context)
+            # This runs BEFORE the main coding work begins
+            template_type, decision_info = TemplateManager.detect_template_type_with_llm(task)
+            
+            # Output detailed decision process
+            tui.append_stream("─" * 60)
+            tui.append_stream("Template Selection Process:")
+            for line in decision_info.split('\n'):
+                if line.strip():
+                    tui.append_stream(f"  {line}")
+            tui.append_stream("─" * 60)
+            
+            if template_type:
+                tui.append_stream(f"Selected template: {template_type}")
+            else:
+                tui.append_stream("No template selected")
+                tui.append_stream("-> Will use web_deep_search to research implementation")
+                tui.append_stream("-> Then create TODO list and implement from scratch")
+            live.update(tui.render())
+        
         if template_type:
-            tui.set_action(f"📋 Template: {template_type}")
+            tui.set_action(f"Template: {template_type}")
             live.update(tui.render())
             
             # Extract placeholders from task
@@ -1478,14 +1613,14 @@ Thumbs.db
                 size = os.path.getsize(f)
                 tui.add_file(fname, size, "done")
             
-            tui.append_stream(f"✅ {len(template_files)} template files")
+            tui.append_stream(f"{len(template_files)} template files")
             live.update(tui.render())
         
         # ═══════════════════════════════════════════════════════════════════
         # SYSTEM PROMPT
         # ═══════════════════════════════════════════════════════════════════
         
-        tui.set_action("📝 Building prompt...")
+        tui.set_action("Building prompt...")
         live.update(tui.render())
         existing_files_info = ""
         if template_files:
@@ -1548,6 +1683,7 @@ Your FIRST action MUST be to call set_todos. Output it EXACTLY like this:
 set_todos(tasks=["Task 1", "Task 2", "Task 3", ...])
 </tool_call>
 ```
+**IMPORTANT: Call `set_todos` ONLY ONCE at the very beginning! Do not call it again after you start working.**
 
 **CRITICAL: Create TODOs that MATCH the actual task!**
 - If task says "CONTENT_ONLY" or "ONLY THE" → Create simple TODOs for single file/content
@@ -1589,22 +1725,32 @@ After all tasks are done, say "ALL TASKS COMPLETED"
 - **CRITICAL**: DO NOT claim completion if any tasks remain incomplete
 - **CRITICAL**: DO NOT skip tasks or stop working prematurely - work through the entire TODO list
 
-## TEMPLATE FILES RULES (if templates exist above)
-🚨 **CRITICAL: Templates are REQUIRED structure - NOT suggestions!**
-
-**MANDATORY WORKFLOW:**
-1. **READ FIRST**: `read_file(path="...")` for EVERY template file BEFORE modifying
-2. **PRESERVE ALL**: Keep ALL structure from template (sections, classes, IDs, functions, imports, etc.)
-3. **ONLY REPLACE**: Replace `{{PLACEHOLDER}}` text with real content - nothing else
-4. **DO NOT REMOVE**: Never remove structural elements (sections, functions, classes, imports, etc.)
-5. **DO NOT REWRITE**: Never write new file from scratch - always modify existing template
-
-**Examples:**
-- **HTML**: Template `<nav class="nav"><div class="logo">{{BUSINESS_NAME}}</div></nav>` → Keep nav structure, only replace placeholder
-- **Python**: Template `def {{FUNCTION_NAME}}({{PARAMS}}):` → Keep function structure, only replace placeholders
-- **Any file**: Preserve all template structure, only replace `{{PLACEHOLDER}}` text
-
-**If you remove template structure, write_file will be BLOCKED!**
+{("## TEMPLATE FILES RULES (if templates exist above)\n"
+"🚨 **CRITICAL: Templates are REQUIRED structure - NOT suggestions!**\n\n"
+"**MANDATORY WORKFLOW:**\n"
+"1. **READ FIRST**: `read_file(path=\"...\")` for EVERY template file BEFORE modifying\n"
+"2. **PRESERVE ALL**: Keep ALL structure from template (sections, classes, IDs, functions, imports, etc.)\n"
+"3. **ONLY REPLACE**: Replace `{{PLACEHOLDER}}` text with real content - nothing else\n"
+"4. **DO NOT REMOVE**: Never remove structural elements (sections, functions, classes, imports, etc.)\n"
+"5. **DO NOT REWRITE**: Never write new file from scratch - always modify existing template\n\n"
+"**Examples:**\n"
+"- **HTML**: Template `<nav class=\"nav\"><div class=\"logo\">{{BUSINESS_NAME}}</div></nav>` → Keep nav structure, only replace placeholder\n"
+"- **Python**: Template `def {{FUNCTION_NAME}}({{PARAMS}}):` → Keep function structure, only replace placeholders\n"
+"- **Any file**: Preserve all template structure, only replace `{{PLACEHOLDER}}` text\n\n"
+"**If you remove template structure, write_file will be BLOCKED!**") if template_files else (
+"## NO TEMPLATE SELECTED - Research and Plan First\n\n"
+"Since no template was selected for this task, you should:\n"
+"1. **Use `web_deep_search`** to get information on how to implement this task\n"
+"   - `web_deep_search` returns a simple answer (like `web_search`), no separate context\n"
+"   - Example: `web_deep_search(query=\"how to create [task description]\", max_results=3)`\n"
+"2. **Analyze the results** and understand the best approach\n"
+"3. **Create a TODO list** with `set_todos` based on the research findings\n"
+"4. **Then implement** the solution from scratch\n\n"
+"**Example workflow:**\n"
+"- `web_deep_search(query=\"Python script generate random lottery numbers save HTML\", max_results=3)`\n"
+"- Analyze: \"I need to use random module, generate 6 unique numbers, create HTML structure\"\n"
+"- `set_todos(tasks=[\"Generate 6 unique random numbers\", \"Create HTML structure\", \"Save to HTML file\"])`\n"
+"- Start implementing")}
 
 ## QUALITY REQUIREMENTS
 - **HTML**: Full structure, navigation, real content, min 500 bytes
@@ -1796,22 +1942,32 @@ After all tasks are done, say "ALL TASKS COMPLETED"
 - **CRITICAL**: DO NOT claim completion if any tasks remain incomplete
 - **CRITICAL**: DO NOT skip tasks or stop working prematurely - work through the entire TODO list
 
-## TEMPLATE FILES RULES (if templates exist above)
-🚨 **CRITICAL: Templates are REQUIRED structure - NOT suggestions!**
-
-**MANDATORY WORKFLOW:**
-1. **READ FIRST**: `read_file(path="...")` for EVERY template file BEFORE modifying
-2. **PRESERVE ALL**: Keep ALL structure from template (sections, classes, IDs, functions, imports, etc.)
-3. **ONLY REPLACE**: Replace `{{PLACEHOLDER}}` text with real content - nothing else
-4. **DO NOT REMOVE**: Never remove structural elements (sections, functions, classes, imports, etc.)
-5. **DO NOT REWRITE**: Never write new file from scratch - always modify existing template
-
-**Examples:**
-- **HTML**: Template `<nav class="nav"><div class="logo">{{BUSINESS_NAME}}</div></nav>` → Keep nav structure, only replace placeholder
-- **Python**: Template `def {{FUNCTION_NAME}}({{PARAMS}}):` → Keep function structure, only replace placeholders
-- **Any file**: Preserve all template structure, only replace `{{PLACEHOLDER}}` text
-
-**If you remove template structure, write_file will be BLOCKED!**
+{("## TEMPLATE FILES RULES (if templates exist above)\n"
+"🚨 **CRITICAL: Templates are REQUIRED structure - NOT suggestions!**\n\n"
+"**MANDATORY WORKFLOW:**\n"
+"1. **READ FIRST**: `read_file(path=\"...\")` for EVERY template file BEFORE modifying\n"
+"2. **PRESERVE ALL**: Keep ALL structure from template (sections, classes, IDs, functions, imports, etc.)\n"
+"3. **ONLY REPLACE**: Replace `{{PLACEHOLDER}}` text with real content - nothing else\n"
+"4. **DO NOT REMOVE**: Never remove structural elements (sections, functions, classes, imports, etc.)\n"
+"5. **DO NOT REWRITE**: Never write new file from scratch - always modify existing template\n\n"
+"**Examples:**\n"
+"- **HTML**: Template `<nav class=\"nav\"><div class=\"logo\">{{BUSINESS_NAME}}</div></nav>` → Keep nav structure, only replace placeholder\n"
+"- **Python**: Template `def {{FUNCTION_NAME}}({{PARAMS}}):` → Keep function structure, only replace placeholders\n"
+"- **Any file**: Preserve all template structure, only replace `{{PLACEHOLDER}}` text\n\n"
+"**If you remove template structure, write_file will be BLOCKED!**") if template_files else (
+"## NO TEMPLATE SELECTED - Research and Plan First\n\n"
+"Since no template was selected for this task, you should:\n"
+"1. **Use `web_deep_search`** to get information on how to implement this task\n"
+"   - `web_deep_search` returns a simple answer (like `web_search`), no separate context\n"
+"   - Example: `web_deep_search(query=\"how to create [task description]\", max_results=3)`\n"
+"2. **Analyze the results** and understand the best approach\n"
+"3. **Create a TODO list** with `set_todos` based on the research findings\n"
+"4. **Then implement** the solution from scratch\n\n"
+"**Example workflow:**\n"
+"- `web_deep_search(query=\"Python script generate random lottery numbers save HTML\", max_results=3)`\n"
+"- Analyze: \"I need to use random module, generate 6 unique numbers, create HTML structure\"\n"
+"- `set_todos(tasks=[\"Generate 6 unique random numbers\", \"Create HTML structure\", \"Save to HTML file\"])`\n"
+"- Start implementing")}
 
 ## QUALITY REQUIREMENTS
 - **HTML**: Full structure, navigation, real content, min 500 bytes
@@ -2093,8 +2249,8 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
         loop = AgenticLoop(timeout_minutes=15)
         files_created = list(template_files)  # Start with template files
         
-        tui.set_action("🔄 Agentic Loop")
-        tui.append_stream(f"📂 {os.path.basename(base_dir)}")
+        tui.set_action("Agentic Loop")
+        tui.append_stream(f"{os.path.basename(base_dir)}")
         live.update(tui.render())
         
         while True:
@@ -2107,19 +2263,25 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 break
             
             # Update TUI
-            tui.set_action(f"🔄 Loop {loop.loop_count}")
+            tui.set_action(f"Loop {loop.loop_count}")
             live.update(tui.render())
             
             # ═══════════════════════════════════════════════════════════════
             # CONTEXT MANAGEMENT - Prevent token overflow
             # ═══════════════════════════════════════════════════════════════
             
-            # Check if compression needed before LLM request
-            if context_manager.should_compress(history):
-                tui.set_action("📝 Compressing context...")
+            # Proactive compression: Check token usage and compress if > 85% of limit
+            estimated_tokens = context_manager.estimate_tokens(history)
+            if estimated_tokens > int(context_manager.max_tokens * 0.85):
+                tui.set_action(f"Proactive compression: {estimated_tokens}/{context_manager.max_tokens} tokens...")
                 live.update(tui.render())
                 history = context_manager.compress(history)
-            tui.set_action(f"🔄 Loop {loop.loop_count}")
+            # Also check normal threshold
+            elif context_manager.should_compress(history):
+                tui.set_action("Compressing context...")
+                live.update(tui.render())
+                history = context_manager.compress(history)
+            tui.set_action(f"Loop {loop.loop_count}")
             live.update(tui.render())
             
             # ═══════════════════════════════════════════════════════════════
@@ -2194,7 +2356,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 # Force the model to make ANY tool call (more compatible with different APIs)
                 # Some APIs don't support specific function forcing
                 tool_choice = "required"  # Forces model to call SOME tool
-                tui.set_action("⚡ Forcing tool call...")
+                tui.set_action("Forcing tool call...")
             else:
                 # Allow model to choose tools freely after TODOs are set
                 tool_choice = "auto"
@@ -2215,9 +2377,42 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     stream=True
                 )
                 
+                # Handle Context Size Error (400) - automatically compress and retry
+                if stream_response.status_code == 400:
+                    try:
+                        error_data = stream_response.json()
+                        error_msg = error_data.get("error", {}).get("message", "")
+                        if "exceed_context_size" in error_msg.lower() or "exceed" in error_msg.lower():
+                            tui.set_action("Context size exceeded. Compressing...")
+                            live.update(tui.render())
+                            # Aggressively compress context
+                            history = context_manager.compress(history)
+                            # Also truncate old messages if still too large
+                            if len(history) > 20:
+                                # Keep system prompt, last user message, and last 10 messages
+                                system_msgs = [m for m in history if m.get("role") == "system"]
+                                user_msgs = [m for m in history if m.get("role") == "user"]
+                                assistant_msgs = [m for m in history if m.get("role") == "assistant"]
+                                
+                                # Keep first system message, last user message, last 5 assistant messages
+                                new_history = []
+                                if system_msgs:
+                                    new_history.append(system_msgs[0])  # Keep first system prompt
+                                if user_msgs:
+                                    new_history.append(user_msgs[-1])  # Keep last user message
+                                if assistant_msgs:
+                                    new_history.extend(assistant_msgs[-5:])  # Keep last 5 assistant messages
+                                
+                                history = new_history
+                            tui.set_action(f"Compressed to {len(history)} messages. Retrying...")
+                            live.update(tui.render())
+                            # Retry the request with compressed context (continue loop)
+                            continue
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        pass  # Not a context size error, fall through to normal error handling
+                
                 if stream_response.status_code != 200:
                     error_text = stream_response.text[:200] if stream_response.text else ""
-                    stop_live()
                     return f"Error: Server {stream_response.status_code} - {error_text}"
                 
                 # Collect streamed response
@@ -2311,7 +2506,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 if 'function' in tc_delta:
                                     if 'name' in tc_delta['function']:
                                         tc['function']['name'] += tc_delta['function']['name']
-                                        tui.set_action(f"🔧 {tc['function']['name']}")
+                                        tui.set_action(f"Calling {tc['function']['name']}")
                                         live.update(tui.render())
                                     if 'arguments' in tc_delta['function']:
                                         tc['function']['arguments'] += tc_delta['function']['arguments']
@@ -2494,7 +2689,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     
                     if extracted_tool_call:
                         tool_calls = [extracted_tool_call]
-                        tui.append_stream("✅ Tool call extracted from text response!")
+                        tui.append_stream("Tool call extracted from text response!")
                         live.update(tui.render())
                 
                 # EXTRACT content from msg if collected_content is empty (fallback)
@@ -2599,11 +2794,9 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 
             except requests.exceptions.ConnectionError:
                 tui.end_stream()  # Mark stream as finished even on error
-                stop_live()
                 return "Error: VAF Server offline."
             except Exception as e:
                 tui.end_stream()  # Mark stream as finished even on error
-                stop_live()
                 return f"Error: Stream failed - {e}"
                 
             # ═══════════════════════════════════════════════════════════════
@@ -2867,7 +3060,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     # CRITICAL: If no TODOs set, nudge agent to set them FIRST!
                     # This is the most common cause of "doing nothing" - agent skips TODO setup
                     if not task_mgr.todos:
-                        tui.set_action("⚠️ No TODO list - nudging...")
+                        tui.set_action("No TODO list - nudging...")
                         history.append({
                             "role": "system",
                             "content": (
@@ -2929,9 +3122,10 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             
             # FIRST: No TODOs set yet? Auto-generate or nudge
             if not task_mgr.todos and loop.loop_count >= 1:
-                # After 3 loops: AUTO-GENERATE TODOs from task description
-                if loop.loop_count >= 3:
-                    tui.set_action("📋 Auto-generating TODOs...")
+                # After 5 loops: AUTO-GENERATE TODOs from task description
+                # Increased from 3 to 5 to give agent more time to plan
+                if loop.loop_count >= 5:
+                    tui.set_action("Auto-generating TODOs...")
                     
                     # Generate sensible TODOs from the task description
                     auto_todos = []
@@ -2947,29 +3141,31 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         "NO FILE PATHS" in task_upper
                     )
                     
+                    # Check for Script/Python task
+                    is_script_task = any(kw in task_lower for kw in ['script', 'python', 'calculate', 'generate', 'tool', 'cli'])
+                    
                     if is_content_only:
-                        # CONTENT_ONLY: Generate generic TODOs based on content type only
-                        # CRITICAL: Do NOT hardcode specific features (weather, video, etc.)
-                        # The agent should decide what to include based on the task description.
-                        if "html" in task_lower or "webpage" in task_lower or "web page" in task_lower:
+                        # ... (existing content only logic)
+                        if "html" in task_lower or "webpage" in task_lower:
                             auto_todos = [
                                 "Generate complete HTML document with all required content",
                                 "Add embedded CSS styling",
                                 "Verify HTML is complete and valid"
                             ]
-                        elif "markdown" in task_lower or "md" in task_lower:
-                            auto_todos = [
-                                "Generate markdown content",
-                                "Format according to task requirements",
-                                "Verify content is complete"
-                            ]
                         else:
-                            # Generic content generation
                             auto_todos = [
                                 "Analyze task requirements",
                                 "Generate requested content",
                                 "Verify content is complete"
                             ]
+                    # Python Script Task (Specific logic for scripts)
+                    elif is_script_task and not is_content_only:
+                         auto_todos = [
+                            "Create main Python script",
+                            "Implement core logic and functions",
+                            "Add error handling and comments",
+                            "Test script execution"
+                        ]
                     # Detect if it's EXPLICITLY a multi-page website (not just "page" in text)
                     elif any(kw in task_lower for kw in ['multi-page', 'multiple pages', 'several pages', 'about page', 'contact page', 'services page', 'create pages']):
                         auto_todos = [
@@ -2993,13 +3189,13 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         auto_todos = [
                             "Analyze task requirements",
                             "Create main files",
-                            "Add styling and functionality",
+                            "Add styling or logic",
                             "Test and verify output"
                         ]
                     
                     # Set the auto-generated TODOs
                     task_mgr.set_todos(auto_todos)
-                    tui.append_stream(f"📋 Auto-generated {len(auto_todos)} tasks (model didn't call set_todos)")
+                    tui.append_stream(f"Auto-generated {len(auto_todos)} tasks (model didn't call set_todos)")
                     for i, t in enumerate(auto_todos, 1):
                         tui.append_stream(f"   {i}. {t}")
                     live.update(tui.render())
@@ -3022,14 +3218,14 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         })
                     # Don't continue - let the loop proceed with the TODOs
                 else:
-                    tui.set_action("⚠️ No TODO list!")
+                    tui.set_action("No TODO list!")
                     nudge_msg = "⚠️ You haven't set a TODO list yet!\nCall `set_todos` with your task breakdown FIRST."
                     history.append({"role": "system", "content": nudge_msg})
                     continue
             
             # If model claims completion without TODOs, force it to set them first
             if completion_signals and not task_mgr.todos:
-                tui.set_action("⚠️ set_todos first")
+                tui.set_action("set_todos first")
                 history.append({
                     "role": "system",
                     "content": "⚠️ You cannot complete yet. First call set_todos with your task breakdown, then work through each task and call task_done after each."
@@ -3060,7 +3256,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     completed_count = len([t for t in task_mgr.todos if t["status"] == "completed"])
                     total_count = len(task_mgr.todos)
                     
-                    tui.set_action(f"⚠️ {len(remaining)}/{total_count} tasks remaining!")
+                    tui.set_action(f"{len(remaining)}/{total_count} tasks remaining!")
                     history.append({
                         "role": "system",
                         "content": (
@@ -3096,7 +3292,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     total_count = len(task_mgr.todos)
                     current = task_mgr.get_current_task()
                     
-                    tui.set_action(f"🚨 {completed_count}/{total_count} tasks - NOT DONE!")
+                    tui.set_action(f"{completed_count}/{total_count} tasks - NOT DONE!")
                     history.append({
                         "role": "system",
                         "content": (
@@ -3142,7 +3338,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 )
                 
                 if should_nudge:
-                    tui.set_action(f"📋 {completed_count}/{total_count} tasks - Continue working!")
+                    tui.set_action(f"{completed_count}/{total_count} tasks - Continue working!")
                     nudge_content = (
                         f"⚠️ TASKS INCOMPLETE - Continue working!\n\n"
                         f"**Progress:** {completed_count}/{total_count} tasks completed\n"
@@ -3204,7 +3400,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         for p in placeholders[:3]:  # Show first 3 per file
                             placeholder_list.append(f"  - {p}")
                     
-                    tui.set_action(f"⚠️ {placeholder_check['total_placeholders']} placeholders found!")
+                    tui.set_action(f"{placeholder_check['total_placeholders']} placeholders found!")
                     history.append({
                         "role": "system",
                         "content": (
@@ -3223,7 +3419,6 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 
                 if quality['passed']:
                     # SUCCESS!
-                    stop_live()
                     
                     # CONTENT_ONLY mode: Return actual file content
                     if skip_template and files_created:
@@ -3286,7 +3481,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     if quality['errors']:
                         feedback.append(f"Errors: {', '.join(quality['errors'])}")
                     
-                    tui.set_action(f"⚠️ Quality: {feedback[0] if feedback else 'check failed'}")
+                    tui.set_action(f"Quality: {feedback[0] if feedback else 'check failed'}")
                     
                     history.append({
                         "role": "system",
@@ -3298,7 +3493,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             if msg_content:
                 file_mentions = re.findall(r'[\w-]+\.(html|css|js|py|ts|json)', msg_content.lower())
                 if file_mentions and len(files_created) <= len(template_files):
-                    tui.set_action("⚠️ Plan detected - forcing execution")
+                    tui.set_action("Plan detected - forcing execution")
                     history.append({
                         "role": "system",
                         "content": f"⚠️ You mentioned files but didn't create them!\n"
@@ -3333,7 +3528,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 loop.record_action(action_sig)
                 
                 if loop.detect_doom_loop():
-                    tui.append_stream("⚠️ Doom loop detected - trying different approach...")
+                    tui.append_stream("Doom loop detected - trying different approach...")
                     history.append({
                         "role": "system",
                         "content": "⚠️ DOOM LOOP! Try a different approach or move to next task."
@@ -3347,10 +3542,20 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 # ===== TODO MANAGEMENT TOOLS =====
                 if fn_name == "set_todos":
                     tasks = fn_args.get("tasks", [])
-                    if tasks:
+                    
+                    # CRITICAL: Prevent resetting TODOs if work has already started!
+                    if task_mgr.todos and task_mgr.current_task_idx > 0:
+                        result = (
+                            f"⚠️ REJECTED: You are already working on Task {task_mgr.current_task_idx + 1}/{len(task_mgr.todos)}!\n"
+                            f"Current task: {task_mgr.get_current_task()}\n\n"
+                            f"You cannot reset the TODO list in the middle of execution.\n"
+                            f"Finish your current tasks using `task_done`."
+                        )
+                        tui.append_stream("set_todos rejected - work in progress!")
+                    elif tasks:
                         task_mgr.set_todos(tasks)
-                        tui.set_action(f"📋 TODO: {len(tasks)} tasks")
-                        tui.append_stream(f"📋 Created TODO list with {len(tasks)} tasks")
+                        tui.set_action(f"TODO: {len(tasks)} tasks")
+                        tui.append_stream(f"Created TODO list with {len(tasks)} tasks")
                         for i, t in enumerate(tasks[:5], 1):
                             tui.append_stream(f"   {i}. {t[:50]}")
                         if len(tasks) > 5:
@@ -3381,14 +3586,13 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 f"3. DO NOT call task_done multiple times to skip tasks\n\n"
                                 f"Work on the remaining tasks now!"
                             )
-                            tui.append_stream(f"🚨 Blocked premature completion - {len(remaining)} tasks remaining!")
-                            tui.set_action(f"📋 {task_mgr.get_progress()} - Complete remaining tasks!")
+                            tui.append_stream(f"Blocked premature completion - {len(remaining)} tasks remaining!")
+                            tui.set_action(f"{task_mgr.get_progress()} - Complete remaining tasks!")
                             # Reset counter to prevent infinite loop
                             loop.consecutive_task_done = 0
                         else:
                             # All tasks are done - allow completion
-                            tui.append_stream("🎉 All tasks completed!")
-                        stop_live()
+                            tui.append_stream("All tasks completed!")
                         
                         # CONTENT_ONLY mode: Return actual file content
                         if skip_template and files_created:
@@ -3463,7 +3667,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             "</tool_call>\n\n"
                             "STOP calling task_done. Call set_todos NOW."
                         )
-                        tui.append_stream("🚨 task_done BLOCKED - no TODOs! Call set_todos first!")
+                        tui.append_stream("task_done BLOCKED - no TODOs! Call set_todos first!")
                     else:
                         current = task_mgr.get_current_task()
                         
@@ -3551,8 +3755,8 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                     f"6. THEN call task_done again\n\n"
                                     f"DO NOT call task_done until template structure is fully preserved!"
                                 )
-                                tui.append_stream(f"⚠️ {current[:40]} - template structure destroyed!")
-                                tui.set_action(f"📋 {task_mgr.get_progress()} - Fix template!")
+                                tui.append_stream(f"{current[:40]} - template structure destroyed!")
+                                tui.set_action(f"{task_mgr.get_progress()} - Fix template!")
                             elif placeholder_check['has_placeholders']:
                                 # Task not really done - placeholders still present
                                 placeholder_details = []
@@ -3694,16 +3898,16 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                     f"**IMPORTANT:** Use the task '{task[:80]}' as context. Replace ALL placeholders at once, "
                                     f"not one by one. Do NOT just change one word - replace EVERYTHING!"
                                 )
-                                tui.append_stream(f"⚠️ {current[:40]} - {placeholder_check['total_placeholders']} placeholders!")
-                                tui.set_action(f"📋 {task_mgr.get_progress()} - Fix {placeholder_check['total_placeholders']} placeholders!")
+                                tui.append_stream(f"{current[:40]} - {placeholder_check['total_placeholders']} placeholders!")
+                                tui.set_action(f"{task_mgr.get_progress()} - Fix {placeholder_check['total_placeholders']} placeholders!")
                             else:
                                 # Task is done - proceed
                                 summary = fn_args.get("summary", "done")
                                 task_mgr.complete_current_task(summary)
                                 next_task = task_mgr.get_current_task()
                                 
-                                tui.append_stream(f"✅ Completed: {current[:40] if current else 'task'}")
-                                tui.set_action(f"📋 {task_mgr.get_progress()}")
+                                tui.append_stream(f"Completed: {current[:40] if current else 'task'}")
+                                tui.set_action(f"{task_mgr.get_progress()}")
                                 
                                 # ═══════════════════════════════════════════════════════════════
                                 # CREATE FRESH CONTEXT FOR NEW TASK - Isolated context per task
@@ -3713,14 +3917,14 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                     # This isolates each task with its own context, preventing confusion
                                     history = create_fresh_context_for_task(next_task)
                                     history_snapshot_len = len(history)  # Update snapshot for new context
-                                    tui.append_stream("🔄 Fresh context created for new task")
+                                    tui.append_stream("Fresh context created for new task")
                                 
                                 if next_task:
                                     result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
-                                    tui.append_stream(f"➡️ Next: {next_task[:40]}")
+                                    tui.append_stream(f"Next: {next_task[:40]}")
                                 elif task_mgr.is_all_done():
                                     result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
-                                    tui.append_stream("🎉 All tasks done!")
+                                    tui.append_stream("All tasks done!")
                                 else:
                                     result = "✅ Task completed. Continue with remaining work."
                         else:
@@ -3779,7 +3983,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             html = html[:3000] + "..." if len(html) > 3000 else html
                         
                         result = f"Fetched {len(html)} chars from {url}\n\n{html}"
-                        tui.append_stream(f"✅ Fetched {url[:30]}")
+                        tui.append_stream(f"Fetched {url[:30]}")
                     except Exception as e:
                         result = f"Error fetching {url}: {e}"
                         tui.append_stream(f"❌ Fetch failed: {str(e)[:30]}")
@@ -3806,7 +4010,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         results = list(DDGS().text(query, max_results=max_results, safesearch='strict'))
                         if not results:
                             result = f"No results found for: {query}"
-                            tui.append_stream("⚠️ No results")
+                            tui.append_stream("No results")
                             continue
                         
                         # Helper to fetch and summarize page content (context-aware, limited)
@@ -3849,7 +4053,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             summary += f"{i}. **{title}**\n   {snippet}\n   {link}{content}\n\n"
                         
                         result = summary
-                        tui.append_stream(f"✅ Found {len(results)} results")
+                        tui.append_stream(f"Found {len(results)} results")
                     except Exception as e:
                         result = f"Error during deep search: {e}"
                         tui.append_stream(f"❌ Search failed: {str(e)[:30]}")
@@ -3869,7 +4073,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 "3. THEN call `write_file` to create/modify files\n\n"
                                 "Call `set_todos` NOW with your task list."
                             )
-                            tui.append_stream("⚠️ write_file rejected - call set_todos FIRST!")
+                            tui.append_stream("write_file rejected - call set_todos FIRST!")
                             history.append({
                                 "role": "tool",
                                 "tool_call_id": tc['id'],
@@ -3941,7 +4145,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                             f"**Example:** Template has `<nav class=\"nav\">` → Keep it! Only replace {{BUSINESS_NAME}}.\n\n"
                                             f"DO NOT rewrite from scratch - work WITH the template!"
                                         )
-                                        tui.append_stream(f"🚨 BLOCKED: Template structure destroyed in {fname}")
+                                        tui.append_stream(f"BLOCKED: Template structure destroyed in {fname}")
                                         tui.set_action(f"⚠️ Fix template preservation!")
                                         history.append({
                                             "role": "system",
@@ -3957,22 +4161,25 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                         continue  # Skip this write_file call
                                     else:
                                         # Structure preserved - allow write but warn
-                                        tui.append_stream(f"✅ Template structure preserved in {fname}")
+                                        tui.append_stream(f"Template structure preserved in {fname}")
                             except Exception as e:
                                 # If validation fails, still warn but allow (graceful degradation)
-                                tui.append_stream(f"⚠️ Could not validate template: {e}")
+                                tui.append_stream(f"Could not validate template: {e}")
                             
                             # Warn if template file is being overwritten
-                            tui.append_stream(f"⚠️ Overwriting template file {fname}")
+                            tui.append_stream(f"Overwriting template file {fname}")
                             tui.append_stream("   Make sure you read it first and preserve the structure!")
                             live.update(tui.render())
                         
                         tui.add_file(fname, 0, "writing")
                         tui.set_action(f"📝 Writing: {fname}")
                         
+                        # Update Code Preview Panel
+                        tui.set_code_preview(fname, fn_args.get("content", ""), "code")
+
                         # Show code preview (first 5 lines) - DON'T clear stream!
                         code_content = fn_args.get("content", "")
-                        tui.append_stream(f"📝 Creating {fname}:")
+                        tui.append_stream(f"Creating {fname}:")
                         code_lines = code_content.split('\n')[:5]
                         for line in code_lines:
                             tui.append_stream(line[:65] if len(line) <= 65 else line[:62] + "...")
@@ -4030,7 +4237,6 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 if len(loop.error_history) >= 3:
                                     last_3 = loop.error_history[-3:]
                                     if len(set(last_3)) == 1:  # All same error
-                                        stop_live()
                                         return (
                                             f"### ❌ Repeated Error Detected\n\n"
                                             f"The same error occurred 3 times in a row:\n"
@@ -4052,7 +4258,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 size = os.path.getsize(path)
                                 files_created.append(path)
                                 tui.update_file(os.path.basename(path), "done", size)
-                                tui.append_stream(f"✅ {os.path.basename(path)} ({size}B)")
+                                tui.append_stream(f"{os.path.basename(path)} ({size}B)")
                                 result = f"✓ Created {path} ({size} bytes)"
                                 
                                 # Automatically run linter after successful write_file
@@ -4075,12 +4281,12 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                                 "role": "system",
                                                 "content": lint_msg
                                             })
-                                            tui.append_stream(f"⚠️ Linter found issues in {os.path.basename(path)}")
+                                            tui.append_stream(f"Linter found issues in {os.path.basename(path)}")
                                         elif lint_result.startswith("✓"):
                                             tui.append_stream(f"✓ Linter: No issues")
                                 except Exception as lint_error:
                                     # Don't fail the write_file if linter fails
-                                    tui.append_stream(f"⚠️ Linter check failed: {str(lint_error)[:50]}")
+                                    tui.append_stream(f"Linter check failed: {str(lint_error)[:50]}")
                             else:
                                 # File not found after write
                                 tui.update_file(os.path.basename(path), "error")
@@ -4106,7 +4312,6 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             if len(loop.error_history) >= 3:
                                 last_3 = loop.error_history[-3:]
                                 if len(set(last_3)) == 1:  # All same error
-                                    stop_live()
                                     return (
                                         f"### ❌ Repeated Error Detected\n\n"
                                         f"The same error occurred 3 times in a row:\n"
@@ -4154,7 +4359,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             f"DO NOT use bash to echo error messages."
                         )
                         result_str = result
-                        tui.append_stream("⚠️ Blocked bash echo of error - fix the issue instead")
+                        tui.append_stream("Blocked bash echo of error - fix the issue instead")
                 
                 # Add result to history
                 history.append({
@@ -4167,8 +4372,6 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
         # ═══════════════════════════════════════════════════════════════════
         # LOOP ENDED (timeout or max empty)
         # ═══════════════════════════════════════════════════════════════════
-        
-        stop_live()
         
         if files_created:
             # ═══════════════════════════════════════════════════════════════
@@ -4291,4 +4494,119 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 f"**💡 Suggestion**: Try a more specific task description.\n\n"
                 f"**🔧 To retry, use:**\n"
                 f"`coding_agent(task=\"your task\", project_path=\"{base_dir}\")`"
-        )
+            )
+        
+        # CRITICAL: Always stop Live display at the end of the method
+        # This prevents "zombie" TUI threads that cause multiple header boxes
+        stop_live()
+        
+        # Clear active instance when done
+        with CodingAgentTool._instance_lock:
+            if CodingAgentTool._active_instance == tui:
+                CodingAgentTool._active_instance = None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TUI BUG FIX DOCUMENTATION - Multiple Empty Header Boxes Issue
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# PROBLEM:
+# Multiple empty "Collaboration Mode Active" header boxes were appearing in the TUI,
+# especially before the actual content was displayed. This happened because:
+#
+# 1. AnimatedHeader.__rich__() creates a new Panel object every time it's called
+# 2. render() was being called multiple times (by animation_updater thread at 15 FPS)
+# 3. Header was being rendered before Live.start() was called
+# 4. Race conditions between render() calls and Live initialization
+# 5. Rich's Live may output initial_render before live.start() fully takes over
+# 6. Multiple coding_agent tool calls could create multiple TUI instances
+#
+# SYMPTOMS:
+# - Multiple empty header boxes appearing before actual content
+# - Header boxes appearing even when _live_started was False
+# - Header boxes appearing between "Debug" messages (especially "Summarizing intel...")
+# - Header boxes appearing when coding_agent is called multiple times in quick succession
+#
+# ROOT CAUSE:
+# The header was being rendered in render() even when:
+# - Live hadn't started yet (initial_render = tui.render() before live.start())
+# - No actual content was present (just placeholder actions like "Initializing...")
+# - Multiple render() calls happened in quick succession
+# - Rich's Live system output initial_render before fully taking over
+# - Multiple coding_agent tool calls created multiple CoderTUI instances, each trying to render headers
+#
+# SOLUTION (FINAL):
+# 1. Added _live_started flag to track when Live is actually running
+# 2. Added _header_visible flag for sticky header (once shown, stays visible to prevent flickering)
+# 3. Set _live_started = True ONLY AFTER live.start() (prevents race conditions)
+# 4. Check _live_started FIRST in render() - if False, return header = None immediately
+# 5. Only check for content if _live_started is True
+# 6. Only render header when BOTH conditions are met: Live is running AND content exists
+# 7. Force first update AFTER _live_started = True: live.update(tui.render()) after live.start()
+# 8. Removed all manual stop_live() calls - cleanup happens at end of run() method
+# 9. Header is sticky: once _header_visible = True, header stays visible even if content temporarily disappears
+# 10. Added instance lock mechanism to prevent multiple coding_agent instances running simultaneously
+# 11. Stop previous instance when new one starts (prevents multiple headers from concurrent calls)
+#
+# KEY CHANGES:
+# - In CodingAgentTool class (line ~1160): Added _instance_lock and _active_instance for singleton-like behavior
+# - In __init__ (line ~185): Added _header_visible = False flag
+# - In render() method (line ~337): Check _live_started first, then content, use sticky flag
+# - In run() method (line ~1306): Stop previous instance if active before starting new one
+# - In run() method (line ~1330): Set _live_started = True AFTER live.start()
+# - In run() method (line ~1335): Force first update AFTER _live_started = True
+# - In run() method (line ~4357): Cleanup stop_live() at end of method
+# - In run() method (line ~4371): Clear active instance when done
+# - Content check excludes placeholder actions: "Initializing...", "Starting...", "Ready"
+# - Removed all manual stop_live() calls throughout the method
+#
+# HOW TO FIX SIMILAR ISSUES:
+# 1. Always check if Live is running before rendering animated components
+# 2. Set flags AFTER critical operations (e.g., after live.start(), not before)
+# 3. Use early returns to prevent unnecessary rendering
+# 4. Cache rendered components if they don't need animation, or render fresh if they do
+# 5. Be careful with threading - animation_updater calls render() 15x/sec
+# 6. Test with initial_render to ensure no components render before Live takes over
+# 7. Force first update AFTER Live is fully started to ensure proper initialization
+# 8. Use sticky flags for components that should remain visible once shown
+# 9. Ensure cleanup happens at end of method, not scattered throughout
+# 10. If tool can be called multiple times, use instance lock to prevent concurrent execution
+# 11. Stop previous instance cleanly when new one starts (set _live_started = False on old instance)
+#
+# LESSONS LEARNED:
+# - Rich's Live system needs to be fully initialized before rendering animated components
+# - Race conditions can occur between render() calls and Live initialization
+# - Always check state flags in the correct order (most restrictive first)
+# - AnimatedHeader creates new Panel objects - be careful with multiple render() calls
+# - Rich's Live may output initial_render before live.start() fully takes over
+# - Force first update after live.start() to ensure header appears only when Live is ready
+# - Sticky flags prevent flickering when content temporarily disappears
+# - Cleanup should be centralized at end of method, not scattered
+# - Multiple tool calls can create multiple TUI instances - use instance lock to prevent this
+# - Stopping previous instance (_live_started = False) prevents zombie headers
+#
+# KNOWN LIMITATIONS:
+# - If coding_agent is called multiple times in quick succession, the previous instance
+#   is stopped before the new one starts, which may cause a brief flicker
+# - The instance lock prevents concurrent execution, so only one coding_agent can run at a time
+#
+# POTENTIAL FUTURE IMPROVEMENTS:
+# - Consider queuing multiple tool calls instead of stopping previous instance
+# - Add visual indicator when previous instance is being stopped
+# - Delay header rendering until first content update after Live starts (already implemented)
+#
+# RELATED FILES:
+# - vaf/tools/coder.py: CoderTUI.render() method (line ~308)
+# - vaf/tools/coder.py: CoderTUI.__init__() method (line ~183)
+# - vaf/tools/coder.py: CodingAgentTool.run() method (line ~1300)
+# - vaf/cli/tui.py: AnimatedHeader class (line ~693)
+# - vaf/tools/research_agent.py: ResearchTUI (reference implementation that works)
+#
+# Date: Fixed after multiple attempts - final solution uses:
+#   - _live_started flag check
+#   - _header_visible sticky flag
+#   - Force update after live.start()
+#   - Centralized cleanup at end of method
+#   - Instance lock mechanism to prevent multiple concurrent instances
+#   - Stop previous instance when new one starts
+# ═══════════════════════════════════════════════════════════════════════════════

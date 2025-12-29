@@ -40,6 +40,7 @@ class StateContext:
     tools_used: List[str] = field(default_factory=list)
     key_decisions: List[str] = field(default_factory=list)
     code_snippets: Dict[str, str] = field(default_factory=dict)  # filename -> snippet
+    narrative_summary: str = ""  # LLM-generated summary of past conversation
     last_updated: str = ""
 
 
@@ -298,6 +299,10 @@ class ContextManager:
         """Build a structured context summary."""
         parts = []
         
+        # Narrative Summary (LLM generated) - Highest Priority
+        if self.state.narrative_summary:
+            parts.append(f"## 📝 Previous Conversation Summary\n{self.state.narrative_summary}")
+
         # Intent Context
         if self.intent.primary_goal or self.intent.sub_goals:
             parts.append("## 🎯 Intent Context")

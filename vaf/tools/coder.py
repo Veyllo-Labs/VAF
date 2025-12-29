@@ -187,6 +187,10 @@ class CoderTUI:
         # Store Live and animation_running so they can be stopped from outside
         self._live = None  # Will be set when Live is created
         self._animation_running = None  # Will be set when animation thread starts
+        self._live_update_callback = None  # Callback to trigger live updates
+        self._last_update_time = 0  # Throttle updates to prevent deadlocks
+        self._update_throttle_ms = 50  # Minimum 50ms between updates (20 FPS max)
+        self._needs_update = False  # Flag to signal that update is needed
         
         # Active Code Preview (for showing what's being written)
         self.active_code_preview = None  # {filename, content, language}
@@ -294,6 +298,17 @@ class CoderTUI:
             # Remove trailing empty lines (but keep at least one line if buffer is not empty)
             while len(self.stream_buffer) > 1 and not self.stream_buffer[-1].strip():
                 self.stream_buffer.pop()
+        
+        # CRITICAL: Set flag for animation thread to update
+        # DON'T call render() here - it would cause deadlock (we're inside lock)
+        # Instead, set a flag that animation thread will check
+        current_time = time.time() * 1000  # Convert to milliseconds
+        time_since_last_update = current_time - self._last_update_time
+        
+        # Only set flag if throttle time has passed
+        if time_since_last_update >= self._update_throttle_ms:
+            self._last_update_time = current_time
+            self._needs_update = True  # Signal animation thread to update
     
     def end_stream(self):
         """End the current stream."""
@@ -581,8 +596,13 @@ class CoderTUI:
                     # Add incomplete line (even if it's just whitespace, to show typing)
                     all_text += clean_incomplete + "\n"
             
+            # CRITICAL: Show separator or stream status even if buffer seems empty
+            # This ensures user sees that something is happening
             if not all_text.strip():
-                all_text = "Ready\n"
+                if self.stream_active:
+                    all_text = "[yellow]Waiting for model response...[/yellow]\n"
+                else:
+                    all_text = "[dim]Ready[/dim]\n"
             
             # Wrap into fixed-width lines (like terminal)
             wrapped_lines = []
@@ -618,11 +638,11 @@ class CoderTUI:
             
             for i, line in enumerate(filtered_lines):
                 # Determine style
-                if "✅" in line or "done" in line.lower():
+                if "[OK]" in line or "done" in line.lower() or "✅" in line:
                     style = "green"
-                elif "❌" in line or "error" in line.lower():
+                elif "[ERROR]" in line or "[X]" in line or "error" in line.lower() or "❌" in line:
                     style = "red"
-                elif "🔧" in line or "Calling" in line:
+                elif "[TOOL]" in line or "Calling" in line or "🔧" in line:
                     style = "yellow"
                 elif line.strip().startswith("<") or line.strip().startswith("{"):
                     style = "dim cyan"
@@ -641,7 +661,8 @@ class CoderTUI:
             # Main content panel (without outer border, header has its own)
             main_content_items = [
                 Text(""),  # Spacer after header
-                Text(f"Task: {self.task[:WIDTH-10]}{'...' if len(self.task) > WIDTH-10 else ''}", style="bold"),
+                # Show full task without truncation - wrap if needed
+                Text(f"Task: {self.task}", style="bold"),
                 status,
                 Text("─" * (WIDTH-2), style="dim cyan"),  # Full width separator
                 files_table,
@@ -787,9 +808,10 @@ class AgenticLoop:
             if elapsed > self.timeout_minutes:
                 return False, f"Safety timeout: No activity for {int(idle_minutes)} min (total: {int(elapsed)} min)"
         
-        # Also check for very long idle time (5+ minutes without any response)
+        # Also check for long idle time (2+ minutes without any response)
         # This catches cases where model completely stopped responding
-        if idle_minutes > 5:
+        # Reduced from 5 minutes to 2 minutes for faster failure detection
+        if idle_minutes > 2:
             return False, f"Model stopped responding (idle for {int(idle_minutes)} min)"
         
         # NOTE: Empty response handling is now done via context reset in the main loop
@@ -1471,6 +1493,45 @@ Thumbs.db
         
         live.start()
         
+        # CRITICAL: Start animation thread IMMEDIATELY after live.start()
+        # This ensures animation continues even during blocking operations (like template selection)
+        import threading
+        animation_running = threading.Event()
+        animation_running.set()
+        
+        # Store for cleanup
+        tui._animation_running = animation_running
+        
+        def animation_updater():
+            while animation_running.is_set():
+                try:
+                    # Update live display
+                    # Check if update is needed (set by append_stream) or always update for animation
+                    needs_update = tui._needs_update
+                    if needs_update:
+                        tui._needs_update = False  # Clear flag
+                    
+                    # Always update (for smooth animation), but check flag for immediate updates
+                    try:
+                        # Render with lock (safe - we're in separate thread)
+                        rendered = tui.render()
+                        live.update(rendered)
+                    except Exception:
+                        pass  # Don't fail if render is blocked
+                    
+                    # Sleep shorter if update was needed, longer otherwise
+                    sleep_time = 0.05 if needs_update else 0.1
+                    time.sleep(sleep_time)
+                except:
+                    break
+        
+        animation_thread = threading.Thread(target=animation_updater, daemon=True)
+        animation_thread.start()
+        
+        # CRITICAL: Callback is no longer needed - we use flag-based updates instead
+        # Animation thread will check _needs_update flag to trigger immediate updates
+        # This prevents deadlocks (callback won't call render() while lock is held)
+        
         def stop_live():
             """Stop live display cleanly."""
             try:
@@ -1480,12 +1541,14 @@ Thumbs.db
 
         # Server health check
         tui.set_action("Checking server...")
+        live.update(tui.render())  # Force immediate update
         time.sleep(0.05) # Prevent lock contention
         try:
             health = requests.get("http://127.0.0.1:8080/health", timeout=5)
             if health.status_code != 200:
                 return f"❌ Server Error: VAF Server not ready (Status {health.status_code}). Please start VAF Server on port 8080."
             tui.set_action("Server ready")
+            live.update(tui.render())  # Force immediate update
             time.sleep(0.05)
         except requests.exceptions.ConnectionError:
             return "❌ Connection Error: VAF Server unreachable (Port 8080). Please start VAF Server."
@@ -1496,6 +1559,7 @@ Thumbs.db
         # TOOLS - File tools + TODO management (NOT coding_agent!)
         # ═══════════════════════════════════════════════════════════════════
         tui.set_action("Loading tools...")
+        live.update(tui.render())  # Force immediate update
         time.sleep(0.05)
         
         # IMPORTANT: coding_agent must NOT have access to itself!
@@ -1514,6 +1578,7 @@ Thumbs.db
 
         # Setup working directory
         tui.set_action("Creating project...")
+        live.update(tui.render())  # Force immediate update
         time.sleep(0.05)
         
         # ═══════════════════════════════════════════════════════════════════
@@ -1590,29 +1655,82 @@ Thumbs.db
         
         if not skip_template:
             tui.set_action("Analyzing task for template...")
-            live.update(tui.render())
+            # CRITICAL: Force immediate update BEFORE blocking operation
+            tui.append_stream("[INFO] Starting template selection...")
+            tui._needs_update = True  # Force animation thread to update immediately
+            # CRITICAL: Force immediate update (outside lock, safe)
+            try:
+                live.update(tui.render())
+            except Exception:
+                pass  # Don't fail if render is blocked
+            time.sleep(0.15)  # Give animation thread time to render before blocking operation
             
             # Use LLM to intelligently detect template type (has its own context)
             # This runs BEFORE the main coding work begins
             # Use snippet to prevent context overflow/hangs
             task_snippet = task[:1000]
-            template_type, decision_info = TemplateManager.detect_template_type_with_llm(task_snippet)
+            
+            # CRITICAL: Add timeout wrapper to prevent hanging
+            try:
+                template_type, decision_info = TemplateManager.detect_template_type_with_llm(task_snippet)
+            except requests.exceptions.Timeout:
+                tui.append_stream("[WARN] Template selection timed out - continuing without template")
+                template_type, decision_info = None, "Template selection timed out - will create from scratch"
+            except Exception as e:
+                tui.append_stream(f"[WARN] Template selection failed: {str(e)[:50]} - continuing without template")
+                template_type, decision_info = None, f"Template selection failed - will create from scratch"
             
             # Output detailed decision process
+            # CRITICAL: Force immediate update to show template selection
             tui.append_stream("─" * 60)
-            tui.append_stream("Template Selection Process:")
+            tui.append_stream("[SEARCH] Template Selection Process:")
             for line in decision_info.split('\n'):
                 if line.strip():
                     tui.append_stream(f"  {line}")
             tui.append_stream("─" * 60)
             
             if template_type:
-                tui.append_stream(f"Selected template: {template_type}")
+                tui.append_stream(f"[OK] Selected template: {template_type}")
             else:
-                tui.append_stream("No template selected")
+                tui.append_stream("[INFO] No template selected")
                 tui.append_stream("-> Will use web_deep_search to research implementation")
                 tui.append_stream("-> Then create TODO list and implement from scratch")
-            live.update(tui.render())
+            
+            # CRITICAL: Force immediate update after all messages
+            tui._needs_update = True  # Force animation thread to update
+            time.sleep(0.3)  # Give animation thread time to render all messages
+            
+            # DEBUG: Verify buffer has content (only in development)
+            with tui._lock:
+                if not tui.stream_buffer:
+                    # Buffer is empty - this shouldn't happen!
+                    tui.append_stream("[WARN] WARNING: Buffer was empty after template selection!")
+                    tui._needs_update = True  # Force update
+                    time.sleep(0.1)  # Give time to render
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # FIX: Template-Auswahl TUI-Anzeige (2024)
+        # ═══════════════════════════════════════════════════════════════════
+        # PROBLEM: Template-Auswahl-Meldungen wurden nicht in der TUI angezeigt,
+        # weil die blockierende LLM-Anfrage (detect_template_type_with_llm) den
+        # Hauptthread blockierte, bevor die Meldungen gerendert werden konnten.
+        #
+        # LÖSUNG:
+        # 1. Flag-basierte Updates: Statt direkter live.update() Aufrufe (die
+        #    Deadlocks verursachen können), setzen wir tui._needs_update = True
+        #    und lassen den Animation Thread die Updates übernehmen.
+        # 2. Animation Thread startet JETZT direkt nach live.start() (Zeile 1494),
+        #    nicht erst nach der Template-Auswahl. Das stellt sicher, dass die
+        #    Animation auch während blockierender Operationen läuft.
+        # 3. Längere Wartezeiten (0.2-0.3s) geben dem Animation Thread Zeit,
+        #    die Meldungen zu rendern, bevor die nächste blockierende Operation
+        #    startet.
+        # 4. Alle Template-Auswahl-Meldungen werden mit append_stream() hinzugefügt
+        #    und bleiben im stream_buffer, auch wenn die LLM-Anfrage blockiert.
+        #
+        # ERGEBNIS: Template-Auswahl-Meldungen sind jetzt in der TUI sichtbar,
+        #           auch während der blockierenden LLM-Anfrage.
+        # ═══════════════════════════════════════════════════════════════════
         
         if template_type:
             tui.set_action(f"Template: {template_type}")
@@ -1630,32 +1748,12 @@ Thumbs.db
                 tui.add_file(fname, size, "done")
             
             tui.append_stream(f"{len(template_files)} template files")
-            live.update(tui.render())
+            # append_stream() now triggers live.update() automatically via callback
         
         # ═══════════════════════════════════════════════════════════════════
-        # START ANIMATION THREAD (Safe Point)
+        # Animation thread is already started immediately after live.start()
+        # No need to start it again here
         # ═══════════════════════════════════════════════════════════════════
-        # We start the thread HERE, after heavy initialization is done.
-        # This prevents lock contention during startup while keeping the loop animated.
-        
-        import threading
-        animation_running = threading.Event()
-        animation_running.set()
-        
-        # Store for cleanup
-        tui._animation_running = animation_running
-        
-        def animation_updater():
-            while animation_running.is_set():
-                try:
-                    # Update live display
-                    live.update(tui.render())
-                    time.sleep(0.1) # 10 FPS
-                except:
-                    break
-        
-        animation_thread = threading.Thread(target=animation_updater, daemon=True)
-        animation_thread.start()
         
         def stop_live():
             """Stop live display cleanly."""
@@ -1717,28 +1815,33 @@ Template: `<nav class="nav"><div class="logo">{{BUSINESS_NAME}}</div></nav>`
 ❌ Wrong: `<header><h1>Testler Handwerksmeister</h1></header>` (removed nav - will be BLOCKED!)
 """
         
-        system_prompt = f"""You are the VAF Coding Sub-Agent.
-    
-    ## PROJECT DIRECTORY
-    `{base_dir}`
-    
-    ## TOOLS
-    - `set_todos(tasks=[...])`: REQUIRED FIRST step.
-    - `write_file(path, content)`: Create/update files.
-    - `read_file(path)`: Read files.
-    - `task_done(summary)`: Mark current task complete.
-    
-    ## YOUR GOAL
-    Complete this task: "{task}"
-    
-    ## INSTRUCTIONS
-    1. **PLAN**: Call `set_todos` with a list of steps.
-    2. **ACT**: Use `write_file` to create the necessary code files.
-    3. **VERIFY**: Use `read_file` if needed.
-    4. **FINISH**: Call `task_done` after each step.
-    
-    **CRITICAL**: You MUST use `write_file` to create files. Thinking about code is not enough.
-    """        
+        system_prompt = f"""You are a Senior software developer Sub-agent. Your task is to complete coding tasks autonomously and efficiently.
+
+## PROJECT DIRECTORY
+`{base_dir}`
+All file paths must be OS-independent (use forward slashes or Path objects).
+
+## TOOLS
+- `set_todos(tasks=[...])`: REQUIRED FIRST step - break down the task into specific subtasks.
+- `write_file(path, content)`: Create/update files - YOU MUST CALL THIS to actually create code.
+- `read_file(path)`: Read existing files.
+- `task_done(summary)`: Mark current task complete - ONLY call after you've actually written files.
+
+## YOUR GOAL
+Complete this task: "{task}"
+
+## CRITICAL WORKFLOW (MUST FOLLOW):
+1. **PLAN**: Call `set_todos` with a list of specific steps.
+2. **ACT**: Use `write_file` to CREATE the actual code files - this is MANDATORY!
+3. **VERIFY**: Use `read_file` if needed to check existing code.
+4. **FINISH**: Call `task_done` ONLY after you've actually written files with `write_file`.
+
+**CRITICAL RULES:**
+- You MUST call `write_file` before calling `task_done` - no exceptions!
+- Thinking about code or describing code is NOT enough - you must actually create files.
+- DO NOT call `task_done` without first calling `write_file` for the current task.
+- Work on ONE task at a time, complete it fully, then move to the next.
+"""        
         # Build user message with STRONG emphasis on set_todos first
         user_msg = f"Task: {task}\n\n"
         if template_files:
@@ -1752,27 +1855,62 @@ Template: `<nav class="nav"><div class="logo">{{BUSINESS_NAME}}</div></nav>`
         
         user_msg += "Start now by calling `set_todos` with your task breakdown (as many tasks as needed)."
         
-        # Initialize context manager for this coding agent session
-        from vaf.core.context import ContextManager
-        max_tokens = 8192  # Same as main agent
-        context_manager = ContextManager(max_tokens=max_tokens)
+        # ═══════════════════════════════════════════════════════════════
+        # HIERARCHICAL CONTEXT STRUCTURE
+        # ═══════════════════════════════════════════════════════════════
+        # 1. MAIN CONTEXT (Coding Agent) - For Template + Task List (set_todos phase)
+        # 2. TASK CONTEXTS - Each task gets its own ContextManager + History
         
-        history = [
+        from vaf.core.context import ContextManager
+        from vaf.core.config import Config
+        
+        # Use same max_tokens as main agent (from user config)
+        max_tokens = Config.get("n_ctx", 8192)
+        
+        # MAIN CONTEXT: For Template/Planning phase
+        main_context_manager = ContextManager(max_tokens=max_tokens)
+        main_history = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg}
         ]
+        
+        # TASK CONTEXTS: Each task gets its own isolated context
+        task_context_managers: Dict[int, ContextManager] = {}  # task_idx -> ContextManager
+        task_histories: Dict[int, List[Dict]] = {}  # task_idx -> history
+        
+        # Current context (switches between main and task contexts)
+        current_context_manager = main_context_manager
+        history = main_history
+        
+        # Helper function to update history in appropriate dict
+        def update_history_in_dict():
+            """Update history in the appropriate dict (main or task-specific)."""
+            nonlocal main_history, task_histories
+            if current_context_manager == main_context_manager:
+                main_history = history
+            else:
+                # Find which task this context belongs to
+                for idx, cm in task_context_managers.items():
+                    if cm == current_context_manager:
+                        task_histories[idx] = history
+                        break
         
         # Snapshot history (before processing)
         history_snapshot_len = len(history)
         
         # ═══════════════════════════════════════════════════════════════
-        # HELPER: Create fresh context for a new task
+        # HELPER: Create fresh context for a new task (with new ContextManager)
         # ═══════════════════════════════════════════════════════════════
-        def create_fresh_context_for_task(current_task: str) -> List[Dict[str, Any]]:
+        def create_fresh_context_for_task(task_idx: int, current_task: str) -> tuple[ContextManager, List[Dict[str, Any]]]:
             """
             Creates a completely fresh context for a new task.
-            This isolates each task with its own context, preventing confusion from previous tasks.
+            This isolates each task with its own ContextManager and history, preventing confusion from previous tasks.
+            
+            Returns:
+                (ContextManager, List[Dict]): New ContextManager and fresh history for this task
             """
+            # Create NEW ContextManager for this task (isolated from other tasks)
+            task_context_manager = ContextManager(max_tokens=max_tokens)
             # Detect task type for dynamic context
             task_lower = current_task.lower()
             is_html_task = any(kw in task_lower for kw in ['html', 'website', 'webpage', 'web seite'])
@@ -1832,7 +1970,7 @@ The following files were already created from a template:
 """
             
             # Rebuild system prompt with current state
-            fresh_system_prompt = f"""You are the VAF Coding Sub-Agent - an autonomous code generator.
+            fresh_system_prompt = f"""You are a Senior software developer Sub-agent. Your task is to complete coding tasks autonomously and efficiently.
 
 ## PROJECT DIRECTORY
 `{base_dir}`
@@ -1857,53 +1995,23 @@ All files must use ABSOLUTE paths in this directory.
 
 ## MANDATORY WORKFLOW (you MUST follow this!)
 
-### PHASE 1: PLANNING (first response)
-Your FIRST action MUST be to call set_todos. Output it EXACTLY like this:
-```
-<tool_call>
-set_todos(tasks=["Task 1", "Task 2", "Task 3", ...])
-</tool_call>
-```
+### YOUR CURRENT TASK
+**{current_task}**
 
-**CRITICAL: Create TODOs that MATCH the actual task!**
-- If task says "CONTENT_ONLY" or "ONLY THE" → Create simple TODOs for single file/content
-- If task says "multi-page website" → Create TODOs for multiple pages
-- If task says "weather report HTML" → Create TODOs for weather HTML, not multi-page website
-- Analyze the task carefully and create appropriate TODOs
+**IMPORTANT:** You are working on ONLY this task. Focus on completing this specific task fully before moving on.
 
-Examples:
-```
-Task: "CONTENT_ONLY: Generate ONLY the complete HTML document content for a weather report"
-✅ CORRECT: set_todos(tasks=["Generate complete HTML document with weather data", "Add embedded CSS styling", "Verify HTML is complete and valid"])
-❌ WRONG: set_todos(tasks=["Read and customize index.html", "Create additional pages", ...])  # Too complex for single file!
-❌ WRONG: set_todos(tasks=["Generate HTML", "Embed YouTube video", ...])  # Don't add features not mentioned in task!
-
-Task: "Create a multi-page website for a restaurant"
-✅ CORRECT: set_todos(tasks=["Create index.html (homepage)", "Create about.html page", "Create menu.html page", "Create contact.html page", "Add navigation", "Style all pages"])
-❌ WRONG: set_todos(tasks=["Generate HTML document"])  # Too simple for multi-page!
-```
-
-### PHASE 2: EXECUTION (work through each task)
-For EACH task in your TODO list:
-1. Focus ONLY on the current task
-2. Call the necessary tools (write_file, etc.)
-3. When task is complete, call `task_done`
-4. The system will give you the next task
-
-### PHASE 3: COMPLETION
-After all tasks are done, say "ALL TASKS COMPLETED"
+### STEPS
+1. Read any existing files if needed (`read_file`)
+2. Create or modify files using `write_file` to complete the task
+3. When task is complete, call `task_done` with a summary
 
 ## RULES
-- You MUST call `set_todos` in your FIRST response
-- **CRITICAL**: Create TODOs that MATCH the task complexity and requirements
-- You MUST call `task_done` after completing each task
-- Work on ONE task at a time (the system tracks progress)
-- Do NOT skip tasks or do multiple at once
+- Focus ONLY on the current task: **{current_task}**
+- You MUST call `write_file` to actually create/modify files - reading files alone is not enough
 - Write COMPLETE code, not placeholders
-- **CRITICAL**: You MUST complete ALL tasks in the TODO list - DO NOT stop until every task is done
-- **CRITICAL**: You MUST use `write_file` to actually modify/create files - reading files alone is not enough
-- **CRITICAL**: DO NOT claim completion if any tasks remain incomplete
-- **CRITICAL**: DO NOT skip tasks or stop working prematurely - work through the entire TODO list
+- When this task is complete, call `task_done` to move to the next task
+- DO NOT call `set_todos` - your TODO list is already set and managed by the system
+- DO NOT skip this task - complete it fully before moving on
 
 {("## TEMPLATE FILES RULES (if templates exist above)\n"
 "🚨 **CRITICAL: Templates are REQUIRED structure - NOT suggestions!**\n\n"
@@ -1952,17 +2060,18 @@ Examples:
 The main agent will answer your questions based on the original user task and call you again with the information.
 You can continue working once you have the answers.
 
-## CURRENT TASK
-You are working on a specific task from a TODO list. The TODO list has already been set.
-Your current task is: **{current_task}**
+## YOUR CURRENT TASK (Task {task_idx + 1})
+**{current_task}**
 
-{task_mgr.get_todos_for_prompt()}
+**IMPORTANT:** You are working on ONLY this task. Focus on completing this specific task fully before moving on.
+
+**NOTE:** Your TODO list is already set and managed by the system. DO NOT call `set_todos` - it's not available in task execution context.
 
 Focus ONLY on completing this task. Use the necessary tools (read_file, write_file, etc.) to complete it.
 When finished, call `task_done(summary="...")` to mark it complete and move to the next task."""
             
-            # Build user message for this specific task
-            fresh_user_msg = f"""## CURRENT TASK
+            # Build user message for this specific task (ONLY current task, not entire list)
+            fresh_user_msg = f"""## YOUR CURRENT TASK (Task {task_idx + 1})
 
 **Task:** {current_task}
 
@@ -1983,227 +2092,213 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             
             fresh_user_msg += "\n\nStart working on this task now."
             
-            # Return fresh context (only system + user, no old history)
-            return [
+            # Create fresh history (only system + user, no old history)
+            task_history = [
                 {"role": "system", "content": fresh_system_prompt},
                 {"role": "user", "content": fresh_user_msg}
             ]
+            
+            # Store in task contexts
+            task_context_managers[task_idx] = task_context_manager
+            task_histories[task_idx] = task_history
+            
+            # Return both ContextManager and history
+            return task_context_manager, task_history
         
-        # Tools schema - includes TODO management tools
-        tools_schema = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "set_todos",
-                    "description": "REQUIRED FIRST ACTION: Set your TODO list for this task. Call this FIRST with a list of specific subtasks.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "tasks": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "List of specific tasks to complete, e.g. ['Create index.html', 'Add CSS styling', 'Test output']"
-                            }
-                        },
-                        "required": ["tasks"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "task_done",
-                    "description": "Mark the current task as complete and move to the next one. Call this after completing each task.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "summary": {"type": "string", "description": "Brief summary of what was done"}
-                        },
-                        "required": ["summary"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "write_file",
-                    "description": "Write content to a file.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": f"Absolute path (use {base_dir}/)"},
-                            "content": {"type": "string", "description": "File content"}
-                        },
-                        "required": ["path", "content"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_file",
-                    "description": "Read a file.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"path": {"type": "string"}},
-                        "required": ["path"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_files",
-                    "description": "List directory contents.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"path": {"type": "string"}},
-                        "required": ["path"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "python_sandbox",
-                    "description": "Execute Python code safely in a sandboxed environment. Use for mathematical calculations, data processing, algorithms, and scientific computations.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {
-                                "type": "string",
-                                "description": "Python code to execute (e.g., 'result = 2 + 2 * 3' or 'import math; print(math.sqrt(16))')"
-                            }
-                        },
-                        "required": ["code"]
-                    }
-                }
-            }
-        ]
-        
-        # web_fetch tool for inspecting web pages
-        tools_schema.append({
+        # ═══════════════════════════════════════════════════════════════════
+        # DYNAMIC TOOLS SCHEMA - Based on context (MAIN vs TASK)
+        # ═══════════════════════════════════════════════════════════════════
+        def get_tools_schema_for_context(is_main_context: bool) -> List[Dict]:
+            """Get tools schema based on context type. Plug-and-Play-Tools are automatically included."""
+            base_tools = [
+                {
                     "type": "function",
                     "function": {
-                "name": "web_fetch",
-                "description": "Fetch a webpage's HTML content. Use to inspect how pages are built or verify your output.",
+                        "name": "task_done",
+                        "description": "Mark the current task as complete and move to the next one. Call this after completing each task.",
                         "parameters": {
                             "type": "object",
                             "properties": {
-                        "url": {"type": "string", "description": "URL to fetch (http:// or https://)"},
-                        "selector": {"type": "string", "description": "Optional CSS selector to extract specific element"}
+                                "summary": {"type": "string", "description": "Brief summary of what was done"}
                             },
-                    "required": ["url"]
+                            "required": ["summary"]
                         }
                     }
-        })
-        
-        # web_deep_search tool for finding solutions to errors or getting ideas
-        tools_schema.append({
+                },
+                {
                     "type": "function",
                     "function": {
-                "name": "web_deep_search",
-                "description": "Deep search the web for solutions, error fixes, or ideas. Returns summarized results without bloating context. Use when you don't know how to fix an error or need inspiration.",
+                        "name": "write_file",
+                        "description": "Write content to a file.",
                         "parameters": {
                             "type": "object",
                             "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query (e.g., 'Python TypeError fix', 'JavaScript async await best practices', 'CSS responsive design tutorial')"
-                        },
-                        "max_results": {
-                            "type": "integer",
-                            "description": "Maximum number of results to return (default: 5, max: 10)",
-                            "default": 5
-                        }
+                                "path": {"type": "string", "description": f"Absolute path (use {base_dir}/)"},
+                                "content": {"type": "string", "description": "File content"}
                             },
-                            "required": ["query"]
+                            "required": ["path", "content"]
                         }
                     }
-        })
-        
-        # Git tools
-        tools_schema.append({
-            "type": "function",
-            "function": {
-                "name": "git_init",
-                "description": "Initialize a Git repository in the project directory. Creates .git directory and .gitignore file.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }
-        })
-        
-        tools_schema.append({
-            "type": "function",
-            "function": {
-                "name": "git_add_commit",
-                "description": "Add files to Git staging area and create a commit with a message. Use this to save your work progress.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "message": {
-                            "type": "string",
-                            "description": "Commit message describing the changes"
-                        },
-                        "files": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Optional: Specific files to add (default: all files)"
-                        }
-                    },
-                    "required": ["message"]
-                }
-            }
-        })
-        
-        tools_schema.append({
-            "type": "function",
-            "function": {
-                "name": "git_status",
-                "description": "Check the current Git status: shows modified, staged, and untracked files.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }
-        })
-        
-        tools_schema.append({
-            "type": "function",
-            "function": {
-                "name": "git_log",
-                "description": "View the Git commit history. Shows recent commits with messages.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "limit": {
-                            "type": "integer",
-                            "description": "Number of commits to show (default: 10)",
-                            "default": 10
-                        }
-                    },
-                    "required": []
-                        }
-                    }
-        })
-        
-        if HAS_CODING_TOOLS:
-            tools_schema.append({
+                },
+                {
                     "type": "function",
                     "function": {
-                    "name": "bash",
-                    "description": "Execute shell command.",
+                        "name": "read_file",
+                        "description": "Read a file.",
                         "parameters": {
                             "type": "object",
-                        "properties": {"command": {"type": "string"}},
-                        "required": ["command"]
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_files",
+                        "description": "List directory contents.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "python_sandbox",
+                        "description": "Execute Python code safely in a sandboxed environment. Use for mathematical calculations, data processing, algorithms, and scientific computations.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "code": {
+                                    "type": "string",
+                                    "description": "Python code to execute (e.g., 'result = 2 + 2 * 3' or 'import math; print(math.sqrt(16))')"
+                                }
+                            },
+                            "required": ["code"]
+                        }
                     }
                 }
-            })
+            ]
+            
+            # Only include set_todos in MAIN context (planning phase)
+            if is_main_context:
+                base_tools.insert(0, {
+                    "type": "function",
+                    "function": {
+                        "name": "set_todos",
+                        "description": (
+                            "REQUIRED FIRST ACTION: Set your TODO list for this task. "
+                            "**ONLY available in planning phase.** "
+                            "Call this FIRST with a list of specific subtasks. "
+                            "Once TODOs are set, this tool is no longer available in task execution context."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "tasks": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "List of specific tasks to complete, e.g. ['Create index.html', 'Add CSS styling', 'Test output']"
+                                }
+                            },
+                            "required": ["tasks"]
+                        }
+                    }
+                })
+            
+            return base_tools
+        
+        # Initialize tools_schema (will be rebuilt dynamically in loop)
+        tools_schema = []
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # LOAD PLUG-AND-PLAY TOOLS AUTOMATICALLY
+        # ═══════════════════════════════════════════════════════════════════
+        def load_plug_and_play_tools() -> List[Dict]:
+            """Load all Plug-and-Play-Tools from vaf/tools/ directory automatically."""
+            plug_and_play_tools = []
+            
+            try:
+                import pkgutil
+                import importlib
+                import inspect
+                from vaf.tools.base import BaseTool
+                import vaf.tools
+                
+                # Tools that should NOT be available to coding agent
+                EXCLUDED_TOOLS = [
+                    "coding_agent",  # Prevent recursion
+                    "librarian_agent",  # Different sub-agent
+                    "research_agent",  # Different sub-agent
+                ]
+                
+                # Iterate over all files in vaf/tools/
+                package_path = os.path.dirname(vaf.tools.__file__)
+                for _, name, _ in pkgutil.iter_modules([package_path]):
+                    try:
+                        # Import the module
+                        module = importlib.import_module(f"vaf.tools.{name}")
+                        
+                        # Find classes that inherit from BaseTool
+                        for _, obj in inspect.getmembers(module):
+                            if inspect.isclass(obj) and issubclass(obj, BaseTool) and obj is not BaseTool:
+                                instance = obj()
+                                
+                                # Skip excluded tools
+                                if instance.name in EXCLUDED_TOOLS:
+                                    continue
+                                
+                                # Skip tools that are already manually added
+                                MANUALLY_ADDED_TOOLS = [
+                                    "set_todos", "task_done", "write_file", "read_file", 
+                                    "list_files", "python_sandbox", "web_fetch", "web_deep_search",
+                                    "git_init", "git_add_commit", "git_status", "git_log", "bash"
+                                ]
+                                if instance.name in MANUALLY_ADDED_TOOLS:
+                                    continue
+                                
+                                # Get parameters schema
+                                params = getattr(instance, 'parameters', {})
+                                if not isinstance(params, dict):
+                                    params = {"type": "object", "properties": {}}
+                                if "type" not in params:
+                                    params["type"] = "object"
+                                if "properties" not in params:
+                                    params["properties"] = {}
+                                
+                                # Add to plug-and-play tools
+                                plug_and_play_tools.append({
+                                    "type": "function",
+                                    "function": {
+                                        "name": instance.name,
+                                        "description": instance.description or f"Tool: {instance.name}",
+                                        "parameters": params
+                                    }
+                                })
+                                
+                                # Also add to local_tools for execution
+                                self.local_tools[instance.name] = instance
+                                
+                    except Exception as e:
+                        # Skip tools that fail to load
+                        continue
+                        
+            except Exception as e:
+                # If loading fails, continue without plug-and-play tools
+                pass
+            
+            return plug_and_play_tools
+        
+        # Load plug-and-play tools
+        plug_and_play_tools = load_plug_and_play_tools()
+        if plug_and_play_tools:
+            tui.append_stream(f"[INFO] Loaded {len(plug_and_play_tools)} plug-and-play tool(s)")
+        
+        # Old tools_schema code removed - now built dynamically in loop
+        # Tools are added dynamically in the loop based on context (MAIN vs TASK)
         
         # ═══════════════════════════════════════════════════════════════════
         # AGENTIC LOOP - NO MAX_STEPS!
@@ -2212,17 +2307,35 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
         loop = AgenticLoop(timeout_minutes=15)
         files_created = list(template_files)  # Start with template files
         
+        # Track files created per task (for validation)
+        task_file_map: Dict[int, List[str]] = {}  # task_idx -> [list of files]
+        write_file_calls_in_session = 0  # Track total write_file calls
+        write_file_calls_in_last_3_loops = 0  # Track recent activity
+        recent_loop_write_files = []  # Track write_file calls per loop
+        
         # Dynamic Temperature State
         current_temp = 0.3
         consecutive_empty = 0
         
+        # Task-spezifische Empty-Counter (isoliert pro Task-Thread)
+        task_empty_counters: Dict[int, int] = {}  # task_idx -> consecutive_empty count
+        main_empty_counter = 0  # For main context
+        
         tui.set_action("Agentic Loop")
-        tui.append_stream(f"{os.path.basename(base_dir)}")
+        tui.append_stream(f"[INFO] Starting agentic loop for: {os.path.basename(base_dir)}")
+        live.update(tui.render())
+        
+        # CRITICAL: Debug output to show loop is starting
+        tui.append_stream("[INFO] Loop initialized - waiting for first LLM response...")
         live.update(tui.render())
         
         while True:
             loop.increment_loop()
             tui.increment_loop()
+            
+            # Initialize write_file tracking for this loop (will be updated if write_file is called)
+            if loop.loop_count > len(recent_loop_write_files):
+                recent_loop_write_files.append(False)
             
             # Check if we should continue
             should_continue, reason = loop.should_continue()
@@ -2234,20 +2347,39 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             live.update(tui.render())
             
             # ═══════════════════════════════════════════════════════════════
-            # CONTEXT MANAGEMENT - Prevent token overflow
+            # CONTEXT MANAGEMENT - Prevent token overflow (per context)
             # ═══════════════════════════════════════════════════════════════
             
+            # Use current context manager (main or task-specific)
             # Proactive compression: Check token usage and compress if > 85% of limit
-            estimated_tokens = context_manager.estimate_tokens(history)
-            if estimated_tokens > int(context_manager.max_tokens * 0.85):
-                tui.set_action(f"Proactive compression: {estimated_tokens}/{context_manager.max_tokens} tokens...")
+            estimated_tokens = current_context_manager.estimate_tokens(history)
+            if estimated_tokens > int(current_context_manager.max_tokens * 0.85):
+                tui.set_action(f"Proactive compression: {estimated_tokens}/{current_context_manager.max_tokens} tokens...")
                 live.update(tui.render())
-                history = context_manager.compress(history)
+                history = current_context_manager.compress(history)
+                # Update history in appropriate dict
+                if current_context_manager == main_context_manager:
+                    main_history = history
+                else:
+                    # Find which task this context belongs to
+                    for idx, cm in task_context_managers.items():
+                        if cm == current_context_manager:
+                            task_histories[idx] = history
+                            break
             # Also check normal threshold
-            elif context_manager.should_compress(history):
+            elif current_context_manager.should_compress(history):
                 tui.set_action("Compressing context...")
                 live.update(tui.render())
-                history = context_manager.compress(history)
+                history = current_context_manager.compress(history)
+                # Update history in appropriate dict
+                if current_context_manager == main_context_manager:
+                    main_history = history
+                else:
+                    # Find which task this context belongs to
+                    for idx, cm in task_context_managers.items():
+                        if cm == current_context_manager:
+                            task_histories[idx] = history
+                            break
             tui.set_action(f"Loop {loop.loop_count}")
             live.update(tui.render())
             
@@ -2290,16 +2422,195 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             # ═══════════════════════════════════════════════════════════════
             
             tui.set_action("Generating...")
+            
+            # Determine if we're in main context or task context
+            is_main_context = (current_context_manager == main_context_manager)
+            
+            if is_main_context:
+                context_info = "[MAIN] Planning/Setup"
+                context_prefix = "[MAIN]"
+            else:
+                # Find which task this context belongs to
+                current_task_idx = None
+                for idx, cm in task_context_managers.items():
+                    if cm == current_context_manager:
+                        current_task_idx = idx
+                        break
+                if current_task_idx is not None:
+                    current_task = task_mgr.todos[current_task_idx]["task"] if current_task_idx < len(task_mgr.todos) else "Unknown"
+                    context_info = f"[TASK {current_task_idx + 1}] {current_task[:50]}"
+                    context_prefix = f"[TASK {current_task_idx + 1}]"
+                else:
+                    context_info = "[TASK] Execution"
+                    context_prefix = "[TASK]"
+            
+            # Helper function to add context prefix to messages
+            def append_with_context(msg: str):
+                """Add context prefix to message for clarity."""
+                if not msg.startswith(context_prefix):
+                    tui.append_stream(f"{context_prefix} {msg}")
+                else:
+                    tui.append_stream(msg)
+            
+            append_with_context(f"[INFO] Preparing LLM request (Loop {loop.loop_count}, context={context_info})...")
+            live.update(tui.render())
+            
+            # Rebuild tools_schema dynamically based on context
+            tools_schema = get_tools_schema_for_context(is_main_context)
+            
+            # Add web tools (available in both contexts)
+            tools_schema.append({
+                "type": "function",
+                "function": {
+                    "name": "web_fetch",
+                    "description": "Fetch a webpage's HTML content. Use to inspect how pages are built or verify your output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string", "description": "URL to fetch (http:// or https://)"},
+                            "selector": {"type": "string", "description": "Optional CSS selector to extract specific element"}
+                        },
+                        "required": ["url"]
+                    }
+                }
+            })
+            
+            tools_schema.append({
+                "type": "function",
+                "function": {
+                    "name": "web_deep_search",
+                    "description": "Deep search the web for solutions, error fixes, or ideas. Returns summarized results without bloating context. Use when you don't know how to fix an error or need inspiration.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Search query (e.g., 'Python TypeError fix', 'JavaScript async await best practices', 'CSS responsive design tutorial')"
+                            },
+                            "max_results": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return (default: 5, max: 10)",
+                                "default": 5
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                }
+            })
+            
+            # Add Git tools (available in both contexts)
+            tools_schema.append({
+                "type": "function",
+                "function": {
+                    "name": "git_init",
+                    "description": "Initialize a Git repository in the project directory. Creates .git directory and .gitignore file.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            })
+            
+            tools_schema.append({
+                "type": "function",
+                "function": {
+                    "name": "git_add_commit",
+                    "description": "Add files to Git staging area and create a commit with a message. Use this to save your work progress.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "message": {
+                                "type": "string",
+                                "description": "Commit message describing the changes"
+                            },
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Optional: Specific files to add (default: all files)"
+                            }
+                        },
+                        "required": ["message"]
+                    }
+                }
+            })
+            
+            tools_schema.append({
+                "type": "function",
+                "function": {
+                    "name": "git_status",
+                    "description": "Check the current Git status: shows modified, staged, and untracked files.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            })
+            
+            tools_schema.append({
+                "type": "function",
+                "function": {
+                    "name": "git_log",
+                    "description": "View the Git commit history. Shows recent commits with messages.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "limit": {
+                                "type": "integer",
+                                "description": "Number of commits to show (default: 10)",
+                                "default": 10
+                            }
+                        },
+                        "required": []
+                    }
+                }
+            })
+            
+            # Add bash if available
+            if HAS_CODING_TOOLS:
+                tools_schema.append({
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "description": "Execute shell command.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"]
+                        }
+                    }
+                })
+            
+            # Add plug-and-play tools (available in both contexts)
+            tools_schema.extend(plug_and_play_tools)
+            
             # Only clear stream if buffer is empty or only has separator
-            # This prevents clearing content that was just added
+            # CRITICAL: Do NOT clear if buffer has template selection or other important messages
+            # This prevents clearing content that was just added (like template selection)
             with tui._lock:
+                # CRITICAL: Check if buffer has important content BEFORE clearing
+                # Convert buffer to string for keyword checking
+                buffer_text = " ".join(str(line) for line in tui.stream_buffer)
+                has_important_content = any(
+                    keyword in buffer_text 
+                    for keyword in [
+                        "Template Selection", "Selected template", "Template:", 
+                        "Analyzing task", "template files", "New project",
+                        "Creating project", "Loading tools", "Checking server",
+                        "[SEARCH]", "[OK]", "[INFO]", "[WARN]", "[ERROR]", "[TOOL]", "─"  # Text markers and separators indicate important content
+                    ]
+                )
+                
                 buffer_has_content = len(tui.stream_buffer) > 1 or (
                     len(tui.stream_buffer) == 1 and 
                     tui.stream_buffer[0] != "--- New response ---" and
                     not tui.stream_buffer[0].startswith("📝 Response at")
                 )
-                if not buffer_has_content:
-                    # Only clear if buffer is empty or only has separator
+                
+                # NEVER clear if buffer has important content
+                if not buffer_has_content and not has_important_content:
+                    # Only clear if buffer is truly empty (no important content)
                     tui.stream_buffer = []
                     tui.current_stream = ""
                     tui.current_line_buffer = ""
@@ -2308,14 +2619,20 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             # Only add separator if buffer is empty
             # Use timestamp instead of "--- New response ---"
             timestamp = time.strftime("%H:%M:%S")
-            separator = f"📝 Response at {timestamp}"
+            separator = f"[NOTE] Response at {timestamp}"
             with tui._lock:
-                if not tui.stream_buffer or tui.stream_buffer == ["--- New response ---"] or (len(tui.stream_buffer) == 1 and tui.stream_buffer[0].startswith("📝 Response at")):
+                if not tui.stream_buffer or tui.stream_buffer == ["--- New response ---"] or (len(tui.stream_buffer) == 1 and tui.stream_buffer[0].startswith("[NOTE] Response at")):
                     tui.stream_buffer = [separator]
                 else:
                     # Add separator before new content
                     tui.stream_buffer.append(separator)
-            live.update(tui.render())
+            # CRITICAL: Force immediate update to show separator
+            # Use try/except to prevent deadlocks
+            try:
+                live.update(tui.render())
+            except Exception:
+                pass  # Don't fail if render is blocked
+            time.sleep(0.01)  # Small delay to ensure render happens
             
             # Streaming request for live output
             # CRITICAL: Force tool calls when no TODOs are set!
@@ -2329,6 +2646,16 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 tool_choice = "auto"
             
             try:
+                # CRITICAL: Add debug output before LLM request with context info
+                append_with_context(f"[INFO] Sending LLM request (Loop {loop.loop_count}, temp={current_temp:.2f}, timeout=180s, context={context_info})...")
+                tui._needs_update = True
+                # CRITICAL: Force immediate update (outside lock, safe)
+                try:
+                    live.update(tui.render())
+                except Exception:
+                    pass  # Don't fail if render is blocked
+                time.sleep(0.1)  # Give animation thread time to render
+                
                 stream_response = requests.post(
                     "http://127.0.0.1:8080/v1/chat/completions",
                     json={
@@ -2344,6 +2671,18 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     stream=True
                 )
                 
+                # Show request status immediately
+                if stream_response.status_code == 200:
+                    append_with_context(f"[OK] Request successful (Status: {stream_response.status_code}) - Streaming response...")
+                else:
+                    append_with_context(f"[WARN] Request returned status {stream_response.status_code}")
+                tui._needs_update = True
+                # CRITICAL: Force immediate update (outside lock, safe)
+                try:
+                    live.update(tui.render())
+                except Exception:
+                    pass  # Don't fail if render is blocked
+                
                 # Handle Context Size Error (400) - automatically compress and retry
                 if stream_response.status_code == 400:
                     try:
@@ -2352,8 +2691,17 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         if "exceed_context_size" in error_msg.lower() or "exceed" in error_msg.lower():
                             tui.set_action("Context size exceeded. Compressing...")
                             live.update(tui.render())
-                            # Aggressively compress context
-                            history = context_manager.compress(history)
+                            # Aggressively compress current context
+                            history = current_context_manager.compress(history)
+                            # Update history in appropriate dict
+                            if current_context_manager == main_context_manager:
+                                main_history = history
+                            else:
+                                # Find which task this context belongs to
+                                for idx, cm in task_context_managers.items():
+                                    if cm == current_context_manager:
+                                        task_histories[idx] = history
+                                        break
                             # Also truncate old messages if still too large
                             if len(history) > 20:
                                 # Keep system prompt, last user message, and last 10 messages
@@ -2379,7 +2727,10 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         pass  # Not a context size error, fall through to normal error handling
                 
                 if stream_response.status_code != 200:
-                    error_text = stream_response.text[:200] if stream_response.text else ""
+                    error_text = stream_response.text[:200] if stream_response.text else "No error details"
+                    append_with_context(f"[ERROR] Server returned {stream_response.status_code}: {error_text}")
+                    tui._needs_update = True
+                    time.sleep(0.1)
                     return f"Error: Server {stream_response.status_code} - {error_text}"
                 
                 # Collect streamed response
@@ -2474,6 +2825,24 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                     if 'name' in tc_delta['function']:
                                         tc['function']['name'] += tc_delta['function']['name']
                                         tui.set_action(f"Calling {tc['function']['name']}")
+                                        # CRITICAL: Add tool call to stream buffer immediately for visibility
+                                        # Use append_with_context if available, otherwise determine context manually
+                                        tool_msg = f"[TOOL] Calling {tc['function']['name']}..."
+                                        if 'append_with_context' in locals():
+                                            append_with_context(tool_msg)
+                                        else:
+                                            # Fallback: determine context manually
+                                            is_main_ctx = (current_context_manager == main_context_manager)
+                                            if is_main_ctx:
+                                                prefix = "[MAIN]"
+                                            else:
+                                                current_task_idx = None
+                                                for idx, cm in task_context_managers.items():
+                                                    if cm == current_context_manager:
+                                                        current_task_idx = idx
+                                                        break
+                                                prefix = f"[TASK {current_task_idx + 1}]" if current_task_idx is not None else "[TASK]"
+                                            tui.append_stream(f"{prefix} {tool_msg}")
                                         live.update(tui.render())
                                     if 'arguments' in tc_delta['function']:
                                         tc['function']['arguments'] += tc_delta['function']['arguments']
@@ -2652,7 +3021,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                         'arguments': json.dumps({'tasks': tasks[:15]})  # Allow up to 15 tasks
                                     }
                                 }
-                                tui.append_stream(f"[FALLBACK] Extracted TODO list from markdown: {len(tasks)} tasks")
+                                append_with_context(f"[FALLBACK] Extracted TODO list from markdown: {len(tasks)} tasks")
                     
                     if extracted_tool_call:
                         tool_calls = [extracted_tool_call]
@@ -2699,36 +3068,53 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     elif tool_calls:
                         # If we have tool calls but no content, show that we're executing tools
                         # Show tool names and parameters (truncated if too long)
+                        # CRITICAL: Check if tool calls are already in buffer (from streaming)
                         tool_infos = []
                         for tc in tool_calls:
                             fn_name = tc.get('function', {}).get('name', 'unknown')
                             fn_args = tc.get('function', {}).get('arguments', '')
                             
-                            # Try to parse arguments as JSON to show them nicely
-                            try:
-                                if fn_args:
-                                    args_dict = json.loads(fn_args)
-                                    # Format arguments nicely (truncate long values)
-                                    args_str = ", ".join([
-                                        f"{k}={str(v)[:50]}{'...' if len(str(v)) > 50 else ''}"
-                                        for k, v in args_dict.items()
-                                    ])
-                                    tool_infos.append(f"🔧 {fn_name}({args_str})")
-                                else:
-                                    tool_infos.append(f"🔧 {fn_name}()")
-                            except (json.JSONDecodeError, TypeError):
-                                # If parsing fails, just show the raw arguments (truncated)
-                                args_display = fn_args[:100] + "..." if len(fn_args) > 100 else fn_args
-                                tool_infos.append(f"🔧 {fn_name}({args_display})")
+                            # Check if this tool call is already in buffer (from streaming detection)
+                            tool_already_shown = False
+                            with tui._lock:
+                                for line in tui.stream_buffer:
+                                    if f"[TOOL] Calling {fn_name}" in line:
+                                        tool_already_shown = True
+                                        break
+                            
+                            # Only add if not already shown
+                            if not tool_already_shown:
+                                # Try to parse arguments as JSON to show them nicely
+                                try:
+                                    if fn_args:
+                                        args_dict = json.loads(fn_args)
+                                        # Format arguments nicely (truncate long values)
+                                        args_str = ", ".join([
+                                            f"{k}={str(v)[:50]}{'...' if len(str(v)) > 50 else ''}"
+                                            for k, v in args_dict.items()
+                                        ])
+                                        tool_infos.append(f"[TOOL] {fn_name}({args_str})")
+                                    else:
+                                        tool_infos.append(f"[TOOL] {fn_name}()")
+                                except (json.JSONDecodeError, TypeError):
+                                    # If parsing fails, just show the raw arguments (truncated)
+                                    args_display = fn_args[:100] + "..." if len(fn_args) > 100 else fn_args
+                                    tool_infos.append(f"[TOOL] {fn_name}({args_display})")
                         
-                        # Add each tool call as a separate line
-                        for tool_info in tool_infos:
-                            tui.stream_buffer.append(tool_info)
-                        # Keep buffer size manageable
-                        if len(tui.stream_buffer) > tui.STREAM_LINES * 2:
-                            tui.stream_buffer = tui.stream_buffer[-tui.STREAM_LINES * 2:]
-                        # CRITICAL: Update display immediately after adding tool info
-                        live.update(tui.render())
+                        # Add each tool call as a separate line (only if not already shown)
+                        if tool_infos:
+                            with tui._lock:
+                                for tool_info in tool_infos:
+                                    # Add context prefix to tool calls
+                                    if not tool_info.startswith(context_prefix):
+                                        tui.stream_buffer.append(f"{context_prefix} {tool_info}")
+                                    else:
+                                        tui.stream_buffer.append(tool_info)
+                                # Keep buffer size manageable
+                                if len(tui.stream_buffer) > tui.STREAM_LINES * 2:
+                                    tui.stream_buffer = tui.stream_buffer[-tui.STREAM_LINES * 2:]
+                            # CRITICAL: Update display immediately after adding tool info
+                            live.update(tui.render())
                     else:
                         # No content and no tool calls - this is an empty response
                         # Only show info if buffer is empty (just separator)
@@ -2756,9 +3142,38 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 # CRITICAL: Update display immediately after adding info
                                 live.update(tui.render())
                 
+                # Show summary of what was received
+                content_len = len(collected_content.strip()) if collected_content else 0
+                tool_count = len(collected_tool_calls) if collected_tool_calls else 0
+                
+                if content_len > 0 or tool_count > 0:
+                    summary_parts = []
+                    if content_len > 0:
+                        summary_parts.append(f"{content_len} chars")
+                    if tool_count > 0:
+                        tool_names = [tc.get('function', {}).get('name', 'unknown') for tc in collected_tool_calls]
+                        summary_parts.append(f"{tool_count} tool call(s): {', '.join(tool_names)}")
+                    if summary_parts:
+                        append_with_context(f"[OK] Response received: {', '.join(summary_parts)}")
+                else:
+                    append_with_context(f"[WARN] Empty response received (no content, no tool calls)")
+                
+                tui._needs_update = True
+                # CRITICAL: Force immediate update (outside lock, safe)
+                try:
+                    live.update(tui.render())
+                except Exception:
+                    pass  # Don't fail if render is blocked
+                
                 # Final update to ensure everything is displayed
                 live.update(tui.render())
                 
+            except requests.exceptions.Timeout:
+                tui.end_stream()
+                append_with_context(f"[ERROR] Request timed out after 180s - no response from server")
+                tui._needs_update = True
+                time.sleep(0.1)
+                return "Error: Request timed out after 180 seconds"
             except requests.exceptions.ConnectionError:
                 tui.end_stream()  # Mark stream as finished even on error
                 return "Error: VAF Server offline."
@@ -2803,6 +3218,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             # This prevents duplicate tool call displays
 
             history.append(msg)
+            update_history_in_dict()
 
             # FORCE DISPLAY CONTENT FROM MSG - Platform-independent, always show
             # Extract content from msg if we have it - NO CHECKS, JUST SHOW IT
@@ -2833,8 +3249,24 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 is_effectively_empty = len(clean_content) < 5
                 
                 if is_effectively_empty:
-                    # Increment empty counter
-                    consecutive_empty += 1
+                    # Increment context-specific empty counter
+                    if is_main_context:
+                        main_empty_counter += 1
+                        consecutive_empty = main_empty_counter
+                    else:
+                        # Find which task this context belongs to
+                        current_task_idx = None
+                        for idx, cm in task_context_managers.items():
+                            if cm == current_context_manager:
+                                current_task_idx = idx
+                                break
+                        if current_task_idx is not None:
+                            if current_task_idx not in task_empty_counters:
+                                task_empty_counters[current_task_idx] = 0
+                            task_empty_counters[current_task_idx] += 1
+                            consecutive_empty = task_empty_counters[current_task_idx]
+                        else:
+                            consecutive_empty = 0  # Fallback
                     
                     # Dynamic Temperature Sweep to break loops
                     # Oscillate around 0.3: +0.1, +0.2, +0.3... then down
@@ -2845,8 +3277,16 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     # Clamp between 0.1 and 0.8 (don't go too crazy for code)
                     current_temp = max(0.1, min(0.8, current_temp))
                     
-                    # Log why we are restarting
-                    tui.append_stream(f"Empty response detected (len={len(clean_content)}) - retrying with temp {current_temp:.1f}...")
+                    # Log why we are restarting with more details (including context)
+                    tool_count = len(tool_calls) if tool_calls else 0
+                    append_with_context(f"[WARN] Empty response detected (content_len={len(clean_content)}, tool_calls={tool_count})")
+                    append_with_context(f"[INFO] Retrying with increased temperature: {current_temp:.2f} (attempt {consecutive_empty})")
+                    tui._needs_update = True
+                    # CRITICAL: Force immediate update (outside lock, safe)
+                    try:
+                        live.update(tui.render())
+                    except Exception:
+                        pass  # Don't fail if render is blocked
                 
                 # ═══════════════════════════════════════════════════════════════
                 # NEW: Tool-Intent Detection (like main agent)
@@ -2875,7 +3315,9 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     if mentioned_tools and not tool_calls:
                         tool_hint = mentioned_tools[0]
                         tui.set_action(f"Tool-Intent detected for '{tool_hint}' without action - resetting...")
-                        live.update(tui.render())
+                        append_with_context(f"[WARN] Tool mentioned ('{tool_hint}') but not called - resetting context...")
+                        tui._needs_update = True
+                        time.sleep(0.1)
                         
                         # Find the last tool call or user message to restart from
                         last_tool_idx = None
@@ -2939,12 +3381,15 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         if removed_count > 0:
                             tui.set_action(f"Reset to {restart_from} (Tool-Intent: {tool_hint})")
                             live.update(tui.render())
+                            # CRITICAL: Update history in appropriate dict after reset
+                            update_history_in_dict()
                         
                         # Add a brief system prompt (will work better now because first thinking is preserved)
                         history.append({
                             "role": "system",
                             "content": "You didn't respond. Please answer or continue where you left off."
                         })
+                        update_history_in_dict()  # Update after adding system message
                         
                         # Continue the loop - if it fails again, this system message will be removed with the reset
                         continue
@@ -3026,11 +3471,16 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     if removed_count > 0:
                         tui.set_action(f"Removed {removed_count} response(s) without final answer, restarting from {restart_from}...")
                         live.update(tui.render())
+                        # CRITICAL: Update history in appropriate dict after reset
+                        update_history_in_dict()
                     
                     # CRITICAL: If no TODOs set, nudge agent to set them FIRST!
                     # This is the most common cause of "doing nothing" - agent skips TODO setup
+                    # Use MAIN context for planning phase
                     if not task_mgr.todos:
                         tui.set_action("No TODO list - nudging...")
+                        current_context_manager = main_context_manager
+                        history = main_history
                         history.append({
                             "role": "system",
                             "content": (
@@ -3042,13 +3492,24 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 "DO NOT send empty responses. Call a tool NOW!"
                             )
                         })
+                        main_history = history  # Update main history
                         continue
                     
                     # Add a brief system prompt (will be removed on next retry if needed)
+                    # Use current context (main or task)
                     history.append({
                         "role": "system",
                         "content": "You didn't respond. Please answer or continue where you left off."
                     })
+                    
+                    # Update history in appropriate dict
+                    if current_context_manager == main_context_manager:
+                        main_history = history
+                    else:
+                        for idx, cm in task_context_managers.items():
+                            if cm == current_context_manager:
+                                task_histories[idx] = history
+                                break
                     
                     # Continue the loop (no retry limit - will loop until we get a response)
                     # If it fails again, this system message will be removed with the reset
@@ -3058,6 +3519,19 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             if tool_calls or (msg_content and msg_content.strip()):
                 loop.record_activity()
                 # Reset temperature state on success
+                # Reset context-specific empty counter
+                if is_main_context:
+                    main_empty_counter = 0
+                else:
+                    # Find which task this context belongs to
+                    current_task_idx = None
+                    for idx, cm in task_context_managers.items():
+                        if cm == current_context_manager:
+                            current_task_idx = idx
+                            break
+                    if current_task_idx is not None:
+                        task_empty_counters[current_task_idx] = 0
+                
                 consecutive_empty = 0
                 current_temp = 0.3
             
@@ -3300,13 +3774,24 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 has_read_file = any(tc.get('function', {}).get('name') == 'read_file' for tc in tool_calls) if tool_calls else False
                 only_reading = has_read_file and not has_write_file
                 
+                # Track write_file activity in recent loops
+                # Update tracking: check if write_file was called in last 3 loops
+                if loop.loop_count > 3:
+                    # Keep only last 3 loops
+                    recent_loop_write_files = recent_loop_write_files[-3:]
+                # Mark this loop as having no write_file yet (will be updated if write_file is called)
+                if loop.loop_count > len(recent_loop_write_files):
+                    recent_loop_write_files.append(False)
+                has_write_file_in_recent_loops = any(recent_loop_write_files)
+                
                 # Nudge if:
                 # 1. No tool calls at all (idle)
                 # 2. Only reading files but not writing (not making progress)
-                # 3. Loop count >= 2 (gave model time to start)
+                # 3. No write_file calls in recent loops (stuck)
+                # 4. Loop count >= 1 (earlier nudge for faster response)
                 should_nudge = (
-                    (not tool_calls or only_reading) and 
-                    loop.loop_count >= 2 and
+                    (not tool_calls or only_reading or not has_write_file_in_recent_loops) and 
+                    loop.loop_count >= 1 and
                     current
                 )
                 
@@ -3433,6 +3918,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     folder_status = "✅ Folder opened in file manager" if folder_opened else "📂 Folder ready"
                     
                     return (
+                        f"[VAF_CODING_AGENT_STATUS: COMPLETE]\n\n"  # Explicit signal for Main Agent
                         f"### ✅ Task Completed\n\n"
                         f"**📁 Project Directory**: {dir_link}\n"
                         f"**Full Path**: `{base_dir}`\n"
@@ -3473,6 +3959,15 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                    f"Files mentioned: {', '.join(file_mentions[:5])}\n"
                                    f"Call write_file NOW."
                     })
+                    
+                    # Update history in appropriate dict
+                    if current_context_manager == main_context_manager:
+                        main_history = history
+                    else:
+                        for idx, cm in task_context_managers.items():
+                            if cm == current_context_manager:
+                                task_histories[idx] = history
+                                break
                     continue
             
             # ═══════════════════════════════════════════════════════════════
@@ -3524,11 +4019,17 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 
                 # ===== TODO MANAGEMENT TOOLS =====
                 if fn_name == "set_todos":
+                    
+                    # Use MAIN context for planning phase (set_todos)
+                    current_context_manager = main_context_manager
+                    history = main_history
+                    
                     tasks = fn_args.get("tasks", [])
                     
-                    # CRITICAL: Prevent resetting TODOs ONLY if work has already started!
-                    # If current_task_idx is 0, allow overwriting (e.g. replacing auto-generated tasks)
-                    if task_mgr.todos and task_mgr.current_task_idx > 0:
+                    # CRITICAL: Block set_todos completely if TODOs already exist
+                    # This prevents the agent from calling set_todos again after the TODO list is set
+                    # Check both if todos list exists AND has items
+                    if task_mgr.todos and len(task_mgr.todos) > 0:
                         current = task_mgr.get_current_task()
                         result = (
                             f"⚠️ REJECTED: You are already working on Task {task_mgr.current_task_idx + 1}!\n"
@@ -3537,7 +4038,11 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             f"**ACTION REQUIRED:**\n"
                             f"Finish your current tasks using `task_done`."
                         )
-                        tui.append_stream("set_todos rejected - work in progress!")
+                        # Use append_with_context if available
+                        if 'append_with_context' in locals():
+                            append_with_context("set_todos rejected - TODOs already exist!")
+                        else:
+                            tui.append_stream("set_todos rejected - TODOs already exist!")
                     elif tasks:
                         task_mgr.set_todos(tasks)
                         tui.set_action(f"TODO: {len(tasks)} tasks")
@@ -3547,8 +4052,28 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         if len(tasks) > 5:
                             tui.append_stream(f"   ... and {len(tasks)-5} more")
                         result = f"✅ TODO list set: {len(tasks)} tasks. Current: {task_mgr.get_current_task()}"
+                        
+                        # Switch to task context for first task
+                        if task_mgr.current_task_idx == 0:
+                            first_task = task_mgr.get_current_task()
+                            if first_task:
+                                new_context_manager, new_history = create_fresh_context_for_task(0, first_task)
+                                # CRITICAL: Update nonlocal variables to switch to task context
+                                current_context_manager = new_context_manager
+                                history = new_history
+                                # CRITICAL: Store in task dicts so they persist and are used in main loop
+                                task_context_managers[0] = current_context_manager
+                                task_histories[0] = history
+                                history_snapshot_len = len(history)
+                                tui.append_stream(f"🔄 Switched to Task 1 context: {first_task[:40]}")
+                                # Debug: Verify context switch worked
+                                is_now_task = (current_context_manager != main_context_manager)
+                                tui.append_stream(f"[DEBUG] Context switch verified: is_task_context={is_now_task}")
                     else:
                         result = "⚠️ No tasks provided!"
+                    
+                    # Update main history after set_todos
+                    main_history = history
                         
                 elif fn_name == "task_done":
                     # Track consecutive task_done calls for dead loop detection
@@ -3556,9 +4081,60 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         loop.consecutive_task_done = 0
                     loop.consecutive_task_done += 1
                     
+                    # CRITICAL: Check if write_file was called for current task
+                    current_task_idx = task_mgr.current_task_idx
+                    files_for_current_task = task_file_map.get(current_task_idx, [])
+                    has_write_file_for_task = len(files_for_current_task) > 0
+                    
+                    # Also check if write_file was called in this session at all
+                    if not has_write_file_for_task and write_file_calls_in_session == 0:
+                        # No write_file calls at all - BLOCK task_done
+                        current = task_mgr.get_current_task()
+                        result = (
+                            f"[bold red]CRITICAL ERROR: NO FILES CREATED![/]\n\n"
+                            f"You called task_done for task: '{current}'\n"
+                            f"BUT YOU HAVE NOT CALLED `write_file` AT ALL IN THIS SESSION!\n\n"
+                            f"**MANDATORY ACTION:**\n"
+                            f"1. You MUST call `write_file(path='...', content='...')` to create the actual code/content NOW.\n"
+                            f"2. DO NOT call `task_done` again until you've actually written files.\n"
+                            f"3. Start working on the code for '{current}' immediately.\n\n"
+                            f"**Remember:** As a Senior software developer, you must actually CREATE code, not just describe it!"
+                        )
+                        tui.append_stream(f"❌ task_done REJECTED - No write_file calls in session!")
+                        tui.set_action("⚠️ Waiting for write_file...")
+                    elif not has_write_file_for_task and current_task_idx > 0:
+                        # write_file was called, but not for this specific task
+                        current = task_mgr.get_current_task()
+                        result = (
+                            f"[bold yellow]WARNING: NO FILES CREATED FOR THIS TASK![/]\n\n"
+                            f"Task: '{current}'\n\n"
+                            f"You have created files for other tasks, but NOT for this one.\n\n"
+                            f"**Action required:**\n"
+                            f"1. Call `write_file` to create/modify files for THIS specific task: '{current}'\n"
+                            f"2. Complete the task by actually writing the code\n"
+                            f"3. Then call `task_done` again\n\n"
+                            f"DO NOT skip tasks - complete each one fully before moving on!"
+                        )
+                        tui.append_stream(f"⚠️ task_done WARNING - No files for current task!")
+                        tui.set_action(f"{task_mgr.get_progress()} - Write files for current task!")
+                    elif not has_write_file_for_task:
+                        # First task, but no write_file yet
+                        current = task_mgr.get_current_task()
+                        result = (
+                            f"[bold yellow]NO FILES CREATED FOR FIRST TASK![/]\n\n"
+                            f"Task: '{current}'\n\n"
+                            f"You must create files for this task before calling task_done.\n\n"
+                            f"**Action required:**\n"
+                            f"1. Call `write_file` to create the code for: '{current}'\n"
+                            f"2. Complete the task by actually writing the code\n"
+                            f"3. Then call `task_done` again\n\n"
+                            f"DO NOT call task_done without first creating files!"
+                        )
+                        tui.append_stream(f"⚠️ task_done WARNING - No files for first task!")
+                        tui.set_action(f"{task_mgr.get_progress()} - Write files first!")
                     # CRITICAL: Block premature completion via consecutive task_done calls
                     # Only allow completion if ALL tasks are actually completed
-                    if loop.consecutive_task_done >= 3:
+                    elif loop.consecutive_task_done >= 3:
                         # Check if all tasks are really done
                         if not task_mgr.is_all_done():
                             remaining = [t["task"] for t in task_mgr.todos if t["status"] != "completed"]
@@ -3916,10 +4492,11 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 # ═══════════════════════════════════════════════════════════════
                                 if next_task:
                                     # Create completely fresh context for the new task
-                                    # This isolates each task with its own context, preventing confusion
-                                    history = create_fresh_context_for_task(next_task)
+                                    # This isolates each task with its own ContextManager and history
+                                    task_idx = task_mgr.current_task_idx
+                                    current_context_manager, history = create_fresh_context_for_task(task_idx, next_task)
                                     history_snapshot_len = len(history)  # Update snapshot for new context
-                                    tui.append_stream("Fresh context created for new task")
+                                    tui.append_stream(f"🔄 Fresh context created for Task {task_idx + 1}: {next_task[:40]}")
                                 
                                 if next_task:
                                     result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
@@ -3943,10 +4520,11 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             # ═══════════════════════════════════════════════════════════════
                             if next_task:
                                 # Create completely fresh context for the new task
-                                # This isolates each task with its own context, preventing confusion
-                                history = create_fresh_context_for_task(next_task)
+                                # This isolates each task with its own ContextManager and history
+                                task_idx = task_mgr.current_task_idx
+                                current_context_manager, history = create_fresh_context_for_task(task_idx, next_task)
                                 history_snapshot_len = len(history)  # Update snapshot for new context
-                                tui.append_stream("🔄 Fresh context created for new task")
+                                tui.append_stream(f"🔄 Fresh context created for Task {task_idx + 1}: {next_task[:40]}")
                             
                             if next_task:
                                 result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
@@ -4065,6 +4643,20 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     
                     # Fix relative paths and show in stream
                     if fn_name == "write_file" and "path" in fn_args:
+                        path = fn_args["path"]
+                        fname = os.path.basename(path)
+                        
+                        # CRITICAL: Add file to display IMMEDIATELY, before any validation or execution
+                        # This ensures it appears in "Waiting for files..." section right away
+                        if fname not in tui.files:
+                            tui.add_file(fname, 0, "writing")
+                            tui._needs_update = True  # Force immediate update
+                            # Force immediate render to show file
+                            try:
+                                live.update(tui.render())
+                            except Exception:
+                                pass  # Don't fail if render is blocked
+                        
                         # CRITICAL: Must set TODOs before writing files!
                         if not task_mgr.todos:
                             result = (
@@ -4085,8 +4677,12 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             live.update(tui.render())
                             continue  # Skip this tool call
                         
-                        if not os.path.isabs(fn_args["path"]):
-                            fn_args["path"] = os.path.join(base_dir, fn_args["path"])
+                        # OS-independent path handling using Path
+                        from pathlib import Path as PathLib
+                        path_obj = PathLib(fn_args["path"])
+                        if not path_obj.is_absolute():
+                            # Use Path.joinpath for OS-independent path joining
+                            fn_args["path"] = str(PathLib(base_dir) / fn_args["path"])
                         
                         fname = os.path.basename(fn_args["path"])
                         path = fn_args["path"]
@@ -4219,12 +4815,22 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
 
                         # Show code preview (first 5 lines) - DON'T clear stream!
                         code_content = fn_args.get("content", "")
-                        tui.append_stream(f"Creating {fname}:")
+                        # Use append_with_context if available
+                        if 'append_with_context' in locals():
+                            append_with_context(f"Creating {fname}:")
+                        else:
+                            tui.append_stream(f"Creating {fname}:")
                         code_lines = code_content.split('\n')[:5]
                         for line in code_lines:
-                            tui.append_stream(line[:65] if len(line) <= 65 else line[:62] + "...")
+                            if 'append_with_context' in locals():
+                                append_with_context(line[:65] if len(line) <= 65 else line[:62] + "...")
+                            else:
+                                tui.append_stream(line[:65] if len(line) <= 65 else line[:62] + "...")
                         if len(code_content.split('\n')) > 5:
-                            tui.append_stream("...")
+                            if 'append_with_context' in locals():
+                                append_with_context("...")
+                            else:
+                                tui.append_stream("...")
                         
                         live.update(tui.render())
                     elif fn_name == "read_file":
@@ -4260,7 +4866,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             "cannot write" in result_str.lower()
                         )
                         
-                        # Track created files
+                        # Track created files (after execution)
                         if fn_name == "write_file" and "path" in fn_args:
                             path = fn_args["path"]
                             
@@ -4297,8 +4903,24 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 loop.error_history = []
                                 size = os.path.getsize(path)
                                 files_created.append(path)
+                                
+                                # Track write_file call for current task
+                                current_task_idx = task_mgr.current_task_idx
+                                if current_task_idx not in task_file_map:
+                                    task_file_map[current_task_idx] = []
+                                task_file_map[current_task_idx].append(path)
+                                
+                                # Track write_file calls in session
+                                write_file_calls_in_session += 1
+                                recent_loop_write_files.append(True)  # Track this loop had write_file
+                                
                                 tui.update_file(os.path.basename(path), "done", size)
-                                tui.append_stream(f"{os.path.basename(path)} ({size}B)")
+                                # Use append_with_context if available
+                                file_msg = f"{os.path.basename(path)} ({size}B)"
+                                if 'append_with_context' in locals():
+                                    append_with_context(file_msg)
+                                else:
+                                    tui.append_stream(file_msg)
                                 result = f"✓ Created {path} ({size} bytes)"
                                 
                                 # Automatically run linter after successful write_file
@@ -4321,6 +4943,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                                 "role": "system",
                                                 "content": lint_msg
                                             })
+                                            update_history_in_dict()  # Update history in appropriate dict
                                             tui.append_stream(f"Linter found issues in {os.path.basename(path)}")
                                         elif lint_result.startswith("✓"):
                                             tui.append_stream(f"✓ Linter: No issues")
@@ -4497,14 +5120,18 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     task_status += f"`coding_agent(task=\"complete all remaining tasks\", project_path=\"{base_dir}\")`"
             
             # Determine completion status
+            # EXPLICIT SIGNAL for Main Agent: [VAF_CODING_AGENT_STATUS]
             if has_incomplete_tasks:
                 completion_header = "### ⚠️ Task Partially Complete"
                 completion_note = "**Note**: Loop ended before all tasks were completed. Please continue to finish all remaining tasks."
+                status_signal = "[VAF_CODING_AGENT_STATUS: PARTIAL]"
             else:
                 completion_header = "### ✅ Task Completed"
                 completion_note = "**Note**: All tasks have been completed. Review files for any final adjustments."
+                status_signal = "[VAF_CODING_AGENT_STATUS: COMPLETE]"
             
             return (
+                f"{status_signal}\n\n"  # Explicit signal for Main Agent parsing
                 f"{completion_header}\n\n"
                 f"**📁 Project Directory**: {dir_link}\n"
                 f"**Full Path**: `{base_dir}`\n"
@@ -4526,6 +5153,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             folder_status = "✅ Folder opened in file manager" if folder_opened else "📂 Folder ready"
             
             return (
+                f"[VAF_CODING_AGENT_STATUS: FAILED]\n\n"  # Explicit signal for Main Agent
                 f"### ❌ Task Failed\n\n"
                 f"**📁 Project Directory**: {dir_link}\n"
                 f"**Full Path**: `{base_dir}`\n"

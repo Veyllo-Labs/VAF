@@ -1420,6 +1420,63 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
         except:
             return 0, 8192
 
+    def _generate_summary(self, messages: list) -> str:
+        """
+        Generates a concise narrative summary of the provided messages using the LLM.
+        """
+        if not messages:
+            return ""
+
+        # Prepare text to summarize
+        conversation_text = ""
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            content = str(msg.get("content", ""))
+            # Skip large tool outputs in summary generation to save tokens
+            if role == "tool" and len(content) > 500:
+                content = content[:500] + "... [truncated]"
+            conversation_text += f"{role.upper()}: {content}\n"
+
+        prompt = (
+            f"Summarize the following conversation segment into 2-3 concise sentences.\n"
+            f"Focus on the user's goal, key actions taken, and important outcomes.\n"
+            f"Ignore minor details.\n\n"
+            f"{conversation_text}\n\n"
+            f"Summary (max 3 sentences):"
+        )
+
+        try:
+            # Use a separate, low-temp call for summarization
+            # Construct a temporary history for this specific task
+            temp_history = [{"role": "user", "content": prompt}]
+            
+            content = ""
+            if self.use_server:
+                payload = {
+                    "messages": temp_history, 
+                    "max_tokens": 200, 
+                    "temperature": 0.3,
+                    "stream": False
+                }
+                try:
+                    res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=30).json()
+                    content = res['choices'][0]['message']['content']
+                except Exception:
+                    pass
+            elif self.llm:
+                 output = self.llm.create_chat_completion(
+                     messages=temp_history,
+                     max_tokens=200,
+                     temperature=0.3
+                 )
+                 content = output['choices'][0]['message']['content']
+            
+            return content.strip()
+        except Exception as e:
+            from vaf.cli.ui import UI
+            UI.event("Debug", f"Summarization failed: {e}", style="dim")
+            return ""
+
     def manage_context(self):
         """
         Cursor-Style Context Management
@@ -1429,6 +1486,7 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
         - State Context: Tracks project state (files, errors)
         - Full Archive: Complete history saved for restoration
         - Smart Compression: Lossy but preserves critical info
+        - Narrative Summarization: LLM summarizes old messages (1+1.. -> 5+3..)
         
         Use /restore to recover full context after compression.
         """
@@ -1445,8 +1503,36 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
         # Check if compression needed
         if not cm.should_compress(self.history):
             return
+
+        # LLM-based Summarization Logic
+        # We want to summarize the "middle" chunk that is about to be compressed away.
+        # compress() keeps: history[0] (System) and history[-recent_memory_size:] (Recent)
+        # So we summarize: history[1 : -recent_memory_size]
         
-        # Compress with Cursor-style algorithm
+        recent_count = cm.recent_memory_size
+        if len(self.history) > recent_count + 2:
+            msgs_to_summarize = self.history[1:-recent_count]
+            
+            if msgs_to_summarize:
+                UI.event("Context", f"Summarizing {len(msgs_to_summarize)} old messages...", style="info")
+                
+                # If we already have a previous summary, include it contextually
+                previous_summary = cm.state.narrative_summary
+                
+                # Create a synthetic message block to summarize
+                # If there's a previous summary, we essentially "re-roll" it with the new old messages
+                messages_for_llm = msgs_to_summarize
+                if previous_summary:
+                    # Prepend previous summary as a context note
+                    messages_for_llm = [{"role": "system", "content": f"Previous Summary: {previous_summary}"}] + msgs_to_summarize
+                
+                new_summary = self._generate_summary(messages_for_llm)
+                
+                if new_summary:
+                    cm.state.narrative_summary = new_summary
+                    UI.event("Context", "Summary updated.", style="dim")
+
+        # Compress with Cursor-style algorithm (now includes the new narrative_summary)
         self.history = cm.compress(self.history)
     
     def restore_context(self) -> bool:
@@ -2436,8 +2522,8 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                                 ])
                                 if is_followup:
                                     from vaf.cli.ui import UI
-                                    answer_preview = tool_args_str[:100] if len(tool_args_str) > 100 else tool_args_str
-                                    UI.event("? Agent Chat", f"? ? Main Agent → Coding Agent: {answer_preview}...", style="green")
+                                    # Show full message without truncation
+                                    UI.event("( OO) Agent Chat", f"( OO) Main Agent → (OO ) Coding Agent: {tool_args_str}", style="green")
                             # No spinner, just run. The tool will print its own updates.
                             result = self.execute_tool(function_name, arguments)
                         else:

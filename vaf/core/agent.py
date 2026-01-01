@@ -1278,12 +1278,16 @@ class Agent:
         if not self.history or self.history[0].get("role") != "system":
             return
 
-        # Optional user override via config: language = "auto" | "de" | "en"
-        configured = (self.config.get("language", "auto") or "auto").strip().lower()
-        if configured in ("de", "en"):
-            lang = configured
+        # Use already detected language if available in prompt_manager
+        if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
+            lang = self.prompt_manager.user_language
         else:
-            lang = self._detect_user_language(user_input)
+            # Optional user override via config: language = "auto" | "de" | "en"
+            configured = (self.config.get("language", "auto") or "auto").strip().lower()
+            if configured in ("de", "en"):
+                lang = configured
+            else:
+                lang = self._detect_user_language(user_input)
 
         # Human-friendly names for common languages (comprehensive list for langid's 97 languages)
         language_names = {
@@ -2142,8 +2146,18 @@ class Agent:
         # Dynamic Context: Update System Prompt
         # ------------------------------------------------------------------
         if hasattr(self, 'prompt_manager') and user_input and not skip_input:
+            # Detect language first so it can be used in build_prompt (e.g. for localized date)
+            # Respect configured language if set
+            configured_lang = (self.config.get("language", "auto") or "auto").strip().lower()
+            if configured_lang in ("de", "en"):
+                lang = configured_lang
+            else:
+                lang = self._detect_user_language(user_input)
+            
+            self.prompt_manager.user_language = lang
+            
             # Analyze intent and active relevant modules
-            self.prompt_manager.analyze_context(user_input)
+            self.prompt_manager.analyze_context(user_input, language=lang)
             
             # Rebuild system prompt
             new_prompt = self.prompt_manager.build_prompt(self.filename)

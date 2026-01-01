@@ -27,6 +27,7 @@ class SystemPromptManager:
         """
         self.tools = tools or []
         self.active_modules: Dict[str, bool] = {}
+        self.user_language: str = "auto"
         
         # ═══════════════════════════════════════════════════════════════════════
         # CORE IDENTITY PROMPTS
@@ -36,6 +37,7 @@ class SystemPromptManager:
 
 ## Core Principles
 - Be helpful, accurate, and concise
+- **Clarify Ambiguity:** If a user's request is vague or missing critical details (e.g., location for weather, specific file for editing), ASK for clarification BEFORE using tools.
 - When uncertain, acknowledge it rather than guessing
 - Always respond in the user's language
 - Execute tasks efficiently using available tools
@@ -51,6 +53,7 @@ class SystemPromptManager:
 
 ## Core Principles
 - Be helpful, accurate, and concise
+- **Clarify Ambiguity:** If a user's request is vague or missing critical details, ASK for clarification BEFORE using tools.
 - When uncertain, acknowledge it
 - Respond in the user's language
 - Use available tools effectively"""
@@ -72,6 +75,7 @@ class SystemPromptManager:
             
             "research": """
 ## Research Guidelines
+- **Refine Queries:** If the user's query is too broad (e.g., "weather tomorrow" without location), ask for specifics BEFORE searching.
 - Use web_search tool for current/real-time information
 - Cross-reference multiple sources when possible
 - Cite sources and provide links
@@ -171,7 +175,25 @@ class SystemPromptManager:
             parts.append(self.vq1_identity)  # Default to VQ-1 for now
         
         # ═══════════════════════════════════════════════════════════════════════
-        # 2. ACTIVE MODULES
+        # 2. CURRENT TIME & DATE
+        # ═══════════════════════════════════════════════════════════════════════
+        from datetime import datetime
+        now = datetime.now()
+        
+        # Localized date formatting
+        if self.user_language == "de":
+            # German formatting: Donnerstag, 01.01.2026 12:00:00
+            days = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+            day_name = days[now.weekday()]
+            time_str = f"Heute ist {day_name}, der {now.strftime('%d.%m.%Y %H:%M:%S')}."
+        else:
+            # Default/English: Thursday, 2026-01-01 12:00:00
+            time_str = f"Today is {now.strftime('%A, %Y-%m-%d %H:%M:%S')}."
+            
+        parts.append(f"\n## Current Time\n{time_str}\n")
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # 3. ACTIVE MODULES
         # ═══════════════════════════════════════════════════════════════════════
         active_module_parts = []
         for module_name, is_active in self.active_modules.items():
@@ -226,7 +248,7 @@ You have access to {len(tool_names)} tools: {', '.join(tool_names[:10])}{'...' i
 
 Use tools proactively to accomplish tasks. Don't ask for permission - just use them when appropriate."""
     
-    def analyze_context(self, user_input: str) -> None:
+    def analyze_context(self, user_input: str, language: str = "auto") -> None:
         """
         Analyze user input and activate relevant modules.
         
@@ -235,10 +257,12 @@ Use tools proactively to accomplish tasks. Don't ask for permission - just use t
         
         Args:
             user_input: The user's message
+            language: Detected user language (iso code)
         """
         if not user_input:
             return
         
+        self.user_language = language
         user_lower = user_input.lower()
         
         # Check each module's keywords

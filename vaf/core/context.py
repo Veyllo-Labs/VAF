@@ -86,8 +86,8 @@ class ContextManager:
     def estimate_tokens(self, messages: List[Dict]) -> int:
         """
         Estimate token count with safety margin.
-        - Text: ~4 chars/token (conservative)
-        - Code: ~3.5 chars/token
+        - Text: ~3.0 chars/token (safer for multilingual/complex text)
+        - Code: ~2.5 chars/token (code uses more tokens due to symbols)
         - Add 10% safety margin for special tokens, formatting, etc.
         """
         total = 0
@@ -96,13 +96,13 @@ class ContextManager:
             # Count role tokens (e.g., "user", "assistant", "system")
             role = msg.get("role", "")
             if role:
-                total += len(role) / 4.0  # Estimate role tokens
+                total += len(role) / 3.0  # Estimate role tokens
             
             # Count content tokens
             if "```" in content:
-                total += len(content) / 3.5
+                total += len(content) / 2.5
             else:
-                total += len(content) / 4.0
+                total += len(content) / 3.0
         
         # Add 10% safety margin for special tokens, formatting, etc.
         total = int(total * 1.1)
@@ -173,6 +173,7 @@ class ContextManager:
         content = str(message.get("content", ""))
         role = message.get("role", "")
         
+        # 1. Proactive Fact Extraction (The "Glue")
         # File operations
         created = re.findall(r'(?:created|wrote|saved|erstellt|geschrieben)[:\s]+[`"\']?([^\s`"\'<>]+\.\w{1,10})', content, re.I)
         read = re.findall(r'(?:read|loaded|opened|gelesen|geöffnet)[:\s]+[`"\']?([^\s`"\'<>]+\.\w{1,10})', content, re.I)
@@ -189,54 +190,83 @@ class ContextManager:
                 self.state.files_modified.append(f)
         
         # Limit lists
-        self.state.files_created = self.state.files_created[-10:]
-        self.state.files_read = self.state.files_read[-10:]
-        self.state.files_modified = self.state.files_modified[-10:]
+        self.state.files_created = self.state.files_created[-15:] # Increased for better glue
+        self.state.files_read = self.state.files_read[-15:]
+        self.state.files_modified = self.state.files_modified[-15:]
         
         # Errors
         if 'error' in content.lower() or 'failed' in content.lower() or 'fehler' in content.lower():
             for line in content.split('\n'):
                 if any(e in line.lower() for e in ['error', 'failed', 'fehler', 'exception']):
-                    error = line.strip()[:100]
+                    error = line.strip()[:150]
                     if error and error not in self.state.errors_encountered:
                         self.state.errors_encountered.append(error)
                         break
-        self.state.errors_encountered = self.state.errors_encountered[-5:]
+        self.state.errors_encountered = self.state.errors_encountered[-8:]
         
         # Tools used (from tool role)
         if role == "tool":
             tool_name = message.get("name", "unknown")
             if tool_name not in self.state.tools_used:
                 self.state.tools_used.append(tool_name)
-        self.state.tools_used = self.state.tools_used[-10:]
+        self.state.tools_used = self.state.tools_used[-15:]
         
         # Key decisions (from assistant without thinking)
         if role == "assistant" and "<think>" not in content:
             # Extract first meaningful statement
             sentences = re.split(r'[.!?]', content)
-            for sent in sentences[:2]:
-                if len(sent.strip()) > 30 and len(sent.strip()) < 150:
-                    decision = sent.strip()
-                    if decision not in self.state.key_decisions:
-                        self.state.key_decisions.append(decision)
+            for sent in sentences[:3]:
+                clean_sent = sent.strip()
+                if 30 < len(clean_sent) < 200:
+                    if clean_sent not in self.state.key_decisions:
+                        self.state.key_decisions.append(clean_sent)
                     break
-        self.state.key_decisions = self.state.key_decisions[-5:]
+        self.state.key_decisions = self.state.key_decisions[-10:]
         
         # Code snippets (keep small snippets)
         code_blocks = re.findall(r'```(\w+)?\n(.+?)```', content, re.DOTALL)
         for lang, code in code_blocks[:2]:
-            if len(code) < 500:  # Only small snippets
+            if len(code) < 800:  # Increased slightly
                 # Generate a key based on content
                 key = f"{lang or 'code'}_{hashlib.md5(code.encode()).hexdigest()[:6]}"
-                self.state.code_snippets[key] = code[:300]
-        # Keep max 5 snippets
-        if len(self.state.code_snippets) > 5:
+                self.state.code_snippets[key] = code[:500]
+        # Keep max 8 snippets
+        if len(self.state.code_snippets) > 8:
             keys = list(self.state.code_snippets.keys())
-            for k in keys[:-5]:
+            for k in keys[:-8]:
                 del self.state.code_snippets[k]
         
         self.state.last_updated = datetime.now().isoformat()
-    
+
+    def process_tool_output(self, tool_name: str, content: str) -> str:
+        """
+        Seamlessly compress a tool output BEFORE it enters history.
+        Extracts facts into StateContext and returns a pruned version of the content.
+        """
+        content_str = str(content)
+        lines = content_str.split('\n')
+        line_count = len(lines)
+        char_count = len(content_str)
+
+        # 1. Update State immediately
+        self.update_state({"role": "tool", "name": tool_name, "content": content_str})
+
+        # 2. If content is small, leave it raw
+        if char_count < 1500 and line_count < 40:
+            return content_str
+
+        # 3. Aggressive Pruning for large outputs (e.g. file reads, search results)
+        pruned_msg = f"[SEAMLESS COMPRESSION: Tool '{tool_name}' output pruned ({char_count} chars, {line_count} lines)]\n"
+        
+        if tool_name in ["read_file", "list_files", "web_search", "web_fetch"]:
+            # Keep top 15 and bottom 10 lines
+            head = "\n".join(lines[:15])
+            tail = "\n".join(lines[-10:])
+            return f"{pruned_msg}\n{head}\n\n[... {line_count - 25} lines hidden ...]\n\n{tail}\n\nNOTE: The facts from this output are stored in the State Context."
+        
+        # Default pruning: Keep first 500 chars
+        return f"{pruned_msg}\n{content_str[:800]}...\n\n[... truncated for context stability ...]"
+
     # ═══════════════════════════════════════════════════════════════════════════
     # CONTEXT COMPRESSION (Cursor-Style)
     # ═══════════════════════════════════════════════════════════════════════════
@@ -296,46 +326,47 @@ class ContextManager:
         return new_history
     
     def _build_context_summary(self) -> str:
-        """Build a structured context summary."""
+        """Build a high-density structured context summary (The 'Glue')."""
         parts = []
         
-        # Narrative Summary (LLM generated) - Highest Priority
+        # 1. NARRATIVE (High Priority)
         if self.state.narrative_summary:
-            parts.append(f"## 📝 Previous Conversation Summary\n{self.state.narrative_summary}")
+            parts.append(f"### 📝 RECENT SUMMARY\n{self.state.narrative_summary}")
 
-        # Intent Context
-        if self.intent.primary_goal or self.intent.sub_goals:
-            parts.append("## 🎯 Intent Context")
-            if self.intent.primary_goal:
-                parts.append(f"**Primary Goal:** {self.intent.primary_goal}")
-            if self.intent.sub_goals:
-                parts.append("**Sub-tasks:** " + ", ".join(self.intent.sub_goals[-3:]))
-            if self.intent.constraints:
-                parts.append("**Constraints:** " + ", ".join(self.intent.constraints[-3:]))
-            if self.intent.keywords:
-                parts.append("**Keywords:** " + ", ".join(self.intent.keywords[-5:]))
-        
-        # State Context
-        state_items = []
+        # 2. PROJECT STATE
+        state_parts = []
         if self.state.files_created:
-            state_items.append(f"Files created: {', '.join(self.state.files_created[-5:])}")
+            state_parts.append(f"**Created:** {', '.join(self.state.files_created[-8:])}")
         if self.state.files_modified:
-            state_items.append(f"Files modified: {', '.join(self.state.files_modified[-5:])}")
-        if self.state.errors_encountered:
-            state_items.append(f"Errors: {'; '.join(self.state.errors_encountered[-2:])}")
-        if self.state.tools_used:
-            state_items.append(f"Tools used: {', '.join(self.state.tools_used[-5:])}")
-        if self.state.key_decisions:
-            state_items.append("Decisions:\n  • " + "\n  • ".join(self.state.key_decisions[-3:]))
+            state_parts.append(f"**Modified:** {', '.join(self.state.files_modified[-8:])}")
+        if self.state.files_read:
+            state_parts.append(f"**Read:** {', '.join(self.state.files_read[-8:])}")
         
-        if state_items:
-            parts.append("\n## 📁 State Context")
-            parts.extend(state_items)
+        if state_parts:
+            parts.append("### 📁 PROJECT STATE\n" + "\n".join(state_parts))
+
+        # 3. ERRORS (Critical)
+        if self.state.errors_encountered:
+            parts.append("### ⚠️ ERRORS ENCOUNTERED\n• " + "\n• ".join(self.state.errors_encountered[-5:]))
+
+        # 4. DECISIONS & PROGRESS
+        if self.state.key_decisions:
+            parts.append("### 🎯 DECISIONS & PROGRESS\n• " + "\n• ".join(self.state.key_decisions[-5:]))
+        
+        # 5. INTENT (Goal)
+        if self.intent.primary_goal:
+            parts.append(f"### 🎯 PRIMARY GOAL\n{self.intent.primary_goal}")
         
         if not parts:
             return ""
         
-        return "[COMPRESSED CONTEXT - Full history archived]\n\n" + "\n".join(parts)
+        return (
+            "╔═══════════════════════════════════════════════════════════════════════╗\n"
+            "║ COMPRESSED CONTEXT STATE (STABLE PROGRESS GLUE)                       ║\n"
+            "╚═══════════════════════════════════════════════════════════════════════╝\n\n"
+            + "\n\n".join(parts) +
+            "\n\n═════════════════════════════════════════════════════════════════════════"
+        )
     
     # ═══════════════════════════════════════════════════════════════════════════
     # ARCHIVE & RESTORATION

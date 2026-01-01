@@ -110,6 +110,16 @@ class Agent:
         self._allow_once_tools = set()
         self._noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip() in ("1", "true", "yes")
         self._event_sink = None  # optional callable(dict)
+        
+        # Initialize Context Manager
+        from vaf.core.context import ContextManager
+        self.context_manager = ContextManager(max_tokens=self.config.get("n_ctx", 8192))
+        
+        # Initialize Prompt Manager
+        from vaf.core.system_prompt import SystemPromptManager
+        # We need tools to init prompt manager, but tools are loaded later.
+        # So we init it here with empty dict and update it after tools load.
+        self.prompt_manager = SystemPromptManager({}) 
 
         # Session tracking for server shutdown management
         self._session_id = None
@@ -118,6 +128,8 @@ class Agent:
         # Initialize Tools (Dynamic Loading)
         self.tools = {}
         self._load_tools()
+        # Update Prompt Manager with loaded tools
+        self.prompt_manager.tools = self.tools
         
         # Register Cleanup Handler (Cross-Platform)
         # WICHTIG: Nur _atexit_cleanup registrieren, nicht shutdown direkt
@@ -763,13 +775,21 @@ class Agent:
             List of completed SubAgentTask objects
         """
         try:
-            from vaf.core.subagent_ipc import get_ipc
+            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
             ipc = get_ipc()
             
             # Cleanup stale tasks (crashed sub-agents)
             ipc.cleanup_stale_active_tasks(max_age_minutes=30)
             
-            return ipc.get_pending_results()
+            # CRITICAL: Only get results for CURRENT session (not old sessions!)
+            current_session = get_current_session_id()
+            
+            # 0. Liveness Check (Detect Crashed Sub-Agents)
+            # Check for zombies that haven't updated heartbeat in >20s
+            ipc.check_zombies(timeout_seconds=20)
+            
+            results = ipc.get_pending_results(session_id=current_session)
+            return results
         except Exception:
             return []
     
@@ -792,11 +812,12 @@ class Agent:
             self.history.append({
                 "role": "system",
                 "content": (
-                    f"📬 **Sub-Agent Result Received** [Task: {task.task_id}]\n"
+                    f"📬 **Sub-Agent Task COMPLETED / TERMINATED** [Task: {task.task_id}]\n"
                     f"Agent: {task.agent_type}\n"
                     f"Original Task: {task.task_description[:200]}\n\n"
-                    f"**Result:**\n{task.result}\n\n"
-                    f"Please inform the user about this result."
+                    f"**FINAL RESULT (Task is DONE):**\n{task.result}\n\n"
+                    f"IMPORTANT: This task is completely finished. The agent is NO LONGER working on it.\n"
+                    f"Analyze the result above and answer the user."
                 )
             })
         elif task.status == "failed":
@@ -805,10 +826,11 @@ class Agent:
             self.history.append({
                 "role": "system",
                 "content": (
-                    f"[X] **Sub-Agent Error** [Task: {task.task_id}]\n"
+                    f"[X] **Sub-Agent Task FAILED / TERMINATED** [Task: {task.task_id}]\n"
                     f"Agent: {task.agent_type}\n"
                     f"Error: {task.error}\n\n"
-                    f"Please inform the user about this error."
+                    f"IMPORTANT: The task has stopped. Do not say it is still running.\n"
+                    f"Inform the user about the error."
                 )
             })
         elif task.status == "timeout":
@@ -817,7 +839,7 @@ class Agent:
             self.history.append({
                 "role": "system",
                 "content": (
-                    f"⏰ **Sub-Agent Timeout** [Task: {task.task_id}]\n"
+                    f"⏰ **Sub-Agent Task TIMEOUT / TERMINATED** [Task: {task.task_id}]\n"
                     f"Agent: {task.agent_type}\n"
                     f"Der Sub-Agent hat nicht rechtzeitig geantwortet.\n\n"
                     f"Bitte informiere den User über dieses Problem."
@@ -1834,7 +1856,7 @@ class Agent:
                     ipc = get_ipc()
                     task_id = ipc.create_task(
                         agent_type=f"workflow:{workflow_id}",
-                        task=user_input,
+                        task_description=user_input,
                         session_id=get_current_session_id()
                     )
                     
@@ -1851,6 +1873,10 @@ class Agent:
                     session_id = get_current_session_id()
                     if session_id:
                         os.environ["VAF_SESSION_ID"] = session_id
+                    
+                    # Pass Language Hint to workflow terminal
+                    if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language:
+                        os.environ["VAF_USER_LANGUAGE"] = self.prompt_manager.user_language
                     
                     # Build command with proper escaping for the platform
                     if Platform.is_windows():
@@ -2104,9 +2130,10 @@ class Agent:
                 self._process_subagent_result(task)
             
             # If we processed results and no new user input, let model respond to results
-            if not user_input or skip_input:
-                # Force a response about the sub-agent results
-                self.history.append({
+            if not user_input and not skip_input:
+                 # Only auto-inject generic prompt if we DON'T have a specific input
+                 # and we're not in a skip_input mode (which usually implies internal control)
+                 self.history.append({
                     "role": "user",
                     "content": "[System: Sub-Agent results have arrived. Please inform me about the results.]"
                 })
@@ -2120,6 +2147,12 @@ class Agent:
             
             # Rebuild system prompt
             new_prompt = self.prompt_manager.build_prompt(self.filename)
+            
+            # Inject PROACTIVE CONTEXT GLUE (Stability)
+            # This ensures the agent always knows which files exist, what errors happened, etc.
+            context_glue = self.context_manager._build_context_summary()
+            if context_glue:
+                new_prompt += f"\n\n{context_glue}"
             
             # Preserve Project Context if it exists
             if len(self.history) > 0 and self.history[0]["role"] == "system":
@@ -2158,14 +2191,15 @@ class Agent:
         # Snapshot history (before adding user input if not skipped)
         history_snapshot_len = len(self.history)
         
-        if not skip_input:
+        # Always add user input if provided, even if skip_input=True (which skips analysis/overhead)
+        if user_input:
             self.history.append({"role": "user", "content": user_input})
+        
+        if not skip_input and user_input:
             # 0.5. Context Management AGAIN - AFTER adding user input (in case it pushed us over limit)
             self.manage_context()
             # Re-apply after potential compression to ensure the hint stays in history[0].
             self._refresh_language_hint(user_input)
-        else:
-            pass
 
         # 1. Adaptive Temperature Check
         target_temp = self.config.get("temperature", 0.7)
@@ -2260,17 +2294,22 @@ class Agent:
                                     user_msgs = [m for m in self.history if m.get("role") == "user"]
                                     assistant_msgs = [m for m in self.history if m.get("role") == "assistant"]
                                     
-                                    # Keep first system message, last user message, last 5 assistant messages
+                                    # Keep first system message, last user message, last 3 assistant messages
                                     new_history = []
                                     if system_msgs:
                                         new_history.append(system_msgs[0])  # Keep first system prompt
                                     if user_msgs:
                                         new_history.append(user_msgs[-1])  # Keep last user message
-                                    if assistant_msgs:
-                                        new_history.extend(assistant_msgs[-5:])  # Keep last 5 assistant messages
+                                    
+                                    # For assistant messages, we need to be careful with huge tool outputs
+                                    # Only keep the last 3, and truncate content if needed
+                                    for msg in assistant_msgs[-3:]:
+                                        if len(str(msg.get("content", ""))) > 2000:
+                                             msg["content"] = str(msg.get("content", ""))[:2000] + "... [TRUNCATED]"
+                                        new_history.append(msg)
                                     
                                     self.history = new_history
-                                    UI.event("Context", f"Compressed to {len(self.history)} messages. Retrying...", style="info")
+                                    UI.event("Context", f"Compressed to {len(self.history)} messages (Aggressive). Retrying...", style="info")
                                     # Retry the request with compressed context (payload will be rebuilt in next iteration)
                                     continue
                         
@@ -2495,22 +2534,55 @@ class Agent:
                                     continue
                                 
                                 # 2. Check for SUCCESSFUL REPETITION (New Logic)
-                                # If args match (fuzzy check) and result wasn't error -> Block
+                                # If args match (strict check) and result wasn't error -> Block
                                 # This prevents double-execution loops
                                 try:
-                                    # Simple check: if tool name matches and we just ran it successfully
-                                    # We assume args match if the agent tries it immediately again
-                                    UI.event("Warning", f"Blocked redundant tool call: {tool_name}", style="warning")
-                                    self.history.append({
-                                        "role": "system",
-                                        "content": (
-                                            f"[!] STOP! You just executed '{tool_name}' successfully.\n"
-                                            f"The result is already in the context above (look for the 'tool' message).\n"
-                                            f"DO NOT execute it again. Analyze the result and provide your answer."
-                                        )
-                                    })
-                                    continue
-                                except: pass
+                                    # Strict check: only block if arguments are IDENTICAL to the last call
+                                    last_call_id = last_tool_msg.get('tool_call_id')
+                                    should_block = False
+                                    
+                                    if last_call_id:
+                                        # Find the assistant message that made this call
+                                        # Search backwards from the tool message index (i)
+                                        for h_idx in range(i - 1, -1, -1):
+                                            m = self.history[h_idx]
+                                            if m.get('role') == 'assistant' and 'tool_calls' in m:
+                                                found_call = False
+                                                for prev_tc in m['tool_calls']:
+                                                    if prev_tc.get('id') == last_call_id:
+                                                        # Found the original call! Compare args.
+                                                        prev_args = prev_tc['function']['arguments']
+                                                        curr_args = tool_data['arguments']
+                                                        
+                                                        # Normalize JSON strings for comparison
+                                                        try:
+                                                            p_json = json.loads(prev_args) if isinstance(prev_args, str) else prev_args
+                                                            c_json = json.loads(curr_args) if isinstance(curr_args, str) else curr_args
+                                                            # Compare dictionaries/lists directly
+                                                            if p_json == c_json:
+                                                                should_block = True
+                                                        except:
+                                                            # Fallback to string comparison
+                                                            if str(prev_args).strip() == str(curr_args).strip():
+                                                                should_block = True
+                                                        found_call = True
+                                                        break
+                                                if found_call: break
+
+                                    if should_block:
+                                        UI.event("Warning", f"Blocked redundant tool call: {tool_name}", style="warning")
+                                        self.history.append({
+                                            "role": "system",
+                                            "content": (
+                                                f"[!] STOP! You just executed '{tool_name}' successfully with these EXACT arguments.\n"
+                                                f"The result is already in the context above (look for the 'tool' message).\n"
+                                                f"DO NOT execute it again. Analyze the result and provide your answer."
+                                            )
+                                        })
+                                        continue
+                                except Exception as e:
+                                    # If check fails, assume it's safe to proceed
+                                    pass
                         
                         tool_calls_detected.append({
                             "id": tool_data['id'] or f"call_{os.urandom(4).hex()}",
@@ -2644,11 +2716,16 @@ class Agent:
                             )
                         })
                     else:
+                        # ═══════════════════════════════════════════════════════════════
+                        # SEAMLESS COMPRESSION: Prune large tool output while extracting facts
+                        # ═══════════════════════════════════════════════════════════════
+                        processed_result = self.context_manager.process_tool_output(function_name, result_str)
+                        
                         self.history.append({
                             "role": "tool",
                             "tool_call_id": tc['id'],
                             "name": function_name,
-                            "content": result_str
+                            "content": processed_result
                         })
                     
                     # Check if this was an async sub-agent task

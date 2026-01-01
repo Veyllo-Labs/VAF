@@ -56,6 +56,7 @@ class SubAgentTask:
     completed_at: Optional[str] = None
     result: Optional[str] = None
     error: Optional[str] = None
+    last_heartbeat: Optional[str] = None # ISO timestamp of last liveness check
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -65,6 +66,9 @@ class SubAgentTask:
         # Handle missing session_id for backwards compatibility
         if 'session_id' not in data:
             data['session_id'] = None
+        # Handle missing last_heartbeat for backwards compatibility
+        if 'last_heartbeat' not in data:
+            data['last_heartbeat'] = None
         return cls(**data)
 
 
@@ -426,7 +430,99 @@ class SubAgentIPC:
             
             self._write_json(self.active_file, active)
             self._write_json(self.results_file, results)
-    
+        else:
+             # Also check pending if it failed fast
+            pending = self._read_json(self.pending_file)
+            for i, task in enumerate(pending):
+                if task.get('task_id') == task_id:
+                    task_data = pending.pop(i)
+                    self._write_json(self.pending_file, pending)
+                    break
+            
+            if task_data:
+                task_data['status'] = SubAgentStatus.FAILED.value
+                task_data['completed_at'] = completed_at
+                task_data['error'] = error
+                results.append(task_data)
+                self._write_json(self.results_file, results)
+
+    def update_heartbeat(self, task_id: str):
+        """Update the last_heartbeat timestamp for a running task."""
+        active = self._read_json(self.active_file)
+        updated = False
+        for task in active:
+            if task.get('task_id') == task_id:
+                task['last_heartbeat'] = datetime.now().isoformat()
+                updated = True
+                break
+        if updated:
+            self._write_json(self.active_file, active)
+
+    def check_zombies(self, timeout_seconds: int = 20):
+        """
+        Check for 'zombie' tasks that have stopped reporting heartbeats.
+        This detects crashes (window closed, process killed) where no result was written.
+        
+        Args:
+            timeout_seconds: Time without heartbeat before declaring dead.
+        """
+        active = self._read_json(self.active_file)
+        results = self._read_json(self.results_file)
+        pending = self._read_json(self.pending_file)
+        
+        now = datetime.now()
+        zombies_found = False
+        
+        # Check active tasks
+        still_active = []
+        for task in active:
+            # Use last_heartbeat if available, else created_at
+            last_seen_str = task.get('last_heartbeat') or task.get('created_at')
+            try:
+                last_seen = datetime.fromisoformat(last_seen_str)
+                age = (now - last_seen).total_seconds()
+                
+                if age > timeout_seconds:
+                    # It's a zombie!
+                    task['status'] = SubAgentStatus.FAILED.value
+                    task['completed_at'] = now.isoformat()
+                    task['error'] = f"CRASH DETECTED: Sub-agent stopped responding (no heartbeat for {int(age)}s). The terminal likely closed unexpectedly."
+                    results.append(task)
+                    zombies_found = True
+                else:
+                    still_active.append(task)
+            except:
+                still_active.append(task)
+
+        if zombies_found:
+            self._write_json(self.active_file, still_active)
+            self._write_json(self.results_file, results)
+
+        # Check pending tasks (stuck in pending too long = crash at startup)
+        still_pending = []
+        pending_zombies = False
+        for task in pending:
+            created_str = task.get('created_at')
+            try:
+                created = datetime.fromisoformat(created_str)
+                age = (now - created).total_seconds()
+                
+                if age > timeout_seconds + 10: # Give pending tasks a bit more time to start
+                     # It never started
+                    task['status'] = SubAgentStatus.FAILED.value
+                    task['completed_at'] = now.isoformat()
+                    task['error'] = f"STARTUP FAILED: Sub-agent never started (timeout {int(age)}s). Check if 'vaf' command works in new terminal."
+                    results.append(task)
+                    pending_zombies = True
+                else:
+                    still_pending.append(task)
+            except:
+                still_pending.append(task)
+                
+        if pending_zombies:
+            self._write_json(self.pending_file, still_pending)
+            self._write_json(self.results_file, results) # Append to results so main agent sees error
+
     # ═══════════════════════════════════════════════════════════════════════════
     # UTILITY METHODS
     # ═══════════════════════════════════════════════════════════════════════════

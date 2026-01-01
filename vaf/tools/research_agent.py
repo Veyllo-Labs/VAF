@@ -382,7 +382,7 @@ class ResearchAgentTool(BaseTool):
             
             # Create task in IPC system
             ipc = get_ipc()
-            task_id = ipc.create_task("research_agent", topic)
+            task_id = ipc.create_task("research_agent", task_description=topic)
             
             # Pass session ID to sub-agent via environment variable
             session_id = get_current_session_id()

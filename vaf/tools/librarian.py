@@ -124,7 +124,7 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             
             # Create task in IPC system
             ipc = get_ipc()
-            task_id = ipc.create_task("librarian_agent", task)
+            task_id = ipc.create_task("librarian_agent", task_description=task)
             
             # Pass session ID to sub-agent via environment variable
             session_id = get_current_session_id()

@@ -75,6 +75,30 @@ def run_subagent(
     # Get IPC instance if we have a task_id
     ipc = get_ipc() if task_id else None
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # HEARTBEAT THREAD
+    # ═══════════════════════════════════════════════════════════════════════════
+    if ipc and task_id:
+        import threading
+        
+        def heartbeat_worker():
+            while True:
+                try:
+                    ipc.update_heartbeat(task_id)
+                except:
+                    pass
+                time.sleep(3) # Pulse every 3 seconds
+        
+        # Start heartbeat in background daemon thread
+        # It will die automatically when main process exits
+        hb_thread = threading.Thread(target=heartbeat_worker, daemon=True)
+        hb_thread.start()
+        
+        # Also mark as running immediately (in case startup takes time)
+        try:
+            ipc.mark_task_running(task_id)
+        except: pass
+    
     success = False
     
     try:

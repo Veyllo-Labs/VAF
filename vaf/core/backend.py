@@ -346,19 +346,106 @@ class ServerManager:
         # Stop existing if any (nur wenn wirklich nötig)
         self.stop_server()
         
+        # ═══════════════════════════════════════════════════════════════════
+        # SMART CONTEXT & SLOT CALCULATION (VRAM-FIRST)
+        # ═══════════════════════════════════════════════════════════════════
+        # Goal: Give each agent the FULL requested context (n_ctx).
+        # Strategy:
+        # - Priority 1: Fit everything in VRAM (Fastest).
+        # - Priority 2: If VRAM full, use System RAM but LIMIT SLOTS to 1 (Sequential) to avoid thrashing.
+        # - Priority 3: Max RAM usage target: 55% of Total System RAM.
+        
+        import psutil
+        from vaf.core.gpu_detection import get_primary_gpu
+        
+        # 1. Get System Stats
+        total_ram_gb = psutil.virtual_memory().total / (1024**3)
+        gpu = get_primary_gpu()
+        
+        # 2. Estimate Memory Usage (STRICT / REALISTIC for Windows)
+        # Model Weights: Get ACTUAL file size + runtime overhead
+        try:
+            model_file_size = os.path.getsize(model_path)
+            model_gb = model_file_size / (1024**3)
+            # Add 0.5GB - 1.0GB overhead for scratch buffers, compute graphs etc.
+            est_model_gb = model_gb + 1.0
+        except Exception:
+            # Fallback if file not found (should not happen here)
+            est_model_gb = 6.5 
+        
+        # Context (KV Cache): Standard f16 cache is HUGE.
+        # 8192 tokens * f16 key/value * layers ~ 2.5 GB VRAM (conservatively)
+        est_ctx_gb_per_8k = 2.5
+        
+        # OS Overhead: Windows needs ~1.5-2.0 GB reserved
+        os_overhead_gb = 2.0
+        
+        req_ctx_gb_per_slot = (n_ctx / 8192) * est_ctx_gb_per_8k
+        
+        # 3. Decision Logic
+        final_parallel = 1
+        final_total_ctx = n_ctx
+        mode_msg = "Sequential (1 Slot)"
+        
+        # Check VRAM first (if available)
+        if gpu and gpu.vram_mb > 0:
+            vram_gb = gpu.vram_mb / 1024
+            
+            # Cost for 2 slots in VRAM
+            cost_2_slots_vram = est_model_gb + (req_ctx_gb_per_slot * 2) + os_overhead_gb
+            
+            if cost_2_slots_vram <= vram_gb:
+                # Fits in VRAM! Go Parallel.
+                final_parallel = 2
+                final_total_ctx = n_ctx * 2
+                mode_msg = "GPU Parallel (2 Slots - VRAM)"
+            else:
+                # Doesn't fit. Fallback to 1 slot to stay in VRAM.
+                # This prevents the 1 Token/sec swap death.
+                mode_msg = "GPU Sequential (1 Slot - VRAM Optimized)"
+        else:
+            # CPU/RAM Mode
+            # Calculate Cost for 2 Slots in RAM
+            cost_2_slots_ram = est_model_gb + (req_ctx_gb_per_slot * 2) + 1.0
+            ram_budget_gb = total_ram_gb * 0.55
+            
+            if cost_2_slots_ram <= ram_budget_gb:
+                final_parallel = 2
+                final_total_ctx = n_ctx * 2
+                mode_msg = "CPU Parallel (2 Slots - RAM)"
+            else:
+                mode_msg = "CPU Sequential (1 Slot - RAM Limited)"
+            
+        UI.event("System", f"Config: {mode_msg}", style="dim")
+        if gpu:
+            UI.event("System", f"VRAM: {vram_gb:.1f}GB | Est. 2-Slot Need: {cost_2_slots_vram:.1f}GB", style="dim")
+        else:
+            UI.event("System", f"RAM: {total_ram_gb:.1f}GB | Est. 2-Slot Need: {cost_2_slots_ram:.1f}GB", style="dim")
+        
         cmd = [
             self.server_path,
             "-m", model_path,
             "-ngl", str(n_gpu_layers),
-            "-c", str(n_ctx),
+            "-c", str(final_total_ctx), # Total allocated context
             "--port", str(port),
             "--host", "127.0.0.1",
-            "--ctx-size", str(n_ctx),
-            "--n-gpu-layers", str(n_gpu_layers),
+            "--parallel", str(final_parallel),
+            # VRAM Optimization: Use 8-bit cache for Key/Value memory
+            # This reduces context VRAM usage by ~50% with minimal quality loss
+            "-ctk", "q8_0",
+            "-ctv", "q8_0", 
             "--verbose" # Helpful for debug output in console
         ]
         
-        UI.event("Server", f"Starting background process on :{port}...", style="dim")
+        # Log the command for debugging
+        try:
+            log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "logs")
+            os.makedirs(log_dir, exist_ok=True)
+            with open(os.path.join(log_dir, "server_cmd.log"), "w") as f:
+                f.write(" ".join(cmd))
+        except: pass
+        
+        UI.event("Server", f"Starting background process on :{port} (ctx={final_total_ctx}, parallel={final_parallel})...", style="dim")
         
         # Start detached process
         # On Windows, we might want CREATE_NO_WINDOW if we want it silent, 

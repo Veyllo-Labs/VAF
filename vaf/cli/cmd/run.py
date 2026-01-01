@@ -783,14 +783,12 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                         lang_instruction = "RESPOND IN ENGLISH."
                     
                     # Trigger agent to summarize/respond to the result
-                    # CRITICAL: Highly restrictive prompt to prevent "labern"
                     response = agent.chat_step(
                         f"The sub-agent has completed its task. {lang_instruction}\n"
-                        "JUST BRIEFLY confirm the result to the user. \n"
-                        "DO NOT ask if they want more research. \n"
-                        "DO NOT offer options. \n"
-                        "DO NOT ask 'What else can I do?'. \n"
-                        "JUST a short, helpful confirmation of the result. NOTHING MORE.",
+                        "Please provide a BRIEF SUMMARY of the sub-agent's findings/results for the user.\n"
+                        "Focus on the content of the result (what was found/done).\n"
+                        "Keep it concise but informative.\n"
+                        "DO NOT offer new options or ask 'What else?'.",
                         skip_input=True  # Don't add this prompt to visible history
                     )
                     if response:

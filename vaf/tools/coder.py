@@ -1458,7 +1458,7 @@ Thumbs.db
             
             # Create task in IPC system
             ipc = get_ipc()
-            task_id = ipc.create_task("coding_agent", task)
+            task_id = ipc.create_task("coding_agent", task_description=task)
             
             # Pass session ID to sub-agent via environment variable
             session_id = get_current_session_id()
@@ -1658,11 +1658,16 @@ Thumbs.db
         # Check if continuing existing project
         project_path = kwargs.get('project_path', '')
         if project_path:
-            # Continue existing project
+            # Continue existing project OR create new one at specific path
             base_dir = os.path.abspath(os.path.expanduser(project_path))
             if not os.path.exists(base_dir):
-                return f"❌ Error: Project directory not found: {base_dir}\nPlease provide a valid path to an existing project."
-            tui.append_stream(f"Continuing project: {os.path.basename(base_dir)}")
+                try:
+                    os.makedirs(base_dir, exist_ok=True)
+                    tui.append_stream(f"Created project directory: {base_dir}")
+                except Exception as e:
+                    return f"❌ Error: Could not create project directory: {base_dir}\n{e}"
+            else:
+                tui.append_stream(f"Using existing directory: {os.path.basename(base_dir)}")
         elif skip_template:
             # CONTENT_ONLY mode: Use a temporary directory instead of creating a project
             import tempfile
@@ -4587,11 +4592,36 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             else:
                                 # Task is done - proceed
                                 summary = fn_args.get("summary", "done")
+                        else:
+                            # All tasks are done - allow completion
+                            tui.append_stream("All tasks completed!")
+                        
+                        # CONTENT_ONLY mode: Return actual file content
+                        if skip_template and files_created:
+                            main_file = None
+                            main_file_patterns = ['index.html', 'main.py', 'app.py', 'script.py', 'main.js', 'app.js']
+                            for pattern in main_file_patterns:
+                                for f in files_created:
+                                    if os.path.basename(f).lower() == pattern.lower():
+                                        main_file = f
+                                        break
+                                if main_file:
+                                    break
+                                
+                                # CRITICAL FIX: Mark task as completed!
+                                summary = fn_args.get("summary", "done")
                                 task_mgr.complete_current_task(summary)
                                 next_task = task_mgr.get_current_task()
                                 
                                 tui.append_stream(f"Completed: {current[:40] if current else 'task'}")
                                 tui.set_action(f"{task_mgr.get_progress()}")
+                                
+                                # ═══════════════════════════════════════════════════════════════
+                                # TASK CHECKPOINTING (The Glue) - Archive old context
+                                # ═══════════════════════════════════════════════════════════════
+                                # Before switching, compress/archive the current task's history
+                                # This ensures we don't lose the "lessons learned" but free up tokens
+                                current_context_manager.compress(history)
                                 
                                 # ═══════════════════════════════════════════════════════════════
                                 # CREATE FRESH CONTEXT FOR NEW TASK - Isolated context per task
@@ -4620,6 +4650,12 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             
                             tui.append_stream(f"✅ Completed: {current[:40] if current else 'task'}")
                             tui.set_action(f"📋 {task_mgr.get_progress()}")
+                            
+                            # ═══════════════════════════════════════════════════════════════
+                            # TASK CHECKPOINTING (The Glue) - Archive old context
+                            # ═══════════════════════════════════════════════════════════════
+                            # Before switching, compress/archive the current task's history
+                            current_context_manager.compress(history)
                             
                             # ═══════════════════════════════════════════════════════════════
                             # CREATE FRESH CONTEXT FOR NEW TASK - Isolated context per task

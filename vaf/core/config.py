@@ -21,6 +21,11 @@ class Config:
         "ux_auto_open_outputs": True,
         # Safety cap for tabs opened automatically
         "ux_auto_open_max_tabs": 8,
+        # Run each sub-agent in its own terminal window
+        "sub_agents_in_separate_terminals": True,
+        # Sub-agent timeout settings
+        "subagent_timeout_enabled": True,      # Enable/disable timeout for sub-agents
+        "subagent_timeout_minutes": 120,       # Timeout in minutes (default: 2 hours)
     }
 
     @classmethod

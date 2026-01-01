@@ -280,6 +280,145 @@ vaf snapshot clean --keep 50
 | Research  🔍 Searching... | ⏱ 0:45 | 🔄 1 | ● Summarizing...
 ```
 
+### 🧠 Intelligent Context Management
+
+VAF uses a **dynamic, modular context system** that intelligently manages tokens and adapts to your task.
+
+#### Dynamic System Prompt ("The Prompt Router")
+
+Unlike traditional agents with static system prompts, VAF **dynamically loads only the modules you need**:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              DYNAMIC SYSTEM PROMPT ARCHITECTURE             │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │  🔷 CORE MODULE (Always Active)                     │    │
+│  │  ├─ Identity (VQ-1 / Model Name)                    │    │
+│  │  ├─ Time, OS, CWD                                   │    │
+│  │  ├─ Language Settings                               │    │
+│  │  └─ Base Rules (~400 tokens)                        │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                          │                                  │
+│           ┌──────────────┼──────────────┐                   │
+│           ▼              ▼              ▼                   │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐            │
+│  │🔍 RESEARCH  │ │ 💻 CODER   │ │📁 LIBRARIAN │            │
+│  │   MODULE    │ │   MODULE    │ │   MODULE    │            │
+│  │ (~400 tok)  │ │ (~500 tok)  │ │ (~300 tok)  │            │
+│  │             │ │             │ │             │            │
+│  │ web_search  │ │coding_agent │ │librarian    │            │
+│  │ webfetch    │ │code rules   │ │file queries │            │
+│  └─────────────┘ └─────────────┘ └─────────────┘            │
+│           │              │              │                   │
+│           └──────────────┼──────────────┘                   │
+│                          ▼                                  │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │  ⚡ AUTOMATION MODULE (On-Demand)                   │    │
+│  │  └─ Scheduling rules, create_automation (~300 tok)  │    │
+│  └─────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Token Savings
+
+| Scenario | Old (Static) | New (Dynamic) | Savings |
+|----------|-------------|---------------|---------|
+| Small Talk ("Hallo!") | ~4,000 tokens | ~800 tokens | **80%** |
+| Web Search | ~4,000 tokens | ~1,200 tokens | **70%** |
+| Coding Task | ~4,000 tokens | ~1,400 tokens | **65%** |
+| File Analysis | ~4,000 tokens | ~1,100 tokens | **72%** |
+| All Modules Active | ~4,000 tokens | ~2,400 tokens | **40%** |
+
+**Result:** You start at **10-20%** context usage instead of **50%+**!
+
+#### Sticky Context with Decay
+
+Modules don't disappear immediately - they use a **decay mechanism**:
+
+```
+User: "Create a Python script"     → 💻 Coder activated (3 turns)
+User: "Add error handling"         → 💻 Coder stays active (3 turns)
+User: "What's the weather?"        → 💻 Coder (2), 🔍 Researcher (3)
+User: "Thanks!"                    → 💻 Coder (1), 🔍 Researcher (2)
+User: "Bye"                        → 💻 Coder gone, 🔍 Researcher (1)
+```
+
+**Benefits:**
+- ✅ **No Context Flicker**: Modules stay active during related tasks
+- ✅ **Automatic Cleanup**: Unused modules decay after 3 messages
+- ✅ **Better Focus**: Only relevant rules are loaded
+
+#### Hierarchical Context (Coder Agent)
+
+The **Coder Agent** uses **isolated contexts per task**:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              CODER AGENT - HIERARCHICAL CONTEXT             │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │  MAIN CONTEXT (Planning Phase)                      │    │
+│  │  └─ Task List from set_todos                        │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                          │                                  │
+│        ┌─────────────────┼─────────────────┐                │
+│        ▼                 ▼                 ▼                │
+│  ┌───────────┐    ┌───────────┐    ┌───────────┐            │
+│  │  TASK 1   │    │  TASK 2   │    │  TASK N   │            │
+│  │ (Isolated)│    │ (Isolated)│    │ (Isolated)│            │
+│  │ Fresh CTX │    │ Fresh CTX │    │ Fresh CTX │            │
+│  └───────────┘    └───────────┘    └───────────┘            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Each task gets a **fresh ContextManager** - no pollution from previous tasks!
+
+#### Context Compression (Cursor-Style)
+
+When context reaches **85%**, VAF compresses automatically:
+
+```
+BEFORE: 100 messages, 7,500 tokens
+┌─────────────────────────────────────────────────┐
+│ System Prompt + 95 messages                     │
+└─────────────────────────────────────────────────┘
+                    ⬇️ COMPRESS ⬇️
+AFTER: 12 messages, 2,000 tokens
+┌─────────────────────────────────────────────────┐
+│ System Prompt (kept)                            │
+│ [COMPRESSED] 🎯 Intent + 📁 State + 📝 Summary │
+│ Last 10 messages (raw)                          │
+└─────────────────────────────────────────────────┘
+```
+
+**Strategy:**
+1. **Archive**: Full history saved to `~/.vaf/context_archive/`
+2. **Keep**: System prompt + last 10 messages
+3. **Compress**: Old messages → Intent + State + Summary
+4. **Restore**: Use `/restore` to recover full history
+
+#### Context Tracking
+
+**🎯 Intent Context**: Primary goal, sub-tasks, constraints, keywords
+
+**📁 State Context**: Files created/modified, errors, tools used, decisions
+
+#### Configuration
+
+- **Default Limit**: 8,192 tokens (configurable via `vaf settings`)
+- **Compression Trigger**: 85% usage
+- **VAF.md**: Optional project context (max 12,000 chars)
+
+**Example Context Usage (New):**
+```
+Tokens: ████░░░░░░░░░░░░░░░░░░░░░░░░░░░ 12% (1,000/8,192)
+         ↑ Dynamic Prompt (~800) + First Message (~200)
+```
+
+> 📚 **Deep Dive**: See [docs/CONTEXT_MANAGEMENT.md](docs/CONTEXT_MANAGEMENT.md) for detailed documentation on sub-agents, web search context isolation, and compression strategies.
+
 ### 🔄 Workflows - Plug & Play Pipelines
 
 VAF includes pre-built workflows that automatically execute multi-step tasks. Just describe what you want, and VAF handles the rest!

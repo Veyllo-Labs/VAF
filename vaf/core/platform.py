@@ -68,6 +68,39 @@ class Platform:
         - macOS/Linux: ~/Documents
         """
         return Path.home() / "Documents"
+    
+    @staticmethod
+    def downloads_dir() -> Path:
+        """
+        Get the user's Downloads directory (cross-platform best-effort).
+        
+        Returns:
+            Path to user's Downloads folder
+        """
+        return Path.home() / "Downloads"
+    
+    @staticmethod
+    def get_research_dir() -> Path:
+        """
+        Get the directory for storing research reports.
+        Tries Documents/VAF_Research first, falls back to Downloads/VAF_Research.
+        Creates the directory if it doesn't exist.
+        
+        Returns:
+            Path to research directory
+        """
+        # Try Documents first
+        docs = Platform.documents_dir()
+        if docs.exists():
+            research_dir = docs / "VAF_Research"
+            research_dir.mkdir(exist_ok=True)
+            return research_dir
+        
+        # Fallback to Downloads
+        downloads = Platform.downloads_dir()
+        research_dir = downloads / "VAF_Research"
+        research_dir.mkdir(exist_ok=True)
+        return research_dir
 
     # ═══════════════════════════════════════════════════════════════════════════
     # UX HELPERS (Open Browser / File Explorer)
@@ -336,22 +369,23 @@ class Platform:
         
         try:
             if Platform.is_windows():
-                # Windows: Use start cmd /k to open new window
-                # Note: start command needs special handling for quotes
+                # Windows: Use start cmd /c to open new window and close when done
+                # /c = execute command then terminate (terminal closes after exit)
+                # /k = execute command and remain (keeps terminal open - DON'T use!)
                 import os
                 cwd = os.getcwd()
                 if title:
                     # Use /D to set working directory and ensure command is properly quoted
-                    cmd = f'start "{title}" /D "{cwd}" cmd /k "{command}"'
+                    cmd = f'start "{title}" /D "{cwd}" cmd /c "{command}"'
                 else:
-                    cmd = f'start /D "{cwd}" cmd /k "{command}"'
+                    cmd = f'start /D "{cwd}" cmd /c "{command}"'
                 try:
                     subprocess.Popen(cmd, shell=True, cwd=cwd)
                     return True
                 except Exception as e:
                     # Fallback: try without title
                     try:
-                        cmd = f'start cmd /k "{command}"'
+                        cmd = f'start cmd /c "{command}"'
                         subprocess.Popen(cmd, shell=True, cwd=cwd)
                         return True
                     except:

@@ -6,11 +6,237 @@ import requests
 import platform
 import subprocess
 from rich.console import Console
+from rich.panel import Panel
 from vaf.core.agent import Agent
 from vaf.cli.ui import UI
 
 app = typer.Typer()
 console = Console()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SUB-AGENT STATUS FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _check_subagent_results(tui, agent):
+    """
+    Check for completed sub-agent results and display them.
+    Also resumes any paused workflows waiting for these results.
+    Called at the beginning of each chat interaction.
+    
+    Returns:
+        bool: True if results were found and processed
+    """
+    try:
+        from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+        ipc = get_ipc()
+        
+        # CRITICAL: Only get results for CURRENT session (not old sessions!)
+        current_session = get_current_session_id()
+        results = ipc.get_pending_results(session_id=current_session)
+        if not results:
+            return False
+        
+        workflow_resumed = False
+        
+        for task in results:
+            # Check if a paused workflow is waiting for this result
+            paused_wf = ipc.get_paused_workflow_for_task(task.task_id)
+            
+            if task.status == "completed":
+                # Detect if this is a workflow result (agent_type starts with "workflow:")
+                is_workflow = task.agent_type.startswith("workflow:")
+                
+                if paused_wf:
+                    # Resume the workflow!
+                    tui.console.print()
+                    tui.console.print(Panel(
+                        f"[bold green][OK] Sub-Agent complete - resuming workflow[/bold green]\n\n"
+                        f"[cyan]Task:[/cyan] {task.task_id}\n"
+                        f"[cyan]Agent:[/cyan] {task.agent_type}\n"
+                        f"[cyan]Workflow:[/cyan] {paused_wf.workflow_name}",
+                        title="[>] Workflow Resuming",
+                        border_style="green"
+                    ))
+                    
+                    # Resume the workflow
+                    _resume_paused_workflow(tui, agent, paused_wf, task.result)
+                    workflow_resumed = True
+                elif is_workflow:
+                    # Workflow completed in separate terminal
+                    workflow_name = task.agent_type.split(":", 1)[1] if ":" in task.agent_type else task.agent_type
+                    result_preview = task.result[:500] if task.result else ""
+                    has_more = len(str(task.result)) > 500 if task.result else False
+                    
+                    tui.console.print()
+                    tui.console.print(Panel(
+                        f"[bold green][OK] Workflow completed[/bold green]\n\n"
+                        f"[cyan]Workflow:[/cyan] {workflow_name}\n"
+                        f"[cyan]Task:[/cyan] {task.task_id}\n"
+                        f"[cyan]Duration:[/cyan] {_format_duration(task.created_at, task.completed_at)}\n\n"
+                        f"[bold]Result:[/bold]\n{result_preview}{'...' if has_more else ''}",
+                        title="[OK] Workflow Complete",
+                        border_style="green"
+                    ))
+                    
+                    # Add short summary to history (workflow returns short summary, not full content)
+                    agent.history.append({
+                        "role": "system",
+                        "content": f"**Workflow Result [{workflow_name}]** (Task: {task.task_id}):\n\n{task.result}"
+                    })
+                else:
+                    # Regular sub-agent result (not part of workflow)
+                    result_preview = task.result[:500] if task.result else ""
+                    has_more = len(str(task.result)) > 500 if task.result else False
+                    
+                    tui.console.print()
+                    tui.console.print(Panel(
+                        f"[bold green][OK] Sub-Agent result received[/bold green]\n\n"
+                        f"[cyan]Task:[/cyan] {task.task_id}\n"
+                        f"[cyan]Agent:[/cyan] {task.agent_type}\n"
+                        f"[cyan]Duration:[/cyan] {_format_duration(task.created_at, task.completed_at)}\n\n"
+                        f"[bold]Result:[/bold]\n{result_preview}{'...' if has_more else ''}",
+                        title="[OK] Sub-Agent Complete",
+                        border_style="green"
+                    ))
+                    
+                    # Add TRUNCATED result to history to avoid context overflow
+                    # The full result is displayed above, so we just need a summary
+                    result_len = len(str(task.result)) if task.result else 0
+                    if result_len > 1000:
+                        # For large results, only add first 500 chars + note
+                        truncated = task.result[:500] + f"\n\n[... {result_len - 500} more characters - see output above ... ]"
+                        agent.history.append({
+                            "role": "system",
+                            "content": f"**Sub-Agent Result [{task.task_id}]** ({task.agent_type}):\n\n{truncated}"
+                        })
+                    else:
+                        # Small results can be added fully
+                        agent.history.append({
+                            "role": "system",
+                            "content": f"**Sub-Agent Result [{task.task_id}]** ({task.agent_type}):\n\n{task.result}"
+                        })
+                
+            elif task.status == "failed":
+                tui.console.print()
+                tui.console.print(Panel(
+                    f"[bold red][X] Sub-Agent failed[/bold red]\n\n"
+                    f"[cyan]Task:[/cyan] {task.task_id}\n"
+                    f"[cyan]Agent:[/cyan] {task.agent_type}\n\n"
+                    f"[red]Error:[/red] {task.error}",
+                    title="[X] Sub-Agent Error",
+                    border_style="red"
+                ))
+                
+                if paused_wf:
+                    # Remove the paused workflow - it failed
+                    ipc.remove_paused_workflow(paused_wf.workflow_id)
+                
+                agent.history.append({
+                    "role": "system",
+                    "content": f"**Sub-Agent Error [{task.task_id}]** ({task.agent_type}):\n{task.error}"
+                })
+                
+            elif task.status == "timeout":
+                tui.console.print()
+                tui.console.print(Panel(
+                    f"[bold yellow][!] Sub-Agent Timeout[/bold yellow]\n\n"
+                    f"[cyan]Task:[/cyan] {task.task_id}\n"
+                    f"[cyan]Agent:[/cyan] {task.agent_type}",
+                    title="[!] Timeout",
+                    border_style="yellow"
+                ))
+            
+            # Consume the result
+            ipc.consume_result(task.task_id)
+        
+        return len(results) > 0
+        
+    except Exception as e:
+        # Log error but don't crash
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def _resume_paused_workflow(tui, agent, paused_wf, subagent_result: str):
+    """
+    Resume a paused workflow with the sub-agent's result.
+    """
+    try:
+        from vaf.workflows.engine import WorkflowEngine
+        
+        # Create engine with agent's tools
+        engine = WorkflowEngine(agent.tools)
+        engine._workflow_name = paused_wf.workflow_name
+        
+        # Resume the workflow
+        result = engine.resume_workflow(paused_wf, subagent_result)
+        
+        if result.paused:
+            # Workflow paused again (another sub-agent call)
+            tui.info(f"[||] Workflow paused again - waiting for next sub-agent [Task: {result.waiting_for_task}]")
+        elif result.success:
+            # Workflow completed!
+            output_str = str(result.final_output) if result.final_output else ""
+            output_preview = output_str[:500]
+            has_more = len(output_str) > 500
+            
+            tui.console.print()
+            tui.console.print(Panel(
+                f"[bold green][OK] Workflow completed[/bold green]\n\n"
+                f"[bold]Final Output:[/bold]\n{output_preview}{'...' if has_more else ''}",
+                title="[OK] Workflow Complete",
+                border_style="green"
+            ))
+            
+            # Add TRUNCATED result to history to avoid context overflow
+            if len(output_str) > 1000:
+                truncated = output_str[:500] + f"\n\n[... {len(output_str) - 500} more characters - see output above ... ]"
+                agent.history.append({
+                    "role": "system",
+                    "content": f"**Workflow Completed** ({paused_wf.workflow_name}):\n\n{truncated}"
+                })
+            else:
+                agent.history.append({
+                    "role": "system",
+                    "content": f"**Workflow Completed** ({paused_wf.workflow_name}):\n\n{output_str}"
+                })
+        else:
+            # Workflow failed
+            tui.error(f"Workflow failed: {result.error}")
+            
+    except Exception as e:
+        tui.error(f"Failed to resume workflow: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+# Note: Static banner replaced by live-updating toolbar in tui.py
+# The toolbar shows sub-agent status and updates every second
+
+
+def _format_duration(start_time_str: str, end_time_str: str = None) -> str:
+    """Format duration between two ISO timestamps, or from start to now."""
+    from datetime import datetime
+    
+    try:
+        start = datetime.fromisoformat(start_time_str)
+        end = datetime.fromisoformat(end_time_str) if end_time_str else datetime.now()
+        
+        delta = end - start
+        seconds = int(delta.total_seconds())
+        
+        if seconds < 60:
+            return f"{seconds}s"
+        elif seconds < 3600:
+            return f"{seconds // 60}m {seconds % 60}s"
+        else:
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            return f"{hours}h {minutes}m"
+    except Exception:
+        return "?"
 
 # Global reference for signal handling
 global_agent = None
@@ -444,6 +670,14 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
     else:
         current_session = session_mgr.new()
     
+    # ═══════════════════════════════════════════════════════════════
+    # SESSION-BASED SUB-AGENT CLEANUP
+    # ═══════════════════════════════════════════════════════════════
+    # Set current session ID for sub-agent tracking and clean up stale tasks
+    from vaf.core.subagent_ipc import set_current_session_id, cleanup_other_sessions
+    set_current_session_id(current_session.id)
+    cleanup_other_sessions()  # Remove active tasks from previous sessions
+    
     # Initialize agent
     tui.clear()
     tui.logo()
@@ -494,9 +728,78 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
         tui.message_box(message, role="user")
         _process_agent_message(agent, message, tui, current_session)
     
+    # ═══════════════════════════════════════════════════════════════
+    # PROACTIVE RESULT NOTIFIER (Background)
+    # ═══════════════════════════════════════════════════════════════
+    import threading
+    from prompt_toolkit.patch_stdout import patch_stdout
+    
+    def result_notifier():
+        """Polls for results and notifies user while at prompt."""
+        from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+        ipc = get_ipc()
+        last_count = 0
+        while True:
+            try:
+                # Only notify if session is active
+                curr_sess = get_current_session_id()
+                if curr_sess:
+                    res = ipc.get_pending_results(session_id=curr_sess)
+                    count = len(res)
+                    if count > last_count:
+                        # New results found!
+                        tui.notification(f"✓ {count} Sub-Agent result(s) ready! (Press Enter to process)")
+                    last_count = count
+                time.sleep(3) # Poll every 3 seconds
+            except:
+                time.sleep(10)
+    
+    # Start polling thread
+    notifier_thread = threading.Thread(target=result_notifier, daemon=True)
+    notifier_thread.start()
+    
     # Interactive loop
     while True:
         try:
+            # ═══════════════════════════════════════════════════════════════
+            # CHECK FOR SUB-AGENT RESULTS (Non-blocking)
+            # ═══════════════════════════════════════════════════════════════
+            results_found = _check_subagent_results(tui, agent)
+            if results_found:
+                # Auto-respond to sub-agent results - don't wait for user input!
+                tui.info("[i] Processing sub-agent results...")
+                try:
+                    # Detect user language for the summary
+                    user_lang = "auto"
+                    for msg in reversed(agent.history):
+                        if msg.get("role") == "user":
+                            user_lang = agent._detect_user_language(msg.get("content", ""))
+                            break
+                    
+                    lang_instruction = ""
+                    if user_lang == "de":
+                        lang_instruction = "ANTWORTE AUF DEUTSCH."
+                    elif user_lang == "en":
+                        lang_instruction = "RESPOND IN ENGLISH."
+                    
+                    # Trigger agent to summarize/respond to the result
+                    # CRITICAL: Highly restrictive prompt to prevent "labern"
+                    response = agent.chat_step(
+                        f"The sub-agent has completed its task. {lang_instruction}\n"
+                        "JUST BRIEFLY confirm the result to the user. \n"
+                        "DO NOT ask if they want more research. \n"
+                        "DO NOT offer options. \n"
+                        "DO NOT ask 'What else can I do?'. \n"
+                        "JUST a short, helpful confirmation of the result. NOTHING MORE.",
+                        skip_input=True  # Don't add this prompt to visible history
+                    )
+                    if response:
+                        tui.message_box(response, title="Answer", style="assistant")
+                except Exception as e:
+                    tui.error(f"Error processing result: {e}")
+        
+            # Note: Sub-agent status now shown in live toolbar (updates every second)
+            
             user_input = tui.input_box(
                 prompt="Message",
                 placeholder="Type your message... (@ for files, / for commands)"
@@ -584,7 +887,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
 **Special:**
   @filename     - Attach file content
   Tab           - Accept autocomplete
-  →             - Accept suggestion
+  ->            - Accept suggestion
                 """, title="Help", style="info")
                 continue
             
@@ -646,13 +949,13 @@ context         - Show context status
 restore         - Restore full context
 
 **Note:** Commands work without / when typed alone.
-         "exit" = "/exit", but "I want to exit" → sent to AI
+         "exit" = "/exit", but "I want to exit" -> sent to AI
 
 **Shortcuts:**
 @filename       - Attach file content
 Tab             - Autocomplete
 ?               - Quick help
-                    """, title="Help", style="info")
+                        """, title="Help", style="info")
                     continue
                 
                 elif cmd == "settings":
@@ -834,7 +1137,7 @@ Created: {current_session.created_at}
                         return f"\n\n--- FILE: {path} ---\n{content}\n----------------\n"
                     except Exception as e:
                         tui.error(f"Failed to attach {path}: {e}")
-                        return match.group(0)
+                        return match.group(0) 
                 
                 user_input = re.sub(r'@([\w\./\\-]+)', replace_file, user_input)
             
@@ -849,6 +1152,16 @@ Created: {current_session.created_at}
             if tui.confirm("Exit?"):
                 _handle_exit(tui, session_mgr, current_session)
                 break
+        except Exception as e:
+            tui.error(f"Error in interaction loop: {e}")
+            import traceback
+            # Save traceback to log for debugging
+            with open("logs/crash.log", "a", encoding="utf-8") as f:
+                # Make sure logs dir exists
+                os.makedirs("logs", exist_ok=True)
+                f.write(f"\n--- {datetime.now().isoformat()} ---\n")
+                f.write(traceback.format_exc())
+            tui.info("Traceback saved to logs/crash.log")
     
     # Cleanup
     agent.shutdown()
@@ -914,6 +1227,12 @@ def _process_agent_message(agent, user_input: str, tui, session):
         
         result_text = agent.chat_step(user_input, stream_callback=stream_callback)
         
+        # Recognize special async acknowledgment marker
+        is_async_ack = False
+        if result_text and str(result_text).startswith("[ASYNC_ACK]"):
+            is_async_ack = True
+            result_text = str(result_text).replace("[ASYNC_ACK]", "")
+        
         # IMPORTANT: Workflows may stream only progress ticks (e.g. "✓ Step 1/2: ...")
         # which are not the actual final answer. In that case, still print the returned result.
         if result_text:
@@ -929,7 +1248,13 @@ def _process_agent_message(agent, user_input: str, tui, session):
                     has_real_content = True
                     break
 
-            if (not response_parts) or (not has_real_content):
+            # If it's an async ack, we ALWAYS print it even if there was content
+            if is_async_ack:
+                tui.newline()
+                tui.console.print(str(result_text), markup=True, style=f"bold {tui.primary}")
+                # Ensure it's in the response parts for session saving
+                response_parts.append(str(result_text))
+            elif (not response_parts) or (not has_real_content):
                 response_parts = [str(result_text)]
                 tui.console.print(str(result_text), markup=True, style=f"bold {tui.primary}")
         tui.newline()

@@ -586,8 +586,14 @@ def main_menu(agent=None):
         auto_links = bool(Config.get("ux_auto_open_links"))
         auto_outputs = bool(Config.get("ux_auto_open_outputs"))
         max_tabs = int(Config.get("ux_auto_open_max_tabs", 8) or 8)
+        separate_terminals = bool(Config.get("sub_agents_in_separate_terminals", True))
+        timeout_enabled = bool(Config.get("subagent_timeout_enabled", True))
+        timeout_minutes = int(Config.get("subagent_timeout_minutes", 120))
+        
         links_label = f"UX: Auto-open browser links [{'ON' if auto_links else 'OFF'}] (max {max_tabs})"
         outputs_label = f"UX: Auto-open output folders/files [{'ON' if auto_outputs else 'OFF'}]"
+        terminals_label = f"Sub-Agents: Run in separate terminals [{'ON' if separate_terminals else 'OFF'}]"
+        timeout_label = f"Sub-Agents: Timeout [{'ON - ' + str(timeout_minutes) + ' min' if timeout_enabled else 'OFF'}]"
         
         # Get automation count
         try:
@@ -615,6 +621,8 @@ def main_menu(agent=None):
                               (theme_label, 'theme'),
                               (links_label, 'ux_links'),
                               (outputs_label, 'ux_outputs'),
+                              (terminals_label, 'separate_terminals'),
+                              (timeout_label, 'subagent_timeout'),
                               (auto_label, 'automations'),
                               ('─────────────────', None),
                               (tools_label, 'tools'),
@@ -676,4 +684,46 @@ def main_menu(agent=None):
             new_val = not bool(Config.get("ux_auto_open_outputs"))
             Config.set("ux_auto_open_outputs", new_val)
             UI.event("Settings", f"Auto-open outputs set to {new_val}", style="success")
+            time.sleep(1.0)
+        elif action == 'separate_terminals':
+            new_val = not bool(Config.get("sub_agents_in_separate_terminals", False))
+            Config.set("sub_agents_in_separate_terminals", new_val)
+            status = "enabled" if new_val else "disabled"
+            UI.event("Settings", f"Sub-agents in separate terminals {status}", style="success")
+            time.sleep(1.0)
+        elif action == 'subagent_timeout':
+            # Show submenu for timeout configuration
+            current_enabled = bool(Config.get("subagent_timeout_enabled", True))
+            current_minutes = int(Config.get("subagent_timeout_minutes", 120))
+            
+            timeout_choices = [
+                (f"Toggle timeout [{'ON' if current_enabled else 'OFF'}]", 'toggle'),
+                (f"Set timeout duration (current: {current_minutes} min)", 'duration'),
+                ('Back', 'back'),
+            ]
+            
+            q = [inquirer.List('timeout_action', message="Sub-Agent Timeout Settings", choices=timeout_choices)]
+            ans = inquirer.prompt(q)
+            
+            if ans and ans['timeout_action'] == 'toggle':
+                new_val = not current_enabled
+                Config.set("subagent_timeout_enabled", new_val)
+                status = f"enabled ({current_minutes} min)" if new_val else "disabled (no timeout)"
+                UI.event("Settings", f"Sub-agent timeout {status}", style="success")
+                time.sleep(1.0)
+            elif ans and ans['timeout_action'] == 'duration':
+                try:
+                    val = UI.console.input("[bold cyan]Timeout in minutes (1-480, 0 = disable): [/bold cyan]").strip()
+                    if val:
+                        n = int(val)
+                        if n == 0:
+                            Config.set("subagent_timeout_enabled", False)
+                            UI.event("Settings", "Sub-agent timeout disabled", style="success")
+                        else:
+                            n = max(1, min(n, 480))  # 1 min to 8 hours
+                            Config.set("subagent_timeout_minutes", n)
+                            Config.set("subagent_timeout_enabled", True)
+                            UI.event("Settings", f"Sub-agent timeout set to {n} minutes", style="success")
+                except Exception:
+                    UI.error("Invalid input")
             time.sleep(1.0)

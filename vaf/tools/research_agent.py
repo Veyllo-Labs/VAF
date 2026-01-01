@@ -363,6 +363,63 @@ class ResearchAgentTool(BaseTool):
             return "Error: No topic provided."
         if out_format not in ("html", "markdown", "html_fragment"):
             return "Error: format must be 'html', 'markdown', or 'html_fragment'."
+        
+        # ═══════════════════════════════════════════════════════════════════════
+        # CHECK IF RUNNING IN SEPARATE TERMINAL MODE
+        # ═══════════════════════════════════════════════════════════════════════
+        from vaf.core.config import Config
+        from vaf.core.platform import Platform
+        from vaf.cli.ui import UI
+        
+        # If already in sub-agent terminal, run normally
+        if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes"):
+            # Continue with normal execution below
+            pass
+        elif Config.get("sub_agents_in_separate_terminals", False):
+            # Start in new terminal window with IPC tracking
+            import shlex
+            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+            
+            # Create task in IPC system
+            ipc = get_ipc()
+            task_id = ipc.create_task("research_agent", topic)
+            
+            # Pass session ID to sub-agent via environment variable
+            session_id = get_current_session_id()
+            if session_id:
+                os.environ["VAF_SESSION_ID"] = session_id
+            
+            cmd_parts = ['vaf', 'subagent', 'run', 'research_agent', '--topic', topic, '--task-id', task_id]
+            if out_format:
+                cmd_parts.extend(['--format', out_format])
+            if max_results:
+                cmd_parts.extend(['--max-results', str(max_results)])
+            
+            if Platform.is_windows():
+                # Windows: properly escape for cmd /k
+                escaped_parts = []
+                for part in cmd_parts:
+                    if ' ' in part or '"' in part:
+                        escaped_parts.append(f'"{part.replace('"', '\\"')}"')
+                    else:
+                        escaped_parts.append(part)
+                cmd = ' '.join(escaped_parts)
+                title = f"VAF Research Agent [{task_id}]"
+            else:
+                # Unix: use shell quoting
+                cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
+                title = f"VAF Research Agent [{task_id}]"
+            
+            if Platform.open_new_terminal(cmd, title=title):
+                # Mark task as running
+                ipc.mark_task_running(task_id)
+                
+                UI.event("Sub-Agent", f"Research Agent started in new terminal [Task: {task_id}]", style="bold cyan")
+                # Return special marker for main agent to recognize async task
+                return f"[SUBAGENT_ASYNC:{task_id}:research_agent] Sub-Agent running in separate terminal. Topic: {topic[:80]}..."
+            else:
+                # Fallback: run normally if terminal opening fails
+                UI.warning("Failed to open new terminal, running in current window")
 
         max_results = max(1, min(max_results, 10))
         lang = forced_lang if forced_lang in ("de", "en") else _detect_language(topic)
@@ -586,10 +643,58 @@ class ResearchAgentTool(BaseTool):
                 md = self._assemble_markdown(topic, rendered_sections, all_sources)
                 return md
 
+            # ═══════════════════════════════════════════════════════════════
+            # SAVE HTML TO FILE + RETURN SHORT SUMMARY (for sub-agent mode)
+            # ═══════════════════════════════════════════════════════════════
             html = self._assemble_html(topic, rendered_sections, all_sources, lang=lang, quality_warning=global_quality_warning)
-            if in_workflow and not use_live:
-                UI.event("Research", "Research completed.", style="success")
-            return html
+            
+            # Check if running as sub-agent (separate terminal)
+            is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL") == "1"
+            
+            if is_subagent:
+                # Generate filename
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_topic = re.sub(r'[^\w\s-]', '', topic).strip().replace(' ', '_')[:50]
+                filename = f"research_{safe_topic}_{timestamp}.html"
+                
+                # Save to user's Documents/VAF_Research (or Downloads/VAF_Research as fallback)
+                # This is OS-independent and user-friendly
+                from pathlib import Path
+                output_dir = Platform.get_research_dir()
+                output_path = output_dir / filename
+                
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    f.write(html)
+                
+                UI.success(f"Research saved: {output_path}")
+                
+                # Open in browser automatically
+                # Convert Windows backslashes to forward slashes for file:/// URL
+                abs_path = output_path.absolute()
+                file_url = f"file:///{abs_path.as_posix()}"
+                
+                if Platform.open_url(file_url, incognito=True):
+                    UI.event("Browser", f"Opened: {filename}", style="success")
+                else:
+                    UI.warning("Could not auto-open browser. Open manually:")
+                    UI.info(str(abs_path))
+                
+                # Return SHORT SUMMARY for Main Agent (not full HTML!)
+                word_count = sum(len(s.split()) for s in rendered_sections)
+                summary = (
+                    f"✅ Research Report: {topic}\n\n"
+                    f"📄 Saved to: {output_path}\n"
+                    f"📊 {len(rendered_sections)} sections, ~{word_count} words\n"
+                    f"🔗 {len(all_sources)} sources analyzed\n\n"
+                    f"The report has been opened in your browser."
+                )
+                return summary
+            else:
+                # Direct call (not sub-agent): return full HTML as before
+                if in_workflow and not use_live:
+                    UI.event("Research", "Research completed.", style="success")
+                return html
 
         if not use_live:
             # No Live: In workflow mode we emit progress events above.

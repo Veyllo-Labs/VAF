@@ -113,6 +113,7 @@ Based ONLY on the information from this page, answer the user's question.
 - If the page contains the answer, provide it clearly and accurately
 - If the page doesn't contain relevant information, say so
 - Be concise but complete
+- **IMPORTANT: Limit your answer to a maximum of 3-4 sentences.**
 - Use dates, times, and facts from the page (not from your training data)
 
 Answer:"""
@@ -147,8 +148,16 @@ Answer:"""
             links = []
             seen = set()
             all_answers = []  # Collect answers from each page
+            
+            # HARD LIMIT: Stop if summary gets too large (approx 4000 tokens)
+            MAX_SUMMARY_CHARS = 12000
 
             for i, res in enumerate(results, 1):
+                # Check total size before adding more
+                if len(summary) > MAX_SUMMARY_CHARS:
+                    summary += f"\n\n[Stopped reading further results to prevent context overflow. {len(results) - i + 1} results omitted.]"
+                    break
+                    
                 page_title = res.get("title", "").strip()
                 link = res.get("href", "").strip()
                 snippet = res.get("body", "").strip()
@@ -170,7 +179,10 @@ Answer:"""
                 page_content = None
                 if deep and link and i <= preview_limit:
                     # Fetch full page content if deep=True
+                    # Limit to 2000 chars to be safe
                     page_content = fetch_text(link)
+                    if page_content and len(page_content) > 2000:
+                        page_content = page_content[:2000]
                 elif snippet:
                     # Use snippet if deep=False
                     page_content = snippet

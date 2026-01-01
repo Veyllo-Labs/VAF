@@ -108,6 +108,58 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             return "Error: No task provided."
         
         # ═══════════════════════════════════════════════════════════════════════
+        # CHECK IF RUNNING IN SEPARATE TERMINAL MODE
+        # ═══════════════════════════════════════════════════════════════════════
+        from vaf.core.config import Config
+        from vaf.core.platform import Platform
+        
+        # If already in sub-agent terminal, run normally
+        if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes"):
+            # Continue with normal execution below
+            pass
+        elif Config.get("sub_agents_in_separate_terminals", False):
+            # Start in new terminal window with IPC tracking
+            import shlex
+            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+            
+            # Create task in IPC system
+            ipc = get_ipc()
+            task_id = ipc.create_task("librarian_agent", task)
+            
+            # Pass session ID to sub-agent via environment variable
+            session_id = get_current_session_id()
+            if session_id:
+                os.environ["VAF_SESSION_ID"] = session_id
+            
+            cmd_parts = ['vaf', 'subagent', 'run', 'librarian_agent', '--task', task, '--task-id', task_id]
+            
+            if Platform.is_windows():
+                # Windows: properly escape for cmd /k
+                escaped_parts = []
+                for part in cmd_parts:
+                    if ' ' in part or '"' in part:
+                        escaped_parts.append(f'"{part.replace('"', '\\"')}"')
+                    else:
+                        escaped_parts.append(part)
+                cmd = ' '.join(escaped_parts)
+                title = f"VAF Librarian Agent [{task_id}]"
+            else:
+                # Unix: use shell quoting
+                cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
+                title = f"VAF Librarian Agent [{task_id}]"
+            
+            if Platform.open_new_terminal(cmd, title=title):
+                # Mark task as running
+                ipc.mark_task_running(task_id)
+                
+                UI.event("Sub-Agent", f"Librarian Agent started in new terminal [Task: {task_id}]", style="bold cyan")
+                # Return special marker for main agent to recognize async task
+                return f"[SUBAGENT_ASYNC:{task_id}:librarian_agent] Sub-Agent running in separate terminal. Task: {task[:80]}..."
+            else:
+                # Fallback: run normally if terminal opening fails
+                UI.warning("Failed to open new terminal, running in current window")
+        
+        # ═══════════════════════════════════════════════════════════════════════
         # FAST PATH: Try to handle simple tasks DIRECTLY (no LLM needed)
         # ═══════════════════════════════════════════════════════════════════════
         
@@ -1392,43 +1444,43 @@ Common paths:
                         # This is language-independent - we only check if response is empty, not what language it's in
                         if mentioned_tools and not tool_calls:
                             tool_hint = mentioned_tools[0]
-                        UI.event("Librarian", f"Tool-Intent detected for '{tool_hint}' without action - resetting to snapshot", style="dim")
-                        
-                        # Check if there's thinking DIRECTLY after user prompt
-                        user_prompt_idx = 1  # User message is at index 1 (after system at 0)
-                        
-                        # Check if there's an assistant message with content directly after user prompt
-                        first_assistant_after_user = None
-                        first_assistant_idx = None
-                        
-                        # Look at messages right after user prompt (within next 2 messages)
-                        for i in range(user_prompt_idx + 1, min(user_prompt_idx + 3, len(history))):
-                            msg = history[i]
-                            if msg.get('role') == 'assistant' and msg.get('content'):
-                                content_str = str(msg.get('content', ''))
-                                # Keep if it has substantial content (thinking/reasoning)
-                                if len(content_str.strip()) > 20:
-                                    first_assistant_after_user = content_str
-                                    first_assistant_idx = i
-                                    break  # Only take the FIRST one directly after user prompt
-                        
-                        if first_assistant_after_user and first_assistant_idx is not None:
-                            # Keep user prompt + first thinking - this becomes the new snapshot
-                            history = history[:first_assistant_idx + 1]
-                            UI.event("Librarian", f"Reset to thinking snapshot (user prompt + {len(first_assistant_after_user)} chars of first thinking)", style="dim")
-                        else:
-                            # No thinking found - reset to user prompt snapshot (as before)
-                            history = history[:history_snapshot_len]
-                            UI.event("Librarian", f"Reset to user prompt snapshot", style="dim")
-                        
-                        # Add a brief system prompt (will work better now because first thinking is preserved)
-                        history.append({
-                            "role": "system",
-                            "content": "You didn't respond. Please answer or continue where you left off."
-                        })
-                        
-                        # Continue the loop - if it fails again, this system message will be removed with the reset
-                        continue
+                            UI.event("Librarian", f"Tool-Intent detected for '{tool_hint}' without action - resetting to snapshot", style="dim")
+                            
+                            # Check if there's thinking DIRECTLY after user prompt
+                            user_prompt_idx = 1  # User message is at index 1 (after system at 0)
+                            
+                            # Check if there's an assistant message with content directly after user prompt
+                            first_assistant_after_user = None
+                            first_assistant_idx = None
+                            
+                            # Look at messages right after user prompt (within next 2 messages)
+                            for i in range(user_prompt_idx + 1, min(user_prompt_idx + 3, len(history))):
+                                msg = history[i]
+                                if msg.get('role') == 'assistant' and msg.get('content'):
+                                    content_str = str(msg.get('content', ''))
+                                    # Keep if it has substantial content (thinking/reasoning)
+                                    if len(content_str.strip()) > 20:
+                                        first_assistant_after_user = content_str
+                                        first_assistant_idx = i
+                                        break  # Only take the FIRST one directly after user prompt
+                            
+                            if first_assistant_after_user and first_assistant_idx is not None:
+                                # Keep user prompt + first thinking - this becomes the new snapshot
+                                history = history[:first_assistant_idx + 1]
+                                UI.event("Librarian", f"Reset to thinking snapshot (user prompt + {len(first_assistant_after_user)} chars of first thinking)", style="dim")
+                            else:
+                                # No thinking found - reset to user prompt snapshot (as before)
+                                history = history[:history_snapshot_len]
+                                UI.event("Librarian", f"Reset to user prompt snapshot", style="dim")
+                            
+                            # Add a brief system prompt (will work better now because first thinking is preserved)
+                            history.append({
+                                "role": "system",
+                                "content": "You didn't respond. Please answer or continue where you left off."
+                            })
+                            
+                            # Continue the loop - if it fails again, this system message will be removed with the reset
+                            continue
                     
                     # ═══════════════════════════════════════════════════════════════
                     # Snapshot System with Thinking Preservation (like main agent)

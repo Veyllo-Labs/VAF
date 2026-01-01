@@ -7,7 +7,9 @@ outputs from one step as inputs to the next.
 
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Dict, Any, List, Optional, Callable
 from enum import Enum
 
@@ -48,6 +50,9 @@ class WorkflowResult:
     steps: List[WorkflowStep]           # All steps with status
     total_duration: float
     error: Optional[str] = None
+    paused: bool = False                # True if workflow is paused waiting for sub-agent
+    workflow_id: Optional[str] = None   # ID for resuming paused workflow
+    waiting_for_task: Optional[str] = None  # Task ID we're waiting for
 
 
 class WorkflowEngine:
@@ -329,6 +334,73 @@ class WorkflowEngine:
                 else:
                     os.environ["VAF_IN_WORKFLOW"] = prev_in_workflow
                 
+                # ═══════════════════════════════════════════════════════════════
+                # ASYNC SUB-AGENT HANDLING: Pause workflow and yield control
+                # ═══════════════════════════════════════════════════════════════
+                # If result contains async marker, save state and return immediately
+                # The workflow will be resumed when the sub-agent finishes
+                import re
+                result_str_check = str(result) if result else ""
+                async_match = re.search(r'\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]', result_str_check)
+                
+                if async_match:
+                    task_id = async_match.group(1)
+                    agent_type = async_match.group(2)
+                    
+                    # Generate workflow ID for tracking
+                    import uuid
+                    workflow_id = str(uuid.uuid4())[:8]
+                    
+                    UI.event("Workflow", f"  ⏸️  Pausing workflow - {agent_type} [Task: {task_id}] running in background", style="cyan")
+                    UI.info(f"  💡 You can continue using the main agent. Workflow will resume automatically.")
+                    
+                    from vaf.core.subagent_ipc import get_ipc, PausedWorkflow
+                    
+                    # Serialize current state
+                    steps_data = []
+                    for s in steps:
+                        steps_data.append({
+                            'tool': s.tool,
+                            'input_template': s.input_template,
+                            'output_name': s.output_name,
+                            'description': s.description,
+                            'optional': s.optional,
+                            'condition': s.condition,
+                            'args_template': s.args_template,
+                            'status': s.status.value,
+                            'result': s.result,
+                            'error': s.error,
+                            'duration': s.duration,
+                        })
+                    
+                    # Save paused workflow state
+                    paused_wf = PausedWorkflow(
+                        workflow_id=workflow_id,
+                        waiting_for_task_id=task_id,
+                        current_step_index=i - 1,  # 0-based index (i is 1-based)
+                        outputs=outputs,
+                        variables=dict(variables or {}),
+                        steps_data=steps_data,
+                        workflow_name=getattr(self, '_workflow_name', 'unknown'),
+                        created_at=datetime.now().isoformat()
+                    )
+                    
+                    ipc = get_ipc()
+                    ipc.pause_workflow(paused_wf)
+                    
+                    # Return paused result - control goes back to user
+                    return WorkflowResult(
+                        success=False,  # Not complete yet
+                        outputs=outputs,
+                        final_output=None,
+                        steps=steps,
+                        total_duration=time.time() - start_time,
+                        error=None,
+                        paused=True,
+                        workflow_id=workflow_id,
+                        waiting_for_task=task_id
+                    )
+                
                 # Check if result indicates failure (even if no exception was raised)
                 if result is None:
                     # Should not happen, but handle gracefully
@@ -414,6 +486,98 @@ class WorkflowEngine:
             steps=steps,
             total_duration=total_duration,
             error=error
+        )
+    
+    def resume_workflow(self, paused_wf, subagent_result: str) -> WorkflowResult:
+        """
+        Resume a paused workflow with the sub-agent's result.
+        
+        Args:
+            paused_wf: The saved workflow state
+            subagent_result: The result from the sub-agent
+            
+        Returns:
+            WorkflowResult with completion status
+        """
+        from vaf.cli.ui import UI
+        from vaf.core.subagent_ipc import get_ipc, PausedWorkflow
+        
+        UI.event("Workflow", f"▶️  Resuming workflow [{paused_wf.workflow_id}]...", style="bold cyan")
+        
+        # Restore steps from saved state
+        steps: List[WorkflowStep] = []
+        for step_data in paused_wf.steps_data:
+            step = WorkflowStep(
+                tool=step_data['tool'],
+                input_template=step_data['input_template'],
+                output_name=step_data['output_name'],
+                description=step_data.get('description', ''),
+                optional=step_data.get('optional', False),
+                condition=step_data.get('condition'),
+                args_template=step_data.get('args_template'),
+            )
+            # Restore status
+            step.status = StepStatus(step_data['status'])
+            step.result = step_data.get('result')
+            step.error = step_data.get('error')
+            step.duration = step_data.get('duration', 0.0)
+            steps.append(step)
+        
+        # Restore outputs and add the sub-agent result
+        outputs = dict(paused_wf.outputs)
+        current_step = steps[paused_wf.current_step_index]
+        
+        # Update the current step with the result
+        current_step.status = StepStatus.SUCCESS
+        current_step.result = subagent_result
+        outputs[current_step.output_name] = subagent_result
+        
+        UI.event("Workflow", f"  ✓ Got result for step: {current_step.tool}", style="success")
+        
+        # Remove from paused workflows
+        ipc = get_ipc()
+        ipc.remove_paused_workflow(paused_wf.workflow_id)
+        
+        # Continue with remaining steps
+        remaining_steps = steps[paused_wf.current_step_index + 1:]
+        
+        if not remaining_steps:
+            # Workflow is complete
+            UI.event("Workflow", "Completed!", style="success")
+            return WorkflowResult(
+                success=True,
+                outputs=outputs,
+                final_output=subagent_result,
+                steps=steps,
+                total_duration=0.0,  # Can't track across pause
+                error=None
+            )
+        
+        # Execute remaining steps
+        UI.event("Workflow", f"Continuing with {len(remaining_steps)} remaining steps...", style="info")
+        
+        # Create new steps list with completed + remaining
+        remaining_result = self.execute(
+            remaining_steps,
+            variables=outputs,  # Use all outputs as variables
+            stop_on_error=True
+        )
+        
+        # If remaining steps also paused, propagate that
+        if remaining_result.paused:
+            return remaining_result
+        
+        # Merge results
+        all_steps = steps[:paused_wf.current_step_index + 1] + remaining_result.steps
+        all_outputs = {**outputs, **remaining_result.outputs}
+        
+        return WorkflowResult(
+            success=remaining_result.success,
+            outputs=all_outputs,
+            final_output=remaining_result.final_output,
+            steps=all_steps,
+            total_duration=remaining_result.total_duration,
+            error=remaining_result.error
         )
     
     def _resolve_template(self, template: str, variables: Dict[str, Any], defaults: Dict[str, Any] = None) -> str:

@@ -1438,6 +1438,65 @@ Thumbs.db
             return "Error: No task provided."
 
         # ═══════════════════════════════════════════════════════════════════
+        # CHECK IF RUNNING IN SEPARATE TERMINAL MODE
+        # ═══════════════════════════════════════════════════════════════════
+        from vaf.core.config import Config
+        from vaf.core.platform import Platform
+        from vaf.cli.ui import UI
+        
+        # If already in sub-agent terminal, run normally
+        if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes"):
+            # Continue with normal execution below
+            pass
+        elif Config.get("sub_agents_in_separate_terminals", False):
+            # Start in new terminal window with IPC tracking
+            project_path = kwargs.get('project_path', '')
+            
+            # Build command with proper escaping
+            import shlex
+            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+            
+            # Create task in IPC system
+            ipc = get_ipc()
+            task_id = ipc.create_task("coding_agent", task)
+            
+            # Pass session ID to sub-agent via environment variable
+            session_id = get_current_session_id()
+            if session_id:
+                os.environ["VAF_SESSION_ID"] = session_id
+            
+            cmd_parts = ['vaf', 'subagent', 'run', 'coding_agent', '--task', task, '--task-id', task_id]
+            if project_path:
+                cmd_parts.extend(['--project-path', project_path])
+            
+            if Platform.is_windows():
+                # Windows: properly escape for cmd /k
+                # Use double quotes for the entire command and escape inner quotes
+                escaped_parts = []
+                for part in cmd_parts:
+                    if ' ' in part or '"' in part:
+                        escaped_parts.append(f'"{part.replace('"', '\\"')}"')
+                    else:
+                        escaped_parts.append(part)
+                cmd = ' '.join(escaped_parts)
+                title = f"VAF Coding Agent [{task_id}]"
+            else:
+                # Unix: use shell quoting
+                cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
+                title = f"VAF Coding Agent [{task_id}]"
+            
+            if Platform.open_new_terminal(cmd, title=title):
+                # Mark task as running
+                ipc.mark_task_running(task_id)
+                
+                UI.event("Sub-Agent", f"Coding Agent started in new terminal [Task: {task_id}]", style="bold cyan")
+                # Return special marker for main agent to recognize async task
+                return f"[SUBAGENT_ASYNC:{task_id}:coding_agent] Sub-Agent running in separate terminal. Task: {task[:80]}..."
+            else:
+                # Fallback: run normally if terminal opening fails
+                UI.warning("Failed to open new terminal, running in current window")
+        
+        # ═══════════════════════════════════════════════════════════════════
         # PREVENT MULTIPLE INSTANCES - Stop previous instance if running
         # ═══════════════════════════════════════════════════════════════════
         
@@ -1879,13 +1938,15 @@ Complete this task: "{task}"
         task_histories: Dict[int, List[Dict]] = {}  # task_idx -> history
         
         # Current context (switches between main and task contexts)
+        # CRITICAL: These variables will be updated by tool handlers via nonlocal declarations
         current_context_manager = main_context_manager
         history = main_history
+        history_snapshot_len = len(history)
         
         # Helper function to update history in appropriate dict
         def update_history_in_dict():
             """Update history in the appropriate dict (main or task-specific)."""
-            nonlocal main_history, task_histories
+            nonlocal main_history, task_histories, current_context_manager, history
             if current_context_manager == main_context_manager:
                 main_history = history
             else:
@@ -1894,9 +1955,6 @@ Complete this task: "{task}"
                     if cm == current_context_manager:
                         task_histories[idx] = history
                         break
-        
-        # Snapshot history (before processing)
-        history_snapshot_len = len(history)
         
         # ═══════════════════════════════════════════════════════════════
         # HELPER: Create fresh context for a new task (with new ContextManager)
@@ -2424,7 +2482,13 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             tui.set_action("Generating...")
             
             # Determine if we're in main context or task context
+            # CRITICAL: Use nonlocal to access the updated current_context_manager
             is_main_context = (current_context_manager == main_context_manager)
+            
+            # Debug: Log current context state
+            if loop.loop_count <= 2:  # Only log first few loops to avoid spam
+                tui.append_stream(f"[DEBUG] Loop {loop.loop_count}: current_context_manager == main_context_manager: {is_main_context}")
+                tui.append_stream(f"[DEBUG] Loop {loop.loop_count}: task_context_managers keys: {list(task_context_managers.keys())}")
             
             if is_main_context:
                 context_info = "[MAIN] Planning/Setup"
@@ -3642,10 +3706,42 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     
                     # Set the auto-generated TODOs
                     task_mgr.set_todos(auto_todos)
+                    tui.set_action(f"TODO: {len(auto_todos)} tasks")
                     tui.append_stream(f"Auto-generated {len(auto_todos)} tasks (model didn't call set_todos)")
                     for i, t in enumerate(auto_todos, 1):
                         tui.append_stream(f"   {i}. {t}")
-                    live.update(tui.render())
+                    
+                    # CRITICAL: Force immediate TUI update to show TODOs
+                    tui._needs_update = True
+                    try:
+                        live.update(tui.render())
+                    except Exception:
+                        pass
+                    time.sleep(0.1)  # Give animation thread time to render
+                    
+                    # CRITICAL: Switch to task context for first task (same as in set_todos handler)
+                    if task_mgr.current_task_idx == 0:
+                        first_task = task_mgr.get_current_task()
+                        if first_task:
+                            new_context_manager, new_history = create_fresh_context_for_task(0, first_task)
+                            # CRITICAL: Update variables to switch to task context
+                            current_context_manager = new_context_manager
+                            history = new_history
+                            # CRITICAL: Store in task dicts so they persist and are used in main loop
+                            task_context_managers[0] = current_context_manager
+                            task_histories[0] = history
+                            history_snapshot_len = len(history)
+                            tui.append_stream(f"🔄 Switched to Task 1 context: {first_task[:40]}")
+                            # Debug: Verify context switch worked
+                            is_now_task = (current_context_manager != main_context_manager)
+                            tui.append_stream(f"[DEBUG] Context switch verified: is_task_context={is_now_task}")
+                            # Force update after context switch
+                            tui._needs_update = True
+                            try:
+                                live.update(tui.render())
+                            except Exception:
+                                pass
+                            time.sleep(0.1)
                     
                     # CRITICAL: Nudge the model to start working on the TODOs
                     current_task = task_mgr.get_current_task()
@@ -4019,11 +4115,6 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 
                 # ===== TODO MANAGEMENT TOOLS =====
                 if fn_name == "set_todos":
-                    
-                    # Use MAIN context for planning phase (set_todos)
-                    current_context_manager = main_context_manager
-                    history = main_history
-                    
                     tasks = fn_args.get("tasks", [])
                     
                     # CRITICAL: Block set_todos completely if TODOs already exist
@@ -4053,6 +4144,14 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             tui.append_stream(f"   ... and {len(tasks)-5} more")
                         result = f"✅ TODO list set: {len(tasks)} tasks. Current: {task_mgr.get_current_task()}"
                         
+                        # CRITICAL: Force immediate TUI update to show TODOs
+                        tui._needs_update = True
+                        try:
+                            live.update(tui.render())
+                        except Exception:
+                            pass
+                        time.sleep(0.1)  # Give animation thread time to render
+                        
                         # Switch to task context for first task
                         if task_mgr.current_task_idx == 0:
                             first_task = task_mgr.get_current_task()
@@ -4069,6 +4168,13 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 # Debug: Verify context switch worked
                                 is_now_task = (current_context_manager != main_context_manager)
                                 tui.append_stream(f"[DEBUG] Context switch verified: is_task_context={is_now_task}")
+                                # Force update after context switch
+                                tui._needs_update = True
+                                try:
+                                    live.update(tui.render())
+                                except Exception:
+                                    pass
+                                time.sleep(0.1)
                     else:
                         result = "⚠️ No tasks provided!"
                     

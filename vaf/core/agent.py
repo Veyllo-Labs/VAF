@@ -26,6 +26,7 @@ except ImportError:
 
 from vaf.core.config import Config
 from vaf.core.backend import ServerManager
+from vaf.core.system_prompt import SystemPromptManager
 from vaf.tools.search import WebSearchTool
 from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, MoveFileTool
 
@@ -33,6 +34,37 @@ import atexit
 import signal
 
 class Agent:
+    # Language names mapping (ISO 639-1 codes to native names)
+    # Used for multilingual instructions - comprehensive list supporting 97+ languages
+    LANGUAGE_NAMES_NATIVE = {
+        # Major European languages
+        "en": "English", "de": "Deutsch", "fr": "Français", "es": "Español",
+        "it": "Italiano", "pt": "Português", "nl": "Nederlands", "pl": "Polski",
+        "ru": "Русский", "uk": "Українська", "sv": "Svenska", "no": "Norsk",
+        "da": "Dansk", "fi": "Suomi", "cs": "Čeština", "ro": "Română",
+        "hu": "Magyar", "el": "Ελληνικά", "tr": "Türkçe", "bg": "Български",
+        "hr": "Hrvatski", "sr": "Српски", "sk": "Slovenčina", "sl": "Slovenščina",
+        "et": "Eesti", "lv": "Latviešu", "lt": "Lietuvių", "ga": "Gaeilge",
+        "mt": "Malti", "is": "Íslenska", "mk": "Македонски", "sq": "Shqip",
+        "bs": "Bosanski", "ca": "Català", "eu": "Euskara", "gl": "Galego",
+        # Asian languages
+        "ja": "日本語", "ko": "한국어", "zh": "中文", "hi": "हिन्दी",
+        "th": "ไทย", "vi": "Tiếng Việt", "id": "Bahasa Indonesia", "ms": "Bahasa Melayu",
+        "tl": "Filipino", "my": "မြန်မာ", "km": "ខ្មែរ", "lo": "ລາວ",
+        "bn": "বাংলা", "ta": "தமிழ்", "te": "తెలుగు", "ml": "മലയാളം",
+        "kn": "ಕನ್ನಡ", "gu": "ગુજરાતી", "pa": "ਪੰਜਾਬੀ", "ur": "اردو",
+        "ne": "नेपाली", "si": "සිංහල", "ka": "ქართული", "hy": "Հայերեն",
+        "az": "Azərbaycan", "kk": "Қазақ", "ky": "Кыргызча", "uz": "Oʻzbek",
+        "mn": "Монгол", "bo": "བོད་",
+        # Middle Eastern & African languages  
+        "ar": "العربية", "he": "עברית", "fa": "فارسی", "ps": "پښتو",
+        "sw": "Kiswahili", "am": "አማርኛ", "zu": "isiZulu", "af": "Afrikaans",
+        "so": "Soomaali", "ha": "Hausa", "yo": "Yorùbá", "ig": "Igbo",
+        # Other languages
+        "eo": "Esperanto", "la": "Latina", "cy": "Cymraeg", "br": "Brezhoneg",
+        "auto": "the user's language"
+    }
+    
     REQUIRED_PACKAGES = {
         "colorama": "colorama",
         "huggingface_hub": "huggingface_hub",
@@ -714,6 +746,130 @@ class Agent:
                         # print(f"Loaded tool: {instance.name}")
             except Exception as e:
                 pass # Silently ignore broken plugins for stability
+        
+        # Track active async sub-agent tasks
+        self._async_subagent_tasks = {}  # task_id -> {"agent_type": str, "task": str, "started_at": datetime}
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SUB-AGENT IPC METHODS
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def _check_subagent_results(self) -> list:
+        """
+        Check for completed sub-agent results.
+        Called periodically during chat to process async results.
+        
+        Returns:
+            List of completed SubAgentTask objects
+        """
+        try:
+            from vaf.core.subagent_ipc import get_ipc
+            ipc = get_ipc()
+            
+            # Cleanup stale tasks (crashed sub-agents)
+            ipc.cleanup_stale_active_tasks(max_age_minutes=30)
+            
+            return ipc.get_pending_results()
+        except Exception:
+            return []
+    
+    def _process_subagent_result(self, task):
+        """
+        Process a completed sub-agent result and add it to the conversation.
+        
+        Args:
+            task: SubAgentTask object with the result
+        """
+        from vaf.cli.ui import UI
+        from vaf.core.subagent_ipc import get_ipc
+        
+        ipc = get_ipc()
+        
+        if task.status == "completed":
+            UI.success(f"✓ Sub-Agent [{task.task_id}] delivered result!")
+            
+            # Add result to history as if it was a tool response
+            self.history.append({
+                "role": "system",
+                "content": (
+                    f"📬 **Sub-Agent Result Received** [Task: {task.task_id}]\n"
+                    f"Agent: {task.agent_type}\n"
+                    f"Original Task: {task.task_description[:200]}\n\n"
+                    f"**Result:**\n{task.result}\n\n"
+                    f"Please inform the user about this result."
+                )
+            })
+        elif task.status == "failed":
+            UI.error(f"✗ Sub-Agent [{task.task_id}] failed: {task.error}")
+            
+            self.history.append({
+                "role": "system",
+                "content": (
+                    f"[X] **Sub-Agent Error** [Task: {task.task_id}]\n"
+                    f"Agent: {task.agent_type}\n"
+                    f"Error: {task.error}\n\n"
+                    f"Please inform the user about this error."
+                )
+            })
+        elif task.status == "timeout":
+            UI.warning(f"⏰ Sub-Agent [{task.task_id}] did not respond (Timeout)")
+            
+            self.history.append({
+                "role": "system",
+                "content": (
+                    f"⏰ **Sub-Agent Timeout** [Task: {task.task_id}]\n"
+                    f"Agent: {task.agent_type}\n"
+                    f"Der Sub-Agent hat nicht rechtzeitig geantwortet.\n\n"
+                    f"Bitte informiere den User über dieses Problem."
+                )
+            })
+        
+        # Remove from tracking and consume from queue
+        if task.task_id in self._async_subagent_tasks:
+            del self._async_subagent_tasks[task.task_id]
+        
+        ipc.consume_result(task.task_id)
+    
+    def _handle_async_subagent_marker(self, result: str) -> bool:
+        """
+        Check if a tool result contains an async sub-agent marker.
+        If so, track the task and return True.
+        
+        Args:
+            result: Tool result string
+            
+        Returns:
+            True if this was an async sub-agent task, False otherwise
+        """
+        import re
+        from datetime import datetime
+        
+        # Pattern: [SUBAGENT_ASYNC:task_id:agent_type]
+        match = re.search(r'\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]', result)
+        if match:
+            task_id = match.group(1)
+            agent_type = match.group(2)
+            
+            # Track the async task
+            self._async_subagent_tasks[task_id] = {
+                "agent_type": agent_type,
+                "started_at": datetime.now()
+            }
+            
+            return True
+        return False
+    
+    def get_active_subagents(self) -> dict:
+        """Get currently running async sub-agent tasks."""
+        return self._async_subagent_tasks.copy()
+    
+    def has_pending_subagent_results(self) -> bool:
+        """Check if there are any pending sub-agent results."""
+        try:
+            from vaf.core.subagent_ipc import get_ipc
+            return get_ipc().has_pending_results()
+        except Exception:
+            return False
 
     def load_model(self, skip_download_check: bool = False):
         from vaf.cli.ui import UI
@@ -835,205 +991,23 @@ class Agent:
                 sys.exit(1)
 
     def init_chat(self):
-        now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
-        os_info = f"{platform.system()} {platform.release()}"
-        home_dir = os.path.expanduser("~")
-        cwd = os.getcwd()
+        # Initialize Prompt Manager
+        self.prompt_manager = SystemPromptManager(self.tools)
         
-        # Optional project context: VAF.md (search upwards from CWD)
-        project_ctx = None
+        # Build initial prompt (Core + Base Rules)
+        # We pass self.filename to determine identity (VQ-1 vs Generic)
+        system_prompt = self.prompt_manager.build_prompt(self.filename)
+        
+        # Optional: Load Project Context (VAF.md)
         try:
             from pathlib import Path
             from vaf.core.project_context import load_project_context
+            cwd = os.getcwd()
             project_ctx = load_project_context(Path(cwd))
+            if project_ctx:
+                system_prompt += f"\n\n## PROJECT CONTEXT (VAF.md)\nLoaded from: {project_ctx.path}\n{project_ctx.content}\n"
         except Exception:
-            project_ctx = None
-
-        # Dynamic Identity
-        model_file = self.filename.lower()
-        if "vq-1" in model_file:
-            identity = "Du bist VQ-1, ein hilfreicher Assistent von Veyllo Labs."
-        else:
-            clean_name = self.filename.replace(".gguf", "").replace("-", " ").title()
-            identity = f"You are {clean_name}, an AI in the VAF Framework."
-
-        # Build concise system prompt - ACTION ORIENTED
-        system_prompt = f"""{identity}
-Time: {now_str} | OS: {os_info} | Home: {home_dir} | CWD: {cwd}
-
-**IMPORTANT**: You have access to the CURRENT DATE and TIME above. Use this information directly for date/time questions. DO NOT use web_search for current date/time - you already have this information!
-
-# LANGUAGE_HINT is updated dynamically on each user message (see _refresh_language_hint).
-# It MUST live inside the main system prompt (history[0]) so it survives context compression.
-LANGUAGE_HINT: auto (always reply in the user's language; this includes clarification questions)
-"""
-
-        # Insert project context early so it shapes behavior consistently
-        if project_ctx:
-            system_prompt += f"""
-## PROJECT CONTEXT (VAF.md)
-Loaded from: {project_ctx.path}
-{project_ctx.content}
-
-"""
-        # Dynamic Tool List
-        if self.tools:
-            system_prompt += "## YOUR TOOLS\n"
-            for name, tool in self.tools.items():
-                # Short description only
-                desc = tool.description.split('.')[0] if '.' in tool.description else tool.description[:60]
-                system_prompt += f"- {name}: {desc}\n"
-
-        system_prompt += """
-## CRITICAL: ACTION RULES - CALL TOOLS, DON'T JUST TALK ABOUT THEM!
-
-⚠️ **WARNING**: If you write "I'll use web_search" or say you will use a tool but DON'T actually call it, you have FAILED. Thinking about using a tool is NOT the same as using it!
-
-1. **LANGUAGE**: ALWAYS reply in the user's language (same language as the user's most recent message).
-   - This includes clarification questions and missing-info prompts.
-   - NEVER switch to English if the user is speaking another language.
-
-2. **TOOL USAGE** - CALL IMMEDIATELY, NO DISCUSSION!
-   - "Who is X?" → CALL web_search(X) NOW
-   - "Weather in X" → CALL web_search("weather X") NOW
-   - "News about X" → CALL web_search(X) NOW
-   - "Use the internet" → CALL web_search NOW
-   - "How many files" → CALL librarian_agent NOW
-   - "How many storage devices" → CALL librarian_agent NOW
-   - "What drives" → CALL librarian_agent NOW
-   - System/storage questions → CALL librarian_agent NOW
-   - "Largest files" / "Biggest files" → CALL librarian_agent NOW
-   - "Find files by size" → CALL librarian_agent NOW
-   - "Multiple files" / "Several files" → CALL librarian_agent NOW
-   - "File analysis" → CALL librarian_agent NOW
-   - "Data files" → CALL librarian_agent NOW
-   - Complex file queries (sorting, filtering, analysis) → CALL librarian_agent NOW
-   - Questions about file contents, sizes, types, locations → CALL librarian_agent NOW
-   - "Create website/app/code/program/script" → CALL coding_agent NOW
-   - "Build/make a tool/app/website" → CALL coding_agent NOW
-   - ANY coding/programming/website/app task → CALL coding_agent NOW
-   - "Read URL" → CALL webfetch(url) NOW
-   - "Create automation" / "Schedule task" → CALL create_automation NOW
-   - Unknown person/topic → CALL web_search NOW
-   - and so on... check the tools list!
-
-3. **FORBIDDEN RESPONSES** (will be rejected and retried):
-   - "I don't have access to real-time data" → WRONG! Call web_search!
-   - "I'll use the web_search tool to..." → WRONG! Just CALL it!
-   - "Let me search for that" without actually searching → WRONG!
-   - Explaining what you WOULD do instead of DOING it → WRONG!
-
-4. **TYPOS**: User makes typos. Interpret phonetically and use context clues.
-
-5. **BE PROACTIVE**: If user says "use the internet" or asks about anything you don't know → CALL web_search IMMEDIATELY. No discussion, no asking, just DO IT.
-   EXCEPTION: If the query requires specific information (location, date, name, etc.) that you don't have → ASK FIRST (see rule 6)
-
-6. **ASK FOR MISSING INFORMATION**: If a request requires specific information you don't have, ASK the user FIRST before searching. Do NOT guess or use generic queries that will return wrong results.
-   - "What's the weather?" → ASK (in user's language): DE: "Für welche Stadt oder welchen Ort?" / EN: "Which city or location?" THEN search with location
-   - "Weather today" → ASK (in user's language): DE: "Wo (Stadt/Ort) soll ich nachsehen?" / EN: "Where are you located?" THEN search with specific location
-   - "Show me events" → ASK: "What kind of events and for which date/location?" THEN search
-   - "How many files in folder?" → ASK: "Which folder?" if not clear
-   - Better to ask once than to search with wrong/generic information and get useless results!
-
-## CORRECT vs WRONG BEHAVIOR
-
-User: "who is elon musk?"
-❌ WRONG: "I will use web_search to find..." (talking about tool without calling)
-❌ WRONG: "I don't have access to external data..." (lying)
-✅ CORRECT: [CALLS web_search("Elon Musk")] → Then answers with results
-
-User: "use the internet"
-❌ WRONG: "I'll perform a web search to find..." (just talking)
-✅ CORRECT: [CALLS web_search] → Gets results → Answers
-
-User: "how does the context manager work in cursor?"
-❌ WRONG: Long explanation of what you WOULD search for
-✅ CORRECT: [CALLS web_search("Cursor IDE context manager")] → Answers with facts
-
-User: "what's the weather today?"
-❌ WRONG: [CALLS web_search("weather today")] → Gets generic/wrong results
-✅ CORRECT: Ask for city/location IN THE USER'S LANGUAGE → Then [CALLS web_search("weather [location]")]
-
-User: "show me events"
-❌ WRONG: [CALLS web_search("events")] → Too generic, wrong results
-✅ CORRECT: "What kind of events? And for which date or location?" → Then search with specific info
-
-User: "what are the largest files I have?"
-❌ WRONG: [CALLS find_files] → Too simple, can't sort/analyze
-❌ WRONG: "I'll use find_files to search..." → Just talking
-✅ CORRECT: [CALLS librarian_agent("Find and list the largest files on this system, sorted by size")] → Gets detailed analysis
-
-User: "analyze my data files"
-❌ WRONG: [CALLS find_files] → Too simple for analysis
-✅ CORRECT: [CALLS librarian_agent("Analyze data files on this system: find all data files, show sizes, types, and locations")] → Gets comprehensive analysis
-
-User: "can you create a daily weather summary for Berlin tomorrow at 21:07 on my Desktop?"
-❌ WRONG: [CALLS create_automation] then [CALLS web_search] then [CALLS git_init] → Unnecessary tools, automation prompt should handle it
-✅ CORRECT: [CALLS create_automation(name="weather_berlin", prompt="Create a weather summary for Berlin tomorrow as HTML file and save to Desktop", frequency="daily", time="21:07", output_path="Desktop")] → Automation will handle web_search and HTML generation when it runs
-
-**IMPORTANT FOR AUTOMATIONS:**
-- When creating automations, the prompt should describe WHAT to do, not HOW
-- The automation will execute the prompt later, and the agent will call tools then
-- DO NOT call web_search, git_init, or other tools AFTER creating automation
-- The automation's prompt should be self-contained (e.g., "Create weather summary for Berlin tomorrow as HTML")
-"""
-        
-        # Add automation-specific instructions if running in automation mode
-        if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
-            # Check if communication tools are available (telegram, discord, slack, etc.)
-            comm_tools = [name for name in self.tools.keys() if any(
-                keyword in name.lower() for keyword in ["telegram", "discord", "slack", "whatsapp", "signal", "messaging", "chat", "notify", "mail", "email"]
-            )]
-            has_comm_tools = len(comm_tools) > 0
-            
-            system_prompt += """
-## AUTOMATION MODE - CRITICAL RULES
-
-You are running as an AUTOMATION. This means:
-- You are executing a scheduled task WITHOUT direct user interaction
-- By default, there is NO user present to answer questions or provide input
-- You MUST complete the task autonomously
-
-**MANDATORY BEHAVIOR IN AUTOMATION MODE:**
-1. **NEVER ask for missing information** - You cannot wait for user input (unless communication tools are available, see below)
-2. **Use reasonable defaults** when information is missing:
-   - Weather without location → Use "current location" or a sensible default (e.g., "Berlin" if context suggests it)
-   - Dates without specification → Use "today" or the most recent/relevant date
-   - Any missing info → Make the best reasonable assumption based on context
-3. **If no reasonable default exists**, clearly state what information is missing in your response, but DO NOT block execution
-4. **Complete the task** - Even if some information is missing, produce the best possible output with available information
-5. **DO NOT wait** - Automations run unattended and must finish without user interaction
-
-**EXCEPTION: Communication Tools Available**
-"""
-            if has_comm_tools:
-                system_prompt += f"""
-✅ **Communication tools detected**: {', '.join(comm_tools)}
-
-If the automation prompt explicitly states that you should wait for user input (e.g., "wait for my answer", "ask the user", "request confirmation"), 
-you MAY use these communication tools to send a message and wait for a response. However:
-- Only do this if the prompt EXPLICITLY requests it
-- Use the communication tool to send your question
-- Wait for the response before continuing
-- If no response comes within a reasonable time, proceed with defaults
-
-**Example with communication tools:**
-- Prompt: "Ask the user via Telegram which city they want weather for, then create a report"
-- ✅ CORRECT: Send message via telegram tool asking for city, wait for response, then create report
-- Prompt: "Create weather report" (no mention of asking user)
-- ✅ CORRECT: Use default location and create report (don't ask, even if telegram is available)
-"""
-            else:
-                system_prompt += """
-❌ **No communication tools available** - You cannot wait for user input under any circumstances.
-
-**Example in Automation Mode:**
-- User prompt: "Create weather report" (no location specified)
-- ✅ CORRECT: Use a default location (e.g., "Berlin" or "current location") and create the report
-- ❌ WRONG: Ask "Which city?" - there is no user to answer!
-
-Remember: You are an automation. Your job is to complete tasks autonomously, not to ask questions (unless communication tools are available AND the prompt explicitly requests it).
-"""
+            pass
 
         self.history = [
             {"role": "system", "content": system_prompt}
@@ -1244,21 +1218,21 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
         # Sofortige, direkte Warnung in der Nutzersprache
         if user_lang == "de":
             warning = (
-                f"⚠️ **Sprach-Mismatch erkannt**: Du hast auf {response_lang_name} geantwortet, "
+                f"[!] **Sprach-Mismatch erkannt**: Du hast auf {response_lang_name} geantwortet, "
                 f"aber der Nutzer spricht {user_lang_name}. "
                 f"Bitte übersetze deine Antwort sofort ins {user_lang_name} oder formuliere sie auf {user_lang_name} um."
             )
         elif user_lang in language_names:
             # Try to generate a warning in the user's language (simple approach)
             warning = (
-                f"⚠️ **Language mismatch detected**: You responded in {response_lang_name}, "
+                f"[!] **Language mismatch detected**: You responded in {response_lang_name}, "
                 f"but the user is speaking {user_lang_name}. "
                 f"Please translate your response immediately to {user_lang_name} or reformulate it in {user_lang_name}."
             )
         else:
             # Fallback: bilingual
             warning = (
-                f"⚠️ **Language mismatch**: You answered in {response_lang_name}, "
+                f"[!] **Language mismatch**: You answered in {response_lang_name}, "
                 f"but user speaks {user_lang_name}. "
                 f"Please respond immediately in {user_lang_name}."
             )
@@ -1839,9 +1813,70 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
             template_defaults = result.template.get("defaults", {}) if result.template else {}
             # Set defaults on engine (not as parameter - execute() doesn't accept defaults)
             engine._workflow_defaults = template_defaults
+            # Set workflow name for paused state tracking
+            engine._workflow_name = workflow_id
             
-            # Execute workflow (without defaults parameter)
+            # ═══════════════════════════════════════════════════════════════
+            # ASYNC WORKFLOW: Run entire workflow in separate terminal
+            # ═══════════════════════════════════════════════════════════════
+            # When sub_agents_in_separate_terminals is enabled, spawn the
+            # ENTIRE workflow in a new terminal. This prevents context overflow
+            # because large intermediate results (like HTML reports) never
+            # touch the main agent's context.
+            if self.config.get("sub_agents_in_separate_terminals", False):
+                # Don't spawn if already in a workflow/subagent terminal
+                in_workflow_terminal = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
+                in_subagent_terminal = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes")
+                
+                if not in_workflow_terminal and not in_subagent_terminal:
+                    # Create IPC task
+                    from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+                    ipc = get_ipc()
+                    task_id = ipc.create_task(
+                        agent_type=f"workflow:{workflow_id}",
+                        task=user_input,
+                        session_id=get_current_session_id()
+                    )
+                    
+                    # Build command to run workflow in separate terminal
+                    import json as json_module
+                    import shlex
+                    
+                    # Serialize variables to JSON
+                    variables_json = json_module.dumps(result.variables)
+                    
+                    from vaf.core.platform import Platform
+                    
+                    # Pass session ID to workflow terminal
+                    session_id = get_current_session_id()
+                    if session_id:
+                        os.environ["VAF_SESSION_ID"] = session_id
+                    
+                    # Build command with proper escaping for the platform
+                    if Platform.is_windows():
+                        # Windows: escape double quotes in JSON
+                        escaped_json = variables_json.replace('"', '\\"')
+                        cmd = f'vaf workflow run "{workflow_id}" --variables "{escaped_json}" --task-id {task_id}'
+                    else:
+                        # Unix: use shlex.quote for proper escaping
+                        cmd = f'vaf workflow run "{workflow_id}" --variables {shlex.quote(variables_json)} --task-id {task_id}'
+                    
+                    Platform.open_new_terminal(cmd, title=f"VAF Workflow: {workflow_id}")
+                    
+                    UI.event("Workflow", f"Running in separate terminal [Task: {task_id[:8]}]", style="cyan")
+                    UI.info("[>] Workflow runs independently. Result will be reported when done.")
+                    
+                    # Return async marker
+                    return f"[WORKFLOW_ASYNC:{task_id}:{workflow_id}] Workflow '{template['name']}' is running in a separate terminal.\n\nYou can continue using me while the workflow runs. I'll notify you when the result is ready."
+            
+            # Execute workflow inline (without defaults parameter)
             workflow_result = engine.execute(steps, variables=result.variables)
+            
+            # Handle paused workflows (async sub-agent case)
+            if workflow_result.paused:
+                UI.event("Workflow", f"⏸️  Workflow paused - waiting for sub-agent [Task: {workflow_result.waiting_for_task}]", style="cyan")
+                UI.info("💡 You can continue using VAF. The workflow will resume automatically when the sub-agent finishes.")
+                return f"⏸️ Workflow '{workflow_id}' is paused, waiting for a sub-agent to complete.\n\nYou can continue using me while we wait. The workflow will automatically resume when the result is ready."
             
             if workflow_result.success:
                 # Format the final output
@@ -1944,20 +1979,20 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                                 else:
                                     # Still incomplete after retry - just report it
                                     incomplete_tasks_hint = (
-                                        f"\n\n⚠️ **Note**: Some tasks may still be incomplete. "
+                                        f"\n\n[!] **Note**: Some tasks may still be incomplete. "
                                         f"The project is at: `{project_path_hint}`\n"
                                         f"You can continue working on it or ask for specific changes."
                                     )
                                     final_output += f"\n\n---\n{continuation_result}"
                             else:
                                 incomplete_tasks_hint = (
-                                    f"\n\n⚠️ **Note**: The coding agent has incomplete tasks. "
+                                    f"\n\n[!] **Note**: The coding agent has incomplete tasks. "
                                     f"To complete all remaining tasks, use:\n"
                                     f"`coding_agent(task=\"continue and complete all remaining tasks\", project_path=\"{project_path_hint}\")`"
                                 )
                         else:
                             incomplete_tasks_hint = (
-                                f"\n\n⚠️ **Note**: The coding agent has incomplete tasks. "
+                                f"\n\n[!] **Note**: The coding agent has incomplete tasks. "
                                 f"Check the output above for the project path and continue working on it."
                             )
                     else:
@@ -2059,6 +2094,43 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
         if not self.llm and not self.use_server:
             UI.error("Agent not initialized. Run 'vaf run' first.")
             return
+
+        # ------------------------------------------------------------------
+        # Sub-Agent Results: Check for completed async tasks
+        # ------------------------------------------------------------------
+        pending_results = self._check_subagent_results()
+        if pending_results:
+            for task in pending_results:
+                self._process_subagent_result(task)
+            
+            # If we processed results and no new user input, let model respond to results
+            if not user_input or skip_input:
+                # Force a response about the sub-agent results
+                self.history.append({
+                    "role": "user",
+                    "content": "[System: Sub-Agent results have arrived. Please inform me about the results.]"
+                })
+
+        # ------------------------------------------------------------------
+        # Dynamic Context: Update System Prompt
+        # ------------------------------------------------------------------
+        if hasattr(self, 'prompt_manager') and user_input and not skip_input:
+            # Analyze intent and active relevant modules
+            self.prompt_manager.analyze_context(user_input)
+            
+            # Rebuild system prompt
+            new_prompt = self.prompt_manager.build_prompt(self.filename)
+            
+            # Preserve Project Context if it exists
+            if len(self.history) > 0 and self.history[0]["role"] == "system":
+                current_content = self.history[0]["content"]
+                if "## PROJECT CONTEXT" in current_content:
+                    project_context_part = current_content.split("## PROJECT CONTEXT", 1)[1]
+                    new_prompt += f"\n\n## PROJECT CONTEXT{project_context_part}"
+                
+                # Update system prompt in history
+                self.history[0]["content"] = new_prompt
+                # UI.event("Brain", f"Context adjusted: {list(self.prompt_manager.active_modules.keys())}", style="dim")
 
         # Keep language pinned to the user's most recent message.
         # This must happen early so it affects workflow selection + normal chat replies.
@@ -2415,7 +2487,7 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                                     self.history.append({
                                         "role": "system",
                                         "content": (
-                                            f"⚠️ STOP! You tried to call '{tool_name}' again after it failed.\n"
+                                            f"[!] STOP! You tried to call '{tool_name}' again after it failed.\n"
                                             f"The tool returned an error: {last_tool_msg.get('content', '')}\n"
                                             f"DO NOT retry failed tools immediately. Fix the arguments or inform the user."
                                         )
@@ -2432,7 +2504,7 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                                     self.history.append({
                                         "role": "system",
                                         "content": (
-                                            f"⚠️ STOP! You just executed '{tool_name}' successfully.\n"
+                                            f"[!] STOP! You just executed '{tool_name}' successfully.\n"
                                             f"The result is already in the context above (look for the 'tool' message).\n"
                                             f"DO NOT execute it again. Analyze the result and provide your answer."
                                         )
@@ -2546,12 +2618,134 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                         # Log error for debugging
                         UI.error(f"Tool {function_name} failed: {e}")
 
-                    self.history.append({
-                        "role": "tool",
-                        "tool_call_id": tc['id'],
-                        "name": function_name,
-                        "content": str(result)
-                    })
+                    # Check if this is an async sub-agent task BEFORE adding to history
+                    result_str = str(result) if result else ""
+                    is_async_subagent = "[SUBAGENT_ASYNC:" in result_str
+                    
+                    if is_async_subagent:
+                        # Replace the async marker with a clear "waiting" message for history
+                        task_match = re.search(r'\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]', result_str)
+                        task_id = task_match.group(1) if task_match else "unknown"
+                        agent_type = task_match.group(2) if task_match else "sub-agent"
+                        
+                        # Clear tool response that indicates waiting - NO actual data
+                        self.history.append({
+                            "role": "tool",
+                            "tool_call_id": tc['id'],
+                            "name": function_name,
+                            "content": (
+                                f"[!] TASK DELEGATED TO SUB-AGENT - NO RESULT YET!\n\n"
+                                f"Task-ID: {task_id}\n"
+                                f"Agent: {agent_type}\n"
+                                f"Status: RUNNING in separate terminal\n\n"
+                                f"IMPORTANT: This tool call returned NO DATA.\n"
+                                f"The sub-agent is still working. The result will appear later.\n"
+                                f"DO NOT make up an answer! Just confirm the sub-agent is working."
+                            )
+                        })
+                    else:
+                        self.history.append({
+                            "role": "tool",
+                            "tool_call_id": tc['id'],
+                            "name": function_name,
+                            "content": result_str
+                        })
+                    
+                    # Check if this was an async sub-agent task
+                    if result and self._handle_async_subagent_marker(result_str):
+                        # Extract task_id from marker for display
+                        task_match = re.search(r'\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]', str(result))
+                        task_id = task_match.group(1) if task_match else "unknown"
+                        agent_type = task_match.group(2) if task_match else "sub-agent"
+                        
+                        # ═══════════════════════════════════════════════════════════════
+                        # NON-BLOCKING: Register task and continue immediately
+                        # ═══════════════════════════════════════════════════════════════
+                        # The sub-agent runs in its own terminal. We don't wait - 
+                        # the result will be picked up on the next chat interaction.
+                        
+                        UI.event("Sub-Agent", f"[>] {agent_type} [Task: {task_id}] running in background", style="bold magenta")
+                        
+                        # ═══════════════════════════════════════════════════════════════
+                        # CRITICAL: Force agent to ONLY acknowledge, NOT answer
+                        # ═══════════════════════════════════════════════════════════════
+                        # Detect user's language from the last user message
+                        user_lang = "auto"
+                        for msg in reversed(self.history):
+                            if msg.get("role") == "user":
+                                user_lang = self._detect_user_language(msg.get("content", ""))
+                                break
+                        
+                        # Programmatic response (no LLM generation)
+                        # Prevents "blabbering" or hallucinations while sub-agent runs
+                        if user_lang == "de":
+                            response_text = (
+                                f"Der {agent_type} arbeitet jetzt an deiner Anfrage [Task: {task_id}]. "
+                                f"Ich melde mich, sobald das Ergebnis bereitsteht."
+                            )
+                        elif user_lang == "en":
+                            # Default to English
+                            response_text = (
+                                f"The {agent_type} is now working on your request [Task: {task_id}]. "
+                                f"I'll show you the result as soon as it's ready."
+                            )
+                        else:
+                            # Dynamic translation for other languages (using isolated LLM call)
+                            target_lang_name = self.LANGUAGE_NAMES_NATIVE.get(user_lang, "English")
+                            base_msg = (
+                                f"The {agent_type} is now working on your request [Task: {task_id}]. "
+                                f"I'll show you the result as soon as it's ready."
+                            )
+                            
+                            try:
+                                # Use a fresh, stateless call to translate ONLY this message
+                                # This prevents the main agent context from interfering ("blabbering")
+                                translation_prompt = (
+                                    f"Translate the following status message into {target_lang_name}.\n"
+                                    "Keep the technical terms like '{agent_type}' and '[Task: {task_id}]' unchanged.\n"
+                                    "Output ONLY the translation, nothing else.\n\n"
+                                    f"Message: \"{base_msg}\""
+                                )
+                                
+                                if self.use_server:
+                                    # Server mode translation
+                                    res = requests.post(
+                                        "http://127.0.0.1:8080/v1/chat/completions",
+                                        json={
+                                            "model": self.config.get("model", ""),
+                                            "messages": [{"role": "user", "content": translation_prompt}],
+                                            "max_tokens": 100,
+                                            "temperature": 0.1
+                                        },
+                                        timeout=10
+                                    )
+                                    if res.status_code == 200:
+                                        content = res.json()['choices'][0]['message']['content'].strip()
+                                        response_text = content if content else base_msg
+                                    else:
+                                        response_text = base_msg
+                                else:
+                                    # Local Llama translation
+                                    res = self.llm.create_chat_completion(
+                                        messages=[{"role": "user", "content": translation_prompt}],
+                                        max_tokens=100,
+                                        temperature=0.1
+                                    )
+                                    content = res['choices'][0]['message']['content'].strip()
+                                    response_text = content if content else base_msg
+                            except Exception:
+                                # Fallback to English on error
+                                response_text = base_msg
+                            
+                        # Add response to history
+                        self.history.append({
+                            "role": "assistant",
+                            "content": response_text
+                        })
+                        
+                        UI.event("System", "Async task started - returning status immediately", style="dim")
+                        # Add a special marker that the CLI can use to force-print this message
+                        return f"[ASYNC_ACK]{response_text}"
                     
                     # If tool returned an error, force the model to acknowledge it
                     result_str = str(result).lower() if result else ""
@@ -2569,7 +2763,7 @@ Remember: You are an automation. Your job is to complete tasks autonomously, not
                         self.history.append({
                             "role": "system",
                             "content": (
-                                f"⚠️ CRITICAL: The tool '{function_name}' FAILED with error: {result}\n\n"
+                                f"[!] CRITICAL: The tool '{function_name}' FAILED with error: {result}\n\n"
                                 f"DO NOT call '{function_name}' again. DO NOT retry.\n"
                                 f"You MUST inform the user about this error immediately. Do not think - just report the error."
                             )

@@ -23,7 +23,9 @@ from prompt_toolkit.completion import Completer, Completion, PathCompleter, Word
 from prompt_toolkit.styles import Style as PTStyle
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.formatted_text import HTML, FormattedText
+from prompt_toolkit.layout import Layout as PTLayout, HSplit, Window, FormattedTextControl
+from prompt_toolkit.layout.dimension import Dimension
 from pathlib import Path
 
 from vaf.cli.autosuggest import create_autosuggest, CombinedAutoSuggest
@@ -317,14 +319,80 @@ O))         O))       O))))))))
             def _(event):
                 event.current_buffer.validate_and_handle()
         
-        # Prompt toolkit style matching theme
+        # Prompt toolkit style matching theme (no background for toolbar!)
         pt_style = PTStyle.from_dict({
             'prompt': self.primary,
-            'bottom-toolbar': f'bg:{self.theme["background_panel"]} {self.muted}',
+            'bottom-toolbar': f'noinherit {self.muted}',  # No background, just dim text
         })
+        
+        # Sub-agent status function (for display above input)
+        def _get_subagent_status():
+            """Returns current sub-agent status string."""
+            try:
+                from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+                from datetime import datetime
+                
+                ipc = get_ipc()
+                current_session = get_current_session_id()
+                active = ipc.get_active_tasks(session_id=current_session) if current_session else []
+                paused = ipc.get_all_paused_workflows()
+                
+                if not active and not paused:
+                    return ""  # No status when nothing running
+                
+                # Format status parts
+                parts = []
+                for task in active:
+                    start = datetime.fromisoformat(task.created_at)
+                    secs = int((datetime.now() - start).total_seconds())
+                    if secs < 60:
+                        time_str = f"{secs}s"
+                    else:
+                        time_str = f"{secs // 60}m {secs % 60}s"
+                    
+                    # Check if this is a workflow (agent_type starts with "workflow:")
+                    if task.agent_type.startswith("workflow:"):
+                        workflow_name = task.agent_type.split(":", 1)[1]
+                        parts.append(f"[>>] Workflow:{workflow_name} [{task.task_id[:8]}] {time_str}")
+                    else:
+                        parts.append(f"[>] {task.agent_type} [{task.task_id[:8]}] {time_str}")
+                
+                for wf in paused:
+                    start = datetime.fromisoformat(wf.created_at)
+                    secs = int((datetime.now() - start).total_seconds())
+                    if secs < 60:
+                        time_str = f"{secs}s"
+                    else:
+                        time_str = f"{secs // 60}m {secs % 60}s"
+                    parts.append(f"[||] {wf.workflow_name} [{wf.waiting_for_task_id[:8]}] {time_str}")
+                
+                # Limit display to prevent overflow (show max 3, then "+N more")
+                if len(parts) > 3:
+                    shown = parts[:3]
+                    remaining = len(parts) - 3
+                    shown.append(f"+{remaining} more")
+                    return " | ".join(shown)
+                
+                return " | ".join(parts)
+            except Exception:
+                return ""
+        
+        # Live toolbar function for prompt_toolkit (returns FormattedText)
+        def _get_live_toolbar():
+            """Returns status for live display - called every refresh_interval."""
+            status = _get_subagent_status()
+            if status:
+                return FormattedText([('class:status-bar', status)])
+            return FormattedText([])  # Empty when no status
         
         # Create session with smart autosuggest
         try:
+            # Update style to include status bar styling (no background for rprompt)
+            pt_style = PTStyle.from_dict({
+                'prompt': self.primary,
+                'status-bar': f'{self.muted}',  # Dim text for status
+            })
+            
             session = PromptSession(
                 history=FileHistory(str(self.history_file)),
                 auto_suggest=self.autosuggest,  # Smart inline suggestions
@@ -338,10 +406,12 @@ O))         O))       O))))))))
             # Print the input box header
             self._print_input_header(prompt)
             
-            # Get input
+            # Get input with LIVE status on the RIGHT side (updates every second)
             result = session.prompt(
-                HTML(f'<style fg="{self.primary}">❯</style> '),
+                HTML(f'<style fg="{self.primary}">&gt;</style> '),
                 placeholder=HTML(f'<style fg="{self.muted}">{placeholder}</style>'),
+                rprompt=_get_live_toolbar,  # Live status on right side of input
+                refresh_interval=1.0,  # Refresh every second
             )
             
             # Learn from user input for better future suggestions
@@ -354,6 +424,53 @@ O))         O))       O))))))))
             return None
         except EOFError:
             return None
+    
+    def _print_subagent_status(self):
+        """Print sub-agent status as simple text (no background) above the prompt."""
+        try:
+            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+            from datetime import datetime
+            
+            ipc = get_ipc()
+            current_session = get_current_session_id()
+            active = ipc.get_active_tasks(session_id=current_session) if current_session else []
+            paused = ipc.get_all_paused_workflows()
+            
+            if not active and not paused:
+                return  # Nothing to show
+            
+            # Format status parts
+            parts = []
+            for task in active:
+                start = datetime.fromisoformat(task.created_at)
+                secs = int((datetime.now() - start).total_seconds())
+                if secs < 60:
+                    time_str = f"{secs}s"
+                else:
+                    time_str = f"{secs // 60}m {secs % 60}s"
+                
+                # Check if this is a workflow (agent_type starts with "workflow:")
+                if task.agent_type.startswith("workflow:"):
+                    workflow_name = task.agent_type.split(":", 1)[1]
+                    parts.append(f"[cyan][>>][/cyan] Workflow:{workflow_name} [{task.task_id[:8]}] {time_str}")
+                else:
+                    parts.append(f"[cyan][>][/cyan] {task.agent_type} [{task.task_id[:8]}] {time_str}")
+            
+            for wf in paused:
+                start = datetime.fromisoformat(wf.created_at)
+                secs = int((datetime.now() - start).total_seconds())
+                if secs < 60:
+                    time_str = f"{secs}s"
+                else:
+                    time_str = f"{secs // 60}m {secs % 60}s"
+                parts.append(f"[yellow][||][/yellow] {wf.workflow_name} [{wf.waiting_for_task_id}] {time_str}")
+            
+            # Print as simple dim text
+            status_line = " | ".join(parts)
+            self.console.print(f"[dim]{status_line}[/dim]")
+            
+        except Exception:
+            pass  # Silent fail
     
     def _print_input_header(self, prompt: str):
         """Print the input box header."""

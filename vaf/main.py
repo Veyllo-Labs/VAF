@@ -110,7 +110,7 @@ def bootstrap():
 bootstrap()
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -154,6 +154,12 @@ app.add_typer(snapshot_app, name="snapshot", help="Code snapshots and undo")
 
 # Scheduled Automations
 app.add_typer(automation_app, name="automation", help="Time-based task automation")
+
+# Sub-Agent execution (internal use - for separate terminal windows)
+app.add_typer(subagent.app, name="subagent", help="Run sub-agents in separate terminals")
+
+# Workflow execution (internal use - for separate terminal windows)
+app.add_typer(workflow.app, name="workflow", help="Run workflows in separate terminals")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STANDALONE COMMANDS

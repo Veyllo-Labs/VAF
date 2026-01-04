@@ -738,9 +738,11 @@ class Agent:
                             continue
                         
                         # Exclude automation management tools when running inside an automation
-                        # This prevents automations from creating/managing other automations (infinite loops, unexpected behavior)
+                        # OR if context is extremely small (<= 4096) to save space
                         is_in_automation = os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
-                        if is_in_automation:
+                        n_ctx = self.config.get("n_ctx", 8192)
+                        
+                        if is_in_automation or n_ctx <= 4096:
                             AUTOMATION_EXCLUDED_TOOLS = [
                                 "create_automation",
                                 "update_automation",
@@ -1021,13 +1023,20 @@ class Agent:
         system_prompt = self.prompt_manager.build_prompt(self.filename)
         
         # Optional: Load Project Context (VAF.md)
+        # Limit to 25% of total context or max 12k chars (whichever is smaller)
+        # 1 token ~ 3 chars -> 25% of n_ctx tokens * 3 = max chars
+        n_ctx = self.config.get("n_ctx", 8192)
+        max_context_chars = int(min(12_000, (n_ctx * 0.25) * 3))
+        
         try:
             from pathlib import Path
             from vaf.core.project_context import load_project_context
+            # Use current working directory for context search
             cwd = os.getcwd()
-            project_ctx = load_project_context(Path(cwd))
+            project_ctx = load_project_context(Path(cwd), max_chars=max_context_chars)
+            
             if project_ctx:
-                system_prompt += f"\n\n## PROJECT CONTEXT (VAF.md)\nLoaded from: {project_ctx.path}\n{project_ctx.content}\n"
+                 system_prompt += f"\n\n## PROJECT CONTEXT (VAF.md)\nLoaded from: {project_ctx.path}\n{project_ctx.content}\n"
         except Exception:
             pass
 
@@ -2298,10 +2307,23 @@ class Agent:
                         if response.status_code == 500:
                             error_text = response.text or ""
                             if "context" in error_text.lower() or "exceed" in error_text.lower():
-                                UI.event("Context", "Context overflow detected. Compressing history...", style="warning")
-                                # Aggressively compress context
+                                UI.event("Context", "Context overflow detected (500). Compressing history...", style="warning")
+                                # 1. Standard Compression
                                 self.manage_context()
-                                # Also truncate old messages if still too large
+                                
+                                # 2. Aggressive Content Truncation (if Standard wasn't enough)
+                                truncated = False
+                                for msg in self.history:
+                                    if msg.get("role") != "system":
+                                        content = str(msg.get("content", ""))
+                                        if len(content) > 6000:
+                                            msg["content"] = content[:6000] + "... [TRUNCATED FOR RECOVERY]"
+                                            truncated = True
+                                
+                                if truncated:
+                                    UI.event("Context", "Truncated large messages for recovery.", style="info")
+
+                                # 3. Message Pruning (existing logic)
                                 if len(self.history) > 20:
                                     # Keep system prompt, last user message, and last 10 messages
                                     system_msgs = [m for m in self.history if m.get("role") == "system"]
@@ -2323,9 +2345,11 @@ class Agent:
                                         new_history.append(msg)
                                     
                                     self.history = new_history
-                                    UI.event("Context", f"Compressed to {len(self.history)} messages (Aggressive). Retrying...", style="info")
-                                    # Retry the request with compressed context (payload will be rebuilt in next iteration)
-                                    continue
+                                    UI.event("Context", f"Compressed to {len(self.history)} messages (Aggressive Pruning).", style="info")
+                                
+                                UI.event("Context", "Retrying request with optimized context...", style="success")
+                                # Retry the request with compressed context (payload will be rebuilt in next iteration)
+                                continue
                         
                         # Handle Context Size Error (400) - automatically compress and retry
                         if response.status_code == 400:
@@ -2334,9 +2358,23 @@ class Agent:
                                 error_msg = error_data.get("error", {}).get("message", "")
                                 if "exceed_context_size" in error_msg.lower() or "exceed" in error_msg.lower():
                                     UI.event("Context", "Context size exceeded. Compressing history...", style="warning")
-                                    # Aggressively compress context
+                                    # 1. Standard Compression
                                     self.manage_context()
-                                    # Also truncate old messages if still too large
+                                    
+                                    # 2. Aggressive Content Truncation (if Standard wasn't enough or history is short but fat)
+                                    # Truncate very large messages to ensure we fit
+                                    truncated = False
+                                    for msg in self.history:
+                                        if msg.get("role") != "system": # Protect system prompt
+                                            content = str(msg.get("content", ""))
+                                            if len(content) > 6000: # 6000 chars ~ 2000 tokens
+                                                msg["content"] = content[:6000] + "... [TRUNCATED FOR RECOVERY]"
+                                                truncated = True
+                                    
+                                    if truncated:
+                                        UI.event("Context", "Truncated large messages for recovery.", style="info")
+
+                                    # 3. Message Pruning (existing logic for long history)
                                     if len(self.history) > 20:
                                         # Keep system prompt, last user message, and last 10 messages
                                         system_msgs = [m for m in self.history if m.get("role") == "system"]
@@ -2353,9 +2391,11 @@ class Agent:
                                             new_history.extend(assistant_msgs[-5:])  # Keep last 5 assistant messages
                                         
                                         self.history = new_history
-                                        UI.event("Context", f"Compressed to {len(self.history)} messages. Retrying...", style="info")
-                                        # Retry the request with compressed context (payload will be rebuilt in next iteration)
-                                        continue
+                                        UI.event("Context", f"Compressed to {len(self.history)} messages (Aggressive Pruning).", style="info")
+                                    
+                                    UI.event("Context", "Retrying request with optimized context...", style="success")
+                                    # Retry the request with compressed context (payload will be rebuilt in next iteration)
+                                    continue
                             except (json.JSONDecodeError, KeyError):
                                 pass  # Not a context size error, fall through to normal error handling
                             
@@ -3415,14 +3455,23 @@ class Agent:
 
     @property
     def TOOLS(self):
-        """Dynamic Tool Schema Generation"""
+        """Dynamic Tool Schema Generation with Context-Aware Optimization"""
         schema = []
+        n_ctx = self.config.get("n_ctx", 8192)
+        is_small_context = n_ctx < 8000
+        
         for name, tool in self.tools.items():
+            description = tool.description
+            
+            # Context Optimization: Truncate descriptions for small contexts
+            if is_small_context and description and len(description) > 150:
+                description = description[:147] + "..."
+            
             schema.append({
                 "type": "function",
                 "function": {
                     "name": name,
-                    "description": tool.description,
+                    "description": description,
                     "parameters": getattr(tool, "parameters", {"type": "object", "properties": {}})
                 }
             })

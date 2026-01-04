@@ -249,12 +249,12 @@ class ResearchTUI:
 
     def render(self) -> Group:
         with self._lock:
-            elapsed = int(time.time() - self.start_time)
-            elapsed_str = f"{elapsed//60}:{elapsed%60:02d}"
+            # Show current time instead of elapsed duration
+            current_time_str = time.strftime("%H:%M:%S")
 
             # Status line
             status = Text()
-            status.append(f"Time: {elapsed_str}", style="dim")
+            status.append(f"Last Update: {current_time_str}", style="dim")
             status.append("  │  ", style="dim")
             status.append(f"Loop: {self.loop_count}", style="dim")
             status.append("  │  ", style="dim")
@@ -469,10 +469,11 @@ class ResearchAgentTool(BaseTool):
         # to prevent multiple Live instances from spamming the console when repair_report fixes multiple sections.
         # Note: We do NOT disable Live for in_workflow (like coding_agent), because Live works fine in workflows.
         is_fragment_mode = (out_format == "html_fragment")
-        use_live = (Live is not None) and (not noninteractive) and is_tty and (not is_fragment_mode)
-        # User preference: run FULL Live TUI (animated) even inside workflows.
-        # Note: Some terminals/workflow outputs may not support true in-place updates.
-        animate_tui = True
+        # Strict check for Live support to avoid "spam" in dumb terminals (Colab, CI, etc.)
+        use_live = (Live is not None) and (not noninteractive) and is_tty and (not is_fragment_mode) and UI.console.is_terminal and not UI.console.is_jupyter
+        
+        # Disable animation by default to prevent flickering/spam in many terminals
+        animate_tui = False 
 
         tui = ResearchTUI(UI.console, topic, animate=animate_tui)
 

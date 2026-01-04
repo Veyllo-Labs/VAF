@@ -75,6 +75,7 @@ class SystemPromptManager:
             
             "research": """
 ## Research Guidelines
+- **VERIFY FACTS:** Do NOT guess or hallucinate information about people, places, or specific entities. If you do not have 100% certainty from your training data, you **MUST** use the `web_search` tool.
 - **Refine Queries:** If the user's query is too broad (e.g., "weather tomorrow" without location), ask for specifics BEFORE searching.
 - Use web_search tool for current/real-time information
 - Cross-reference multiple sources when possible
@@ -133,7 +134,10 @@ class SystemPromptManager:
             "research": [
                 "search", "find", "research", "look up", "what is", "who is", 
                 "how does", "why does", "when did", "where is", "latest", "news",
-                "current", "today", "information about", "tell me about"
+                "current", "today", "information about", "tell me about",
+                # German keywords
+                "suche", "finde", "recherchiere", "wer ist", "was ist", "wie ist",
+                "warum", "wann", "wo ist", "aktuell", "nachrichten", "infos über"
             ],
             "filesystem": [
                 "file", "read", "write", "create", "delete", "move", "copy",

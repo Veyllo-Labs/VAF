@@ -251,21 +251,31 @@ class ContextManager:
         # 1. Update State immediately
         self.update_state({"role": "tool", "name": tool_name, "content": content_str})
 
+        # Dynamic limits based on context size
+        is_small_context = self.max_tokens < 6000
+        max_raw_chars = 800 if is_small_context else 1500
+        max_raw_lines = 20 if is_small_context else 40
+        
         # 2. If content is small, leave it raw
-        if char_count < 1500 and line_count < 40:
+        if char_count < max_raw_chars and line_count < max_raw_lines:
             return content_str
 
-        # 3. Aggressive Pruning for large outputs (e.g. file reads, search results)
+        # 3. Aggressive Pruning for large outputs
         pruned_msg = f"[SEAMLESS COMPRESSION: Tool '{tool_name}' output pruned ({char_count} chars, {line_count} lines)]\n"
         
         if tool_name in ["read_file", "list_files", "web_search", "web_fetch"]:
-            # Keep top 15 and bottom 10 lines
-            head = "\n".join(lines[:15])
-            tail = "\n".join(lines[-10:])
-            return f"{pruned_msg}\n{head}\n\n[... {line_count - 25} lines hidden ...]\n\n{tail}\n\nNOTE: The facts from this output are stored in the State Context."
+            # Dynamic pruning window
+            head_lines = 5 if is_small_context else 15
+            tail_lines = 5 if is_small_context else 10
+            
+            head = "\n".join(lines[:head_lines])
+            tail = "\n".join(lines[-tail_lines:])
+            hidden_count = max(0, line_count - (head_lines + tail_lines))
+            return f"{pruned_msg}\n{head}\n\n[... {hidden_count} lines hidden ...]\n\n{tail}\n\nNOTE: The facts from this output are stored in the State Context."
         
-        # Default pruning: Keep first 500 chars
-        return f"{pruned_msg}\n{content_str[:800]}...\n\n[... truncated for context stability ...]"
+        # Default pruning
+        trunc_limit = 400 if is_small_context else 800
+        return f"{pruned_msg}\n{content_str[:trunc_limit]}...\n\n[... truncated for context stability ...]"
 
     # ═══════════════════════════════════════════════════════════════════════════
     # CONTEXT COMPRESSION (Cursor-Style)

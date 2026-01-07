@@ -856,6 +856,41 @@ class AnimatedHeader:
         )
 
 
+class _StaticHeader:
+    """Static version of AnimatedHeader (no movement)."""
+    def __init__(self, title: str, left_agt: str, right_agt: str):
+        self.title = title
+        self.left_agt = left_agt
+        self.right_agt = right_agt
+        
+        # Get current theme colors
+        from vaf.core.config import Config
+        theme_name = Config.get("theme", "vaf")
+        theme = ThemeManager.get_theme(theme_name)
+        self.border_color = theme.get("border_active", theme.get("primary", "#00d4ff"))
+        self.text_color = theme.get("primary", "#00d4ff")
+
+    def __rich__(self) -> Panel:
+        # Static arrow
+        arrow_str = Text("<=====>", style=f"bold {self.text_color}")
+
+        art_grid = Text()
+        art_grid.append(" \n")
+        art_grid.append("   ( OO)     ", style="white")
+        art_grid.append_text(arrow_str)
+        art_grid.append("     (OO )\n", style="white")
+        
+        row3 = f" {self.left_agt:<13}           {self.right_agt:<12}"
+        art_grid.append(row3 + "\n", style="white")
+
+        return Panel(
+            Align.center(art_grid),
+            title=f"[bold {self.text_color}]{self.title}[/bold {self.text_color}]",
+            border_style=f"bold {self.border_color}",
+            padding=(0, 2)
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # STATIC UI CLASS (Backward Compatibility)
 # ═══════════════════════════════════════════════════════════════════════════════

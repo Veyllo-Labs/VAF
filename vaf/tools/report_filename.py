@@ -55,7 +55,41 @@ class ReportFilenameTool(BaseTool):
             ext = "md"
         max_words = max(1, min(max_words, 6))
 
+        # SMART EXTRACTION: If topic is long/complex, use LLM to extract keywords
+        # This avoids filenames like "can_you_please_research.html"
         words = _slugify_words(topic)
+        
+        if len(words) > 4:
+            try:
+                import requests
+                from vaf.core.config import Config
+                
+                # Fast, cheap call to extract keywords
+                prompt = (
+                    f"Extract exactly {max_words} main keywords for a filename from this request.\n"
+                    f"Request: \"{topic}\"\n"
+                    f"Keywords (space separated):"
+                )
+                
+                res = requests.post(
+                    "http://127.0.0.1:8080/v1/chat/completions",
+                    json={
+                        "model": Config.get("model", ""),
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 20,
+                        "temperature": 0.0,
+                    },
+                    timeout=5
+                )
+                
+                if res.status_code == 200:
+                    content = res.json()["choices"][0]["message"]["content"].strip()
+                    llm_words = _slugify_words(content)
+                    if llm_words:
+                        words = llm_words
+            except:
+                pass # Fallback to dumb slugify on error
+
         base_words = words[:max_words] if words else ["report"]
         base = "_".join(base_words)
         name = f"{base}_{suffix}.{ext}"

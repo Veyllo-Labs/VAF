@@ -2140,7 +2140,7 @@ class Agent:
             UI.event("Debug", f"Workflow error: {e}", style="dim")
             return None
 
-    def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False, disable_workflows=False):
+    def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False, disable_workflows=False, disable_tools=False):
         from vaf.cli.ui import UI
         
         if not self.llm and not self.use_server:
@@ -2296,13 +2296,22 @@ class Agent:
                         # Prepare messages for specific model quirks (e.g. Gemma)
                         prepared_messages = self._prepare_messages(self.history)
                         
+                        # Disable tools if requested (forces text response)
+                        current_tools = self.TOOLS if not disable_tools else None
+                        current_tool_choice = "auto" if not disable_tools else "none"
+                        
                         payload = {
                              "messages": prepared_messages,
-                             "tools": self.TOOLS, 
-                             "tool_choice": "auto",
+                             "tools": current_tools, 
+                             "tool_choice": current_tool_choice,
                              "stream": True,
                              "temperature": current_temp,
                         }
+                        
+                        # Remove keys if None (some APIs don't like null tools)
+                        if current_tools is None:
+                            if "tools" in payload: del payload["tools"]
+                            if "tool_choice" in payload: del payload["tool_choice"]
                         
                         response = requests.post(
                             "http://127.0.0.1:8080/v1/chat/completions", 

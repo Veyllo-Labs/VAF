@@ -259,12 +259,15 @@ class ResearchTUI:
 
     def render(self) -> Group:
         with self._lock:
-            elapsed = int(time.time() - self.start_time)
-            elapsed_str = f"{elapsed//60}:{elapsed%60:02d}"
+            # Show time of last actual update for static look, or ticking time for animated
+            if self.last_update_time:
+                update_time_str = time.strftime("%H:%M:%S", time.localtime(self.last_update_time))
+            else:
+                update_time_str = time.strftime("%H:%M:%S")
 
             # Status line
             status = Text()
-            status.append(f"Time: {elapsed_str}", style="dim")
+            status.append(f"Last Update: {update_time_str}", style="dim")
             status.append("  │  ", style="dim")
             status.append(f"Loop: {self.loop_count}", style="dim")
             status.append("  │  ", style="dim")
@@ -355,8 +358,73 @@ class ResearchAgentTool(BaseTool):
         "required": ["topic"],
     }
 
+    def _generate_title(self, raw_topic: str) -> str:
+        """Extract a clean, professional title from a raw prompt."""
+        from vaf.cli.ui import UI
+        try:
+            from vaf.core.config import Config
+            import requests
+            import time
+            
+            UI.event("Research", "Generating clean title...", style="dim")
+            
+            prompt = (
+                f"Task: Extract a clean title from the request.\n"
+                f"Example Request: \"tell me about space x rocket launch\"\n"
+                f"Title: SpaceX Rocket Launch Overview\n\n"
+                f"Request: \"{raw_topic}\"\n"
+                f"Title:"
+            )
+            
+            # Retry loop for model loading
+            for attempt in range(5):
+                try:
+                    res = requests.post(
+                        "http://127.0.0.1:8080/v1/chat/completions",
+                        json={
+                            "model": Config.get("model", ""),
+                            "messages": [{"role": "user", "content": prompt}],
+                            "max_tokens": 550,
+                            "temperature": 0.7,
+                        },
+                        timeout=20
+                    )
+                    
+                    if res.status_code == 503:
+                        # UI.event("Debug", "Title gen: Model loading (503)...", style="dim")
+                        time.sleep(2)
+                        continue
+                        
+                    if res.status_code == 200:
+                        content = res.json()["choices"][0]["message"]["content"].strip()
+                        title = content.strip('"').strip("'").split("\n")[0] # Take first line only
+                        
+                        # Remove common prefixes if model is chatty
+                        for prefix in ["Title:", "Report Title:", "Here is a title:", "The title is:", "Answer:"]:
+                            if title.lower().startswith(prefix.lower()):
+                                title = title[len(prefix):].strip()
+                                
+                        if len(title) > 1: # Relaxed length check
+                            UI.event("Research", f"Title: {title}", style="dim")
+                            return title
+                        else:
+                            UI.event("Debug", f"Title gen: Result too short ('{title}')", style="warning")
+                    else:
+                        UI.event("Debug", f"Title gen: Server returned {res.status_code}", style="warning")
+                except Exception as e:
+                    UI.event("Debug", f"Title gen attempt {attempt} failed: {e}", style="dim")
+                    time.sleep(1)
+            
+            # If we fall through here, all attempts failed
+            UI.event("Debug", "Title generation gave up (all attempts failed).", style="warning")
+        except Exception as e:
+            UI.event("Debug", f"Title generation critical error: {e}", style="error")
+            pass
+            
+        return raw_topic
+
     def run(self, **kwargs) -> str:
-        topic = (kwargs.get("topic") or "").strip()
+        raw_topic = (kwargs.get("topic") or "").strip()
         out_format = (kwargs.get("format") or "html").strip().lower()
         max_results = int(kwargs.get("max_results", 5) or 5)
         deep = bool(kwargs.get("deep", False))
@@ -369,8 +437,21 @@ class ResearchAgentTool(BaseTool):
         section_titles: Optional[Sequence[str]] = kwargs.get("sections")
         existing_section_html = str(kwargs.get("existing_section_html") or "").strip()
 
-        if not topic:
+        if not raw_topic:
             return "Error: No topic provided."
+            
+        # Clean up topic title (remove "write a report about", "hello", etc.)
+        # Only do this if we are going to RUN the research locally (not dispatching)
+        in_subagent_terminal = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes")
+        from vaf.core.config import Config
+        will_dispatch = not in_subagent_terminal and Config.get("sub_agents_in_separate_terminals", False)
+        
+        # If running locally (or inside subagent), clean the topic for better planning/titles.
+        # If dispatching, keep raw topic to pass full context to the sub-agent.
+        topic = raw_topic
+        if not will_dispatch: 
+             topic = self._generate_title(raw_topic)
+        
         if out_format not in ("html", "markdown", "html_fragment"):
             return "Error: format must be 'html', 'markdown', or 'html_fragment'."
         
@@ -382,7 +463,7 @@ class ResearchAgentTool(BaseTool):
         from vaf.cli.ui import UI
         
         # If already in sub-agent terminal, run normally
-        if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes"):
+        if in_subagent_terminal:
             # Continue with normal execution below
             pass
         elif Config.get("sub_agents_in_separate_terminals", False):
@@ -392,14 +473,16 @@ class ResearchAgentTool(BaseTool):
             
             # Create task in IPC system
             ipc = get_ipc()
-            task_id = ipc.create_task("research_agent", task_description=topic)
+            # Use RAW topic for description so we see the full request
+            task_id = ipc.create_task("research_agent", task_description=raw_topic)
             
             # Pass session ID to sub-agent via environment variable
             session_id = get_current_session_id()
             if session_id:
                 os.environ["VAF_SESSION_ID"] = session_id
             
-            cmd_parts = ['vaf', 'subagent', 'run', 'research_agent', '--topic', topic, '--task-id', task_id]
+            # Pass RAW topic to sub-agent (it will clean it up)
+            cmd_parts = ['vaf', 'subagent', 'run', 'research_agent', '--topic', raw_topic, '--task-id', task_id]
             if out_format:
                 cmd_parts.extend(['--format', out_format])
             if max_results:

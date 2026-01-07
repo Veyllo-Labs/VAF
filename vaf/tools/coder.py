@@ -161,7 +161,7 @@ class CoderTUI:
     # Number of lines to show in live stream (scrolling view)
     STREAM_LINES = 10
     
-    def __init__(self, console: Console, task: str, task_mgr=None):
+    def __init__(self, console: Console, task: str, task_mgr=None, animate: bool = True):
         self.console = console
         self.task = task
         self.files: Dict[str, Dict] = {}  # filename -> {status, size, preview}
@@ -178,9 +178,13 @@ class CoderTUI:
         self.current_stream = ""
         self.current_line_buffer = ""  # Current incomplete line being built
         
-        # Create animated header once - it will be reused in render()
-        # Render fresh each time when Live is running to keep animation alive
-        self._header = AnimatedHeader("Collaboration Mode Active", "Main Agt", "Coder")
+        # Create header based on animation preference
+        if animate:
+            self._header = AnimatedHeader("Collaboration Mode Active", "Main Agt", "Coder")
+        else:
+            from vaf.cli.tui import _StaticHeader
+            self._header = _StaticHeader("Collaboration Mode Active", "Main Agt", "Coder")
+            
         self._live_started = False  # Track if Live has been started
         self._header_visible = False  # Track if header has been shown (sticky - once shown, stays visible)
         
@@ -192,6 +196,9 @@ class CoderTUI:
         self._update_throttle_ms = 50  # Minimum 50ms between updates (20 FPS max)
         self._needs_update = False  # Flag to signal that update is needed
         
+        # Last meaningful status update time (for static display)
+        self.last_status_update_time = time.time()
+        
         # Active Code Preview (for showing what's being written)
         self.active_code_preview = None  # {filename, content, language}
         
@@ -200,9 +207,14 @@ class CoderTUI:
         self._in_code_block = False
         self._code_lang = "text"
 
+    def _touch(self):
+        """Update last status change time."""
+        self.last_status_update_time = time.time()
+
     def set_code_preview(self, filename: str, content: str, language: str = "python"):
         """Set the code preview to show at the top."""
         with self._lock:
+            self._touch()
             # Auto-detect language from extension if generic
             if language == "code":
                 ext = os.path.splitext(filename)[1].lower()
@@ -224,11 +236,13 @@ class CoderTUI:
     def clear_code_preview(self):
         """Clear the code preview."""
         with self._lock:
+            self._touch()
             self.active_code_preview = None
     
     def add_file(self, filename: str, size: int = 0, status: str = "creating"):
         """Add a file to the display."""
         with self._lock:
+            self._touch()
             self.files[filename] = {
                 "status": status,
                 "size": size,
@@ -238,6 +252,7 @@ class CoderTUI:
     def update_file(self, filename: str, status: str = None, size: int = None, preview: str = None):
         """Update file info."""
         with self._lock:
+            self._touch()
             if filename not in self.files:
                 self.files[filename] = {"status": "unknown", "size": 0, "preview": ""}
             if status:
@@ -250,6 +265,7 @@ class CoderTUI:
     def set_action(self, action: str):
         """Set current action."""
         with self._lock:
+            self._touch()
             self.current_action = action
             self.actions_log.append(f"{time.strftime('%H:%M:%S')} {action}")
             if len(self.actions_log) > 10:
@@ -257,6 +273,7 @@ class CoderTUI:
     
     def increment_loop(self):
         """Increment loop counter."""
+        self._touch()
         self.loop_count += 1
     
     # ═══════════════════════════════════════════════════════════════════
@@ -266,12 +283,14 @@ class CoderTUI:
     def start_stream(self):
         """Start a new stream (agent is generating)."""
         with self._lock:
+            self._touch()
             self.stream_active = True
             self.current_stream = ""
     
     def append_stream(self, chunk: str):
         """Append text to the current stream (each chunk is a new line)."""
         with self._lock:
+            self._touch()
             # Filter out redacted reasoning tags
             chunk = re.sub(r'</?redacted_reasoning>', '', chunk, flags=re.IGNORECASE)
             chunk = re.sub(r'</?think>', '', chunk, flags=re.IGNORECASE)
@@ -313,11 +332,13 @@ class CoderTUI:
     def end_stream(self):
         """End the current stream."""
         with self._lock:
+            self._touch()
             self.stream_active = False
     
     def clear_stream(self):
         """Clear the stream buffer for fresh output."""
         with self._lock:
+            self._touch()
             self.stream_buffer = []
             self.current_stream = ""
             self.current_line_buffer = ""
@@ -373,8 +394,13 @@ class CoderTUI:
     def render(self) -> Group:
         """Render the TUI as a Rich Panel - ALL IN ONE WINDOW."""
         with self._lock:
-            elapsed = int(time.time() - self.start_time)
-            elapsed_str = f"{elapsed//60}:{elapsed%60:02d}"
+            # Determine time display based on header type
+            if hasattr(self._header, 'frame_idx'): # AnimatedHeader
+                elapsed = int(time.time() - self.start_time)
+                time_str = f"Time: {elapsed//60}:{elapsed%60:02d}"
+            else: # _StaticHeader
+                update_time_str = time.strftime("%H:%M:%S", time.localtime(self.last_status_update_time))
+                time_str = f"Last Update: {update_time_str}"
             
             # Get terminal width - platform-independent
             # Works on Windows, macOS, and Linux
@@ -418,6 +444,35 @@ class CoderTUI:
                         "content": code_content,
                         "language": language,
                         "timestamp": time.time()  # Always fresh
+                    }
+            elif self.stream_active and len(full_text) > 50:
+                # Heuristic fallback: Check for code patterns without markdown
+                lines = full_text.split('\n')
+                # Look at last few lines
+                recent_lines = lines[-10:]
+                code_score = 0
+                detected_lang = "text"
+                
+                for line in recent_lines:
+                    l = line.strip()
+                    if l.startswith(("import ", "def ", "class ", "from ", "return ", "print(", "async ")):
+                        code_score += 1
+                        detected_lang = "python"
+                    elif l.startswith(("<html", "<!DOCTYPE", "<body", "<div", "<script", "<head", "<style")):
+                        code_score += 1
+                        detected_lang = "html"
+                    elif "function" in l or "const " in l or "let " in l or "var " in l or "=>" in l:
+                        code_score += 1
+                        detected_lang = "javascript"
+                
+                if code_score >= 2:
+                    # Heuristic match! Show as code preview
+                    # Try to capture from start of potential code
+                    self.active_code_preview = {
+                        "filename": "Generating (detected)...",
+                        "content": full_text[-800:], # Show recent part
+                        "language": detected_lang,
+                        "timestamp": time.time()
                     }
             
             # ═══════════════════════════════════════════════════════════════
@@ -473,7 +528,7 @@ class CoderTUI:
             clean_action = clean_action.replace("[dim]", "").replace("[/dim]", "")
             
             status = Text()
-            status.append(f"Time: {elapsed_str}", style="dim")
+            status.append(time_str, style="dim")
             status.append("  │  ", style="dim")
             status.append(f"Loop: {self.loop_count}", style="dim")
             status.append("  │  ", style="dim")
@@ -624,9 +679,10 @@ class CoderTUI:
             # Filter out empty lines at the end
             filtered_lines = []
             for line in display_lines:
-                # Filter out redacted reasoning tags
-                if "</think>" in line or "<think>" in line:
-                    continue
+                # SKIP: Do not filter out reasoning tags - show them dimmed instead!
+                # if "</think>" in line or "<think>" in line:
+                #    continue
+                
                 # Skip empty lines at the end
                 if not line.strip() and not filtered_lines:
                     continue
@@ -638,7 +694,9 @@ class CoderTUI:
             
             for i, line in enumerate(filtered_lines):
                 # Determine style
-                if "[OK]" in line or "done" in line.lower() or "✅" in line:
+                if "<think>" in line or "</think>" in line:
+                    style = "dim"
+                elif "[OK]" in line or "done" in line.lower() or "✅" in line:
                     style = "green"
                 elif "[ERROR]" in line or "[X]" in line or "error" in line.lower() or "❌" in line:
                     style = "red"
@@ -1533,7 +1591,8 @@ Thumbs.db
         # Create a fresh console for the Coder to avoid conflicts
         local_console = Console(force_terminal=True)
         
-        tui = CoderTUI(local_console, task, task_mgr)
+        # Disable animation to prevent terminal spam/flicker
+        tui = CoderTUI(local_console, task, task_mgr, animate=False)
         
         # Mark this as the active instance
         with CodingAgentTool._instance_lock:
@@ -2172,37 +2231,10 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
         # DYNAMIC TOOLS SCHEMA - Based on context (MAIN vs TASK)
         # ═══════════════════════════════════════════════════════════════════
         def get_tools_schema_for_context(is_main_context: bool) -> List[Dict]:
-            """Get tools schema based on context type. Plug-and-Play-Tools are automatically included."""
-            base_tools = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "task_done",
-                        "description": "Mark the current task as complete and move to the next one. Call this after completing each task.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "summary": {"type": "string", "description": "Brief summary of what was done"}
-                            },
-                            "required": ["summary"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "write_file",
-                        "description": "Write content to a file.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "path": {"type": "string", "description": f"Absolute path (use {base_dir}/)"},
-                                "content": {"type": "string", "description": "File content"}
-                            },
-                            "required": ["path", "content"]
-                        }
-                    }
-                },
+            """Get tools schema based on context type. Enforces strict phase separation."""
+            
+            # Common tools (Research/Read-only) available in both phases
+            common_tools = [
                 {
                     "type": "function",
                     "function": {
@@ -2226,53 +2258,88 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             "required": ["path"]
                         }
                     }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "python_sandbox",
-                        "description": "Execute Python code safely in a sandboxed environment. Use for mathematical calculations, data processing, algorithms, and scientific computations.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "code": {
-                                    "type": "string",
-                                    "description": "Python code to execute (e.g., 'result = 2 + 2 * 3' or 'import math; print(math.sqrt(16))')"
-                                }
-                            },
-                            "required": ["code"]
-                        }
-                    }
                 }
             ]
             
-            # Only include set_todos in MAIN context (planning phase)
             if is_main_context:
-                base_tools.insert(0, {
-                    "type": "function",
-                    "function": {
-                        "name": "set_todos",
-                        "description": (
-                            "REQUIRED FIRST ACTION: Set your TODO list for this task. "
-                            "**ONLY available in planning phase.** "
-                            "Call this FIRST with a list of specific subtasks. "
-                            "Once TODOs are set, this tool is no longer available in task execution context."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "tasks": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                    "description": "List of specific tasks to complete, e.g. ['Create index.html', 'Add CSS styling', 'Test output']"
-                                }
-                            },
-                            "required": ["tasks"]
+                # PLANNING PHASE: ONLY set_todos + read tools
+                # write_file and task_done are HIDDEN to force planning
+                return [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "set_todos",
+                            "description": (
+                                "REQUIRED FIRST ACTION: Set your TODO list for this task. "
+                                "**ONLY available in planning phase.** "
+                                "Call this FIRST with a list of specific subtasks. "
+                                "Once TODOs are set, this tool is no longer available in task execution context."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "tasks": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "List of specific tasks to complete, e.g. ['Create index.html', 'Add CSS styling', 'Test output']"
+                                    }
+                                },
+                                "required": ["tasks"]
+                            }
                         }
                     }
-                })
-            
-            return base_tools
+                ] + common_tools
+            else:
+                # EXECUTION PHASE: write_file + task_done + sandbox + read tools
+                # set_todos is HIDDEN to prevent re-planning loops
+                return [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "task_done",
+                            "description": "Mark the current task as complete and move to the next one. Call this after completing each task.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "summary": {"type": "string", "description": "Brief summary of what was done"}
+                                },
+                                "required": ["summary"]
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "write_file",
+                            "description": "Write content to a file.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {"type": "string", "description": f"Absolute path (use {base_dir}/)"},
+                                    "content": {"type": "string", "description": "File content"}
+                                },
+                                "required": ["path", "content"]
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "python_sandbox",
+                            "description": "Execute Python code safely in a sandboxed environment. Use for mathematical calculations, data processing, algorithms, and scientific computations.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "code": {
+                                        "type": "string",
+                                        "description": "Python code to execute (e.g., 'result = 2 + 2 * 3' or 'import math; print(math.sqrt(16))')"
+                                    }
+                                },
+                                "required": ["code"]
+                            }
+                        }
+                    }
+                ] + common_tools
         
         # Initialize tools_schema (will be rebuilt dynamically in loop)
         tools_schema = []
@@ -2915,6 +2982,27 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                         live.update(tui.render())
                                     if 'arguments' in tc_delta['function']:
                                         tc['function']['arguments'] += tc_delta['function']['arguments']
+                                        # Update UI to show activity
+                                        tool_name = tc['function']['name']
+                                        tui.set_action(f"Building args for {tool_name}...")
+                                        tui._needs_update = True  # Force update
+                                        
+                                        # STREAMING CODE PREVIEW: If writing file, show content live!
+                                        if tool_name == 'write_file':
+                                            full_args = tc['function']['arguments']
+                                            # Try to find "content": "..."
+                                            # We use simple string search because JSON is incomplete
+                                            content_start = full_args.find('"content":')
+                                            if content_start != -1:
+                                                # Find start of string value
+                                                val_start = full_args.find('"', content_start + 10)
+                                                if val_start != -1:
+                                                    current_content = full_args[val_start+1:]
+                                                    # Unescape JSON string (basic) to make it readable
+                                                    current_content = current_content.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+                                                    
+                                                    # Show last 1000 chars to keep it responsive
+                                                    tui.set_code_preview("Streaming...", current_content[-1000:], "code")
                     
                     except json.JSONDecodeError:
                         continue
@@ -3657,8 +3745,23 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         "NO FILE PATHS" in task_upper
                     )
                     
-                    # Check for Script/Python task
-                    is_script_task = any(kw in task_lower for kw in ['script', 'python', 'calculate', 'generate', 'tool', 'cli'])
+                    # Check for Script/Python task (STRICTER - use Regex word boundaries)
+                    script_keywords = ['script', 'python', 'bash', 'shell', 'cli', 'automation']
+                    is_script_task = False
+                    trigger_kw = None
+                    
+                    for kw in script_keywords:
+                        if re.search(rf'\b{kw}\b', task_lower):
+                            is_script_task = True
+                            trigger_kw = kw
+                            break
+                    
+                    # If HTML/Web is mentioned, it is NOT a script task unless explicitly stated
+                    if "html" in task_lower or "web" in task_lower:
+                        is_script_task = False
+                    
+                    if is_script_task:
+                        tui.append_stream(f"[DEBUG] Detected script task (keyword: '{trigger_kw}')")
                     
                     if is_content_only:
                         # ... (existing content only logic)
@@ -3670,7 +3773,6 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             ]
                         else:
                             auto_todos = [
-                                "Analyze task requirements",
                                 "Generate requested content",
                                 "Verify content is complete"
                             ]
@@ -3692,20 +3794,28 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             "Test all pages and links"
                         ]
                     # Detect if it's a website project (but not CONTENT_ONLY)
-                    elif any(kw in task_lower for kw in ['website', 'webseite', 'homepage', 'landing page']) and not is_content_only:
-                        auto_todos = [
-                            "Read and analyze existing template files (if any)",
-                            "Create or customize index.html with task-specific content",
-                            "Update styles.css with appropriate styling",
-                            "Add JavaScript functionality if needed",
-                            "Verify all files are complete and working"
-                        ]
+                    # Added typos: 'webseit', 'websit'
+                    elif any(kw in task_lower for kw in ['website', 'webseite', 'webseit', 'websit', 'homepage', 'landing page']) and not is_content_only:
+                        if template_files:
+                            auto_todos = [
+                                "Read and analyze existing template files",
+                                "Customize index.html with task-specific content",
+                                "Update styles.css with appropriate styling",
+                                "Add JavaScript functionality if needed",
+                                "Verify all files are complete and working"
+                            ]
+                        else:
+                            auto_todos = [
+                                "Create index.html with task-specific content",
+                                "Create styles.css with appropriate styling",
+                                "Add JavaScript functionality if needed",
+                                "Verify all files are complete and working"
+                            ]
                     # Fallback for other tasks
                     else:
                         auto_todos = [
-                            "Analyze task requirements",
-                            "Create main files",
-                            "Add styling or logic",
+                            "Create project structure and main files",
+                            "Add logic and functionality",
                             "Test and verify output"
                         ]
                     
@@ -4085,7 +4195,8 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 
                 try:
                     fn_args = json.loads(fn_args_str)
-                except:
+                except Exception as e:
+                    tui.append_stream(f"[ERROR] JSON parse error for {fn_name}: {e}")
                     fn_args = {}
 
                 # Reset consecutive_task_done counter if a different tool is called
@@ -4784,11 +4895,16 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     tool = self.local_tools[fn_name]
                     
                     # Fix relative paths and show in stream
-                    if fn_name == "write_file" and "path" in fn_args:
-                        path = fn_args["path"]
-                        fname = os.path.basename(path)
-                        
-                        # CRITICAL: Add file to display IMMEDIATELY, before any validation or execution
+                    if fn_name == "write_file":
+                        if "path" not in fn_args:
+                            tui.append_stream(f"[ERROR] write_file called without 'path': {fn_args}")
+                            result = "Error: Missing 'path' argument"
+                            # Continue to let result be added to history
+                        else:
+                            path = fn_args["path"]
+                            fname = os.path.basename(path)
+                            
+                            # CRITICAL: Add file to display IMMEDIATELY, before any validation or execution
                         # This ensures it appears in "Waiting for files..." section right away
                         if fname not in tui.files:
                             tui.add_file(fname, 0, "writing")

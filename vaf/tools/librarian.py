@@ -166,12 +166,13 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
         # Try direct execution first (no animation needed for fast path)
         direct_result = self._try_direct_execution(task)
         if direct_result:
-            # Fast path succeeded - show brief animation
-            header = AnimatedHeader("Collaboration Mode Active", "Main Agt", "Librarian")
+            # Fast path succeeded - show brief static header
+            from vaf.cli.tui import _StaticHeader
+            header = _StaticHeader("Collaboration Mode Active", "Main Agt", "Librarian")
             live = Live(header, refresh_per_second=12, console=UI.console)
             live.start()
             try:
-                time.sleep(0.5)  # Brief animation
+                time.sleep(0.5)  # Brief display
                 UI.event("Sub-Agent", "Librarian activated...", style="bold cyan")
                 time.sleep(0.3)
             finally:
@@ -1199,8 +1200,12 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
     def _execute_with_llm(self, task: str) -> str:
         """Execute complex task using LLM reasoning."""
         
-        # Show animation
-        header = AnimatedHeader("Collaboration Mode Active", "Main Agt", "Librarian")
+        # Show animation (or static)
+        # Disable animation by default for stability (matches Coder/Research agent)
+        from vaf.cli.tui import _StaticHeader
+        header = _StaticHeader("Collaboration Mode Active", "Main Agt", "Librarian")
+        
+        # Use Live to show the header, but with minimal updates
         live = Live(header, refresh_per_second=12, console=UI.console)
         live.start()
         

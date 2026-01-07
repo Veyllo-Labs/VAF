@@ -785,24 +785,44 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                             break
                     
                     # Robust language instruction for the summary
-                    lang_upper = user_lang.upper()
-                    lang_instruction = f"RESPOND EXCLUSIVELY IN LANGUAGE: {lang_upper}."
+                    native_lang = agent.LANGUAGE_NAMES_NATIVE.get(user_lang, user_lang)
                     
                     # Combine all results into one text block (truncated to safe size)
                     combined_results = "\n\n---\n\n".join(r[:1000] for r in found_results)
                     
+                    # Define simple callback for live output
+                    def simple_stream_callback(text):
+                        tui.console.print(text, end="", markup=True, style=f"bold {tui.primary}")
+
+                    if user_lang == "de":
+                        instruction_prompt = (
+                            f"Hier sind die Ergebnisse der Sub-Agenten:\n\n"
+                            f"{combined_results}\n\n"
+                            f"Bitte erstelle eine KURZE ZUSAMMENFASSUNG dieser Ergebnisse für den Benutzer auf DEUTSCH.\n"
+                            f"Konzentriere dich auf den Inhalt (was wurde gefunden/getan).\n"
+                            f"Bleib prägnant aber informativ.\n"
+                            f"Du kannst `read_file` nutzen, wenn du den Inhalt sehen musst.\n"
+                            f"ANTWORTE AUSSCHLIESSLICH AUF DEUTSCH."
+                        )
+                    else:
+                        instruction_prompt = (
+                            f"The sub-agent(s) have completed their tasks.\n\n"
+                            f"**RESULTS:**\n{combined_results}\n\n"
+                            f"Please provide a BRIEF SUMMARY of these results for the user in {native_lang}.\n"
+                            f"Focus on the content (what was found/done).\n"
+                            f"Keep it concise but informative.\n"
+                            f"You may use `read_file` if you need to see the content before summarizing.\n"
+                            f"RESPOND EXCLUSIVELY IN {native_lang.upper()}."
+                        )
+
                     # Trigger agent to summarize/respond to the result DIRECTLY
                     # We inject the result into the prompt so the agent sees it immediately
                     response = agent.chat_step(
-                        f"Here are the results from the sub-agent:\n\n"
-                        f"{combined_results}\n\n"
-                        f"{lang_instruction}\n"
-                        "Using the information above, answer this question for the user:\n"
-                        "**What did you find out?**\n"
-                        "Summarize the key findings in 2-3 sentences.\n"
-                        "DO NOT use any tools.",
+                        instruction_prompt,
+                        stream_callback=simple_stream_callback,  # CRITICAL: Show output live!
                         skip_input=False,  # Show prompt in history to ensure model sees it
-                        disable_workflows=True  # Prevent recursive workflow triggering
+                        disable_workflows=True,  # Prevent recursive workflow triggering
+                        disable_tools=False  # Allow tools so agent can read the file if needed
                     )
                     if response:
                         tui.message_box(response, title="Answer", role="assistant")

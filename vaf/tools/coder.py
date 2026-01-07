@@ -286,6 +286,8 @@ class CoderTUI:
             self._touch()
             self.stream_active = True
             self.current_stream = ""
+            # Clear old preview to avoid confusion
+            self.active_code_preview = None
     
     def append_stream(self, chunk: str):
         """Append text to the current stream (each chunk is a new line)."""
@@ -486,16 +488,22 @@ class CoderTUI:
                     self.active_code_preview = None
                 else:
                     content = self.active_code_preview["content"]
-                    # Truncate content if too long (keep first 15 lines)
                     lines = content.split('\n')
-                    if len(lines) > 15:
-                        content = '\n'.join(lines[:15]) + f"\n... ({len(lines)-15} more lines)"
+                    
+                    if len(lines) > 100:
+                        # Show last 100 lines
+                        start_line = len(lines) - 100 + 1
+                        display_content = f"... ({start_line-1} lines above)\n" + '\n'.join(lines[-100:])
+                    else:
+                        start_line = 1
+                        display_content = content
                     
                     syntax = Syntax(
-                        content, 
+                        display_content, 
                         self.active_code_preview["language"], 
                         theme="monokai", 
                         line_numbers=True,
+                        start_line=start_line,
                         word_wrap=True
                     )
                     
@@ -2958,6 +2966,11 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 if 'id' in tc_delta:
                                     tc['id'] = tc_delta['id']
                                 if 'function' in tc_delta:
+                                    # DEBUG: Trace tool streaming
+                                    fn_name_chunk = tc_delta['function'].get('name', '')
+                                    if fn_name_chunk:
+                                        tui.append_stream(f"[DEBUG] Stream tool idx={idx} name+={fn_name_chunk}")
+                                    
                                     if 'name' in tc_delta['function']:
                                         tc['function']['name'] += tc_delta['function']['name']
                                         tui.set_action(f"Calling {tc['function']['name']}")
@@ -3001,8 +3014,8 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                                     # Unescape JSON string (basic) to make it readable
                                                     current_content = current_content.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
                                                     
-                                                    # Show last 1000 chars to keep it responsive
-                                                    tui.set_code_preview("Streaming...", current_content[-1000:], "code")
+                                                    # Pass FULL content to render so it can calculate line numbers correctly
+                                                    tui.set_code_preview("Streaming...", current_content, "code")
                     
                     except json.JSONDecodeError:
                         continue
@@ -3035,6 +3048,12 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 
                 content = collected_content
                 tool_calls = collected_tool_calls if collected_tool_calls else []
+                
+                # DEBUG: Log what we actually got from the stream
+                debug_msg = f"[DEBUG] Stream end. Content: {len(content or '')} chars. Tool calls: {len(tool_calls)}."
+                if tool_calls:
+                    debug_msg += f" Tools: {[tc['function']['name'] for tc in tool_calls]}"
+                tui.append_stream(debug_msg)
                 
                 # FALLBACK: Try to extract tool calls from text content
                 # Some models output JSON in text instead of using proper tool_calls
@@ -3764,7 +3783,6 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         tui.append_stream(f"[DEBUG] Detected script task (keyword: '{trigger_kw}')")
                     
                     if is_content_only:
-                        # ... (existing content only logic)
                         if "html" in task_lower or "webpage" in task_lower:
                             auto_todos = [
                                 "Generate complete HTML document with all required content",
@@ -3776,15 +3794,13 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 "Generate requested content",
                                 "Verify content is complete"
                             ]
-                    # Python Script Task (Specific logic for scripts)
                     elif is_script_task and not is_content_only:
-                         auto_todos = [
+                        auto_todos = [
                             "Create main Python script",
                             "Implement core logic and functions",
                             "Add error handling and comments",
                             "Test script execution"
                         ]
-                    # Detect if it's EXPLICITLY a multi-page website (not just "page" in text)
                     elif any(kw in task_lower for kw in ['multi-page', 'multiple pages', 'several pages', 'about page', 'contact page', 'services page', 'create pages']):
                         auto_todos = [
                             "Read and customize index.html (homepage)",
@@ -3793,8 +3809,6 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             "Add navigation between pages",
                             "Test all pages and links"
                         ]
-                    # Detect if it's a website project (but not CONTENT_ONLY)
-                    # Added typos: 'webseit', 'websit'
                     elif any(kw in task_lower for kw in ['website', 'webseite', 'webseit', 'websit', 'homepage', 'landing page']) and not is_content_only:
                         if template_files:
                             auto_todos = [
@@ -3811,7 +3825,6 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 "Add JavaScript functionality if needed",
                                 "Verify all files are complete and working"
                             ]
-                    # Fallback for other tasks
                     else:
                         auto_todos = [
                             "Create project structure and main files",
@@ -4000,7 +4013,9 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 # 2. Only reading files but not writing (not making progress)
                 # 3. No write_file calls in recent loops (stuck)
                 # 4. Loop count >= 1 (earlier nudge for faster response)
+                # CRITICAL FIX: Only nudge if we are NOT currently writing a file!
                 should_nudge = (
+                    not has_write_file and 
                     (not tool_calls or only_reading or not has_write_file_in_recent_loops) and 
                     loop.loop_count >= 1 and
                     current
@@ -4043,8 +4058,8 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     history.append({
                         "role": "system",
                         "content": nudge_content
-                })
-                continue
+                    })
+                    continue
             
             # Only accept completion if:
             # 1. TODO list is done AND at least 3 loops completed (minimum work done)
@@ -4189,9 +4204,20 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             if not hasattr(loop, 'error_history'):
                 loop.error_history = []
 
+            tui.append_stream(f"[DEBUG] START EXEC LOOP ({len(tool_calls)} tools)")
+
             for tc in tool_calls:
-                fn_name = tc['function']['name']
+                fn_name = tc['function']['name'].strip()
                 fn_args_str = tc['function']['arguments']
+                
+                # DEBUG: Trace execution flow
+                tui.append_stream(f"[DEBUG] EXEC: Processing '{fn_name}'")
+                
+                if fn_name in self.local_tools:
+                     # tui.append_stream(f"[DEBUG] Found in local_tools")
+                     pass
+                elif fn_name not in ["task_done", "set_todos", "web_fetch", "web_deep_search", "coding_agent", "git_init", "git_add_commit", "git_status", "git_log"]:
+                     tui.append_stream(f"[DEBUG] Tool '{fn_name}' NOT found in local_tools. Available: {list(self.local_tools.keys())}")
                 
                 try:
                     fn_args = json.loads(fn_args_str)
@@ -4905,85 +4931,85 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             fname = os.path.basename(path)
                             
                             # CRITICAL: Add file to display IMMEDIATELY, before any validation or execution
-                        # This ensures it appears in "Waiting for files..." section right away
-                        if fname not in tui.files:
-                            tui.add_file(fname, 0, "writing")
-                            tui._needs_update = True  # Force immediate update
-                            # Force immediate render to show file
-                            try:
+                            # This ensures it appears in "Waiting for files..." section right away
+                            if fname not in tui.files:
+                                tui.add_file(fname, 0, "writing")
+                                tui._needs_update = True  # Force immediate update
+                                # Force immediate render to show file
+                                try:
+                                    live.update(tui.render())
+                                except Exception:
+                                    pass  # Don't fail if render is blocked
+                            
+                            # CRITICAL: Must set TODOs before writing files!
+                            if not task_mgr.todos:
+                                result = (
+                                    "⚠️ ERROR: You must call `set_todos` FIRST before writing files!\n\n"
+                                    "REQUIRED WORKFLOW:\n"
+                                    "1. Call `set_todos` with your task breakdown\n"
+                                    "2. Call `read_file` to read template files\n"
+                                    "3. THEN call `write_file` to create/modify files\n\n"
+                                    "Call `set_todos` NOW with your task list."
+                                )
+                                tui.append_stream("write_file rejected - call set_todos FIRST!")
+                                history.append({
+                                    "role": "tool",
+                                    "tool_call_id": tc['id'],
+                                    "name": fn_name,
+                                    "content": result
+                                })
                                 live.update(tui.render())
-                            except Exception:
-                                pass  # Don't fail if render is blocked
-                        
-                        # CRITICAL: Must set TODOs before writing files!
-                        if not task_mgr.todos:
-                            result = (
-                                "⚠️ ERROR: You must call `set_todos` FIRST before writing files!\n\n"
-                                "REQUIRED WORKFLOW:\n"
-                                "1. Call `set_todos` with your task breakdown\n"
-                                "2. Call `read_file` to read template files\n"
-                                "3. THEN call `write_file` to create/modify files\n\n"
-                                "Call `set_todos` NOW with your task list."
-                            )
-                            tui.append_stream("write_file rejected - call set_todos FIRST!")
-                            history.append({
-                                "role": "tool",
-                                "tool_call_id": tc['id'],
-                                "name": fn_name,
-                                "content": result
-                            })
-                            live.update(tui.render())
-                            continue  # Skip this tool call
-                        
-                        # OS-independent path handling using Path
-                        from pathlib import Path as PathLib
-                        path_obj = PathLib(fn_args["path"])
-                        if not path_obj.is_absolute():
-                            # Use Path.joinpath for OS-independent path joining
-                            fn_args["path"] = str(PathLib(base_dir) / fn_args["path"])
-                        
-                        fname = os.path.basename(fn_args["path"])
-                        path = fn_args["path"]
-                        
-                        # Check if this is a template file being overwritten
-                        is_template_file = any(path == tf or os.path.basename(path) == os.path.basename(tf) for tf in template_files)
-                        
-                        # Generate Diff or Content Preview
-                        preview_content = ""
-                        preview_lang = "python" # Default
-                        
-                        if os.path.exists(path):
-                            try:
-                                with open(path, 'r', encoding='utf-8') as f:
-                                    old_content = f.readlines()
-                                new_lines = fn_args.get("content", "").splitlines(keepends=True)
-                                
-                                import difflib
-                                diff = list(difflib.unified_diff(
-                                    old_content, 
-                                    new_lines, 
-                                    fromfile=f"a/{fname}", 
-                                    tofile=f"b/{fname}",
-                                    n=3 # Context lines
-                                ))
-                                
-                                if diff:
-                                    preview_content = "".join(diff)
-                                    preview_lang = "diff"
-                                else:
-                                    preview_content = fn_args.get("content", "") # No changes
-                            except:
+                                continue  # Skip this tool call
+                            
+                            # OS-independent path handling using Path
+                            from pathlib import Path as PathLib
+                            path_obj = PathLib(fn_args["path"])
+                            if not path_obj.is_absolute():
+                                # Use Path.joinpath for OS-independent path joining
+                                fn_args["path"] = str(PathLib(base_dir) / fn_args["path"])
+                            
+                            fname = os.path.basename(fn_args["path"])
+                            path = fn_args["path"]
+                            
+                            # Check if this is a template file being overwritten
+                            is_template_file = any(path == tf or os.path.basename(path) == os.path.basename(tf) for tf in template_files)
+                            
+                            # Generate Diff or Content Preview
+                            preview_content = ""
+                            preview_lang = "python" # Default
+                            
+                            if os.path.exists(path):
+                                try:
+                                    with open(path, 'r', encoding='utf-8') as f:
+                                        old_content = f.readlines()
+                                    new_lines = fn_args.get("content", "").splitlines(keepends=True)
+                                    
+                                    import difflib
+                                    diff = list(difflib.unified_diff(
+                                        old_content, 
+                                        new_lines, 
+                                        fromfile=f"a/{fname}", 
+                                        tofile=f"b/{fname}",
+                                        n=3 # Context lines
+                                    ))
+                                    
+                                    if diff:
+                                        preview_content = "".join(diff)
+                                        preview_lang = "diff"
+                                    else:
+                                        preview_content = fn_args.get("content", "") # No changes
+                                except:
+                                    preview_content = fn_args.get("content", "")
+                            else:
+                                # New file
                                 preview_content = fn_args.get("content", "")
-                        else:
-                            # New file
-                            preview_content = fn_args.get("content", "")
-                            ext = os.path.splitext(fname)[1].lower()
-                            if ext in ['.js', '.ts']: preview_lang = "javascript"
-                            elif ext == '.html': preview_lang = "html"
-                            elif ext == '.css': preview_lang = "css"
-                        
-                        # Update Code Preview Panel with Diff or Content
-                        tui.set_code_preview(fname, preview_content, preview_lang)
+                                ext = os.path.splitext(fname)[1].lower()
+                                if ext in ['.js', '.ts']: preview_lang = "javascript"
+                                elif ext == '.html': preview_lang = "html"
+                                elif ext == '.css': preview_lang = "css"
+                            
+                            # Update Code Preview Panel with Diff or Content
+                            tui.set_code_preview(fname, preview_content, preview_lang)
 
                         if is_template_file:
                             # CRITICAL: Validate that template structure is preserved
@@ -5112,6 +5138,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     
                     try:
                         result = tool.run(**fn_args)
+                        tui.append_stream(f"[DEBUG] Tool {fn_name} result: {str(result)[:100]}...")
                         result_str = str(result)
                         
                         # Check if result indicates an error (even if no exception was raised)
@@ -5180,6 +5207,9 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 else:
                                     tui.append_stream(file_msg)
                                 result = f"✓ Created {path} ({size} bytes)"
+                                
+                                # Nudge to finish if this was the main action
+                                result += "\n\n(If this completes the current task, call `task_done` now.)"
                                 
                                 # Automatically run linter after successful write_file
                                 try:

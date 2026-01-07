@@ -25,7 +25,7 @@ def _check_subagent_results(tui, agent):
     Called at the beginning of each chat interaction.
     
     Returns:
-        bool: True if results were found and processed
+        list: List of result texts (strings) found and processed
     """
     try:
         from vaf.core.subagent_ipc import get_ipc, get_current_session_id
@@ -35,9 +35,9 @@ def _check_subagent_results(tui, agent):
         current_session = get_current_session_id()
         results = ipc.get_pending_results(session_id=current_session)
         if not results:
-            return False
+            return []
         
-        workflow_resumed = False
+        found_results_text = []
         
         for task in results:
             # Check if a paused workflow is waiting for this result
@@ -61,7 +61,6 @@ def _check_subagent_results(tui, agent):
                     
                     # Resume the workflow
                     _resume_paused_workflow(tui, agent, paused_wf, task.result)
-                    workflow_resumed = True
                 elif is_workflow:
                     # Workflow completed in separate terminal
                     workflow_name = task.agent_type.split(":", 1)[1] if ":" in task.agent_type else task.agent_type
@@ -84,6 +83,9 @@ def _check_subagent_results(tui, agent):
                         "role": "system",
                         "content": f"**Workflow Result [{workflow_name}]** (Task: {task.task_id}):\n\n{task.result}"
                     })
+                    
+                    # Add to return list for main agent processing
+                    found_results_text.append(f"Workflow '{workflow_name}' completed:\n{task.result}")
                 else:
                     # Regular sub-agent result (not part of workflow)
                     result_preview = task.result[:500] if task.result else ""
@@ -116,6 +118,9 @@ def _check_subagent_results(tui, agent):
                             "role": "system",
                             "content": f"**Sub-Agent Result [{task.task_id}]** ({task.agent_type}):\n\n{task.result}"
                         })
+                    
+                    # Add to return list for main agent processing
+                    found_results_text.append(f"Sub-Agent '{task.agent_type}' completed:\n{task.result}")
                 
             elif task.status == "failed":
                 tui.console.print()
@@ -137,6 +142,9 @@ def _check_subagent_results(tui, agent):
                     "content": f"**Sub-Agent Error [{task.task_id}]** ({task.agent_type}):\n{task.error}"
                 })
                 
+                # Add to return list so main agent can comment on failure
+                found_results_text.append(f"Sub-Agent '{task.agent_type}' FAILED:\n{task.error}")
+                
             elif task.status == "timeout":
                 tui.console.print()
                 tui.console.print(Panel(
@@ -150,13 +158,13 @@ def _check_subagent_results(tui, agent):
             # Consume the result
             ipc.consume_result(task.task_id)
         
-        return len(results) > 0
+        return found_results_text
         
     except Exception as e:
         # Log error but don't crash
         import traceback
         traceback.print_exc()
-        return False
+        return []
 
 
 def _resume_paused_workflow(tui, agent, paused_wf, subagent_result: str):
@@ -761,11 +769,11 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
     # Interactive loop
     while True:
         try:
-            # ═══════════════════════════════════════════════════════════════
+            # ═══════════════════════════════════════════════════════════════════
             # CHECK FOR SUB-AGENT RESULTS (Non-blocking)
-            # ═══════════════════════════════════════════════════════════════
-            results_found = _check_subagent_results(tui, agent)
-            if results_found:
+            # ═══════════════════════════════════════════════════════════════════
+            found_results = _check_subagent_results(tui, agent)
+            if found_results:
                 # Auto-respond to sub-agent results - don't wait for user input!
                 tui.info("[i] Processing sub-agent results...")
                 try:
@@ -776,23 +784,28 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                             user_lang = agent._detect_user_language(msg.get("content", ""))
                             break
                     
-                    lang_instruction = ""
-                    if user_lang == "de":
-                        lang_instruction = "ANTWORTE AUF DEUTSCH."
-                    elif user_lang == "en":
-                        lang_instruction = "RESPOND IN ENGLISH."
+                    # Robust language instruction for the summary
+                    lang_upper = user_lang.upper()
+                    lang_instruction = f"RESPOND EXCLUSIVELY IN LANGUAGE: {lang_upper}."
                     
-                    # Trigger agent to summarize/respond to the result
+                    # Combine all results into one text block (truncated to safe size)
+                    combined_results = "\n\n---\n\n".join(r[:1000] for r in found_results)
+                    
+                    # Trigger agent to summarize/respond to the result DIRECTLY
+                    # We inject the result into the prompt so the agent sees it immediately
                     response = agent.chat_step(
-                        f"The sub-agent has completed its task. {lang_instruction}\n"
-                        "Please provide a BRIEF SUMMARY of the sub-agent's findings/results for the user.\n"
-                        "Focus on the content of the result (what was found/done).\n"
-                        "Keep it concise but informative.\n"
-                        "DO NOT offer new options or ask 'What else?'.",
-                        skip_input=True  # Don't add this prompt to visible history
+                        f"Here are the results from the sub-agent:\n\n"
+                        f"{combined_results}\n\n"
+                        f"{lang_instruction}\n"
+                        "Using the information above, answer this question for the user:\n"
+                        "**What did you find out?**\n"
+                        "Summarize the key findings in 2-3 sentences.\n"
+                        "DO NOT use any tools.",
+                        skip_input=False,  # Show prompt in history to ensure model sees it
+                        disable_workflows=True  # Prevent recursive workflow triggering
                     )
                     if response:
-                        tui.message_box(response, title="Answer", style="assistant")
+                        tui.message_box(response, title="Answer", role="assistant")
                 except Exception as e:
                     tui.error(f"Error processing result: {e}")
         

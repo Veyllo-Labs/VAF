@@ -18,22 +18,32 @@ class SystemPromptManager:
     Dynamically adjusts active modules based on conversation context.
     """
     
-    def __init__(self, tools: List[Any] = None):
+    def __init__(self, tools: List[Any] = None, model_name: str = "VQ-1"):
         """
-        Initialize the prompt manager with available tools.
+        Initialize the prompt manager with available tools and model name.
         
         Args:
             tools: List of tool instances available to the agent
+            model_name: The name of the underlying AI model
         """
         self.tools = tools or []
         self.active_modules: Dict[str, bool] = {}
         self.user_language: str = "auto"
+        self.model_name = model_name
         
         # ═══════════════════════════════════════════════════════════════════════
         # CORE IDENTITY PROMPTS
         # ═══════════════════════════════════════════════════════════════════════
         
-        self.vq1_identity = """You are **VQ-1** (Virtual Query One), a highly capable AI assistant built on VAF (Virtual Agent Framework).
+        # Determine base identity based on model name
+        is_vq1 = "vq-1" in model_name.lower() or "vq1" in model_name.lower()
+        
+        if is_vq1:
+            self.identity = "Du bist VQ-1, ein hilfreicher Assistent von Veyllo Labs."
+        else:
+            self.identity = f"You are **{model_name}**, an AI model running within the **VAF** (Veyllo Agentic Framework)."
+
+        self.vq1_identity = f"""{self.identity}
 
 ## Core Principles
 - Be helpful, accurate, and concise
@@ -49,7 +59,7 @@ class SystemPromptManager:
 - Code blocks with syntax highlighting
 - Structured responses for complex topics"""
 
-        self.generic_identity = """You are a helpful AI assistant powered by VAF (Virtual Agent Framework).
+        self.generic_identity = """You are a helpful AI assistant powered by VAF (Veyllo Agentic Framework).
 
 ## Core Principles
 - Be helpful, accurate, and concise

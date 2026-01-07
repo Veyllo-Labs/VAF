@@ -133,14 +133,35 @@ class Platform:
             browsers = []
             
             if Platform.is_windows():
+                # Common Windows browser paths to check if not in PATH
+                common_paths = [
+                    os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+                    os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+                    os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+                    os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+                    os.path.expandvars(r"%ProgramFiles%\Mozilla Firefox\firefox.exe"),
+                    os.path.expandvars(r"%ProgramFiles%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+                ]
+                
+                # Check PATH first, then common locations
                 browsers = [
-                    # Chrome/Chromium
                     ("chrome.exe", ["--incognito", url]),
                     ("msedge.exe", ["--inprivate", url]),
                     ("brave.exe", ["--incognito", url]),
-                    # Firefox
                     ("firefox.exe", ["-private-window", url]),
                 ]
+                
+                # Add found absolute paths to the list
+                for path in common_paths:
+                    if os.path.exists(path):
+                        # Determine flag based on browser name
+                        lower_path = path.lower()
+                        flag = "--incognito"
+                        if "firefox" in lower_path: flag = "-private-window"
+                        elif "edge" in lower_path: flag = "--inprivate"
+                        
+                        browsers.insert(0, (path, [flag, url])) # Prioritize found paths
+
             elif Platform.is_macos():
                 browsers = [
                     # Chrome/Chromium

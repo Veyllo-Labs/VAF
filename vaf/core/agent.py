@@ -10,6 +10,7 @@ import warnings
 import atexit
 from datetime import datetime
 import re
+from typing import List, Dict, Any
 from rich import print
 from rich.markup import escape
 
@@ -117,9 +118,21 @@ class Agent:
         
         # Initialize Prompt Manager
         from vaf.core.system_prompt import SystemPromptManager
+        
+        # Extract model name for identity
+        model_display_name = "VQ-1"
+        if hasattr(self, 'filename'):
+            fname = self.filename.lower()
+            if "gemma" in fname: model_display_name = "Gemma"
+            elif "llama" in fname: model_display_name = "Llama"
+            elif "mistral" in fname: model_display_name = "Mistral"
+            elif "phi" in fname: model_display_name = "Phi"
+            elif "qwen" in fname: model_display_name = "Qwen"
+            elif "deepseek" in fname: model_display_name = "DeepSeek"
+        
         # We need tools to init prompt manager, but tools are loaded later.
         # So we init it here with empty dict and update it after tools load.
-        self.prompt_manager = SystemPromptManager({}) 
+        self.prompt_manager = SystemPromptManager({}, model_name=model_display_name) 
 
         # Session tracking for server shutdown management
         self._session_id = None
@@ -2127,7 +2140,7 @@ class Agent:
             UI.event("Debug", f"Workflow error: {e}", style="dim")
             return None
 
-    def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False):
+    def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False, disable_workflows=False):
         from vaf.cli.ui import UI
         
         if not self.llm and not self.use_server:
@@ -2203,7 +2216,7 @@ class Agent:
         # Otherwise, fall back to LLM agent for flexible handling
         # Workflows provide structured, multi-step pipelines for common tasks
         
-        if not skip_input:
+        if not skip_input and not disable_workflows:
             # Try workflow matching BEFORE adding to history
             workflow_result = self._try_workflow(user_input, stream_callback)
             if workflow_result:
@@ -2280,8 +2293,11 @@ class Agent:
                 for _ in range(15): # Try for ~30 seconds
                     try:
                         # CRITICAL: Rebuild payload with current history (may have been compressed)
+                        # Prepare messages for specific model quirks (e.g. Gemma)
+                        prepared_messages = self._prepare_messages(self.history)
+                        
                         payload = {
-                             "messages": self.history,
+                             "messages": prepared_messages,
                              "tools": self.TOOLS, 
                              "tool_choice": "auto",
                              "stream": True,
@@ -3221,10 +3237,11 @@ class Agent:
                  # 3. Recursively call with auto_retry=True.
                  
                  # The user prompt is at index `start_len` (if not skipped).
-                 target_len = history_snapshot_len + 1 if not skip_input else history_snapshot_len
+                 target_len = history_snapshot_len 
                  self.history = self.history[:target_len]
                  
-                 return self.chat_step(user_input="", stream_callback=stream_callback, auto_retry=True, skip_input=True)
+                 # Retry with the ORIGINAL user input to regenerate the response
+                 return self.chat_step(user_input=user_input, stream_callback=stream_callback, auto_retry=True, skip_input=skip_input)
                  
              fallback_msg = "\n\n*(System: The agent processed the request but failed to generate a final answer. Please see the thought trace above.)*"
              if stream_callback: stream_callback(f"[gold]{fallback_msg}[/gold]")
@@ -3452,6 +3469,63 @@ class Agent:
             shutil.move(res_src, res_dst)
             return f"Moved {src} to {dst}"
         except Exception as e: return str(e)
+
+    def _prepare_messages(self, messages: List[Dict]) -> List[Dict]:
+        """Prepare messages for specific model quirks (e.g. Gemma)."""
+        is_gemma = "gemma" in self.filename.lower()
+        if not is_gemma:
+            return messages
+        
+        # Gemma Logic: Merge System into first User, Ensure Alternation
+        new_messages = []
+        pending_system = ""
+        
+        for msg in messages:
+            role = msg.get("role")
+            content = str(msg.get("content", ""))
+            
+            if role == "system":
+                pending_system += f"{content}\n\n"
+            elif role == "user":
+                if pending_system:
+                    content = f"{pending_system}{content}"
+                    pending_system = ""
+                
+                # Check alternation: If last was user, merge this one
+                if new_messages and new_messages[-1]["role"] == "user":
+                    new_messages[-1]["content"] += f"\n\n{content}"
+                else:
+                    new_messages.append({"role": "user", "content": content})
+            
+            elif role == "assistant":
+                # Check alternation: If last was assistant, merge this one
+                if new_messages and new_messages[-1]["role"] == "assistant":
+                    if content: # Only merge if content exists
+                        prev_content = new_messages[-1].get("content", "") or ""
+                        new_messages[-1]["content"] = f"{prev_content}\n\n{content}"
+                    # If tool calls are present, we might need to handle differently, but merging content is safe
+                    if "tool_calls" in msg:
+                        # Append tool calls to the previous message if it doesn't have them
+                        if "tool_calls" not in new_messages[-1]:
+                            new_messages[-1]["tool_calls"] = msg["tool_calls"]
+                        else:
+                            new_messages[-1]["tool_calls"].extend(msg["tool_calls"])
+                else:
+                    new_messages.append(msg)
+            
+            elif role == "tool":
+                # Gemma requires User -> Assistant -> User -> ...
+                # Tool responses usually follow Assistant (tool calls).
+                # But sometimes we have multiple Tool responses.
+                # If we send Tool, llama.cpp handles it, but we must ensure it follows Assistant.
+                # And after Tool, we need Assistant (or User? No, model replies).
+                new_messages.append(msg)
+
+        # If system prompt is left over (no user message yet), add as user
+        if pending_system:
+             new_messages.append({"role": "user", "content": pending_system.strip()})
+             
+        return new_messages
 
     @property
     def TOOLS(self):

@@ -188,6 +188,11 @@ class ResearchTUI:
         )
         self._logs: List[str] = []
         self._on_change = None  # Live updater callback (optional)
+        self.last_update_time = time.time()  # Track last actual update
+
+    def _touch(self):
+        """Update the last modified timestamp."""
+        self.last_update_time = time.time()
 
     def set_on_change(self, cb):
         """Register a callback invoked after state changes (used for event-driven Live refresh)."""
@@ -196,6 +201,7 @@ class ResearchTUI:
     def log(self, msg: str):
         cb = None
         with self._lock:
+            self._touch()
             ts = time.strftime("%H:%M:%S")
             self._logs.append(f"{ts} {msg}")
             if len(self._logs) > self.LOG_LINES:
@@ -207,6 +213,7 @@ class ResearchTUI:
     def set_stage(self, stage: str):
         cb = None
         with self._lock:
+            self._touch()
             self.stage = stage or ""
             cb = self._on_change
         if cb:
@@ -215,6 +222,7 @@ class ResearchTUI:
     def increment_loop(self):
         cb = None
         with self._lock:
+            self._touch()
             self.loop_count += 1
             cb = self._on_change
         if cb:
@@ -223,6 +231,7 @@ class ResearchTUI:
     def set_section(self, idx: int, total: int, title: str):
         cb = None
         with self._lock:
+            self._touch()
             self.section_idx = int(idx)
             self.section_total = int(total)
             self.section_title = title or ""
@@ -233,6 +242,7 @@ class ResearchTUI:
     def set_word_progress(self, current_words: int, target_words: int, ok_words: int):
         cb = None
         with self._lock:
+            self._touch()
             self.word_count = max(0, int(current_words))
             self.word_target = max(0, int(target_words))
             self.word_ok = max(0, int(ok_words))
@@ -249,12 +259,12 @@ class ResearchTUI:
 
     def render(self) -> Group:
         with self._lock:
-            # Show current time instead of elapsed duration
-            current_time_str = time.strftime("%H:%M:%S")
+            elapsed = int(time.time() - self.start_time)
+            elapsed_str = f"{elapsed//60}:{elapsed%60:02d}"
 
             # Status line
             status = Text()
-            status.append(f"Last Update: {current_time_str}", style="dim")
+            status.append(f"Time: {elapsed_str}", style="dim")
             status.append("  │  ", style="dim")
             status.append(f"Loop: {self.loop_count}", style="dim")
             status.append("  │  ", style="dim")
@@ -433,27 +443,13 @@ class ResearchAgentTool(BaseTool):
         min_chars_empty = max(50, min(min_chars_empty, 2000))
         min_chars_ok = max(min_chars_empty + 1, min(min_chars_ok, 5000))
 
-        # Default 10-section plan
-        defaults: List[SectionSpec] = [
-            SectionSpec("Overview", ""),
-            SectionSpec("Definition & Core Concepts", "definition core concepts"),
-            SectionSpec("History & Milestones", "history milestones timeline"),
-            SectionSpec("Methods & Techniques", "methods techniques approaches"),
-            SectionSpec("Tools & Ecosystem", "tools frameworks libraries"),
-            SectionSpec("Real-World Use Cases", "use cases examples applications"),
-            SectionSpec("Pros & Cons", "advantages disadvantages pros cons"),
-            SectionSpec("Risks, Pitfalls & Limitations", "risks limitations pitfalls common mistakes"),
-            SectionSpec("Ethics, Safety & Governance", "ethics safety regulation governance"),
-            SectionSpec("Latest Developments (2024/2025)", "2024 2025 latest updates news research"),
-        ]
-
+        # Dynamic Planning: Generate sections based on topic analysis
         if section_titles:
             # Build a user-defined section list (query suffix = title)
             specs = [SectionSpec(str(t).strip(), str(t).strip()) for t in section_titles if str(t).strip()]
-            if not specs:
-                specs = defaults
         else:
-            specs = defaults
+            # Generate a custom plan via LLM
+            specs = self._generate_plan(topic, lang)
 
         # Research TUI (Coder-like): shows loop, section progress, word progress, and logs.
         try:
@@ -776,6 +772,64 @@ class ResearchAgentTool(BaseTool):
             UI.event("Research Agent", f"Error: {str(e)[:100]}", style="error")
             raise
 
+    def _generate_plan(self, topic: str, lang: str) -> List[SectionSpec]:
+        """Dynamically generate section titles based on topic analysis via LLM."""
+        try:
+            # 1. Analyze topic and generate plan
+            prompt = (
+                f"Create a research plan for the topic: '{topic}'.\n"
+                f"Language: {lang}\n"
+                "Return a JSON list of 6-8 section titles that cover this topic comprehensively.\n"
+                "Examples:\n"
+                "- Person: Biography, Career, Impact, Controversies\n"
+                "- Tech: Features, Architecture, Use Cases, Pros/Cons\n"
+                "- Event: Background, Timeline, Key Figures, Aftermath\n\n"
+                "Return ONLY the JSON list of strings, e.g. [\"Section 1\", \"Section 2\"]."
+            )
+            
+            import requests
+            from vaf.core.config import Config
+            res = requests.post(
+                "http://127.0.0.1:8080/v1/chat/completions",
+                json={
+                    "model": Config.get("model", ""),
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 500,
+                    "temperature": 0.3,
+                },
+                timeout=30
+            )
+            
+            if res.status_code == 200:
+                content = res.json()["choices"][0]["message"]["content"]
+                # Extract JSON list
+                import json
+                try:
+                    # Find list brackets
+                    start = content.find('[')
+                    end = content.rfind(']') + 1
+                    if start >= 0 and end > start:
+                        json_str = content[start:end]
+                        titles = json.loads(json_str)
+                        if isinstance(titles, list) and all(isinstance(t, str) for t in titles):
+                            # Convert to specs
+                            return [SectionSpec(t, t.lower()) for t in titles]
+                except:
+                    pass
+        except Exception:
+            pass
+        
+        # Fallback to defaults if generation fails
+        return [
+            SectionSpec("Overview", ""),
+            SectionSpec("Background & History", "history background"),
+            SectionSpec("Key Concepts / Features", "concepts features"),
+            SectionSpec("Impact & Significance", "impact importance"),
+            SectionSpec("Current Status / Latest News", "current status news"),
+            SectionSpec("Pros & Cons / Criticism", "pros cons criticism"),
+            SectionSpec("Conclusion", "conclusion summary")
+        ]
+
     def _summarize_section_html(
         self,
         topic: str,
@@ -790,8 +844,22 @@ class ResearchAgentTool(BaseTool):
         """
         Call the model for ONE section only (bounded input), return an HTML fragment.
         """
+        # Data sanity check
+        if not web_results or len(str(web_results).strip()) < 50:
+            if lang == "de":
+                return f"<h2>{title}</h2><p><em>Keine ausreichenden Suchergebnisse für diesen Abschnitt gefunden.</em></p>"
+            return f"<h2>{title}</h2><p><em>Insufficient search results found for this section.</em></p>"
+
         model_name = Config.get("model", "") or ""
-        lang_instruction = "Write in German." if lang == "de" else "Write in English."
+        
+        # Robust language instruction supporting all detected languages (ISO codes like DE, FR, ES, etc.)
+        lang_upper = lang.upper()
+        lang_instruction = (
+            f"WRITE EXCLUSIVELY IN LANGUAGE: {lang_upper}.\n"
+            f"Translate all information from sources into {lang_upper}.\n"
+            f"Maintain a professional and consistent style in {lang_upper}."
+        )
+            
         attempt = (attempt or "initial").strip().lower()
 
         extra = ""
@@ -811,10 +879,12 @@ class ResearchAgentTool(BaseTool):
             f"Main topic: {topic}\n"
             f"Section title: {title}\n\n"
             f"{lang_instruction}\n"
-            f"Length requirement: at least {min_words_target} words (do not mention word counts).\n"
+            f"Length requirement: at least {min_words_target} words.\n"
             f"{extra}\n"
-            "Use ONLY the provided web search results as evidence.\n"
-            "Do NOT invent sources. Do NOT use example.com or placeholder links.\n"
+            "CITATION GUIDELINES:\n"
+            "1. Support claims with provided search results where possible.\n"
+            "2. If a claim is important but not directly supported by sources, mark it with '[Unverified]'.\n"
+            "3. At the end of the section, add a small 'Sources' paragraph listing domain names of used sources.\n"
             "Return ONLY an HTML fragment (no <html>, no <head>, no <body>).\n"
         )
 

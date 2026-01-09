@@ -3344,7 +3344,10 @@ class Agent:
                 allowed_once = "python_exec" in self._allow_once_tools
                 
                 if policy != "allow" and not trusted and not allowed_once:
-                    if not self._noninteractive:
+                    # Check if running as sub-agent (cannot handle interactive prompts reliably for security)
+                    is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "") == "1"
+                    
+                    if not self._noninteractive and not is_subagent:
                         UI.event("Security", "python_sandbox blocked this code. You can run it UNSANDBOXED via python_exec.", style="warning")
                         choice = UI.prompt("Run via python_exec? [o]nce / [a]lways / [c]ancel: ").strip().lower()
                         if choice in ("o", "once"):
@@ -3355,7 +3358,7 @@ class Agent:
                         else:
                             return result + "\n\n[CANCELLED] Not running unsandboxed."
                     else:
-                        return result + "\n\n[INFO] python_exec is available but requires interactive confirmation."
+                        return result + "\n\n[INFO] python_exec is available but requires interactive confirmation (not available in sub-agent mode)."
                 
                 # Execute unsandboxed python if allowed
                 if get_tool_policy("python_exec") == "allow" or is_trusted_dir(cwd) or ("python_exec" in self._allow_once_tools):

@@ -3646,7 +3646,35 @@ All files must be saved inside this directory.
                     idle_loop_count += 1
                     
                     # If we are stuck in empty loops for too long, FORCE a nudge instead of just temp sweep
-                    if idle_loop_count >= 5:
+                    if idle_loop_count >= 10:
+                         _trace("Idle/Empty limit reached (10). Forcing context reset.")
+                         
+                         # Get rich context for recovery
+                         todo_status = task_mgr.get_todos_for_prompt() if task_mgr.todos else "Resume current task."
+                         
+                         # NUCLEAR OPTION: Clear history
+                         # Keep system prompt (index 0)
+                         if history:
+                             history = [history[0]]
+                         
+                         # Add strict instruction with FULL CONTEXT
+                         history.append({
+                            "role": "user", 
+                            "content": (
+                                f"🛑 SYSTEM ALERT: You were stuck in an infinite loop sending empty responses.\n"
+                                f"I have cleared your history to fix this.\n\n"
+                                f"**YOUR CURRENT STATUS:**\n{todo_status}\n\n"
+                                f"**INSTRUCTION:**\n"
+                                f"Resume the active task immediately. Check existing files if needed.\n"
+                                f"Call a tool (e.g. `write_file`, `read_file`) NOW."
+                            )
+                         })
+                         
+                         tui.set_action(f"☢️ CONTEXT RESET (Stuck Loop)")
+                         idle_loop_count = 0
+                         consecutive_empty = 0
+                         
+                    elif idle_loop_count >= 5:
                          nudge_msg = f"🛑 SYSTEM ALERT: You are sending empty responses for {idle_loop_count} loops. STOP. Call `task_done` or `write_file` NOW."
                          history.append({
                             "role": "user",

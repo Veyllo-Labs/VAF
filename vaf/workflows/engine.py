@@ -230,6 +230,34 @@ class WorkflowEngine:
                 import os
                 prev_in_workflow = os.environ.get("VAF_IN_WORKFLOW")
                 os.environ["VAF_IN_WORKFLOW"] = "1"
+
+                # Sub-agent debug logging context for in-workflow sub-agent tools.
+                # These tools may run in-process (not via `subagent run`), so we set
+                # VAF_AGENT_TYPE/VAF_TASK_ID here to enable per-run logs.
+                prev_agent_type = os.environ.get("VAF_AGENT_TYPE")
+                prev_task_id = os.environ.get("VAF_TASK_ID")
+                prev_in_subagent_term = os.environ.get("VAF_IN_SUBAGENT_TERMINAL")
+                subagent_step_task_id = None
+                is_subagent_tool = step.tool in ("coding_agent", "librarian_agent", "research_agent")
+                if is_subagent_tool:
+                    subagent_step_task_id = f"{step.tool}-{i}-{str(uuid.uuid4())[:6]}"
+                    os.environ["VAF_AGENT_TYPE"] = step.tool
+                    os.environ["VAF_TASK_ID"] = subagent_step_task_id
+                    # Prevent nested terminal spawning during workflows.
+                    if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() not in ("1", "true", "yes"):
+                        os.environ["VAF_IN_SUBAGENT_TERMINAL"] = "1"
+                    try:
+                        from vaf.core.subagent_debug import get_subagent_logger_from_env
+                        lg = get_subagent_logger_from_env()
+                        if lg:
+                            lg.event(
+                                "workflow_subagent_step_start",
+                                workflow_name=getattr(self, "_workflow_name", ""),
+                                step_index=i,
+                                total_steps=len(steps),
+                            )
+                    except Exception:
+                        pass
                 
                 # Retry logic for context errors (like main agent)
                 max_retries = 3
@@ -328,11 +356,43 @@ class WorkflowEngine:
                             # Not a context error - re-raise immediately
                             raise
                 
+                # Sub-agent step end (result summary only)
+                if is_subagent_tool:
+                    try:
+                        from vaf.core.subagent_debug import get_subagent_logger_from_env, summarize_result
+                        lg = get_subagent_logger_from_env()
+                        if lg:
+                            lg.event(
+                                "workflow_subagent_step_end",
+                                ok=True,
+                                workflow_name=getattr(self, "_workflow_name", ""),
+                                step_index=i,
+                                total_steps=len(steps),
+                                **summarize_result(result),
+                            )
+                    except Exception:
+                        pass
+
                 # Cleanup environment variable (after while loop)
                 if prev_in_workflow is None:
                     os.environ.pop("VAF_IN_WORKFLOW", None)
                 else:
                     os.environ["VAF_IN_WORKFLOW"] = prev_in_workflow
+
+                # Restore sub-agent debug env vars (avoid leaking into other tools)
+                if is_subagent_tool:
+                    if prev_agent_type is None:
+                        os.environ.pop("VAF_AGENT_TYPE", None)
+                    else:
+                        os.environ["VAF_AGENT_TYPE"] = prev_agent_type
+                    if prev_task_id is None:
+                        os.environ.pop("VAF_TASK_ID", None)
+                    else:
+                        os.environ["VAF_TASK_ID"] = prev_task_id
+                    if prev_in_subagent_term is None:
+                        os.environ.pop("VAF_IN_SUBAGENT_TERMINAL", None)
+                    else:
+                        os.environ["VAF_IN_SUBAGENT_TERMINAL"] = prev_in_subagent_term
                 
                 # ═══════════════════════════════════════════════════════════════
                 # ASYNC SUB-AGENT HANDLING: Pause workflow and yield control
@@ -348,7 +408,6 @@ class WorkflowEngine:
                     agent_type = async_match.group(2)
                     
                     # Generate workflow ID for tracking
-                    import uuid
                     workflow_id = str(uuid.uuid4())[:8]
                     
                     UI.event("Workflow", f"  ⏸️  Pausing workflow - {agent_type} [Task: {task_id}] running in background", style="cyan")

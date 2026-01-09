@@ -53,25 +53,37 @@ def run_subagent(
 ):
     """
     Run a sub-agent in a separate terminal window.
-    
-    This command is called automatically when sub_agents_in_separate_terminals is enabled.
-    Results are reported back to the main agent via IPC.
-    Terminal auto-closes after 5 seconds (use --no-auto-close to disable).
     """
-    from vaf.core.config import Config
-    from vaf.cli.ui import UI
-    from vaf.core.subagent_ipc import get_ipc, set_current_session_id
-    
     # Mark that we're in a sub-agent terminal (enables TUI, IPC reporting)
     # NOTE: We do NOT set VAF_NONINTERACTIVE because the terminal IS interactive
     # and we WANT the Live TUI to work (Research Agent, Coding Agent animations)
     os.environ["VAF_IN_SUBAGENT_TERMINAL"] = "1"
+
+    # Provide IDs for debug logger (so we can log actions+reactions per run)
+    os.environ["VAF_AGENT_TYPE"] = str(agent_type or "")
+    if task_id:
+        os.environ["VAF_TASK_ID"] = str(task_id)
+
+    from vaf.core.config import Config
+    from vaf.cli.ui import UI
+    from vaf.core.subagent_ipc import get_ipc, set_current_session_id
+    from vaf.core.subagent_debug import get_subagent_logger_from_env, summarize_result
+    import traceback
     
     # Restore session ID from environment (passed from main agent)
     session_id = os.environ.get("VAF_SESSION_ID", "").strip()
     if session_id:
         set_current_session_id(session_id)
     
+    lg = get_subagent_logger_from_env()
+    if lg:
+        lg.event(
+            "subagent_start",
+            cwd=str(Path.cwd()),
+            python=sys.executable,
+            argv=list(sys.argv),
+        )
+
     # Get IPC instance if we have a task_id
     ipc = get_ipc() if task_id else None
     
@@ -97,6 +109,8 @@ def run_subagent(
         # Also mark as running immediately (in case startup takes time)
         try:
             ipc.mark_task_running(task_id)
+            if lg:
+                lg.event("ipc_mark_task_running", ok=True)
         except: pass
     
     success = False
@@ -139,6 +153,8 @@ def run_subagent(
             UI.error(f"Unknown sub-agent type: {agent_type}")
             if ipc and task_id:
                 ipc.fail_task(task_id, f"Unknown sub-agent type: {agent_type}")
+                if lg:
+                    lg.event("ipc_fail_task", ok=True, error="Unknown sub-agent type")
             
             # Auto-close even on error
             if not no_auto_close:
@@ -149,6 +165,11 @@ def run_subagent(
         if ipc and task_id and result:
             ipc.complete_task(task_id, result)
             UI.success(f"[OK] Result sent to Main Agent [Task: {task_id}]")
+            if lg:
+                lg.event("ipc_complete_task", ok=True, **summarize_result(result))
+        elif lg:
+            # Some tools may return empty string; still log end-of-run.
+            lg.event("subagent_result_empty_or_none", ok=True, **summarize_result(result))
         
         success = True
             
@@ -157,10 +178,19 @@ def run_subagent(
         UI.error(f"Sub-agent execution failed: {error_msg}")
         import traceback
         traceback.print_exc()
+        if lg:
+            lg.event(
+                "subagent_exception",
+                ok=False,
+                error=error_msg,
+                traceback=traceback.format_exc()[:4000],
+            )
         
         # Report failure to IPC
         if ipc and task_id:
             ipc.fail_task(task_id, error_msg)
+            if lg:
+                lg.event("ipc_fail_task", ok=True, error=error_msg)
     
     # Auto-close terminal after completion (success or failure)
     if not no_auto_close:

@@ -113,6 +113,44 @@ def _get_open_instructions(files: list, base_dir: str) -> str:
     return "\n".join(instructions)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Linter Helper
+# ═══════════════════════════════════════════════════════════════════════════════
+def _run_linter_for_files(files: List[str], history: List[Dict], local_tools: Dict[str, Any]):
+    """
+    Run the linter tool for supported file types and record results into history.
+    Supported types: .py, .js/.ts/.tsx/.jsx
+    """
+    linter_tool = local_tools.get("linter") if local_tools else None
+    if not linter_tool:
+        return
+    
+    ext_map = {
+        ".py": "python",
+        ".js": "javascript",
+        ".ts": "javascript",
+        ".tsx": "javascript",
+        ".jsx": "javascript",
+    }
+    
+    for f in files:
+        ext = Path(f).suffix.lower()
+        file_type = ext_map.get(ext)
+        if not file_type:
+            continue
+        try:
+            res = linter_tool.run(path=f, file_type=file_type)
+            history.append({
+                "role": "system",
+                "content": f"Linter result for {os.path.basename(f)} ({file_type}):\n{res}"
+            })
+        except Exception as e:
+            history.append({
+                "role": "system",
+                "content": f"Linter failed for {os.path.basename(f)}: {e}"
+            })
+
+
 def _format_file_links(files: list, base_dir: str) -> str:
     """Formats files as clickable terminal links."""
     if not files:
@@ -820,6 +858,7 @@ class AgenticLoop:
         self.thinking_since = None
         self.last_token_count = 0
         self.same_action_count = 0
+        self.idle_loop_count = 0 # Track loops without tool calls
     
     def record_activity(self):
         """Record agent activity."""
@@ -1503,6 +1542,19 @@ Thumbs.db
         if not task:
             return "Error: No task provided."
 
+        # Sub-agent debug logger (only active inside sub-agent terminals)
+        try:
+            from vaf.core.subagent_debug import get_subagent_logger_from_env
+            lg = get_subagent_logger_from_env()
+            if lg:
+                lg.event(
+                    "coding_agent_tool_run_invoked",
+                    cwd=str(os.getcwd()),
+                    kwargs_keys=list(kwargs.keys()),
+                )
+        except Exception:
+            lg = None  # type: ignore[assignment]
+
         # ═══════════════════════════════════════════════════════════════════
         # CHECK IF RUNNING IN SEPARATE TERMINAL MODE
         # ═══════════════════════════════════════════════════════════════════
@@ -1531,7 +1583,10 @@ Thumbs.db
             if session_id:
                 os.environ["VAF_SESSION_ID"] = session_id
             
-            cmd_parts = ['vaf', 'subagent', 'run', 'coding_agent', '--task', task, '--task-id', task_id]
+            # CRITICAL FIX: Use current python executable instead of 'vaf' command
+            # This ensures we use the exact same code/environment as the main process
+            import sys
+            cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'coding_agent', '--task', task, '--task-id', task_id]
             if project_path:
                 cmd_parts.extend(['--project-path', project_path])
             
@@ -2031,24 +2086,36 @@ Complete this task: "{task}"
         # ═══════════════════════════════════════════════════════════════
         # HELPER: Create fresh context for a new task (with new ContextManager)
         # ═══════════════════════════════════════════════════════════════
-        def create_fresh_context_for_task(task_idx: int, current_task: str) -> tuple[ContextManager, List[Dict[str, Any]]]:
+        def create_fresh_context_for_task(task_idx: int, current_task: str, completed_info: str = "") -> tuple[ContextManager, List[Dict[str, Any]]]:
             """
             Creates a completely fresh context for a new task.
             This isolates each task with its own ContextManager and history, preventing confusion from previous tasks.
             
+            Args:
+                task_idx: Index of the current task
+                current_task: Description of the current task
+                completed_info: Information about previously completed tasks to provide continuity
+                
             Returns:
                 (ContextManager, List[Dict]): New ContextManager and fresh history for this task
             """
             # Create NEW ContextManager for this task (isolated from other tasks)
             task_context_manager = ContextManager(max_tokens=max_tokens)
-            # Detect task type for dynamic context
+            
+            # ... (rest of detection logic)
             task_lower = current_task.lower()
             is_html_task = any(kw in task_lower for kw in ['html', 'website', 'webpage', 'web seite'])
             is_script_task = any(kw in task_lower for kw in ['script', 'python', 'skript', '.py'])
-            is_app_task = any(kw in task_lower for kw in ['app', 'application', 'anwendung'])
             
+            # Format completed info if present
+            completed_section = ""
+            if completed_info:
+                completed_section = f"\n## PROGRESS SO FAR\nYou have already completed these tasks:\n{completed_info}\n"
+
             # Rebuild existing_files_info (in case template files changed)
             fresh_existing_files_info = ""
+            # ... (template logic stays same)
+
             if template_files:
                 # Generic template rules that work for all file types
                 template_file_list = chr(10).join(['- ' + os.path.basename(f) for f in template_files])
@@ -2100,105 +2167,31 @@ The following files were already created from a template:
 """
             
             # Rebuild system prompt with current state
-            fresh_system_prompt = f"""You are a Senior software developer Sub-agent. Your task is to complete coding tasks autonomously and efficiently.
+            # IMPORTANT: Keep task-context prompts SMALL to avoid n_ctx overflow.
+            # The agent may have more tools available locally, but task execution should
+            # only advertise the minimal tool set required to complete the task.
+            fresh_system_prompt = f"""You are a Senior software developer Sub-agent.
 
 ## PROJECT DIRECTORY
 `{base_dir}`
-All files must use ABSOLUTE paths in this directory.
+All files must be saved inside this directory.
+{completed_section}
 {fresh_existing_files_info}
 
-## TOOLS
-- `set_todos`: REQUIRED FIRST - set your task breakdown
-- `task_done`: Mark current task complete, get next task
-- `write_file`: Create/write files (path, content)
-- `read_file`: Read file contents (path)  
-- `list_files`: List directory (path)
-- `python_sandbox`: Execute Python code safely for calculations, algorithms, and data processing (code)
-- `linter`: Check code files for syntax errors and linting issues (path, optional file_type)
-- `web_fetch`: Fetch webpage HTML (url, optional selector)
-- `web_deep_search`: Deep search web for solutions/ideas (query, max_results). Use when you don't know how to fix an error or need inspiration. Returns summarized results without bloating context.
-- `git_init`: Initialize Git repository (if not already initialized)
-- `git_add_commit`: Add files and commit changes with a message (message, optional files array)
-- `git_status`: Check Git status (shows modified/staged/untracked files)
-- `git_log`: View commit history (optional limit parameter)
-{"- `bash`: Execute shell commands" if HAS_CODING_TOOLS else ""}
-
-## MANDATORY WORKFLOW (you MUST follow this!)
-
-### YOUR CURRENT TASK
-**{current_task}**
-
-**IMPORTANT:** You are working on ONLY this task. Focus on completing this specific task fully before moving on.
-
-### STEPS
-1. Read any existing files if needed (`read_file`)
-2. Create or modify files using `write_file` to complete the task
-3. When task is complete, call `task_done` with a summary
-
-## RULES
-- Focus ONLY on the current task: **{current_task}**
-- You MUST call `write_file` to actually create/modify files - reading files alone is not enough
-- Write COMPLETE code, not placeholders
-- When this task is complete, call `task_done` to move to the next task
-- DO NOT call `set_todos` - your TODO list is already set and managed by the system
-- DO NOT skip this task - complete it fully before moving on
-
-{("## TEMPLATE FILES RULES (if templates exist above)\n"
-"🚨 **CRITICAL: Templates are REQUIRED structure - NOT suggestions!**\n\n"
-"**MANDATORY WORKFLOW:**\n"
-"1. **READ FIRST**: `read_file(path=\"...\")` for EVERY template file BEFORE modifying\n"
-"2. **PRESERVE ALL**: Keep ALL structure from template (sections, classes, IDs, functions, imports, etc.)\n"
-"3. **ONLY REPLACE**: Replace `{{PLACEHOLDER}}` text with real content - nothing else\n"
-"4. **DO NOT REMOVE**: Never remove structural elements (sections, functions, classes, imports, etc.)\n"
-"5. **DO NOT REWRITE**: Never write new file from scratch - always modify existing template\n\n"
-"**Examples:**\n"
-"- **HTML**: Template `<nav class=\"nav\"><div class=\"logo\">{{BUSINESS_NAME}}</div></nav>` → Keep nav structure, only replace placeholder\n"
-"- **Python**: Template `def {{FUNCTION_NAME}}({{PARAMS}}):` → Keep function structure, only replace placeholders\n"
-"- **Any file**: Preserve all template structure, only replace `{{PLACEHOLDER}}` text\n\n"
-"**If you remove template structure, write_file will be BLOCKED!**") if template_files else (
-"## NO TEMPLATE SELECTED - Research and Plan First\n\n"
-"Since no template was selected for this task, you should:\n"
-"1. **Use `web_deep_search`** to get information on how to implement this task\n"
-"   - `web_deep_search` returns a simple answer (like `web_search`), no separate context\n"
-"   - Example: `web_deep_search(query=\"how to create [task description]\", max_results=3)`\n"
-"2. **Analyze the results** and understand the best approach\n"
-"3. **Create a TODO list** with `set_todos` based on the research findings\n"
-"4. **Then implement** the solution from scratch\n\n"
-"**Example workflow:**\n"
-"- `web_deep_search(query=\"Python script generate random lottery numbers save HTML\", max_results=3)`\n"
-"- Analyze: \"I need to use random module, generate 6 unique numbers, create HTML structure\"\n"
-"- `set_todos(tasks=[\"Generate 6 unique random numbers\", \"Create HTML structure\", \"Save to HTML file\"])`\n"
-"- Start implementing")}
-
-## QUALITY REQUIREMENTS
-- **HTML**: Full structure, navigation, real content, min 500 bytes
-- **CSS**: Reset, typography, colors, responsive, min 400 bytes
-- **JavaScript**: Working code, error handling, min 100 bytes
-- **Python**: Complete functionality, error handling, docstrings, min 100 bytes
-- **Other files**: Complete, working code/content appropriate for the file type
-
-## ASKING QUESTIONS TO MAIN AGENT
-If you need information that's not in the task, you can ask the main agent questions!
-Simply include your question in your response using this format:
-❓ QUESTION: [Your question here]
-
-Examples:
-- ❓ QUESTION: What should the company name be?
-- ❓ QUESTION: Which color scheme should I use for the website?
-- ❓ QUESTION: What should the headline say?
-
-The main agent will answer your questions based on the original user task and call you again with the information.
-You can continue working once you have the answers.
+## AVAILABLE TOOLS (task execution)
+- `read_file(path)`
+- `list_files(path)`
+- `write_file(path, content)`
+- `task_done(summary)`
 
 ## YOUR CURRENT TASK (Task {task_idx + 1})
 **{current_task}**
 
-**IMPORTANT:** You are working on ONLY this task. Focus on completing this specific task fully before moving on.
-
-**NOTE:** Your TODO list is already set and managed by the system. DO NOT call `set_todos` - it's not available in task execution context.
-
-Focus ONLY on completing this task. Use the necessary tools (read_file, write_file, etc.) to complete it.
-When finished, call `task_done(summary="...")` to mark it complete and move to the next task."""
+## RULES
+- Focus ONLY on the current task
+- Use `write_file` to actually create/modify files (do not just describe code)
+- When finished, call `task_done(summary="...")`
+"""
             
             # Build user message for this specific task (ONLY current task, not entire list)
             fresh_user_msg = f"""## YOUR CURRENT TASK (Task {task_idx + 1})
@@ -2238,6 +2231,18 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
         # ═══════════════════════════════════════════════════════════════════
         # DYNAMIC TOOLS SCHEMA - Based on context (MAIN vs TASK)
         # ═══════════════════════════════════════════════════════════════════
+        def _dedupe_tools_schema(schema: List[Dict]) -> List[Dict]:
+            """Remove duplicate tools by function name (keeps first occurrence)."""
+            seen: set[str] = set()
+            deduped: List[Dict] = []
+            for t in schema:
+                name = (t or {}).get("function", {}).get("name")
+                if not name or name in seen:
+                    continue
+                seen.add(str(name))
+                deduped.append(t)
+            return deduped
+
         def get_tools_schema_for_context(is_main_context: bool) -> List[Dict]:
             """Get tools schema based on context type. Enforces strict phase separation."""
             
@@ -2459,6 +2464,9 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
         task_empty_counters: Dict[int, int] = {}  # task_idx -> consecutive_empty count
         main_empty_counter = 0  # For main context
         
+        # Idle Loop Counter (Track loops without tool calls)
+        idle_loop_count = 0
+        
         tui.set_action("Agentic Loop")
         tui.append_stream(f"[INFO] Starting agentic loop for: {os.path.basename(base_dir)}")
         live.update(tui.render())
@@ -2467,9 +2475,33 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
         tui.append_stream("[INFO] Loop initialized - waiting for first LLM response...")
         live.update(tui.render())
         
+        # GLOBAL TRACE LOGGER (repo-local via subagent debug logger; no thoughts/prompts)
+        def _trace(msg):
+            try:
+                if lg:
+                    lg.event("coder_trace", message=str(msg)[:1000])
+            except Exception:
+                pass
+
+        _trace("=== AGENTIC LOOP STARTED ===")
+        
         while True:
             loop.increment_loop()
             tui.increment_loop()
+            _trace(f"--- LOOP {loop.loop_count} START ---")
+            try:
+                if lg:
+                    current_task = task_mgr.get_current_task() if task_mgr else ""
+                    lg.event(
+                        "loop_start",
+                        loop=loop.loop_count,
+                        progress=task_mgr.get_progress() if task_mgr else "",
+                        current_task_idx=getattr(task_mgr, "current_task_idx", None),
+                        current_task_preview=(current_task[:180] if current_task else ""),
+                        no_action_since=getattr(loop, "no_action_since", None),
+                    )
+            except Exception:
+                pass
             
             # Initialize write_file tracking for this loop (will be updated if write_file is called)
             if loop.loop_count > len(recent_loop_write_files):
@@ -2478,6 +2510,12 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             # Check if we should continue
             should_continue, reason = loop.should_continue()
             if not should_continue:
+                _trace(f"Loop stopped: {reason}")
+                try:
+                    if lg:
+                        lg.event("loop_stop", loop=loop.loop_count, reason=str(reason))
+                except Exception:
+                    pass
                 break
             
             # Update TUI
@@ -2488,7 +2526,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             # CONTEXT MANAGEMENT - Prevent token overflow (per context)
             # ═══════════════════════════════════════════════════════════════
             
-            # Use current context manager (main or task-specific)
+            _trace("Checking context size...")
             # Proactive compression: Check token usage and compress if > 85% of limit
             estimated_tokens = current_context_manager.estimate_tokens(history)
             if estimated_tokens > int(current_context_manager.max_tokens * 0.85):
@@ -2601,133 +2639,107 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             
             # Rebuild tools_schema dynamically based on context
             tools_schema = get_tools_schema_for_context(is_main_context)
-            
-            # Add web tools (available in both contexts)
-            tools_schema.append({
-                "type": "function",
-                "function": {
-                    "name": "web_fetch",
-                    "description": "Fetch a webpage's HTML content. Use to inspect how pages are built or verify your output.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "url": {"type": "string", "description": "URL to fetch (http:// or https://)"},
-                            "selector": {"type": "string", "description": "Optional CSS selector to extract specific element"}
-                        },
-                        "required": ["url"]
-                    }
-                }
-            })
-            
-            tools_schema.append({
-                "type": "function",
-                "function": {
-                    "name": "web_deep_search",
-                    "description": "Deep search the web for solutions, error fixes, or ideas. Returns summarized results without bloating context. Use when you don't know how to fix an error or need inspiration.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Search query (e.g., 'Python TypeError fix', 'JavaScript async await best practices', 'CSS responsive design tutorial')"
-                            },
-                            "max_results": {
-                                "type": "integer",
-                                "description": "Maximum number of results to return (default: 5, max: 10)",
-                                "default": 5
-                            }
-                        },
-                        "required": ["query"]
-                    }
-                }
-            })
-            
-            # Add Git tools (available in both contexts)
-            tools_schema.append({
-                "type": "function",
-                "function": {
-                    "name": "git_init",
-                    "description": "Initialize a Git repository in the project directory. Creates .git directory and .gitignore file.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    }
-                }
-            })
-            
-            tools_schema.append({
-                "type": "function",
-                "function": {
-                    "name": "git_add_commit",
-                    "description": "Add files to Git staging area and create a commit with a message. Use this to save your work progress.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "message": {
-                                "type": "string",
-                                "description": "Commit message describing the changes"
-                            },
-                            "files": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Optional: Specific files to add (default: all files)"
-                            }
-                        },
-                        "required": ["message"]
-                    }
-                }
-            })
-            
-            tools_schema.append({
-                "type": "function",
-                "function": {
-                    "name": "git_status",
-                    "description": "Check the current Git status: shows modified, staged, and untracked files.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    }
-                }
-            })
-            
-            tools_schema.append({
-                "type": "function",
-                "function": {
-                    "name": "git_log",
-                    "description": "View the Git commit history. Shows recent commits with messages.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "limit": {
-                                "type": "integer",
-                                "description": "Number of commits to show (default: 10)",
-                                "default": 10
-                            }
-                        },
-                        "required": []
-                    }
-                }
-            })
-            
-            # Add bash if available
-            if HAS_CODING_TOOLS:
+
+            # IMPORTANT: Only advertise "full coder toolbelt" in MAIN context (planning/setup).
+            # In TASK contexts we keep tool schema minimal to avoid n_ctx overflow.
+            if is_main_context:
+                # Web tools (planning/setup)
                 tools_schema.append({
                     "type": "function",
                     "function": {
-                        "name": "bash",
-                        "description": "Execute shell command.",
+                        "name": "web_fetch",
+                        "description": "Fetch a webpage's HTML content. Use to inspect how pages are built or verify your output.",
                         "parameters": {
                             "type": "object",
-                            "properties": {"command": {"type": "string"}},
-                            "required": ["command"]
+                            "properties": {
+                                "url": {"type": "string", "description": "URL to fetch (http:// or https://)"},
+                                "selector": {"type": "string", "description": "Optional CSS selector to extract specific element"}
+                            },
+                            "required": ["url"]
                         }
                     }
                 })
-            
-            # Add plug-and-play tools (available in both contexts)
-            tools_schema.extend(plug_and_play_tools)
+
+                tools_schema.append({
+                    "type": "function",
+                    "function": {
+                        "name": "web_deep_search",
+                        "description": "Deep search the web for solutions, error fixes, or ideas. Returns summarized results without bloating context.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string", "description": "Search query"},
+                                "max_results": {"type": "integer", "description": "Maximum number of results (default: 5, max: 10)", "default": 5}
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                })
+
+                # Git tools (planning/setup)
+                tools_schema.append({
+                    "type": "function",
+                    "function": {
+                        "name": "git_init",
+                        "description": "Initialize a Git repository in the project directory.",
+                        "parameters": {"type": "object", "properties": {}, "required": []}
+                    }
+                })
+                tools_schema.append({
+                    "type": "function",
+                    "function": {
+                        "name": "git_add_commit",
+                        "description": "Add files to Git staging area and create a commit with a message.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "message": {"type": "string", "description": "Commit message describing the changes"},
+                                "files": {"type": "array", "items": {"type": "string"}, "description": "Optional: Specific files to add (default: all files)"}
+                            },
+                            "required": ["message"]
+                        }
+                    }
+                })
+                tools_schema.append({
+                    "type": "function",
+                    "function": {
+                        "name": "git_status",
+                        "description": "Check the current Git status.",
+                        "parameters": {"type": "object", "properties": {}, "required": []}
+                    }
+                })
+                tools_schema.append({
+                    "type": "function",
+                    "function": {
+                        "name": "git_log",
+                        "description": "View the Git commit history.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"limit": {"type": "integer", "description": "Number of commits to show (default: 10)", "default": 10}},
+                            "required": []
+                        }
+                    }
+                })
+
+                # Bash (planning/setup)
+                if HAS_CODING_TOOLS:
+                    tools_schema.append({
+                        "type": "function",
+                        "function": {
+                            "name": "bash",
+                            "description": "Execute shell command.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"command": {"type": "string"}},
+                                "required": ["command"]
+                            }
+                        }
+                    })
+
+                # Plug-and-play tools can be large - keep them out of TASK contexts.
+                tools_schema.extend(plug_and_play_tools)
+
+            tools_schema = _dedupe_tools_schema(tools_schema)
             
             # Only clear stream if buffer is empty or only has separator
             # CRITICAL: Do NOT clear if buffer has template selection or other important messages
@@ -2800,6 +2812,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     pass  # Don't fail if render is blocked
                 time.sleep(0.1)  # Give animation thread time to render
                 
+                _trace("Sending LLM request...")
                 stream_response = requests.post(
                     "http://127.0.0.1:8080/v1/chat/completions",
                     json={
@@ -2811,15 +2824,17 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         "tool_choice": tool_choice,  # Dynamic: forced for set_todos, auto after
                         "stream": True  # STREAMING enabled!
                     },
-                    timeout=180,
+                    timeout=300, # Increased timeout for large contexts
                     stream=True
                 )
                 
                 # Show request status immediately
                 if stream_response.status_code == 200:
                     append_with_context(f"[OK] Request successful (Status: {stream_response.status_code}) - Streaming response...")
+                    _trace("LLM request successful (200)")
                 else:
                     append_with_context(f"[WARN] Request returned status {stream_response.status_code}")
+                    _trace(f"LLM request failed ({stream_response.status_code})")
                 tui._needs_update = True
                 # CRITICAL: Force immediate update (outside lock, safe)
                 try:
@@ -2831,44 +2846,84 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 if stream_response.status_code == 400:
                     try:
                         error_data = stream_response.json()
-                        error_msg = error_data.get("error", {}).get("message", "")
-                        if "exceed_context_size" in error_msg.lower() or "exceed" in error_msg.lower():
-                            tui.set_action("Context size exceeded. Compressing...")
+                        error_msg = str(error_data) # Convert full JSON to string to search
+                        
+                        # Aggressive check for ANY 400 error that looks like context issues
+                        if "context" in error_msg.lower() or "length" in error_msg.lower() or "token" in error_msg.lower() or True: # Force retry on 400
+                            # Track consecutive 400 errors
+                            if not hasattr(loop, 'consecutive_400'):
+                                loop.consecutive_400 = 0
+                            loop.consecutive_400 += 1
+                            
+                            tui.set_action(f"Context error (400). Compression Level {loop.consecutive_400}...")
+                            append_with_context(f"[WARN] Context limit reached (Level {loop.consecutive_400}). Compressing...")
                             live.update(tui.render())
-                            # Aggressively compress current context
-                            history = current_context_manager.compress(history)
+                            
+                            new_history = []
+                            
+                            # 1. System Prompt (Always keep)
+                            system_msgs = [m for m in history if m.get("role") == "system"]
+                            if system_msgs:
+                                new_history.append(system_msgs[0])
+                            
+                            # Compression Strategy based on severity
+                            if loop.consecutive_400 == 1:
+                                # Level 1: Keep System + Last User + Last 2 Messages
+                                user_msgs = [m for m in history if m.get("role") == "user"]
+                                if user_msgs:
+                                    new_history.append(user_msgs[-1])
+                                if len(history) > 2:
+                                    # Filter out tool outputs that might be huge
+                                    recent = history[-2:]
+                                    for msg in recent:
+                                        if len(str(msg.get('content', ''))) < 2000: # Only keep small messages
+                                            new_history.append(msg)
+                            elif loop.consecutive_400 == 2:
+                                # Level 2: Keep ONLY System + Last User (Summary)
+                                user_msgs = [m for m in history if m.get("role") == "user"]
+                                if user_msgs:
+                                    # Create a summarized placeholder for the user message if it's too big
+                                    last_user = user_msgs[-1]
+                                    if len(last_user.get('content', '')) > 500:
+                                        new_history.append({"role": "user", "content": "Context cleared. Please continue working on the current task."})
+                                    else:
+                                        new_history.append(last_user)
+                            else:
+                                # Level 3: Nuclear Option - System Only + Generic Prompt
+                                new_history.append({"role": "user", "content": "Context exceeded. Please continue the current task from where you left off."})
+                            
+                            # CRITICAL: Re-inject TODO status after compression so agent knows where it is
+                            if task_mgr.todos:
+                                todo_status = task_mgr.get_todos_for_prompt()
+                                new_history.append({
+                                    "role": "system", 
+                                    "content": f"[CONTEXT RECOVERED]\nHere is your current status:\n{todo_status}\n\nResume work immediately."
+                                })
+                                
+                            # Force update history
+                            history = new_history
+                            
                             # Update history in appropriate dict
                             if current_context_manager == main_context_manager:
                                 main_history = history
                             else:
-                                # Find which task this context belongs to
                                 for idx, cm in task_context_managers.items():
                                     if cm == current_context_manager:
                                         task_histories[idx] = history
                                         break
-                            # Also truncate old messages if still too large
-                            if len(history) > 20:
-                                # Keep system prompt, last user message, and last 10 messages
-                                system_msgs = [m for m in history if m.get("role") == "system"]
-                                user_msgs = [m for m in history if m.get("role") == "user"]
-                                assistant_msgs = [m for m in history if m.get("role") == "assistant"]
-                                
-                                # Keep first system message, last user message, last 5 assistant messages
-                                new_history = []
-                                if system_msgs:
-                                    new_history.append(system_msgs[0])  # Keep first system prompt
-                                if user_msgs:
-                                    new_history.append(user_msgs[-1])  # Keep last user message
-                                if assistant_msgs:
-                                    new_history.extend(assistant_msgs[-5:])  # Keep last 5 assistant messages
-                                
-                                history = new_history
-                            tui.set_action(f"Compressed to {len(history)} messages. Retrying...")
+                                        
+                            tui.set_action(f"Compressed to {len(history)} msgs. Retrying...")
                             live.update(tui.render())
-                            # Retry the request with compressed context (continue loop)
+                            time.sleep(1) # Breathe
                             continue
-                    except (json.JSONDecodeError, KeyError, ValueError):
-                        pass  # Not a context size error, fall through to normal error handling
+                    except Exception as e:
+                        tui.append_stream(f"[ERROR] Failed to handle 400 error: {e}")
+                        pass
+                
+                # Reset consecutive 400 counter on success
+                if stream_response.status_code == 200:
+                    if hasattr(loop, 'consecutive_400'):
+                        loop.consecutive_400 = 0
                 
                 if stream_response.status_code != 200:
                     error_text = stream_response.text[:200] if stream_response.text else "No error details"
@@ -2893,6 +2948,12 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     except UnicodeDecodeError:
                         # Fallback for platforms with different encoding
                         line_str = line.decode('utf-8', errors='replace')
+                    
+                    # DEBUG RAW STREAM
+                    # if len(line_str) > 6 and not line_str.startswith('data: [DONE]'):
+                         # Show more of the delta to see where the text is
+                         # tui.append_stream(f"[RAW] {line_str[6:120]}...")
+                    
                     if not line_str.startswith('data: '):
                         continue
                     
@@ -2913,15 +2974,92 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         if not choices:
                             continue
                         
+                        # Check finish_reason
+                        finish_reason = choices[0].get('finish_reason')
+                        if finish_reason == 'length':
+                            tui.append_stream("[WARN] Response truncated (length limit).")
+                            
+                            # CRITICAL: If we were writing a file, save what we have so far!
+                            # This prevents the "infinite loop of starting over"
+                            if 'write_file' in collected_content or (collected_tool_calls and collected_tool_calls[-1]['function']['name'] == 'write_file'):
+                                tui.append_stream("[INFO] Attempting to save partial content...")
+                                
+                                # Try to find filename from args
+                                partial_filename = "PARTIAL_CONTENT.txt"
+                                partial_content = ""
+                                
+                                # Extract content from collected tool calls if available
+                                if collected_tool_calls:
+                                    last_tc = collected_tool_calls[-1]
+                                    if last_tc['function']['name'] == 'write_file':
+                                        args_str = last_tc['function']['arguments']
+                                        # Simple regex to get path and content
+                                        p_match = re.search(r'"path"\s*:\s*"([^"]+)"', args_str)
+                                        if p_match:
+                                            partial_filename = f"PARTIAL_{os.path.basename(p_match.group(1))}"
+                                        
+                                        # Get content (even if truncated)
+                                        c_match = re.search(r'"content"\s*:\s*"(.*)', args_str, re.DOTALL)
+                                        if c_match:
+                                            partial_content = c_match.group(1)
+                                            # Clean up
+                                            partial_content = partial_content.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+                                
+                                if partial_content and len(partial_content) > 50:
+                                    # Save partial file using tool directly
+                                    try:
+                                        with open(os.path.join(base_dir, partial_filename), 'w', encoding='utf-8') as f:
+                                            f.write(partial_content)
+                                        tui.append_stream(f"[INFO] Saved {len(partial_content)} bytes to {partial_filename}")
+                                        
+                                        # Instruct agent to APPEND instead of overwrite
+                                        history.append({
+                                            "role": "system",
+                                            "content": (
+                                                f"⚠️ RESPONSE TRUNCATED! I saved the partial code to `{partial_filename}`.\n"
+                                                f"DO NOT start over! Read `{partial_filename}` to see where you stopped.\n"
+                                                f"Then call `write_file` with the *rest* of the code, or append to it.\n"
+                                                f"Better yet: Split the file into smaller parts (e.g. header.html, body.html) to avoid limits."
+                                            )
+                                        })
+                                    except Exception as e:
+                                        tui.append_stream(f"[ERROR] Failed to save partial: {e}")
+                                else:
+                                    # Standard truncation message if no file involved
+                                    history.append({
+                                        "role": "system",
+                                        "content": "Your previous response was truncated because it reached the token limit. Please continue exactly where you left off. Do not repeat the beginning."
+                                    })
+                            else:
+                                # Standard truncation message
+                                history.append({
+                                    "role": "system",
+                                    "content": "Your previous response was truncated because it reached the token limit. Please continue exactly where you left off. Do not repeat the beginning."
+                                })
+                                
+                            update_history_in_dict()
+                            # We don't break here, we let the loop handle the next request
+                        
                         delta = choices[0].get('delta', {})
                         
                         # Stream content (agent's thoughts) - LIVE!
-                        # Check both 'content' in delta and delta.get('content')
-                        text_chunk = delta.get('content', '')
+                        # Support both standard 'content' and 'reasoning_content' (DeepSeek/R1)
+                        text_chunk = delta.get('content', '') or delta.get('reasoning_content', '') or delta.get('thought', '')
+                        
                         if text_chunk:
+                            # If it's reasoning, maybe add a hint
+                            is_reasoning = 'reasoning_content' in delta or 'thought' in delta
+                            
                             # Filter out redacted reasoning tags immediately
                             text_chunk = re.sub(r'</?redacted_reasoning>', '', text_chunk, flags=re.IGNORECASE)
                             text_chunk = re.sub(r'</?think>', '', text_chunk, flags=re.IGNORECASE)
+                            
+                            if is_reasoning:
+                                # Show reasoning in dim style if it's the first chunk of reasoning
+                                if not collected_content.startswith("<think>"):
+                                    # We don't want to add tags to collected_content itself to avoid confusing the parser,
+                                    # but we want to show it in the TUI.
+                                    pass
                             
                             collected_content += text_chunk
                             current_line += text_chunk
@@ -3054,6 +3192,25 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 if tool_calls:
                     debug_msg += f" Tools: {[tc['function']['name'] for tc in tool_calls]}"
                 tui.append_stream(debug_msg)
+
+                # Structured metadata for debugging "stuck" behavior (no raw LLM text)
+                try:
+                    if lg:
+                        tool_names = []
+                        for tc in tool_calls or []:
+                            try:
+                                tool_names.append(str(tc.get("function", {}).get("name", "")))
+                            except Exception:
+                                pass
+                        lg.event(
+                            "llm_stream_end",
+                            loop=getattr(loop, "loop_count", None),
+                            content_len=len(content or ""),
+                            tool_calls_count=len(tool_calls or []),
+                            tool_names=tool_names,
+                        )
+                except Exception:
+                    pass
                 
                 # FALLBACK: Try to extract tool calls from text content
                 # Some models output JSON in text instead of using proper tool_calls
@@ -3198,6 +3355,47 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                     }
                                 }
                                 append_with_context(f"[FALLBACK] Extracted TODO list from markdown: {len(tasks)} tasks")
+                    
+                    # Format 4: Markdown code blocks with filename (The "Lazy Agent" Catcher)
+                    if not extracted_tool_call:
+                        # Find all code blocks
+                        code_blocks = list(re.finditer(r'```(?:\w+)?\n(.*?)```', content, re.DOTALL))
+                        if code_blocks:
+                            # Check if we can associate a filename with the LAST code block
+                            best_block = code_blocks[-1]
+                            code_content = best_block.group(1)
+                            
+                            filename = None
+                            
+                            # Strategy A: Look for filename in text before block
+                            start_idx = best_block.start()
+                            pre_text = content[max(0, start_idx-300):start_idx]
+                            file_match = re.search(r'(?:^|[\s`\'">])([\w\-\./]+\.(?:py|js|html|css|json|md|txt|java|c|cpp|h|go|rs|php|ts|jsx|tsx|vue))', pre_text)
+                            if file_match:
+                                filename = file_match.group(1).strip('`\'".>')
+                            
+                            # Strategy B: Infer filename from current task if not found
+                            if not filename and task_mgr.todos:
+                                current_task = task_mgr.get_current_task()
+                                if current_task:
+                                    task_file_match = re.search(r'([\w\-\./]+\.(?:py|js|html|css|json|md|txt))', current_task)
+                                    if task_file_match:
+                                        filename = task_file_match.group(1)
+                                        tui.append_stream(f"[FALLBACK] Inferred filename {filename} from task description")
+
+                            if filename and len(code_content) > 20: # Ensure valid content
+                                extracted_tool_call = {
+                                    'id': f'extracted_{int(time.time())}',
+                                    'type': 'function', 
+                                    'function': {
+                                        'name': 'write_file',
+                                        'arguments': json.dumps({
+                                            'path': filename,
+                                            'content': code_content
+                                        })
+                                    }
+                                }
+                                tui.append_stream(f"[FALLBACK] Extracted write_file({filename}) from markdown code block")
                     
                     if extracted_tool_call:
                         tool_calls = [extracted_tool_call]
@@ -3444,6 +3642,21 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         else:
                             consecutive_empty = 0  # Fallback
                     
+                    # CRITICAL FIX: Also increment global idle_loop_count to trigger Nudge/Reset
+                    idle_loop_count += 1
+                    
+                    # If we are stuck in empty loops for too long, FORCE a nudge instead of just temp sweep
+                    if idle_loop_count >= 5:
+                         nudge_msg = f"🛑 SYSTEM ALERT: You are sending empty responses for {idle_loop_count} loops. STOP. Call `task_done` or `write_file` NOW."
+                         history.append({
+                            "role": "user",
+                            "content": nudge_msg
+                         })
+                         tui.set_action(f"⚠️ EMPTY LOOP ({idle_loop_count}) - FORCING ACTION")
+                         _trace(f"Triggered Empty Response Nudge (Count: {idle_loop_count})")
+                         # Reset empty counter to avoid immediate retry, let the model see the message
+                         consecutive_empty = 0 
+                         
                     # Dynamic Temperature Sweep to break loops
                     # Oscillate around 0.3: +0.1, +0.2, +0.3... then down
                     # For code, we prefer staying low, but if stuck, go higher
@@ -3743,6 +3956,43 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             # These checks ensure the agent doesn't skip work!
             # ═══════════════════════════════════════════════════════════════
             
+            # Idle Detection: Force tool usage if stuck in thinking loop
+            if not tool_calls:
+                idle_loop_count += 1
+            else:
+                idle_loop_count = 0
+            
+            # Update TUI with Idle Status
+            tui.set_action(f"Thinking... (Idle: {idle_loop_count})")
+            
+            if idle_loop_count >= 3:
+                # Escalation Strategy
+                if idle_loop_count == 3:
+                    nudge_msg = "⚠️ You are thinking too much. You MUST use a tool in the next step."
+                else:
+                    nudge_msg = f"🛑 SYSTEM OVERRIDE (Idle {idle_loop_count}): STOP THINKING. CALL `write_file` or `task_done` IMMEDIATELY."
+
+                # Inject as USER message for higher priority attention
+                history.append({
+                    "role": "user",
+                    "content": nudge_msg
+                })
+                
+                tui.set_action(f"⚠️ FORCING TOOL CALL (Idle: {idle_loop_count})")
+                _trace(f"Triggered Aggressive Idle Nudge (Count: {idle_loop_count})")
+                
+                # If we hit 10 idle loops, restart the context completely (Soft Reset)
+                if idle_loop_count >= 10:
+                     _trace("Idle limit reached (10). Forcing context reset.")
+                     # Clear conversation history but keep system prompt
+                     history = [history[0]] + [{"role": "user", "content": "You were stuck. Please check your TODOs and create the missing files now."}]
+                     idle_loop_count = 0 # Reset counter after nuclear option
+
+            # Initialize flags to prevent NameError
+            has_task_done = False
+            has_write_file = False
+            only_reading = False
+            
             # FIRST: No TODOs set yet? Auto-generate or nudge
             if not task_mgr.todos and loop.loop_count >= 1:
                 # After 5 loops: AUTO-GENERATE TODOs from task description
@@ -3834,6 +4084,18 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     
                     # Set the auto-generated TODOs
                     task_mgr.set_todos(auto_todos)
+                    try:
+                        if lg:
+                            lg.event(
+                                "todos_set",
+                                source="auto_generated",
+                                tasks_count=len(auto_todos),
+                                tasks_preview=[str(t)[:120] for t in auto_todos[:5]],
+                                current_task_idx=getattr(task_mgr, "current_task_idx", None),
+                                current_task_preview=(str(task_mgr.get_current_task() or "")[:180]),
+                            )
+                    except Exception:
+                        pass
                     tui.set_action(f"TODO: {len(auto_todos)} tasks")
                     tui.append_stream(f"Auto-generated {len(auto_todos)} tasks (model didn't call set_todos)")
                     for i, t in enumerate(auto_todos, 1):
@@ -3893,6 +4155,41 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     nudge_msg = "⚠️ You haven't set a TODO list yet!\nCall `set_todos` with your task breakdown FIRST."
                     history.append({"role": "system", "content": nudge_msg})
                     continue
+            
+            # SECOND: Check for Task-Stuck (Infinite Loop on same task)
+            # If we are on same task for > 15 loops -> FORCE COMPLETE
+            current_task_idx = task_mgr.current_task_idx
+            if current_task_idx < len(task_mgr.todos):
+                # Check how long we've been on this task
+                if not hasattr(loop, 'task_start_loop'):
+                    loop.task_start_loop = {}
+                
+                if current_task_idx not in loop.task_start_loop:
+                    loop.task_start_loop[current_task_idx] = loop.loop_count
+                
+                loops_on_task = loop.loop_count - loop.task_start_loop[current_task_idx]
+                
+                # Force complete after 15 loops on same task
+                if loops_on_task > 15:
+                    tui.set_action("Task stuck - Auto-completing...")
+                    tui.append_stream(f"[AUTO] Task {current_task_idx+1} stuck for {loops_on_task} loops. Forcing completion.")
+                    
+                    # Force complete task
+                    task_mgr.complete_current_task("Auto-completed (stuck detection)")
+                    
+                    # Move to next task context
+                    next_task = task_mgr.get_current_task()
+                    if next_task:
+                        # Build summary of completed work
+                        completed_info = "\n".join([f"- {t['task']}: {t.get('result', 'done')}" for t in task_mgr.todos if t['status'] == 'completed'])
+                        
+                        task_idx = task_mgr.current_task_idx
+                        current_context_manager, history = create_fresh_context_for_task(task_idx, next_task, completed_info)
+                        task_context_managers[task_idx] = current_context_manager
+                        task_histories[task_idx] = history
+                        tui.append_stream(f"[AUTO] Switched to Task {task_idx + 1}: {next_task[:40]}")
+                    
+                    continue # Skip to next loop with new task
             
             # If model claims completion without TODOs, force it to set them first
             if completion_signals and not task_mgr.todos:
@@ -3996,6 +4293,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 # If no tool calls OR only read_file calls without write_file, nudge to continue
                 has_write_file = any(tc.get('function', {}).get('name') == 'write_file' for tc in tool_calls) if tool_calls else False
                 has_read_file = any(tc.get('function', {}).get('name') == 'read_file' for tc in tool_calls) if tool_calls else False
+                has_task_done_call = any(tc.get('function', {}).get('name') == 'task_done' for tc in tool_calls) if tool_calls else False
                 only_reading = has_read_file and not has_write_file
                 
                 # Track write_file activity in recent loops
@@ -4007,28 +4305,87 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                 if loop.loop_count > len(recent_loop_write_files):
                     recent_loop_write_files.append(False)
                 has_write_file_in_recent_loops = any(recent_loop_write_files)
+
+                # Track consecutive loops without any tool action
+                if not hasattr(loop, "no_action_since"):
+                    loop.no_action_since = 0
+                if tool_calls:
+                    loop.no_action_since = 0
+                else:
+                    loop.no_action_since += 1
                 
                 # Nudge if:
                 # 1. No tool calls at all (idle)
                 # 2. Only reading files but not writing (not making progress)
                 # 3. No write_file calls in recent loops (stuck)
                 # 4. Loop count >= 1 (earlier nudge for faster response)
-                # CRITICAL FIX: Only nudge if we are NOT currently writing a file!
+                
+                # CRITICAL: Also nudge if we created the file for the current task but haven't called task_done!
+                current_task_idx = task_mgr.current_task_idx
+                files_for_task = task_file_map.get(current_task_idx, [])
+                task_file_exists = len(files_for_task) > 0
+                
+                # Only nudge if we are NOT currently writing a file!
                 should_nudge = (
-                    not has_write_file and 
-                    (not tool_calls or only_reading or not has_write_file_in_recent_loops) and 
-                    loop.loop_count >= 1 and
-                    current
-                )
+                    (not has_write_file and (not tool_calls or only_reading or not has_write_file_in_recent_loops)) or
+                    (task_file_exists and not has_task_done_call) # Nudge IMMEDIATELY if file exists but task not done
+                ) and loop.loop_count >= 1 and current
                 
                 if should_nudge:
                     tui.set_action(f"{completed_count}/{total_count} tasks - Continue working!")
-                    nudge_content = (
-                        f"⚠️ TASKS INCOMPLETE - Continue working!\n\n"
-                        f"**Progress:** {completed_count}/{total_count} tasks completed\n"
-                        f"**Remaining:** {len(remaining)} tasks\n\n"
-                        f"**Current task:** {current}\n\n"
-                    )
+
+                    # Log WHY we are nudging (helps debug "stuck" situations)
+                    try:
+                        if lg:
+                            lg.event(
+                                "nudge",
+                                loop=loop.loop_count,
+                                progress=f"{completed_count}/{total_count}",
+                                current_task_idx=current_task_idx,
+                                current_task_preview=(current[:180] if current else ""),
+                                no_tool_calls=not bool(tool_calls),
+                                only_reading=bool(only_reading),
+                                no_write_in_recent_loops=not bool(has_write_file_in_recent_loops),
+                                task_file_exists=bool(task_file_exists),
+                                has_task_done_call=bool(has_task_done_call),
+                                no_action_since=getattr(loop, "no_action_since", None),
+                                forced_completion_hint=bool(task_file_exists and getattr(loop, "no_action_since", 0) >= 2),
+                            )
+                    except Exception:
+                        pass
+                    
+                    # If we already have files for this task and keep thinking, emit a forced completion hint
+                    if task_file_exists and loop.no_action_since >= 2:
+                        completion_signals = True  # allow completion path
+                        history.append({
+                            "role": "system",
+                            "content": (
+                                "✅ You have already created/updated files for this task: "
+                                f"{', '.join([os.path.basename(f) for f in files_for_task])}.\n\n"
+                                "If anything is still missing, use tools now (write_file/read_file/etc.).\n"
+                                "If the task is finished, call `task_done(summary=\"...\")` NOW.\n"
+                                "Do not keep thinking without a tool or `task_done`."
+                            )
+                        })
+                        loop.no_action_since = 0
+                    
+                    if task_file_exists:
+                        nudge_content = (
+                            f"🚨 [bold red]CRITICAL: TASK ALREADY FINISHED![/]\n\n"
+                            f"**Task:** {current}\n"
+                            f"**Status:** The file(s) {', '.join([os.path.basename(f) for f in files_for_task])} have been successfully created/modified.\n\n"
+                            f"**MANDATORY ACTION:**\n"
+                            f"You are wasting tokens by thinking. Call `task_done(summary='...')` NOW to finish this task.\n"
+                            f"Do NOT write any more code for this task. MOVE TO THE NEXT ONE."
+                        )
+                        tui.set_action(f"Task finished - forcing task_done...")
+                    else:
+                        nudge_content = (
+                            f"⚠️ TASKS INCOMPLETE - Continue working!\n\n"
+                            f"**Progress:** {completed_count}/{total_count} tasks completed\n"
+                            f"**Remaining:** {len(remaining)} tasks\n\n"
+                            f"**Current task:** {current}\n\n"
+                        )
                     
                     if only_reading:
                         nudge_content += (
@@ -4059,14 +4416,49 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         "role": "system",
                         "content": nudge_content
                     })
+                    _trace("Sent nudge to continue/finish task")
+                    continue
+
+                # AUTO-COMPLETE SAFETY: If files exist for current task but we keep idling, auto-complete to break deadlock
+                if task_file_exists and loop.no_action_since >= 4:
+                    summary = (
+                        f"Auto-completed due to inactivity. "
+                        f"Files present: {', '.join([os.path.basename(f) for f in files_for_task])}"
+                    )
+                    task_mgr.complete_current_task(summary)
+                    next_task = task_mgr.get_current_task()
+                    tui.append_stream(f"✅ Auto-completed: {current[:60] if current else 'task'}")
+                    tui.set_action(f"📋 {task_mgr.get_progress()}")
+                    loop.no_action_since = 0
+
+                    # Archive/compress current history to keep context small
+                    current_context_manager.compress(history)
+
+                    if next_task:
+                        completed_info = "\n".join([f"- {t['task']}: {t.get('result', 'done')}" for t in task_mgr.todos if t['status'] == 'completed'])
+                        task_idx = task_mgr.current_task_idx
+                        current_context_manager, history = create_fresh_context_for_task(task_idx, next_task, completed_info)
+                        history_snapshot_len = len(history)
+                        tui.append_stream(f"🔄 Fresh context created for Task {task_idx + 1}: {next_task[:40]}")
+                        result = f"✅ Task auto-completed.\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
+                    elif task_mgr.is_all_done():
+                        result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
+                        tui.append_stream("🎉 All tasks done (auto-complete)!")
+                    else:
+                        result = "✅ Task auto-completed. Continue with remaining work."
+
+                    # Skip rest of loop, since we advanced the task
                     continue
             
-            # Only accept completion if:
-            # 1. TODO list is done AND at least 3 loops completed (minimum work done)
-            # 2. Must have actually used write_file (not just template files)
-            min_loops_required = 3  # Require at least 3 loops to complete
-            has_done_real_work = len(files_created) > len(template_files)  # Created more than just templates
-            can_complete = task_mgr.is_all_done() and loop.loop_count >= min_loops_required and has_done_real_work
+                # Only accept completion if:
+                # 1. TODO list is done AND at least 3 loops completed (minimum work done)
+                # 2. Must have actually used write_file (not just template files)
+                min_loops_required = 3  # Require at least 3 loops to complete
+                has_done_real_work = (
+                    len(files_created) > len(template_files) or
+                    len(task_file_map.get(task_mgr.current_task_idx, [])) > 0
+                )  # Created/modified files for current task
+                can_complete = task_mgr.is_all_done() and loop.loop_count >= min_loops_required and has_done_real_work
             
             # CRITICAL: Only allow completion if ALL conditions are met
             if completion_signals and can_complete:
@@ -4175,7 +4567,9 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     continue
             
             # Plan-only detection (mentioned files but didn't create them)
-            if msg_content:
+            # CRITICAL FIX: Only check this if NO tool calls! 
+            # If tool calls exist, execute them instead of complaining.
+            if msg_content and not tool_calls:
                 file_mentions = re.findall(r'[\w-]+\.(html|css|js|py|ts|json)', msg_content.lower())
                 if file_mentions and len(files_created) <= len(template_files):
                     tui.set_action("Plan detected - forcing execution")
@@ -4203,27 +4597,208 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
             # Track repeated errors to prevent infinite loops
             if not hasattr(loop, 'error_history'):
                 loop.error_history = []
+            
+            # CRITICAL FIX: Ensure tool calls are actually executed!
+            if tool_calls:
+                tui.append_stream(f"[DEBUG] EXEC: Found {len(tool_calls)} tool calls to execute")
+                loop.record_activity() # Reset idle timer
 
-            tui.append_stream(f"[DEBUG] START EXEC LOOP ({len(tool_calls)} tools)")
+            # Initialize task flags at the start of the loop
+            current_task_name = task_mgr.get_current_task()
+            task_lower_name = current_task_name.lower() if current_task_name else ""
+            is_create_task_init = any(kw in task_lower_name for kw in ['create', 'generate', 'write', 'build', 'implement', 'make'])
+            is_file_task = is_create_task_init or any(kw in task_lower_name for kw in ['edit', 'modify', 'update', 'fix', 'change', 'add', 'file'])
+
+            # CRITICAL: Extensive Debugging for Tool Execution
+            # Route debug traces into the per-subagent debug logger (repo-local).
+            def _log_to_file(msg):
+                try:
+                    if lg:
+                        lg.event("coder_debug", message=str(msg)[:1000])
+                except Exception:
+                    pass
+
+            if tool_calls:
+                msg = f"[DEBUG-X] Found {len(tool_calls)} potential tool calls in response."
+                tui.append_stream(msg)
+                _log_to_file(msg)
+                for i, tc in enumerate(tool_calls):
+                    # Log name and full arguments to see what's happening
+                    tc_name = tc.get('function', {}).get('name')
+                    tc_args = tc.get('function', {}).get('arguments')
+                    msg = f"[DEBUG-X] Tool {i+1}: {tc_name} | Args Len: {len(tc_args) if tc_args else 0}"
+                    tui.append_stream(msg)
+                    _log_to_file(f"Tool {i+1} Name: {tc_name}")
+                    # Do NOT log raw arguments (can include file contents). Length is enough for debugging.
+                    _log_to_file(f"Tool {i+1} Args Len: {len(tc_args) if tc_args else 0}")
 
             for tc in tool_calls:
                 fn_name = tc['function']['name'].strip()
                 fn_args_str = tc['function']['arguments']
                 
                 # DEBUG: Trace execution flow
-                tui.append_stream(f"[DEBUG] EXEC: Processing '{fn_name}'")
+                msg = f"[DEBUG-X] EXEC START: Processing '{fn_name}'"
+                tui.append_stream(msg)
+                _log_to_file(msg)
+                
+                # Check if base_dir exists and is writable
+                if fn_name == "write_file":
+                    if not os.path.exists(base_dir):
+                        msg = f"[DEBUG-X] CRITICAL: Base dir {base_dir} does not exist!"
+                        tui.append_stream(msg)
+                        _log_to_file(msg)
+                        try:
+                            os.makedirs(base_dir, exist_ok=True)
+                            msg = f"[DEBUG-X] Created base dir."
+                            tui.append_stream(msg)
+                            _log_to_file(msg)
+                        except Exception as e:
+                            msg = f"[DEBUG-X] FAILED to create base dir: {e}"
+                            tui.append_stream(msg)
+                            _log_to_file(msg)
                 
                 if fn_name in self.local_tools:
                      # tui.append_stream(f"[DEBUG] Found in local_tools")
                      pass
                 elif fn_name not in ["task_done", "set_todos", "web_fetch", "web_deep_search", "coding_agent", "git_init", "git_add_commit", "git_status", "git_log"]:
-                     tui.append_stream(f"[DEBUG] Tool '{fn_name}' NOT found in local_tools. Available: {list(self.local_tools.keys())}")
+                     msg = f"[DEBUG-X] Tool '{fn_name}' NOT found in local_tools. Available: {list(self.local_tools.keys())}"
+                     tui.append_stream(msg)
+                     _log_to_file(msg)
                 
+                json_error = None
                 try:
-                    fn_args = json.loads(fn_args_str)
+                    parsed = json.loads(fn_args_str)
+                    if isinstance(parsed, dict):
+                        fn_args = parsed
+                        msg = f"[DEBUG-X] JSON parse OK."
+                        tui.append_stream(msg)
+                        _log_to_file(msg)
+                    elif isinstance(parsed, list) and fn_name == "set_todos":
+                        # Auto-fix for set_todos(["task1", "task2"])
+                        fn_args = {"tasks": parsed}
+                        msg = f"[INFO] Auto-corrected list args for set_todos"
+                        tui.append_stream(msg)
+                        _log_to_file(msg)
+                    elif isinstance(parsed, str) and fn_name == "set_todos":
+                        # Auto-fix for set_todos("task1")
+                        fn_args = {"tasks": [parsed]}
+                        msg = f"[INFO] Auto-corrected string arg for set_todos"
+                        tui.append_stream(msg)
+                        _log_to_file(msg)
+                    else:
+                        msg = f"[WARN] JSON parsed to {type(parsed)}, expected dict. Using empty dict."
+                        tui.append_stream(msg)
+                        _log_to_file(msg)
+                        fn_args = {}
                 except Exception as e:
-                    tui.append_stream(f"[ERROR] JSON parse error for {fn_name}: {e}")
-                    fn_args = {}
+                    json_error = str(e)
+                    msg = f"[ERROR] JSON parse error for {fn_name}: {e}"
+                    tui.append_stream(msg)
+                    _log_to_file(msg)
+                    msg = f"[DEBUG] Raw args (len={len(fn_args_str)}): {fn_args_str[:100]}..."
+                    tui.append_stream(msg)
+                    _log_to_file(msg)
+                    
+                    # ROBUST FALLBACK: Regex Extraction
+                    # If JSON fails (common with long file content), try to extract path and content directly
+                    
+                    # 1. Handle write_file (Path + Content)
+                    if fn_name == "write_file":
+                        extracted_args = {}
+                        # Extract path
+                        path_match = re.search(r'"path"\s*:\s*"([^"]+)"', fn_args_str)
+                        if path_match:
+                            extracted_args["path"] = path_match.group(1)
+                        
+                        # Extract content
+                        content_match = re.search(r'"content"\s*:\s*"(.*)', fn_args_str, re.DOTALL)
+                        if content_match:
+                            content_raw = content_match.group(1)
+                            end_quote_match = re.search(r'(.*)"\s*\}\s*$', content_raw, re.DOTALL)
+                            if end_quote_match:
+                                content_clean = end_quote_match.group(1)
+                            else:
+                                content_clean = content_raw.rstrip('"} ]')
+                                if content_clean.endswith('"'): content_clean = content_clean[:-1]
+                            
+                            content_clean = content_clean.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+                            extracted_args["content"] = content_clean
+                            
+                        if "path" in extracted_args and "content" in extracted_args:
+                            # CRITICAL: Check if we are just rewriting the same content
+                            path = extracted_args["path"]
+                            content = extracted_args["content"]
+                            full_path = path if os.path.isabs(path) else os.path.join(base_dir, path)
+                            
+                            is_duplicate_write = False
+                            if os.path.exists(full_path):
+                                try:
+                                    with open(full_path, 'r', encoding='utf-8-sig') as f: # Handle BOM
+                                        existing_content = f.read()
+                                    # Compare stripped content to ignore whitespace differences
+                                    if content.strip() == existing_content.strip():
+                                        is_duplicate_write = True
+                                except:
+                                    pass
+                            
+                            if is_duplicate_write:
+                                tui.append_stream(f"[INFO] Skipping duplicate write for {path} (content identical)")
+                                
+                                # CRITICAL: Still track this file for the current task even if we skip the physical write!
+                                # This ensures the "Task Complete Nudge" knows the file exists.
+                                current_task_idx = task_mgr.current_task_idx
+                                if current_task_idx not in task_file_map:
+                                    task_file_map[current_task_idx] = []
+                                if full_path not in task_file_map[current_task_idx]:
+                                    task_file_map[current_task_idx].append(full_path)
+                                
+                                if full_path not in files_created:
+                                    files_created.append(full_path)
+                                
+                                # Add a fake success message to history
+                                history.append({
+                                    "role": "tool", 
+                                    "tool_call_id": tc['id'],
+                                    "name": "write_file",
+                                    "content": f"✓ File {path} already exists with identical content. No changes made. You can proceed to the next task."
+                                })
+                                update_history_in_dict()
+                                continue # Skip to next tool
+                            else:
+                                fn_args = extracted_args
+                                tui.append_stream(f"[INFO] Regex extracted args for write_file")
+                    
+                    # 2. Handle single-argument tools (web_search, etc.)
+                    elif fn_name in ["web_fetch", "web_deep_search", "web_search", "bash", "python_sandbox"]:
+                        arg_map = {
+                            "web_fetch": "url",
+                            "web_deep_search": "query",
+                            "web_search": "query", # Map alias
+                            "bash": "command",
+                            "python_sandbox": "code"
+                        }
+                        main_arg = arg_map.get(fn_name)
+                        # Extract "arg": "value..."
+                        match = re.search(rf'"{main_arg}"\s*:\s*"(.*)', fn_args_str, re.DOTALL)
+                        if match:
+                            val_raw = match.group(1)
+                            end_quote_match = re.search(r'(.*)"\s*[\},]', val_raw, re.DOTALL)
+                            if end_quote_match:
+                                val_clean = end_quote_match.group(1)
+                            else:
+                                val_clean = val_raw.rstrip('"} ]')
+                                if val_clean.endswith('"'): val_clean = val_clean[:-1]
+                            
+                            val_clean = val_clean.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+                            fn_args = {main_arg: val_clean}
+                            
+                            # Handle alias mapping for execution
+                            if fn_name == "web_search":
+                                fn_name = "web_deep_search" # Remap to actual tool name
+                                
+                            tui.append_stream(f"[INFO] Regex extracted {main_arg} for {fn_name}")
+                    else:
+                        fn_args = {}
 
                 # Reset consecutive_task_done counter if a different tool is called
                 if fn_name != "task_done" and hasattr(loop, 'consecutive_task_done'):
@@ -4255,6 +4830,11 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     )
                     tui.append_stream("Recursion blocked: Agent tried to call itself")
                 
+                # ALIAS: web_search -> web_deep_search
+                if fn_name == "web_search":
+                    fn_name = "web_deep_search"
+                    tui.append_stream("[INFO] Redirecting web_search -> web_deep_search")
+                
                 # ===== TODO MANAGEMENT TOOLS =====
                 if fn_name == "set_todos":
                     tasks = fn_args.get("tasks", [])
@@ -4278,6 +4858,18 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             tui.append_stream("set_todos rejected - TODOs already exist!")
                     elif tasks:
                         task_mgr.set_todos(tasks)
+                        try:
+                            if lg:
+                                lg.event(
+                                    "todos_set",
+                                    source="model_tool_call",
+                                    tasks_count=len(tasks),
+                                    tasks_preview=[str(t)[:120] for t in (tasks[:5] if isinstance(tasks, list) else [])],
+                                    current_task_idx=getattr(task_mgr, "current_task_idx", None),
+                                    current_task_preview=(str(task_mgr.get_current_task() or "")[:180]),
+                                )
+                        except Exception:
+                            pass
                         tui.set_action(f"TODO: {len(tasks)} tasks")
                         tui.append_stream(f"Created TODO list with {len(tasks)} tasks")
                         for i, t in enumerate(tasks[:5], 1):
@@ -4307,6 +4899,16 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 task_histories[0] = history
                                 history_snapshot_len = len(history)
                                 tui.append_stream(f"🔄 Switched to Task 1 context: {first_task[:40]}")
+                                try:
+                                    if lg:
+                                        lg.event(
+                                            "task_context_switch",
+                                            to_task_idx=0,
+                                            to_task_preview=(first_task[:180] if first_task else ""),
+                                            is_task_context=(current_context_manager != main_context_manager),
+                                        )
+                                except Exception:
+                                    pass
                                 # Debug: Verify context switch worked
                                 is_now_task = (current_context_manager != main_context_manager)
                                 tui.append_stream(f"[DEBUG] Context switch verified: is_task_context={is_now_task}")
@@ -4485,6 +5087,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         # For file-related tasks, check if files were created/modified
                         task_lower = current.lower() if current else ""
                         is_create_task = any(kw in task_lower for kw in ['create', 'generate', 'write', 'build', 'implement', 'make'])
+                        is_file_task = is_create_task or any(kw in task_lower for kw in ['edit', 'modify', 'update', 'fix', 'change', 'add', 'file'])
                         
                         # CRITICAL: If task is to create something, but no files were created -> BLOCK
                         # We check if ANY files were created in the whole session (files_created)
@@ -4748,6 +5351,8 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 # CRITICAL FIX: Mark task as completed!
                                 summary = fn_args.get("summary", "done")
                                 task_mgr.complete_current_task(summary)
+                                # Run linter for files of this task (if supported types)
+                                _run_linter_for_files(files_for_current_task or files_created, history, self.local_tools)
                                 next_task = task_mgr.get_current_task()
                                 
                                 tui.append_stream(f"Completed: {current[:40] if current else 'task'}")
@@ -4764,10 +5369,13 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 # CREATE FRESH CONTEXT FOR NEW TASK - Isolated context per task
                                 # ═══════════════════════════════════════════════════════════════
                                 if next_task:
+                                    # Build summary of completed work for context continuity
+                                    completed_info = "\n".join([f"- {t['task']}: {t.get('result', 'done')}" for t in task_mgr.todos if t['status'] == 'completed'])
+                                    
                                     # Create completely fresh context for the new task
                                     # This isolates each task with its own ContextManager and history
                                     task_idx = task_mgr.current_task_idx
-                                    current_context_manager, history = create_fresh_context_for_task(task_idx, next_task)
+                                    current_context_manager, history = create_fresh_context_for_task(task_idx, next_task, completed_info)
                                     history_snapshot_len = len(history)  # Update snapshot for new context
                                     tui.append_stream(f"🔄 Fresh context created for Task {task_idx + 1}: {next_task[:40]}")
                                 
@@ -4783,6 +5391,7 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             # Non-file task or no files created yet - allow completion
                             summary = fn_args.get("summary", "done")
                             task_mgr.complete_current_task(summary)
+                            _run_linter_for_files(files_for_current_task, history, self.local_tools)
                             next_task = task_mgr.get_current_task()
                             
                             tui.append_stream(f"✅ Completed: {current[:40] if current else 'task'}")
@@ -4798,10 +5407,13 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                             # CREATE FRESH CONTEXT FOR NEW TASK - Isolated context per task
                             # ═══════════════════════════════════════════════════════════════
                             if next_task:
+                                # Build summary of completed work for context continuity
+                                completed_info = "\n".join([f"- {t['task']}: {t.get('result', 'done')}" for t in task_mgr.todos if t['status'] == 'completed'])
+                                
                                 # Create completely fresh context for the new task
                                 # This isolates each task with its own ContextManager and history
                                 task_idx = task_mgr.current_task_idx
-                                current_context_manager, history = create_fresh_context_for_task(task_idx, next_task)
+                                current_context_manager, history = create_fresh_context_for_task(task_idx, next_task, completed_info)
                                 history_snapshot_len = len(history)  # Update snapshot for new context
                                 tui.append_stream(f"🔄 Fresh context created for Task {task_idx + 1}: {next_task[:40]}")
                             
@@ -4922,9 +5534,14 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                     
                     # Fix relative paths and show in stream
                     if fn_name == "write_file":
+                        is_template_file = False  # Initialize to prevent UnboundLocalError
                         if "path" not in fn_args:
-                            tui.append_stream(f"[ERROR] write_file called without 'path': {fn_args}")
-                            result = "Error: Missing 'path' argument"
+                            msg = f"Error: Missing 'path' argument"
+                            if 'json_error' in locals() and json_error:
+                                msg += f". JSON was malformed/truncated: {json_error}"
+                            
+                            tui.append_stream(f"[ERROR] {msg}")
+                            result = msg
                             # Continue to let result be added to history
                         else:
                             path = fn_args["path"]
@@ -5097,24 +5714,11 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         # Update Code Preview Panel
                         tui.set_code_preview(fname, fn_args.get("content", ""), "code")
 
-                        # Show code preview (first 5 lines) - DON'T clear stream!
-                        code_content = fn_args.get("content", "")
-                        # Use append_with_context if available
+                        # Log start of writing
                         if 'append_with_context' in locals():
-                            append_with_context(f"Creating {fname}:")
+                            append_with_context(f"Writing {fname}...")
                         else:
-                            tui.append_stream(f"Creating {fname}:")
-                        code_lines = code_content.split('\n')[:5]
-                        for line in code_lines:
-                            if 'append_with_context' in locals():
-                                append_with_context(line[:65] if len(line) <= 65 else line[:62] + "...")
-                            else:
-                                tui.append_stream(line[:65] if len(line) <= 65 else line[:62] + "...")
-                        if len(code_content.split('\n')) > 5:
-                            if 'append_with_context' in locals():
-                                append_with_context("...")
-                            else:
-                                tui.append_stream("...")
+                            tui.append_stream(f"Writing {fname}...")
                         
                         live.update(tui.render())
                     elif fn_name == "read_file":
@@ -5137,7 +5741,30 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         live.update(tui.render())
                     
                     try:
+                        # Structured per-subagent debug logging (action + reaction)
+                        t0 = time.time()
+                        try:
+                            if lg:
+                                from vaf.core.subagent_debug import sanitize_args
+                                lg.event("tool_start", tool=fn_name, args=sanitize_args(fn_name, fn_args))
+                        except Exception:
+                            pass
+
                         result = tool.run(**fn_args)
+
+                        try:
+                            if lg:
+                                from vaf.core.subagent_debug import summarize_result
+                                lg.event(
+                                    "tool_end",
+                                    tool=fn_name,
+                                    duration_ms=int((time.time() - t0) * 1000),
+                                    ok=True,
+                                    **summarize_result(result),
+                                )
+                        except Exception:
+                            pass
+
                         tui.append_stream(f"[DEBUG] Tool {fn_name} result: {str(result)[:100]}...")
                         result_str = str(result)
                         
@@ -5200,16 +5827,52 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                                 recent_loop_write_files.append(True)  # Track this loop had write_file
                                 
                                 tui.update_file(os.path.basename(path), "done", size)
+                                
                                 # Use append_with_context if available
-                                file_msg = f"{os.path.basename(path)} ({size}B)"
+                                size_str = f"{size:,}B" if size < 1024 else f"{size/1024:.1f} KB"
+                                file_msg = f"] {os.path.basename(path)} ({size_str}) done"
+                                
+                                # FULL PATH VISIBILITY
+                                full_path_msg = f"[SAVED] 💾 {path}"
+                                _trace(f"💾 FILE SAVED: {path}") 
+                                
                                 if 'append_with_context' in locals():
                                     append_with_context(file_msg)
+                                    append_with_context(full_path_msg)
                                 else:
                                     tui.append_stream(file_msg)
+                                    tui.append_stream(full_path_msg)
+                                
+                                # Show first 10 lines of saved content
+                                code_content = fn_args.get("content", "")
+                                code_lines = code_content.split('\n')[:10]
+                                for line in code_lines:
+                                    if 'append_with_context' in locals():
+                                        append_with_context(f"  {line[:65]}")
+                                    else:
+                                        tui.append_stream(f"  {line[:65]}")
+                                if len(code_content.split('\n')) > 10:
+                                    if 'append_with_context' in locals():
+                                        append_with_context("  ...")
+                                    else:
+                                        tui.append_stream("  ...")
+                                
                                 result = f"✓ Created {path} ({size} bytes)"
                                 
-                                # Nudge to finish if this was the main action
-                                result += "\n\n(If this completes the current task, call `task_done` now.)"
+                                # CRITICAL: Stronger nudge after write
+                                history.append({
+                                    "role": "system",
+                                    "content": (
+                                        f"✅ File `{os.path.basename(path)}` successfully written.\n\n"
+                                        f"**DECISION TIME:**\n"
+                                        f"1. Is this task complete? -> Call `task_done(summary='...')` NOW.\n"
+                                        f"2. Is more code needed? -> Call `write_file` again.\n\n"
+                                        f"Do NOT just think about it. ACT."
+                                    )
+                                })
+                                # Reset idle loop counter on write
+                                if hasattr(loop, 'idle_loop_count'):
+                                    loop.idle_loop_count = 0
                                 
                                 # Automatically run linter after successful write_file
                                 try:
@@ -5252,6 +5915,12 @@ When finished, call `task_done(summary="...")` to mark it complete and move to t
                         result = f"Error: {error_msg}"
                         result_str = result
                         tui.append_stream(f"❌ Error: {error_msg[:50]}")
+                        try:
+                            if lg:
+                                from vaf.core.subagent_debug import summarize_result
+                                lg.event("tool_end", tool=fn_name, ok=False, error=error_msg, **summarize_result(result))
+                        except Exception:
+                            pass
                         if fn_name == "write_file" and "path" in fn_args:
                             tui.update_file(os.path.basename(fn_args["path"]), "error")
                             

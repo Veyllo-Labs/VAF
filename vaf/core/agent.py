@@ -3268,6 +3268,14 @@ class Agent:
                     self._event_sink(evt)
                 except Exception:
                     pass
+            # Sub-agent debug logging (actions + system reactions, no thoughts/prompts)
+            try:
+                from vaf.core.subagent_debug import get_subagent_logger_from_env
+                lg = get_subagent_logger_from_env()
+                if lg:
+                    lg.event("agent_event", payload=evt)
+            except Exception:
+                pass
         
         def make_json_serializable(obj):
             """
@@ -3311,7 +3319,13 @@ class Agent:
 
         # Convert Path objects in args to strings for JSON serialization (OS-independent)
         serializable_args = make_json_serializable(args) if args else {}
-        emit({"type": "tool_start", "tool": name, "args": serializable_args})
+        # Sanitize heavy fields (content/code/command) before logging
+        try:
+            from vaf.core.subagent_debug import sanitize_args
+            dbg_args = sanitize_args(name, serializable_args)
+        except Exception:
+            dbg_args = serializable_args
+        emit({"type": "tool_start", "tool": name, "args": dbg_args})
         try:
             if name in self.tools:
                 result = self.tools[name].run(**args)
@@ -3357,6 +3371,14 @@ class Agent:
                     result = unsafe_result
 
         emit({"type": "tool_end", "tool": name})
+        # Log system reaction (result summary only)
+        try:
+            from vaf.core.subagent_debug import get_subagent_logger_from_env, summarize_result
+            lg = get_subagent_logger_from_env()
+            if lg:
+                lg.event("tool_result", tool=name, **summarize_result(result))
+        except Exception:
+            pass
 
         # TRUNCATION: Limit context usage for massive outputs (e.g. list_files on Downloads)
         MAX_LEN = 2000

@@ -26,6 +26,7 @@ bin/
 # IDE und Editor
 .vscode/
 .idea/
+.claude
 *.swp
 *.swo
 *~

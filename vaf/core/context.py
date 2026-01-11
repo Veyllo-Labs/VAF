@@ -286,53 +286,82 @@ class ContextManager:
         usage = self.get_usage_percent(history)
         return usage >= self.trigger_threshold
     
-    def compress(self, history: List[Dict]) -> List[Dict]:
+    def compress(self, history: List[Dict], preserve_tools: List[str] = None) -> List[Dict]:
         """
-        Cursor-style compression:
+        Cursor-style compression with tool result preservation:
         1. Archive full history for potential restoration
         2. Keep system prompt
-        3. Keep recent messages raw
-        4. Summarize old messages into Intent + State context
+        3. Preserve critical tool results (write_file, read_file, set_todos)
+        4. Keep recent messages raw
+        5. Summarize old messages into Intent + State context
+
+        Args:
+            history: Full history to compress
+            preserve_tools: List of tool names whose results should be preserved
         """
         from vaf.cli.ui import UI
-        
+
+        if preserve_tools is None:
+            preserve_tools = ["set_todos", "write_file", "read_file"]
+
         if len(history) <= self.recent_memory_size + 2:
             return history
-        
+
         current_tokens = self.estimate_tokens(history)
         UI.event("Context", f"Compressing ({current_tokens}/{self.max_tokens} tokens, {self.get_usage_percent(history):.0%})...", style="info")
-        
+
         # 1. Archive full history for restoration
         self._archive_history(history)
-        
+
         # 2. Update Intent and State from ALL messages
         for msg in history:
             if msg.get("role") == "user":
                 self.update_intent(msg.get("content", ""))
             self.update_state(msg)
-        
-        # 3. Build compressed history
+
+        # 3. Extract critical tool results from middle section
+        critical_tools = []
+        middle_section = history[1:-self.recent_memory_size] if len(history) > self.recent_memory_size + 1 else []
+
+        for msg in middle_section:
+            if msg.get("role") == "tool" and msg.get("name") in preserve_tools:
+                # Truncate content but keep structure
+                content = msg.get("content", "")
+                truncated = content[:300] + "..." if len(content) > 300 else content
+                critical_tools.append({
+                    "role": "tool",
+                    "name": msg.get("name"),
+                    "content": truncated,
+                    "tool_call_id": msg.get("tool_call_id", "")
+                })
+
+        # 4. Build compressed history
         system_prompt = history[0]  # Always keep
         recent_messages = history[-self.recent_memory_size:]  # Keep raw
-        
-        # 4. Build context summary
+
+        # 5. Build context summary
         context_summary = self._build_context_summary()
-        
-        # 5. Construct new history
+
+        # 6. Construct new history
         new_history = [system_prompt]
-        
+
         if context_summary:
             new_history.append({
                 "role": "system",
                 "content": context_summary
             })
-        
+
+        # Add critical tool results (max 5)
+        new_history.extend(critical_tools[-5:])
+
         new_history.extend(recent_messages)
-        
+
         new_tokens = self.estimate_tokens(new_history)
         UI.event("Context", f"Compressed: {len(history)} → {len(new_history)} msgs, {current_tokens} → {new_tokens} tokens", style="success")
+        if critical_tools:
+            UI.event("Context", f"Preserved {len(critical_tools[-5:])} critical tool results", style="dim")
         UI.event("Context", f"Full history archived. Use /restore to recover.", style="dim")
-        
+
         return new_history
     
     def _build_context_summary(self) -> str:

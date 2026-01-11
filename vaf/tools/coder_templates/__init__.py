@@ -263,22 +263,23 @@ class TemplateManager:
         return None
     
     @classmethod
-    def detect_template_type_with_llm(cls, task: str) -> tuple[Optional[str], str]:
+    def detect_template_type_with_llm(cls, task: str, user_preference: Optional[str] = None) -> tuple[Optional[str], str]:
         """
         Use LLM to intelligently detect which template type matches a task.
         This has its own context and runs BEFORE the main coding work begins.
         More accurate than keyword matching, especially for ambiguous cases.
-        
+
         Args:
             task: Task description from the main agent
-            
+            user_preference: Optional hint about user's preference (e.g., "no_template", "content_only")
+
         Returns:
             Tuple of (template_type, decision_info):
             - template_type: Template type or None if no template should be used
             - decision_info: Detailed information about the decision process
         """
         import requests
-        
+
         # Get available template types with descriptions
         available_templates = list(cls.TEMPLATES.keys())
         template_list = []
@@ -287,23 +288,35 @@ class TemplateManager:
             files = cls.TEMPLATES[ttype].get("files", [])
             file_names = [f.get("name", "") for f in files]
             template_list.append(f"- {ttype}: {desc} (creates: {', '.join(file_names)})")
-        
+
+        # Add user preference hint to prompt if provided
+        preference_hint = ""
+        if user_preference:
+            if user_preference == "no_template":
+                preference_hint = "\n**User Preference**: User indicated they prefer NO template (keywords: NO_TEMPLATE, FROM_SCRATCH).\nHowever, you can still recommend a template if you believe it would significantly help!"
+            elif user_preference == "content_only":
+                preference_hint = "\n**User Preference**: User wants CONTENT_ONLY (keywords: CONTENT_ONLY, ONLY THE CODE).\nThis suggests minimal structure. Consider 'none' unless a simple template clearly fits."
+            elif user_preference == "simple":
+                preference_hint = "\n**User Preference**: User wants something simple (keywords: SIMPLE, BASIC, MINIMAL).\nPrefer simpler templates or 'none' if the task is straightforward."
+
         prompt = f"""You are a template selection assistant for a coding agent. Your job is to analyze a task and determine which template (if any) should be used.
 
 Available Templates:
 {chr(10).join(template_list)}
 
-Task from Main Agent: "{task}"
+Task from Main Agent: "{task}"{preference_hint}
 
 DECISION PROCESS:
 1. **First, review all available templates above**
-2. **If a template matches the task well, use it** (e.g., "python_script", "website", etc.)
-3. **If NO template matches or you think you can do better without a template, return "none"**
-4. **When you return "none", the coding agent will:**
+2. **Consider the user's preference (if provided) as a HINT, but you make the final decision**
+3. **If a template matches the task well, use it** (e.g., "python_script", "website", etc.)
+4. **If NO template matches or you think starting from scratch is better, return "none"**
+5. **When you return "none", the coding agent will:**
    - Use `web_deep_search` to get information on how to implement this (returns a simple answer, no separate context)
    - Use that information to create a TODO list with `set_todos`
    - Then implement the solution from scratch
 
+IMPORTANT: User preferences are HINTS, not commands. If a template would genuinely help despite user preference, recommend it!
 
 Output ONLY the template type (e.g., "python_script", "website", "python_server", "none") - no explanation, no markdown, just the type."""
         
@@ -335,15 +348,24 @@ Output ONLY the template type (e.g., "python_script", "website", "python_server"
             
             # Build decision info
             decision_info = f"Available templates: {', '.join(available_templates)}\n"
+            if user_preference:
+                pref_names = {"no_template": "NO template", "content_only": "CONTENT_ONLY", "simple": "SIMPLE/MINIMAL"}
+                decision_info += f"User preference hint: {pref_names.get(user_preference, user_preference)}\n"
             decision_info += f"Task analyzed: {task[:80]}{'...' if len(task) > 80 else ''}\n"
             decision_info += f"LLM response: '{content}'\n"
             
             # Check if it's a valid template type
             if content in available_templates:
                 decision_info += f"Decision: Using template '{content}'"
+                if user_preference == "no_template":
+                    decision_info += " (overriding user preference - template will help)"
                 return content, decision_info
             elif content == "none":
-                decision_info += "Decision: No template matches\n"
+                decision_info += "Decision: No template"
+                if user_preference:
+                    decision_info += " (respecting user preference)\n"
+                else:
+                    decision_info += " (no template matches)\n"
                 decision_info += "-> Will use web_deep_search to research implementation\n"
                 decision_info += "-> Then create TODO list and implement from scratch"
                 return None, decision_info

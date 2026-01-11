@@ -1235,6 +1235,78 @@ class QualityChecker:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Context State Management - Robust context switching with rollback
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from dataclasses import dataclass, field
+
+@dataclass
+class ContextState:
+    """
+    Encapsulates current context state for robust switching.
+
+    Each ContextState represents either:
+    - Main Context: Planning phase (set_todos)
+    - Task Context: Execution phase (work on specific task)
+
+    This allows clean context switching with rollback on failure.
+    """
+    context_manager: Any  # ContextManager instance
+    history: List[Dict]
+    phase: str  # "main", "task_0", "task_1", etc.
+    task_idx: Optional[int] = None
+
+    # State tracking per context
+    files_created: List[str] = field(default_factory=list)
+    tools_used: List[str] = field(default_factory=list)
+    last_tool_call: Optional[str] = None
+
+    def is_main(self) -> bool:
+        """Check if this is the main context (planning phase)."""
+        return self.phase == "main"
+
+    def is_task(self) -> bool:
+        """Check if this is a task context (execution phase)."""
+        return self.phase.startswith("task_")
+
+    def get_task_idx(self) -> Optional[int]:
+        """Get task index if in task context."""
+        if self.is_task():
+            try:
+                return int(self.phase.split("_")[1])
+            except (IndexError, ValueError):
+                return None
+        return None
+
+    def clone(self):
+        """Create a shallow copy for rollback."""
+        return ContextState(
+            context_manager=self.context_manager,
+            history=self.history.copy(),
+            phase=self.phase,
+            task_idx=self.task_idx,
+            files_created=self.files_created.copy(),
+            tools_used=self.tools_used.copy(),
+            last_tool_call=self.last_tool_call
+        )
+
+    def record_file_created(self, filepath: str):
+        """Record that a file was created in this context."""
+        if filepath not in self.files_created:
+            self.files_created.append(filepath)
+
+    def record_tool_call(self, tool_name: str):
+        """Record tool usage in this context."""
+        if tool_name not in self.tools_used:
+            self.tools_used.append(tool_name)
+        self.last_tool_call = tool_name
+
+    def has_created_files(self) -> bool:
+        """Check if any files were created in this context."""
+        return len(self.files_created) > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Git Tools for Coding Agent
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1766,15 +1838,22 @@ Thumbs.db
         # CHECK FOR CONTENT_ONLY MODE (before creating project directory)
         # ═══════════════════════════════════════════════════════════════════
         
-        # Skip template if task explicitly requests content-only (no project structure)
-        # This is used by automations that need just HTML/content, not a full project
+        # Detect user preferences for template usage (as hints, not hard blocks)
+        # The LLM will consider these preferences but can override if a template would genuinely help
+        user_template_preference = None
+        task_upper = task.upper()
+
+        if "NO_TEMPLATE" in task_upper or "FROM_SCRATCH" in task_upper or "WITHOUT TEMPLATE" in task_upper:
+            user_template_preference = "no_template"
+        elif "CONTENT_ONLY" in task_upper or "ONLY THE CODE" in task_upper or "ONLY THE HTML" in task_upper or "RETURN ONLY" in task_upper:
+            user_template_preference = "content_only"
+        elif "SIMPLE" in task_upper or "BASIC" in task_upper or "MINIMAL" in task_upper:
+            user_template_preference = "simple"
+
+        # Legacy: Hard skip for CONTENT_ONLY mode (creates temp dir instead of project)
+        # This is ONLY for automations that need temp content without project structure
         skip_template = (
-            "CONTENT_ONLY" in task.upper() or 
-            "NO_TEMPLATE" in task.upper() or
-            "ONLY THE" in task.upper() or  # "Generate ONLY the HTML..."
-            "RETURN ONLY" in task.upper() or  # "Return ONLY the HTML code..."
-            "NO PROJECT" in task.upper() or
-            "NO FILE PATHS" in task.upper()
+            "CONTENT_ONLY" in task_upper and ("AUTOMATION" in task_upper or "NO PROJECT" in task_upper or "NO FILE PATHS" in task_upper)
         )
         
         # Check if continuing existing project
@@ -1843,6 +1922,13 @@ Thumbs.db
             tui.set_action("Analyzing task for template...")
             # CRITICAL: Force immediate update BEFORE blocking operation
             tui.append_stream("[INFO] Starting template selection...")
+            if user_template_preference:
+                pref_labels = {
+                    "no_template": "User prefers NO template",
+                    "content_only": "User wants CONTENT_ONLY",
+                    "simple": "User wants SIMPLE/MINIMAL"
+                }
+                tui.append_stream(f"[HINT] {pref_labels.get(user_template_preference, user_template_preference)} (LLM will decide)")
             tui._needs_update = True  # Force animation thread to update immediately
             # CRITICAL: Force immediate update (outside lock, safe)
             try:
@@ -1857,8 +1943,9 @@ Thumbs.db
             task_snippet = task[:1000]
             
             # CRITICAL: Add timeout wrapper to prevent hanging
+            # Pass user preference as hint to LLM (Option B: LLM gets hint but decides)
             try:
-                template_type, decision_info = TemplateManager.detect_template_type_with_llm(task_snippet)
+                template_type, decision_info = TemplateManager.detect_template_type_with_llm(task_snippet, user_template_preference)
             except requests.exceptions.Timeout:
                 tui.append_stream("[WARN] Template selection timed out - continuing without template")
                 template_type, decision_info = None, "Template selection timed out - will create from scratch"
@@ -2009,6 +2096,7 @@ All file paths must be OS-independent (use forward slashes or Path objects).
 
 ## TOOLS
 - `set_todos(tasks=[...])`: REQUIRED FIRST step - break down the task into specific subtasks.
+- `web_search(query)`: Search web for docs, examples, or research BEFORE planning (optional).
 - `write_file(path, content)`: Create/update files - YOU MUST CALL THIS to actually create code.
 - `read_file(path)`: Read existing files.
 - `task_done(summary)`: Mark current task complete - ONLY call after you've actually written files.
@@ -2017,12 +2105,14 @@ All file paths must be OS-independent (use forward slashes or Path objects).
 Complete this task: "{task}"
 
 ## CRITICAL WORKFLOW (MUST FOLLOW):
-1. **PLAN**: Call `set_todos` with a list of specific steps.
-2. **ACT**: Use `write_file` to CREATE the actual code files - this is MANDATORY!
-3. **VERIFY**: Use `read_file` if needed to check existing code.
-4. **FINISH**: Call `task_done` ONLY after you've actually written files with `write_file`.
+1. **RESEARCH** (optional): Use `web_search` if you need docs/examples BEFORE planning.
+2. **PLAN**: Call `set_todos` with a list of specific steps.
+3. **ACT**: Use `write_file` to CREATE the actual code files - this is MANDATORY!
+4. **VERIFY**: Use `read_file` if needed to check existing code.
+5. **FINISH**: Call `task_done` ONLY after you've actually written files with `write_file`.
 
 **CRITICAL RULES:**
+- **IMPORTANT**: If you use `web_search` for research, you MUST then call `set_todos` immediately - do not loop searches!
 - You MUST call `write_file` before calling `task_done` - no exceptions!
 - Thinking about code or describing code is NOT enough - you must actually create files.
 - DO NOT call `task_done` without first calling `write_file` for the current task.
@@ -2053,36 +2143,156 @@ Complete this task: "{task}"
         # Use same max_tokens as main agent (from user config)
         max_tokens = Config.get("n_ctx", 8192)
         
-        # MAIN CONTEXT: For Template/Planning phase
+        # ═══════════════════════════════════════════════════════════════
+        # CONTEXT STATE INITIALIZATION (Hierarchical Context Architecture)
+        # ═══════════════════════════════════════════════════════════════
+        # Main Context: For Template/Planning phase (set_todos)
+        # Task Contexts: Each task gets fresh ContextManager + History
+
         main_context_manager = ContextManager(max_tokens=max_tokens)
         main_history = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg}
         ]
-        
-        # TASK CONTEXTS: Each task gets its own isolated context
-        task_context_managers: Dict[int, ContextManager] = {}  # task_idx -> ContextManager
-        task_histories: Dict[int, List[Dict]] = {}  # task_idx -> history
-        
-        # Current context (switches between main and task contexts)
-        # CRITICAL: These variables will be updated by tool handlers via nonlocal declarations
-        current_context_manager = main_context_manager
-        history = main_history
+
+        # Initialize Main ContextState
+        current_state = ContextState(
+            context_manager=main_context_manager,
+            history=main_history,
+            phase="main"
+        )
+
+        # Backup for rollback on errors
+        last_stable_state = current_state.clone()
+
+        # Storage for all context states (main + tasks)
+        context_states: Dict[str, ContextState] = {
+            "main": current_state
+        }
+
+        # Legacy support - these will be kept in sync with current_state
+        # For compatibility with existing code that uses these variables
+        current_context_manager = current_state.context_manager
+        history = current_state.history
         history_snapshot_len = len(history)
+
+        # Helper function to sync legacy variables
+        def sync_legacy_vars():
+            """Sync legacy variables with current_state."""
+            nonlocal current_context_manager, history, history_snapshot_len
+            current_context_manager = current_state.context_manager
+            history = current_state.history
+            history_snapshot_len = len(history)
         
-        # Helper function to update history in appropriate dict
-        def update_history_in_dict():
-            """Update history in the appropriate dict (main or task-specific)."""
-            nonlocal main_history, task_histories, current_context_manager, history
-            if current_context_manager == main_context_manager:
-                main_history = history
+        # ═══════════════════════════════════════════════════════════════
+        # HELPER: Context Switch Functions with Rollback
+        # ═══════════════════════════════════════════════════════════════
+
+        def switch_to_task_context(task_idx: int, task_description: str) -> bool:
+            """
+            Switch to task context with rollback on failure.
+            Returns True on success, False on failure.
+            """
+            nonlocal current_state, last_stable_state, context_states
+
+            try:
+                # Save current state for rollback
+                last_stable_state = current_state.clone()
+
+                # Check if task context already exists
+                task_phase = f"task_{task_idx}"
+                if task_phase in context_states:
+                    # Reuse existing task context
+                    current_state = context_states[task_phase]
+                    tui.append_stream(f"🔄 Resumed Task {task_idx+1} context")
+                else:
+                    # Create fresh task context
+                    completed_info = _build_completed_info()
+                    task_cm, task_hist = create_fresh_context_for_task(
+                        task_idx, task_description, completed_info
+                    )
+
+                    # Create new state
+                    new_state = ContextState(
+                        context_manager=task_cm,
+                        history=task_hist,
+                        phase=task_phase,
+                        task_idx=task_idx
+                    )
+
+                    # Store and activate
+                    context_states[task_phase] = new_state
+                    current_state = new_state
+
+                    tui.append_stream(f"🔄 Switched to Task {task_idx+1} context (fresh)")
+
+                # Sync legacy variables for compatibility
+                sync_legacy_vars()
+
+                # Log context switch
+                try:
+                    if lg:
+                        lg.event("context_switch",
+                            from_phase=last_stable_state.phase,
+                            to_phase=current_state.phase,
+                            task_idx=task_idx,
+                            success=True)
+                except Exception:
+                    pass
+
+                return True
+
+            except Exception as e:
+                # Rollback to last stable state
+                tui.append_stream(f"[ERROR] Context switch failed: {str(e)[:100]}")
+                current_state = last_stable_state
+                sync_legacy_vars()
+
+                try:
+                    if lg:
+                        lg.event("context_switch_failed",
+                            error=str(e),
+                            rolled_back=True)
+                except Exception:
+                    pass
+
+                return False
+
+        def _build_completed_info() -> str:
+            """Build summary of completed tasks for context injection."""
+            if not task_mgr.todos:
+                return ""
+
+            completed = []
+            for i, todo in enumerate(task_mgr.todos):
+                if todo["status"] == "completed":
+                    result = todo.get("result", "done")
+                    completed.append(f"✅ Task {i+1}: {todo['task']} - {result}")
+
+            if not completed:
+                return ""
+
+            return "\n".join(completed)
+
+        def _build_state_glue() -> str:
+            """Build Context Glue summary from current state."""
+            glue = "### 📁 PROJECT STATE\n"
+
+            if files_created:
+                glue += f"**Created:** {', '.join([os.path.basename(f) for f in files_created[:10]])}\n"
+                if len(files_created) > 10:
+                    glue += f"... and {len(files_created)-10} more files\n"
             else:
-                # Find which task this context belongs to
-                for idx, cm in task_context_managers.items():
-                    if cm == current_context_manager:
-                        task_histories[idx] = history
-                        break
-        
+                glue += "**No files created yet**\n"
+
+            glue += f"\n### 🎯 CURRENT PROGRESS\n"
+            glue += f"Phase: {current_state.phase}\n"
+            if current_state.is_task():
+                glue += f"Task {current_state.task_idx + 1}: {task_mgr.get_current_task()}\n"
+                glue += f"Files in this context: {len(current_state.files_created)}\n"
+
+            return glue
+
         # ═══════════════════════════════════════════════════════════════
         # HELPER: Create fresh context for a new task (with new ContextManager)
         # ═══════════════════════════════════════════════════════════════
@@ -2090,12 +2300,12 @@ Complete this task: "{task}"
             """
             Creates a completely fresh context for a new task.
             This isolates each task with its own ContextManager and history, preventing confusion from previous tasks.
-            
+
             Args:
                 task_idx: Index of the current task
                 current_task: Description of the current task
                 completed_info: Information about previously completed tasks to provide continuity
-                
+
             Returns:
                 (ContextManager, List[Dict]): New ContextManager and fresh history for this task
             """
@@ -2179,10 +2389,11 @@ All files must be saved inside this directory.
 {fresh_existing_files_info}
 
 ## AVAILABLE TOOLS (task execution)
-- `read_file(path)`
-- `list_files(path)`
-- `write_file(path, content)`
-- `task_done(summary)`
+- `read_file(path)` - Read file contents
+- `list_files(path)` - List directory contents
+- `write_file(path, content)` - Create/modify files with actual code
+- `web_search(query)` - Search web for docs, examples, solutions
+- `task_done(summary)` - Mark task complete and move to next
 
 ## YOUR CURRENT TASK (Task {task_idx + 1})
 **{current_task}**
@@ -2190,6 +2401,7 @@ All files must be saved inside this directory.
 ## RULES
 - Focus ONLY on the current task
 - Use `write_file` to actually create/modify files (do not just describe code)
+- **CRITICAL**: After `web_search`, immediately use the results to call `write_file` - DO NOT just think or plan
 - When finished, call `task_done(summary="...")`
 """
             
@@ -2221,9 +2433,8 @@ All files must be saved inside this directory.
                 {"role": "user", "content": fresh_user_msg}
             ]
             
-            # Store in task contexts
-            task_context_managers[task_idx] = task_context_manager
-            task_histories[task_idx] = task_history
+            # Store in task contexts (handled by switch_to_task_context now)
+            # No longer needed - context_states manages this
             
             # Return both ContextManager and history
             return task_context_manager, task_history
@@ -2303,7 +2514,7 @@ All files must be saved inside this directory.
                     }
                 ] + common_tools
             else:
-                # EXECUTION PHASE: write_file + task_done + sandbox + read tools
+                # EXECUTION PHASE: write_file + task_done + web_search + sandbox + read tools
                 # set_todos is HIDDEN to prevent re-planning loops
                 return [
                     {
@@ -2349,6 +2560,36 @@ All files must be saved inside this directory.
                                     }
                                 },
                                 "required": ["code"]
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "web_deep_search",
+                            "description": "Search the web for solutions, documentation, or examples. Use when you need to research APIs, fix errors, or find implementation examples.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {"type": "string", "description": "Search query (e.g., 'Python pandas read CSV example', 'fix React useEffect infinite loop')"},
+                                    "max_results": {"type": "integer", "description": "Maximum number of results (default: 5, max: 10)", "default": 5}
+                                },
+                                "required": ["query"]
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "web_search",
+                            "description": "Search the web for solutions, documentation, examples, or research. Alias for web_deep_search.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {"type": "string", "description": "Search query"},
+                                    "max_results": {"type": "integer", "description": "Maximum number of results (default: 5, max: 10)", "default": 5}
+                                },
+                                "required": ["query"]
                             }
                         }
                     }
@@ -2528,34 +2769,35 @@ All files must be saved inside this directory.
             
             _trace("Checking context size...")
             # Proactive compression: Check token usage and compress if > 85% of limit
-            estimated_tokens = current_context_manager.estimate_tokens(history)
-            if estimated_tokens > int(current_context_manager.max_tokens * 0.85):
-                tui.set_action(f"Proactive compression: {estimated_tokens}/{current_context_manager.max_tokens} tokens...")
+            estimated_tokens = current_state.context_manager.estimate_tokens(current_state.history)
+            if estimated_tokens > int(current_state.context_manager.max_tokens * 0.85):
+                tui.set_action(f"Proactive compression: {estimated_tokens}/{current_state.context_manager.max_tokens} tokens...")
                 live.update(tui.render())
-                history = current_context_manager.compress(history)
-                # Update history in appropriate dict
-                if current_context_manager == main_context_manager:
-                    main_history = history
-                else:
-                    # Find which task this context belongs to
-                    for idx, cm in task_context_managers.items():
-                        if cm == current_context_manager:
-                            task_histories[idx] = history
-                            break
+
+                # Compress with Context Glue preservation
+                current_state.history = current_state.context_manager.compress(current_state.history)
+
+                # Update in context_states storage
+                context_states[current_state.phase] = current_state
+
+                # Sync legacy vars
+                sync_legacy_vars()
+
+                tui.append_stream(f"[INFO] Context compressed (was {estimated_tokens} tokens)")
+
             # Also check normal threshold
-            elif current_context_manager.should_compress(history):
+            elif current_state.context_manager.should_compress(current_state.history):
                 tui.set_action("Compressing context...")
                 live.update(tui.render())
-                history = current_context_manager.compress(history)
-                # Update history in appropriate dict
-                if current_context_manager == main_context_manager:
-                    main_history = history
-                else:
-                    # Find which task this context belongs to
-                    for idx, cm in task_context_managers.items():
-                        if cm == current_context_manager:
-                            task_histories[idx] = history
-                            break
+
+                # Compress with Context Glue preservation
+                current_state.history = current_state.context_manager.compress(current_state.history)
+
+                # Update in context_states storage
+                context_states[current_state.phase] = current_state
+
+                # Sync legacy vars
+                sync_legacy_vars()
             tui.set_action(f"Loop {loop.loop_count}")
             live.update(tui.render())
             
@@ -2598,30 +2840,25 @@ All files must be saved inside this directory.
             # ═══════════════════════════════════════════════════════════════
             
             tui.set_action("Generating...")
-            
+
             # Determine if we're in main context or task context
-            # CRITICAL: Use nonlocal to access the updated current_context_manager
-            is_main_context = (current_context_manager == main_context_manager)
-            
+            is_main_context = current_state.is_main()
+
             # Debug: Log current context state
             if loop.loop_count <= 2:  # Only log first few loops to avoid spam
-                tui.append_stream(f"[DEBUG] Loop {loop.loop_count}: current_context_manager == main_context_manager: {is_main_context}")
-                tui.append_stream(f"[DEBUG] Loop {loop.loop_count}: task_context_managers keys: {list(task_context_managers.keys())}")
-            
+                tui.append_stream(f"[DEBUG] Loop {loop.loop_count}: phase={current_state.phase}, is_main={is_main_context}")
+                tui.append_stream(f"[DEBUG] Loop {loop.loop_count}: context_states keys: {list(context_states.keys())}")
+
             if is_main_context:
                 context_info = "[MAIN] Planning/Setup"
                 context_prefix = "[MAIN]"
             else:
-                # Find which task this context belongs to
-                current_task_idx = None
-                for idx, cm in task_context_managers.items():
-                    if cm == current_context_manager:
-                        current_task_idx = idx
-                        break
-                if current_task_idx is not None:
-                    current_task = task_mgr.todos[current_task_idx]["task"] if current_task_idx < len(task_mgr.todos) else "Unknown"
-                    context_info = f"[TASK {current_task_idx + 1}] {current_task[:50]}"
-                    context_prefix = f"[TASK {current_task_idx + 1}]"
+                # We're in a task context
+                task_idx = current_state.get_task_idx()
+                if task_idx is not None and task_idx < len(task_mgr.todos):
+                    current_task = task_mgr.todos[task_idx]["task"]
+                    context_info = f"[TASK {task_idx + 1}] {current_task[:50]}"
+                    context_prefix = f"[TASK {task_idx + 1}]"
                 else:
                     context_info = "[TASK] Execution"
                     context_prefix = "[TASK]"
@@ -2665,6 +2902,23 @@ All files must be saved inside this directory.
                     "function": {
                         "name": "web_deep_search",
                         "description": "Deep search the web for solutions, error fixes, or ideas. Returns summarized results without bloating context.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string", "description": "Search query"},
+                                "max_results": {"type": "integer", "description": "Maximum number of results (default: 5, max: 10)", "default": 5}
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                })
+
+                # Alias for web_deep_search (some LLMs prefer shorter names)
+                tools_schema.append({
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "description": "Search the web for solutions, documentation, examples, or research. Use when you need information from the internet.",
                         "parameters": {
                             "type": "object",
                             "properties": {
@@ -2904,13 +3158,9 @@ All files must be saved inside this directory.
                             history = new_history
                             
                             # Update history in appropriate dict
-                            if current_context_manager == main_context_manager:
-                                main_history = history
-                            else:
-                                for idx, cm in task_context_managers.items():
-                                    if cm == current_context_manager:
-                                        task_histories[idx] = history
-                                        break
+                            # Update current context state
+                            current_state.history = history
+                            context_states[current_state.phase] = current_state
                                         
                             tui.set_action(f"Compressed to {len(history)} msgs. Retrying...")
                             live.update(tui.render())
@@ -3037,7 +3287,9 @@ All files must be saved inside this directory.
                                     "content": "Your previous response was truncated because it reached the token limit. Please continue exactly where you left off. Do not repeat the beginning."
                                 })
                                 
-                            update_history_in_dict()
+                            # Update context state
+                            current_state.history = history
+                            context_states[current_state.phase] = current_state
                             # We don't break here, we let the loop handle the next request
                         
                         delta = choices[0].get('delta', {})
@@ -3123,11 +3375,8 @@ All files must be saved inside this directory.
                                             if is_main_ctx:
                                                 prefix = "[MAIN]"
                                             else:
-                                                current_task_idx = None
-                                                for idx, cm in task_context_managers.items():
-                                                    if cm == current_context_manager:
-                                                        current_task_idx = idx
-                                                        break
+                                                # Get task index from current_state
+                                                current_task_idx = current_state.get_task_idx()
                                                 prefix = f"[TASK {current_task_idx + 1}]" if current_task_idx is not None else "[TASK]"
                                             tui.append_stream(f"{prefix} {tool_msg}")
                                         live.update(tui.render())
@@ -3592,7 +3841,9 @@ All files must be saved inside this directory.
             # This prevents duplicate tool call displays
 
             history.append(msg)
-            update_history_in_dict()
+            # Update context state
+            current_state.history = history
+            context_states[current_state.phase] = current_state
 
             # FORCE DISPLAY CONTENT FROM MSG - Platform-independent, always show
             # Extract content from msg if we have it - NO CHECKS, JUST SHOW IT
@@ -3628,12 +3879,8 @@ All files must be saved inside this directory.
                         main_empty_counter += 1
                         consecutive_empty = main_empty_counter
                     else:
-                        # Find which task this context belongs to
-                        current_task_idx = None
-                        for idx, cm in task_context_managers.items():
-                            if cm == current_context_manager:
-                                current_task_idx = idx
-                                break
+                        # Get task index from current_state
+                        current_task_idx = current_state.get_task_idx()
                         if current_task_idx is not None:
                             if current_task_idx not in task_empty_counters:
                                 task_empty_counters[current_task_idx] = 0
@@ -3645,32 +3892,62 @@ All files must be saved inside this directory.
                     # CRITICAL FIX: Also increment global idle_loop_count to trigger Nudge/Reset
                     idle_loop_count += 1
                     
-                    # If we are stuck in empty loops for too long, FORCE a nudge instead of just temp sweep
+                    # If we are stuck in empty loops for too long, FORCE a smart reset with context preservation
                     if idle_loop_count >= 10:
-                         _trace("Idle/Empty limit reached (10). Forcing context reset.")
-                         
+                         _trace("Idle/Empty limit reached (10). Performing smart context reset with preservation.")
+
                          # Get rich context for recovery
                          todo_status = task_mgr.get_todos_for_prompt() if task_mgr.todos else "Resume current task."
-                         
-                         # NUCLEAR OPTION: Clear history
-                         # Keep system prompt (index 0)
-                         if history:
-                             history = [history[0]]
-                         
-                         # Add strict instruction with FULL CONTEXT
-                         history.append({
-                            "role": "user", 
-                            "content": (
-                                f"🛑 SYSTEM ALERT: You were stuck in an infinite loop sending empty responses.\n"
-                                f"I have cleared your history to fix this.\n\n"
-                                f"**YOUR CURRENT STATUS:**\n{todo_status}\n\n"
-                                f"**INSTRUCTION:**\n"
-                                f"Resume the active task immediately. Check existing files if needed.\n"
-                                f"Call a tool (e.g. `write_file`, `read_file`) NOW."
-                            )
-                         })
-                         
-                         tui.set_action(f"☢️ CONTEXT RESET (Stuck Loop)")
+
+                         # Build Context Glue
+                         state_glue = _build_state_glue()
+
+                         # SMART RESET: Extract critical messages from history
+                         critical_msgs = []
+                         for msg in current_state.history:
+                             role = msg.get("role", "")
+                             content = msg.get("content", "")
+
+                             # Keep system prompt
+                             if role == "system" and len(critical_msgs) == 0:
+                                 critical_msgs.append(msg)
+
+                             # Keep tool results (especially write_file, read_file, set_todos)
+                             elif role == "tool":
+                                 tool_name = msg.get("name", "")
+                                 if tool_name in ["write_file", "read_file", "set_todos"]:
+                                     # Truncate long results
+                                     truncated = content[:500] + "..." if len(content) > 500 else content
+                                     critical_msgs.append({
+                                         "role": "tool",
+                                         "name": tool_name,
+                                         "content": truncated,
+                                         "tool_call_id": msg.get("tool_call_id", "")
+                                     })
+
+                         # Reset history with preserved context
+                         current_state.history = critical_msgs + [
+                             {
+                                 "role": "system",
+                                 "content": (
+                                     f"╔═══════════════════════════════════════════════════════════╗\n"
+                                     f"║ CONTEXT RESET - You were stuck in an empty loop          ║\n"
+                                     f"╚═══════════════════════════════════════════════════════════╝\n\n"
+                                     f"{state_glue}\n\n"
+                                     f"**YOUR STATUS:**\n{todo_status}\n\n"
+                                     f"**FILES CREATED IN THIS CONTEXT:**\n" +
+                                     "\n".join(f"- {f}" for f in current_state.files_created) +
+                                     f"\n\n**INSTRUCTION:**\n"
+                                     f"Resume work immediately. Call a tool NOW (write_file, read_file, task_done)."
+                                 )
+                             }
+                         ]
+
+                         # Update in storage and sync
+                         context_states[current_state.phase] = current_state
+                         sync_legacy_vars()
+
+                         tui.set_action(f"♻️ SMART RESET (preserved critical context)")
                          idle_loop_count = 0
                          consecutive_empty = 0
                          
@@ -3799,14 +4076,18 @@ All files must be saved inside this directory.
                             tui.set_action(f"Reset to {restart_from} (Tool-Intent: {tool_hint})")
                             live.update(tui.render())
                             # CRITICAL: Update history in appropriate dict after reset
-                            update_history_in_dict()
+                            # Update context state
+                            current_state.history = history
+                            context_states[current_state.phase] = current_state
                         
                         # Add a brief system prompt (will work better now because first thinking is preserved)
                         history.append({
                             "role": "system",
                             "content": "You didn't respond. Please answer or continue where you left off."
                         })
-                        update_history_in_dict()  # Update after adding system message
+                        # Update context state
+                        current_state.history = history
+                        context_states[current_state.phase] = current_state
                         
                         # Continue the loop - if it fails again, this system message will be removed with the reset
                         continue
@@ -3888,8 +4169,9 @@ All files must be saved inside this directory.
                     if removed_count > 0:
                         tui.set_action(f"Removed {removed_count} response(s) without final answer, restarting from {restart_from}...")
                         live.update(tui.render())
-                        # CRITICAL: Update history in appropriate dict after reset
-                        update_history_in_dict()
+                        # CRITICAL: Update context state after reset
+                        current_state.history = history
+                        context_states[current_state.phase] = current_state
                     
                     # CRITICAL: If no TODOs set, nudge agent to set them FIRST!
                     # This is the most common cause of "doing nothing" - agent skips TODO setup
@@ -3923,10 +4205,9 @@ All files must be saved inside this directory.
                     if current_context_manager == main_context_manager:
                         main_history = history
                     else:
-                        for idx, cm in task_context_managers.items():
-                            if cm == current_context_manager:
-                                task_histories[idx] = history
-                                break
+                        # Update current context state
+                        current_state.history = history
+                        context_states[current_state.phase] = current_state
                     
                     # Continue the loop (no retry limit - will loop until we get a response)
                     # If it fails again, this system message will be removed with the reset
@@ -3940,12 +4221,8 @@ All files must be saved inside this directory.
                 if is_main_context:
                     main_empty_counter = 0
                 else:
-                    # Find which task this context belongs to
-                    current_task_idx = None
-                    for idx, cm in task_context_managers.items():
-                        if cm == current_context_manager:
-                            current_task_idx = idx
-                            break
+                    # Get task index from current_state
+                    current_task_idx = current_state.get_task_idx()
                     if current_task_idx is not None:
                         task_empty_counters[current_task_idx] = 0
                 
@@ -4145,9 +4422,8 @@ All files must be saved inside this directory.
                             # CRITICAL: Update variables to switch to task context
                             current_context_manager = new_context_manager
                             history = new_history
-                            # CRITICAL: Store in task dicts so they persist and are used in main loop
-                            task_context_managers[0] = current_context_manager
-                            task_histories[0] = history
+                            # Context state already managed by switch_to_task_context
+                            # No additional storage needed
                             history_snapshot_len = len(history)
                             tui.append_stream(f"🔄 Switched to Task 1 context: {first_task[:40]}")
                             # Debug: Verify context switch worked
@@ -4212,9 +4488,9 @@ All files must be saved inside this directory.
                         completed_info = "\n".join([f"- {t['task']}: {t.get('result', 'done')}" for t in task_mgr.todos if t['status'] == 'completed'])
                         
                         task_idx = task_mgr.current_task_idx
-                        current_context_manager, history = create_fresh_context_for_task(task_idx, next_task, completed_info)
-                        task_context_managers[task_idx] = current_context_manager
-                        task_histories[task_idx] = history
+                        # Use switch_to_task_context instead
+                        if switch_to_task_context(task_idx, next_task):
+                            pass  # Context switched successfully
                         tui.append_stream(f"[AUTO] Switched to Task {task_idx + 1}: {next_task[:40]}")
                     
                     continue # Skip to next loop with new task
@@ -4311,7 +4587,8 @@ All files must be saved inside this directory.
             
             # CRITICAL: Always check if tasks are incomplete, regardless of completion signals
             # This prevents the model from stopping work prematurely
-            if task_mgr.todos and not task_mgr.is_all_done():
+            # IMPORTANT: Skip nudges if tool_calls exist - let them execute first!
+            if task_mgr.todos and not task_mgr.is_all_done() and not tool_calls:
                 remaining = [t["task"] for t in task_mgr.todos if t["status"] != "completed"]
                 current = task_mgr.get_current_task()
                 completed_count = len([t for t in task_mgr.todos if t["status"] == "completed"])
@@ -4612,10 +4889,9 @@ All files must be saved inside this directory.
                     if current_context_manager == main_context_manager:
                         main_history = history
                     else:
-                        for idx, cm in task_context_managers.items():
-                            if cm == current_context_manager:
-                                task_histories[idx] = history
-                                break
+                        # Update current context state
+                        current_state.history = history
+                        context_states[current_state.phase] = current_state
                     continue
             
             # ═══════════════════════════════════════════════════════════════
@@ -4772,14 +5048,17 @@ All files must be saved inside this directory.
                             if is_duplicate_write:
                                 tui.append_stream(f"[INFO] Skipping duplicate write for {path} (content identical)")
                                 
-                                # CRITICAL: Still track this file for the current task even if we skip the physical write!
-                                # This ensures the "Task Complete Nudge" knows the file exists.
+                                # CRITICAL: Track file in current context state
+                                current_state.record_file_created(full_path)
+                                current_state.record_tool_call("write_file")
+
+                                # Legacy tracking
                                 current_task_idx = task_mgr.current_task_idx
                                 if current_task_idx not in task_file_map:
                                     task_file_map[current_task_idx] = []
                                 if full_path not in task_file_map[current_task_idx]:
                                     task_file_map[current_task_idx].append(full_path)
-                                
+
                                 if full_path not in files_created:
                                     files_created.append(full_path)
                                 
@@ -4790,7 +5069,9 @@ All files must be saved inside this directory.
                                     "name": "write_file",
                                     "content": f"✓ File {path} already exists with identical content. No changes made. You can proceed to the next task."
                                 })
-                                update_history_in_dict()
+                                # Update context state
+                                current_state.history = history
+                                context_states[current_state.phase] = current_state
                                 continue # Skip to next tool
                             else:
                                 fn_args = extracted_args
@@ -4866,26 +5147,55 @@ All files must be saved inside this directory.
                 # ===== TODO MANAGEMENT TOOLS =====
                 if fn_name == "set_todos":
                     tasks = fn_args.get("tasks", [])
-                    
-                    # CRITICAL: Block set_todos completely if TODOs already exist
-                    # This prevents the agent from calling set_todos again after the TODO list is set
-                    # Check both if todos list exists AND has items
-                    if task_mgr.todos and len(task_mgr.todos) > 0:
-                        current = task_mgr.get_current_task()
+
+                    # Check current phase - CONTEXT-AWARE
+                    if current_state.is_task():
+                        # BLOCK: Cannot change todos during task execution
+                        current_task = task_mgr.get_current_task()
                         result = (
-                            f"⚠️ REJECTED: You are already working on Task {task_mgr.current_task_idx + 1}!\n"
-                            f"You cannot call `set_todos` again after you started working.\n\n"
-                            f"**Current Task:** {current}\n\n"
-                            f"**ACTION REQUIRED:**\n"
-                            f"Finish your current tasks using `task_done`."
+                            f"⚠️ REJECTED: Cannot modify TODO list during task execution!\n\n"
+                            f"You are currently working on Task {current_state.task_idx + 1}: {current_task}\n\n"
+                            f"**Options:**\n"
+                            f"1. Complete current task with task_done\n"
+                            f"2. Continue working on the current task\n\n"
+                            f"TODO list can only be modified in planning phase (Main Context)."
                         )
-                        # Use append_with_context if available
-                        if 'append_with_context' in locals():
-                            append_with_context("set_todos rejected - TODOs already exist!")
+                        tui.append_stream("set_todos rejected - in task execution phase!")
+
+                    elif task_mgr.todos and len(task_mgr.todos) > 0:
+                        # ALLOW: Re-planning in Main Context (e.g., after all tasks completed)
+                        if task_mgr.is_all_done():
+                            # All tasks done, allow new plan
+                            old_count = len(task_mgr.todos)
+                            task_mgr.todos.clear()  # Clear old todos
+                            task_mgr.current_task_idx = 0
+                            task_mgr.phase = "planning"
+
+                            task_mgr.set_todos(tasks)
+                            result = (
+                                f"✅ TODO list updated (previous plan completed)\n"
+                                f"Old: {old_count} tasks → New: {len(tasks)} tasks\n\n"
+                                f"Current task: {task_mgr.get_current_task()}"
+                            )
+                            tui.append_stream(f"Re-planning: {len(tasks)} new tasks")
+
+                            # Switch to first task
+                            if tasks and switch_to_task_context(0, tasks[0]):
+                                tui.append_stream(f"🔄 Switched to Task 1: {tasks[0][:40]}")
                         else:
-                            tui.append_stream("set_todos rejected - TODOs already exist!")
+                            # Tasks not done yet, reject
+                            remaining = len([t for t in task_mgr.todos if t["status"] != "completed"])
+                            result = (
+                                f"⚠️ REJECTED: Cannot modify TODO list with {remaining} tasks remaining!\n\n"
+                                f"Complete all tasks first, then you can create a new plan."
+                            )
+                            tui.append_stream(f"set_todos rejected - {remaining} tasks remaining!")
+
                     elif tasks:
+                        # First time setting todos
                         task_mgr.set_todos(tasks)
+
+                        # Logging
                         try:
                             if lg:
                                 lg.event(
@@ -4898,14 +5208,16 @@ All files must be saved inside this directory.
                                 )
                         except Exception:
                             pass
+
                         tui.set_action(f"TODO: {len(tasks)} tasks")
                         tui.append_stream(f"Created TODO list with {len(tasks)} tasks")
                         for i, t in enumerate(tasks[:5], 1):
                             tui.append_stream(f"   {i}. {t[:50]}")
                         if len(tasks) > 5:
                             tui.append_stream(f"   ... and {len(tasks)-5} more")
+
                         result = f"✅ TODO list set: {len(tasks)} tasks. Current: {task_mgr.get_current_task()}"
-                        
+
                         # CRITICAL: Force immediate TUI update to show TODOs
                         tui._needs_update = True
                         try:
@@ -4913,33 +5225,12 @@ All files must be saved inside this directory.
                         except Exception:
                             pass
                         time.sleep(0.1)  # Give animation thread time to render
-                        
-                        # Switch to task context for first task
+
+                        # Switch to task context for first task using new switch function
                         if task_mgr.current_task_idx == 0:
                             first_task = task_mgr.get_current_task()
-                            if first_task:
-                                new_context_manager, new_history = create_fresh_context_for_task(0, first_task)
-                                # CRITICAL: Update nonlocal variables to switch to task context
-                                current_context_manager = new_context_manager
-                                history = new_history
-                                # CRITICAL: Store in task dicts so they persist and are used in main loop
-                                task_context_managers[0] = current_context_manager
-                                task_histories[0] = history
-                                history_snapshot_len = len(history)
+                            if first_task and switch_to_task_context(0, first_task):
                                 tui.append_stream(f"🔄 Switched to Task 1 context: {first_task[:40]}")
-                                try:
-                                    if lg:
-                                        lg.event(
-                                            "task_context_switch",
-                                            to_task_idx=0,
-                                            to_task_preview=(first_task[:180] if first_task else ""),
-                                            is_task_context=(current_context_manager != main_context_manager),
-                                        )
-                                except Exception:
-                                    pass
-                                # Debug: Verify context switch worked
-                                is_now_task = (current_context_manager != main_context_manager)
-                                tui.append_stream(f"[DEBUG] Context switch verified: is_task_context={is_now_task}")
                                 # Force update after context switch
                                 tui._needs_update = True
                                 try:
@@ -4949,124 +5240,150 @@ All files must be saved inside this directory.
                                 time.sleep(0.1)
                     else:
                         result = "⚠️ No tasks provided!"
-                    
-                    # Update main history after set_todos
-                    main_history = history
                         
                 elif fn_name == "task_done":
                     # Track consecutive task_done calls for dead loop detection
                     if not hasattr(loop, 'consecutive_task_done'):
                         loop.consecutive_task_done = 0
                     loop.consecutive_task_done += 1
-                    
-                    # CRITICAL: Check if write_file was called for current task
-                    current_task_idx = task_mgr.current_task_idx
-                    files_for_current_task = task_file_map.get(current_task_idx, [])
-                    has_write_file_for_task = len(files_for_current_task) > 0
-                    
-                    # Also check if write_file was called in this session at all
-                    if not has_write_file_for_task and write_file_calls_in_session == 0:
-                        # No write_file calls at all - BLOCK task_done
-                        current = task_mgr.get_current_task()
-                        result = (
-                            f"[bold red]CRITICAL ERROR: NO FILES CREATED![/]\n\n"
-                            f"You called task_done for task: '{current}'\n"
-                            f"BUT YOU HAVE NOT CALLED `write_file` AT ALL IN THIS SESSION!\n\n"
-                            f"**MANDATORY ACTION:**\n"
-                            f"1. You MUST call `write_file(path='...', content='...')` to create the actual code/content NOW.\n"
-                            f"2. DO NOT call `task_done` again until you've actually written files.\n"
-                            f"3. Start working on the code for '{current}' immediately.\n\n"
-                            f"**Remember:** As a Senior software developer, you must actually CREATE code, not just describe it!"
-                        )
-                        tui.append_stream(f"❌ task_done REJECTED - No write_file calls in session!")
-                        tui.set_action("⚠️ Waiting for write_file...")
-                    elif not has_write_file_for_task and current_task_idx > 0:
-                        # write_file was called, but not for this specific task
-                        current = task_mgr.get_current_task()
-                        result = (
-                            f"[bold yellow]WARNING: NO FILES CREATED FOR THIS TASK![/]\n\n"
-                            f"Task: '{current}'\n\n"
-                            f"You have created files for other tasks, but NOT for this one.\n\n"
-                            f"**Action required:**\n"
-                            f"1. Call `write_file` to create/modify files for THIS specific task: '{current}'\n"
-                            f"2. Complete the task by actually writing the code\n"
-                            f"3. Then call `task_done` again\n\n"
-                            f"DO NOT skip tasks - complete each one fully before moving on!"
-                        )
-                        tui.append_stream(f"⚠️ task_done WARNING - No files for current task!")
-                        tui.set_action(f"{task_mgr.get_progress()} - Write files for current task!")
-                    elif not has_write_file_for_task:
-                        # First task, but no write_file yet
-                        current = task_mgr.get_current_task()
-                        result = (
-                            f"[bold yellow]NO FILES CREATED FOR FIRST TASK![/]\n\n"
-                            f"Task: '{current}'\n\n"
-                            f"You must create files for this task before calling task_done.\n\n"
-                            f"**Action required:**\n"
-                            f"1. Call `write_file` to create the code for: '{current}'\n"
-                            f"2. Complete the task by actually writing the code\n"
-                            f"3. Then call `task_done` again\n\n"
-                            f"DO NOT call task_done without first creating files!"
-                        )
-                        tui.append_stream(f"⚠️ task_done WARNING - No files for first task!")
-                        tui.set_action(f"{task_mgr.get_progress()} - Write files first!")
-                    # CRITICAL: Block premature completion via consecutive task_done calls
-                    # Only allow completion if ALL tasks are actually completed
-                    elif loop.consecutive_task_done >= 3:
-                        # Check if all tasks are really done
-                        if not task_mgr.is_all_done():
-                            remaining = [t["task"] for t in task_mgr.todos if t["status"] != "completed"]
+
+                    # CONTEXT-AWARE: Check if files were created IN THIS TASK CONTEXT
+                    if current_state.is_task():
+                        has_files = current_state.has_created_files()
+                        current_task = task_mgr.get_current_task()
+
+                        # Check if this is a non-file-creation task (verify, test, check, review)
+                        task_lower = current_task.lower() if current_task else ""
+                        is_non_file_task = any(kw in task_lower for kw in [
+                            'verify', 'test', 'check', 'review', 'validate', 'confirm',
+                            'ensure', 'make sure', 'überprüfen', 'testen', 'prüfen'
+                        ])
+
+                        if not has_files and write_file_calls_in_session == 0:
+                            # No write_file calls at all - BLOCK task_done
+                            current = task_mgr.get_current_task()
                             result = (
-                                f"🚨 BLOCKED: Cannot complete with {len(remaining)} tasks remaining!\n\n"
-                                f"You called task_done {loop.consecutive_task_done} times, but these tasks are still pending:\n" +
-                                "\n".join(f"- {t}" for t in remaining[:5]) +
-                                f"\n\n**Action required:**\n"
-                                f"1. Complete EACH remaining task by actually doing the work\n"
-                                f"2. Call task_done ONLY after completing a task\n"
-                                f"3. DO NOT call task_done multiple times to skip tasks\n\n"
-                                f"Work on the remaining tasks now!"
+                                f"🚨 [bold red]NO FILES CREATED IN THIS TASK![/]\n\n"
+                                f"Task: '{current}'\n\n"
+                                f"This task context has NOT called write_file yet.\n"
+                                f"Total files in project: {len(files_created)}\n"
+                                f"Files in THIS context: {len(current_state.files_created)}\n\n"
+                                f"**Action required:**\n"
+                                f"1. Call write_file for THIS task: '{current}'\n"
+                                f"2. Then call task_done again\n"
                             )
-                            tui.append_stream(f"Blocked premature completion - {len(remaining)} tasks remaining!")
-                            tui.set_action(f"{task_mgr.get_progress()} - Complete remaining tasks!")
-                            # Reset counter to prevent infinite loop
-                            loop.consecutive_task_done = 0
+                            tui.append_stream(f"❌ task_done REJECTED - No files in this context!")
+                        elif not has_files and not is_non_file_task:
+                            # Files exist globally, but not in this context
+                            # AND this is not a verify/test task
+                            current = task_mgr.get_current_task()
+                            result = (
+                                f"[bold yellow]WARNING: NO FILES FOR THIS TASK![/]\n\n"
+                                f"Task: '{current}'\n\n"
+                                f"You have created {len(files_created)} files total, but NONE in this task context.\n\n"
+                                f"**Action required:**\n"
+                                f"1. Call write_file to create files for THIS specific task\n"
+                                f"2. Complete the task by actually writing the code\n"
+                                f"3. Then call task_done again\n"
+                            )
+                            tui.append_stream(f"⚠️ task_done WARNING - No files for current task!")
                         else:
-                            # All tasks are done - allow completion
-                            tui.append_stream("All tasks completed!")
-                        
-                        # CONTENT_ONLY mode: Return actual file content
-                        if skip_template and files_created:
-                            main_file = None
-                            main_file_patterns = ['index.html', 'main.py', 'app.py', 'script.py', 'main.js', 'app.js']
-                            for pattern in main_file_patterns:
-                                for f in files_created:
-                                    if os.path.basename(f).lower() == pattern.lower():
-                                        main_file = f
+                            # Files were created in this context - allow task_done
+                            # Continue with normal task_done logic below
+                            pass
+                    else:
+                        # Not in task context - this shouldn't happen
+                        result = "⚠️ task_done called outside task context!"
+                        tui.append_stream("task_done ERROR - not in task context!")
+
+                    # If we passed the checks above, proceed with task_done logic
+                    # Only proceed if result is not already set (not blocked above)
+                    if 'result' not in locals() or result is None:
+                        # CRITICAL: Block premature completion via consecutive task_done calls
+                        # Only allow completion if ALL tasks are actually completed
+                        if loop.consecutive_task_done >= 3:
+                            # Check if all tasks are really done
+                            if not task_mgr.is_all_done():
+                                remaining = [t["task"] for t in task_mgr.todos if t["status"] != "completed"]
+                                result = (
+                                    f"🚨 BLOCKED: Cannot complete with {len(remaining)} tasks remaining!\n\n"
+                                    f"You called task_done {loop.consecutive_task_done} times, but these tasks are still pending:\n" +
+                                    "\n".join(f"- {t}" for t in remaining[:5]) +
+                                    f"\n\n**Action required:**\n"
+                                    f"1. Complete EACH remaining task by actually doing the work\n"
+                                    f"2. Call task_done ONLY after completing a task\n"
+                                    f"3. DO NOT call task_done multiple times to skip tasks\n\n"
+                                    f"Work on the remaining tasks now!"
+                                )
+                                tui.append_stream(f"Blocked premature completion - {len(remaining)} tasks remaining!")
+                                tui.set_action(f"{task_mgr.get_progress()} - Complete remaining tasks!")
+                                # Reset counter to prevent infinite loop
+                                loop.consecutive_task_done = 0
+                            else:
+                                # All tasks are done - allow completion
+                                tui.append_stream("All tasks completed!")
+
+                        # ═══════════════════════════════════════════════════════
+                        # LINTER CHECK - Prevent task_done with linter errors
+                        # ═══════════════════════════════════════════════════════
+                        # Check recent history for linter errors
+                        has_recent_linter_errors = False
+                        for msg in current_state.history[-10:]:  # Check last 10 messages
+                            if msg.get("role") == "system" and "❌ LINTER CHECK FAILED" in msg.get("content", ""):
+                                has_recent_linter_errors = True
+                                break
+
+                        if has_recent_linter_errors:
+                            # Block task_done if there are recent linter errors
+                            current = task_mgr.get_current_task()
+                            result = (
+                                f"🚨 [bold red]TASK_DONE BLOCKED - LINTER ERRORS![/]\n\n"
+                                f"Task: '{current}'\n\n"
+                                f"You have recent linter errors that must be fixed first.\n\n"
+                                f"**ACTION REQUIRED:**\n"
+                                f"1. Review the linter errors in the conversation above\n"
+                                f"2. Fix the code issues\n"
+                                f"3. Call write_file again with corrected code\n"
+                                f"4. Wait for linter to PASS\n"
+                                f"5. Then call task_done\n\n"
+                                f"✅ You must see 'LINTER CHECK PASSED' before calling task_done!"
+                            )
+                            tui.append_stream(f"❌ task_done BLOCKED - Fix linter errors first!")
+                        elif 'result' not in locals() or result is None:
+                            # Normal task_done processing
+                            # CONTENT_ONLY mode: Return actual file content
+                            if skip_template and files_created:
+                                main_file = None
+                                main_file_patterns = ['index.html', 'main.py', 'app.py', 'script.py', 'main.js', 'app.js']
+                                for pattern in main_file_patterns:
+                                    for f in files_created:
+                                        if os.path.basename(f).lower() == pattern.lower():
+                                            main_file = f
+                                            break
+                                    if main_file:
                                         break
+                                if not main_file and files_created:
+                                    main_file = files_created[0]
+
                                 if main_file:
-                                    break
-                            if not main_file and files_created:
-                                main_file = files_created[0]
-                            
-                            if main_file:
-                                try:
-                                    full_path = main_file if os.path.isabs(main_file) else os.path.join(base_dir, main_file)
-                                    if os.path.exists(full_path):
-                                        with open(full_path, 'r', encoding='utf-8') as f:
-                                            content = f.read()
-                                        # Clean up temporary directory
-                                        try:
-                                            import shutil
-                                            shutil.rmtree(base_dir)
-                                        except:
-                                            pass
-                                        return content
-                                except Exception:
-                                    pass  # Fallback to summary
-                        
-                        # Normal mode: Return project summary
-                        files_list = _format_file_links(files_created, base_dir)
-                        dir_link = _get_clickable_path(base_dir)
+                                    try:
+                                        full_path = main_file if os.path.isabs(main_file) else os.path.join(base_dir, main_file)
+                                        if os.path.exists(full_path):
+                                            with open(full_path, 'r', encoding='utf-8') as f:
+                                                content = f.read()
+                                            # Clean up temporary directory
+                                            try:
+                                                import shutil
+                                                shutil.rmtree(base_dir)
+                                            except:
+                                                pass
+                                            return content
+                                    except Exception:
+                                        pass  # Fallback to summary
+
+                            # Normal mode: Return project summary
+                            files_list = _format_file_links(files_created, base_dir)
+                            dir_link = _get_clickable_path(base_dir)
                         open_instructions = _get_open_instructions(files_created, base_dir)
                             
                         # Try to open the folder automatically
@@ -5492,7 +5809,10 @@ All files must be saved inside this directory.
                     max_results = min(fn_args.get("max_results", 5), 10)  # Max 10 results
                     tui.set_action(f"🔍 Deep search: {query[:40]}...")
                     live.update(tui.render())
-                    
+
+                    # DEBUG: Log that we're executing web_deep_search
+                    _log_to_file(f"[DEBUG-X] web_deep_search EXEC START: query='{query[:50]}'")
+
                     try:
                         # Try to import DuckDuckGo search
                         try:
@@ -5503,59 +5823,102 @@ All files must be saved inside this directory.
                             except ImportError:
                                 result = "Error: DuckDuckGo search not available. Install with: pip install duckduckgo-search"
                                 tui.append_stream("❌ Search tool not available")
-                                continue
-                        
+
                         # Perform search
-                        results = list(DDGS().text(query, max_results=max_results, safesearch='strict'))
-                        if not results:
-                            result = f"No results found for: {query}"
-                            tui.append_stream("No results")
-                            continue
-                        
-                        # Helper to fetch and summarize page content (context-aware, limited)
-                        def fetch_summary(url):
-                            try:
-                                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-                                r = requests.get(url, timeout=5, headers=headers)
-                                if r.status_code != 200:
+                        if 'DDGS' in locals():  # Only search if library was imported
+                            results = list(DDGS().text(query, max_results=max_results, safesearch='strict'))
+                            if not results:
+                                result = f"No results found for: {query}"
+                                tui.append_stream("No results")
+                        else:
+                            results = []  # No library available, skip search
+
+                        # Only build summary if we have results
+                        if results and 'DDGS' in locals():
+                            # Helper to fetch and summarize page content (context-aware, limited)
+                            def fetch_summary(url):
+                                try:
+                                    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                                    r = requests.get(url, timeout=5, headers=headers)
+                                    if r.status_code != 200:
+                                        return None
+
+                                    html = r.text
+                                    # Remove scripts, styles
+                                    html = re.sub(r'<(script|style|noscript)[^>]*>.*?</\1>', ' ', html, flags=re.DOTALL | re.IGNORECASE)
+                                    # Strip tags
+                                    text = re.sub(r'<[^>]+>', ' ', html)
+                                    # Clean whitespace
+                                    text = re.sub(r'\s+', ' ', text).strip()
+
+                                    # Limit to 1500 chars per result to keep context small
+                                    return text[:1500]
+                                except:
                                     return None
-                                
-                                html = r.text
-                                # Remove scripts, styles
-                                html = re.sub(r'<(script|style|noscript)[^>]*>.*?</\1>', ' ', html, flags=re.DOTALL | re.IGNORECASE)
-                                # Strip tags
-                                text = re.sub(r'<[^>]+>', ' ', html)
-                                # Clean whitespace
-                                text = re.sub(r'\s+', ' ', text).strip()
-                                
-                                # Limit to 1500 chars per result to keep context small
-                                return text[:1500]
-                            except:
-                                return None
-                        
-                        # Build summarized results
-                        summary = f"### Deep Search Results: {query}\n\n"
-                        for i, res in enumerate(results[:max_results], 1):
-                            title = res.get('title', 'No title')
-                            link = res.get('href', '')
-                            snippet = res.get('body', '')
-                            
-                            # Fetch full content for top 3 results only (to keep context small)
-                            content = ""
-                            if i <= 3:
-                                tui.set_action(f"📖 Reading {link[:30]}...")
-                                live.update(tui.render())
-                                page_text = fetch_summary(link)
-                                if page_text:
-                                    content = f"\n  [Content]: {page_text}..."
-                            
-                            summary += f"{i}. **{title}**\n   {snippet}\n   {link}{content}\n\n"
-                        
-                        result = summary
-                        tui.append_stream(f"Found {len(results)} results")
+
+                            # Build summarized results
+                            summary = f"### Deep Search Results: {query}\n\n"
+                            for i, res in enumerate(results[:max_results], 1):
+                                title = res.get('title', 'No title')
+                                link = res.get('href', '')
+                                snippet = res.get('body', '')
+
+                                # Fetch full content for top 3 results only (to keep context small)
+                                content = ""
+                                if i <= 3:
+                                    tui.set_action(f"📖 Reading {link[:30]}...")
+                                    live.update(tui.render())
+                                    page_text = fetch_summary(link)
+                                    if page_text:
+                                        content = f"\n  [Content]: {page_text}..."
+
+                                summary += f"{i}. **{title}**\n   {snippet}\n   {link}{content}\n\n"
+
+                            result = summary
+                            tui.append_stream(f"Found {len(results)} results")
+                            _log_to_file(f"[DEBUG-X] web_deep_search SUCCESS: {len(results)} results, result_len={len(result)}")
                     except Exception as e:
                         result = f"Error during deep search: {e}"
                         tui.append_stream(f"❌ Search failed: {str(e)[:30]}")
+                        _log_to_file(f"[DEBUG-X] web_deep_search ERROR: {str(e)[:100]}")
+
+                    # DEBUG: Log result status
+                    result_preview = result[:100] if 'result' in locals() and result else "NO RESULT SET"
+                    _log_to_file(f"[DEBUG-X] web_deep_search END: result_preview='{result_preview}'")
+
+                    # CRITICAL: Add action nudge after web_search to prevent "thinking loops"
+                    # The agent has the search results now and MUST use them appropriately
+                    if 'result' in locals() and result:
+                        if current_state.is_task():
+                            # In task execution mode, web_search must lead to write_file
+                            result += (
+                                "\n\n---\n"
+                                "✅ **Search completed!** You now have the information you need.\n\n"
+                                "**NEXT ACTION REQUIRED:**\n"
+                                f"1. Use the search results above to complete your current task: '{task_mgr.get_current_task()}'\n"
+                                "2. Call `write_file(path='...', content='...')` with the actual code NOW\n"
+                                "3. DO NOT just think or plan - write the actual file immediately\n\n"
+                                "**Example:**\n"
+                                "```\n"
+                                "write_file(path='index.html', content='<!DOCTYPE html>...')\n"
+                                "```\n\n"
+                                "Start writing the file NOW using the information from the search results!"
+                            )
+                        elif current_state.is_main():
+                            # In planning mode, web_search must lead to set_todos
+                            result += (
+                                "\n\n---\n"
+                                "✅ **Research completed!** You now have the information you need.\n\n"
+                                "**NEXT ACTION REQUIRED:**\n"
+                                "1. Use the search results above to plan your task breakdown\n"
+                                "2. Call `set_todos(tasks=[...])` NOW with your task list\n"
+                                "3. DO NOT do more searches - proceed with planning\n\n"
+                                "**Example:**\n"
+                                "```\n"
+                                "set_todos(tasks=['Create index.html', 'Create styles.css', 'Add JavaScript'])\n"
+                                "```\n\n"
+                                "Call set_todos NOW based on the search results!"
+                            )
                 
                 elif fn_name in self.local_tools:
                     tool = self.local_tools[fn_name]
@@ -5842,14 +6205,20 @@ All files must be saved inside this directory.
                                 # Success - clear error history
                                 loop.error_history = []
                                 size = os.path.getsize(path)
+
+                                # CONTEXT STATE TRACKING
+                                current_state.record_file_created(path)
+                                current_state.record_tool_call("write_file")
+
+                                # Legacy tracking
                                 files_created.append(path)
-                                
-                                # Track write_file call for current task
+
+                                # Track write_file call for current task (legacy)
                                 current_task_idx = task_mgr.current_task_idx
                                 if current_task_idx not in task_file_map:
                                     task_file_map[current_task_idx] = []
                                 task_file_map[current_task_idx].append(path)
-                                
+
                                 # Track write_file calls in session
                                 write_file_calls_in_session += 1
                                 recent_loop_write_files.append(True)  # Track this loop had write_file
@@ -5902,30 +6271,57 @@ All files must be saved inside this directory.
                                 if hasattr(loop, 'idle_loop_count'):
                                     loop.idle_loop_count = 0
                                 
-                                # Automatically run linter after successful write_file
+                                # ═══════════════════════════════════════════════════════
+                                # AUTOMATIC LINTER CHECK - Prevent zombie task_done
+                                # ═══════════════════════════════════════════════════════
                                 try:
                                     linter_tool = self.local_tools.get("linter")
                                     if linter_tool:
                                         tui.set_action("🔍 Linting...")
                                         live.update(tui.render())
                                         lint_result = linter_tool.run(path=path)
-                                        
-                                        # If linter found issues, add them to history for agent to see
-                                        if lint_result and not lint_result.startswith("✓") and not lint_result.startswith("[INFO]"):
-                                            # Issues found - add as system message so agent can fix them
+
+                                        # Clear PASS/FAIL classification
+                                        has_errors = lint_result and not lint_result.startswith("✓") and not lint_result.startswith("[INFO]")
+
+                                        if has_errors:
+                                            # ❌ FAIL: Linter found issues
                                             lint_msg = (
-                                                f"🔍 Linter checked {os.path.basename(path)} and found issues:\n\n"
-                                                f"{lint_result}\n\n"
-                                                f"**Action required:** Review and fix the issues above before completing the task."
+                                                f"╔═══════════════════════════════════════════════════════╗\n"
+                                                f"║  ❌ LINTER CHECK FAILED                                ║\n"
+                                                f"╚═══════════════════════════════════════════════════════╝\n\n"
+                                                f"File: {os.path.basename(path)}\n"
+                                                f"Status: FAIL - Code has linter errors\n\n"
+                                                f"**Errors found:**\n{lint_result}\n\n"
+                                                f"**ACTION REQUIRED:**\n"
+                                                f"1. Fix the linter errors listed above\n"
+                                                f"2. Call write_file again with corrected code\n"
+                                                f"3. Do NOT call task_done until linter passes\n\n"
+                                                f"🚨 Files with linter errors will cause issues!"
                                             )
                                             history.append({
                                                 "role": "system",
                                                 "content": lint_msg
                                             })
-                                            update_history_in_dict()  # Update history in appropriate dict
-                                            tui.append_stream(f"Linter found issues in {os.path.basename(path)}")
-                                        elif lint_result.startswith("✓"):
-                                            tui.append_stream(f"✓ Linter: No issues")
+                                            # Update context state
+                                            current_state.history = history
+                                            context_states[current_state.phase] = current_state
+                                            tui.append_stream(f"❌ LINTER FAIL: {os.path.basename(path)} has errors!")
+                                        else:
+                                            # ✅ PASS: No linter errors
+                                            lint_msg = (
+                                                f"✅ LINTER CHECK PASSED\n"
+                                                f"File: {os.path.basename(path)}\n"
+                                                f"Status: PASS - No linter errors\n"
+                                            )
+                                            history.append({
+                                                "role": "system",
+                                                "content": lint_msg
+                                            })
+                                            # Update context state
+                                            current_state.history = history
+                                            context_states[current_state.phase] = current_state
+                                            tui.append_stream(f"✅ LINTER PASS: {os.path.basename(path)}")
                                 except Exception as lint_error:
                                     # Don't fail the write_file if linter fails
                                     tui.append_stream(f"Linter check failed: {str(lint_error)[:50]}")
@@ -6010,6 +6406,7 @@ All files must be saved inside this directory.
                         tui.append_stream("Blocked bash echo of error - fix the issue instead")
                 
                 # Add result to history
+                _log_to_file(f"[DEBUG-X] Adding tool result to history: fn_name={fn_name}, result_len={len(result_str)}")
                 history.append({
                     "role": "tool",
                     "tool_call_id": tc['id'],

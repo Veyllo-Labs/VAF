@@ -590,10 +590,21 @@ def main_menu(agent=None):
         timeout_enabled = bool(Config.get("subagent_timeout_enabled", True))
         timeout_minutes = int(Config.get("subagent_timeout_minutes", 120))
         
+        # Speech toggles
+        tts_enabled = bool(Config.get("speech_tts_enabled", False))
+        stt_enabled = bool(Config.get("speech_stt_enabled", False))
+        
         links_label = f"UX: Auto-open browser links [{'ON' if auto_links else 'OFF'}] (max {max_tabs})"
         outputs_label = f"UX: Auto-open output folders/files [{'ON' if auto_outputs else 'OFF'}]"
         terminals_label = f"Sub-Agents: Run in separate terminals [{'ON' if separate_terminals else 'OFF'}]"
         timeout_label = f"Sub-Agents: Timeout [{'ON - ' + str(timeout_minutes) + ' min' if timeout_enabled else 'OFF'}]"
+        
+        tts_label = f"🔊 Speech Output (TTS) [{'ON' if tts_enabled else 'OFF'}]"
+        stt_label = f"🎤 Speech Input (STT) [{'ON' if stt_enabled else 'OFF'}]"
+        mic_label = "   ↳ Select Microphone" if stt_enabled else None
+        
+        current_lang = Config.get("speech_language", "en-US")
+        lang_label = f"   ↳ Speech Language: {current_lang}" if stt_enabled else None
         
         # Get automation count
         try:
@@ -610,26 +621,37 @@ def main_menu(agent=None):
         except:
             tools_label = '🔧 Show All Tools'
         
+        menu_choices = [
+            ('Set Context Limit', 'context'),
+            ('Select Active Model', 'list'),
+            ('Search & Download New Models', 'search'),
+            ('─────────────────', None),
+            (theme_label, 'theme'),
+            (links_label, 'ux_links'),
+            (outputs_label, 'ux_outputs'),
+            (terminals_label, 'separate_terminals'),
+            (timeout_label, 'subagent_timeout'),
+            (tts_label, 'speech_tts'),
+            (stt_label, 'speech_stt'),
+        ]
+        
+        if stt_enabled:
+            menu_choices.append((mic_label, 'speech_mic'))
+            menu_choices.append((lang_label, 'speech_lang'))
+            
+        menu_choices.extend([
+            (auto_label, 'automations'),
+            ('─────────────────', None),
+            (tools_label, 'tools'),
+            (f'Server Persistence {p_label}', 'persist'),
+            ('About', 'about'),
+            ('Exit Settings', 'exit'),
+        ])
+        
         questions = [
             inquirer.List('action',
                           message="Settings Menu",
-                          choices=[
-                              ('Set Context Limit', 'context'),
-                              ('Select Active Model', 'list'),
-                              ('Search & Download New Models', 'search'),
-                              ('─────────────────', None),
-                              (theme_label, 'theme'),
-                              (links_label, 'ux_links'),
-                              (outputs_label, 'ux_outputs'),
-                              (terminals_label, 'separate_terminals'),
-                              (timeout_label, 'subagent_timeout'),
-                              (auto_label, 'automations'),
-                              ('─────────────────', None),
-                              (tools_label, 'tools'),
-                              (f'Server Persistence {p_label}', 'persist'),
-                              ('About', 'about'),
-                              ('Exit Settings', 'exit'),
-                          ],
+                          choices=menu_choices,
             ),
         ]
         answers = inquirer.prompt(questions)
@@ -641,6 +663,68 @@ def main_menu(agent=None):
         if action is None:  # Separator
             continue
         
+        if action == 'speech_lang':
+            lang_choices = [
+                ("English (US)", "en-US"),
+                ("German (DE)", "de-DE"),
+                ("Turkish (TR)", "tr-TR"),
+                ("French (FR)", "fr-FR"),
+                ("Spanish (ES)", "es-ES"),
+                ("Chinese (CN)", "zh-CN"),
+                ("Russian (RU)", "ru-RU"),
+                ("Italian (IT)", "it-IT"),
+                ("Cancel", None)
+            ]
+            q = [inquirer.List('lang', message="Select Input Language", choices=lang_choices)]
+            ans = inquirer.prompt(q)
+            
+            if ans and ans['lang']:
+                Config.set("speech_language", ans['lang'])
+                UI.success(f"Speech language set to: {ans['lang']}")
+                time.sleep(1.0)
+        
+        if action == 'speech_mic':
+            try:
+                from vaf.core.speech import get_speech_manager
+                mics = get_speech_manager().list_microphones()
+                if not mics:
+                    UI.error("No microphones found.")
+                else:
+                    mic_choices = [(f"{i}: {name}", i) for i, name in enumerate(mics)]
+                    mic_choices.append(("Cancel", None))
+                    
+                    q = [inquirer.List('mic', message="Select Microphone", choices=mic_choices)]
+                    ans = inquirer.prompt(q)
+                    
+                    if ans and ans['mic'] is not None:
+                        get_speech_manager().set_microphone(ans['mic'])
+                        UI.success(f"Microphone set to: {mics[ans['mic']]}")
+                        time.sleep(1.0)
+            except Exception as e:
+                UI.error(f"Error listing microphones: {e}")
+                time.sleep(2.0)
+        
+        if action == 'speech_tts':
+            new_val = not tts_enabled
+            Config.set("speech_tts_enabled", new_val)
+            status = "enabled" if new_val else "disabled"
+            UI.event("Settings", f"Text-to-Speech (TTS) {status}", style="success")
+            # Initialize engine if enabled
+            if new_val:
+                try:
+                    from vaf.core.speech import get_speech_manager
+                    get_speech_manager().speak("Speech output enabled.")
+                except ImportError:
+                    UI.warning("Speech libraries not installed. Run: pip install pyttsx3")
+            time.sleep(1.0)
+            
+        if action == 'speech_stt':
+            new_val = not stt_enabled
+            Config.set("speech_stt_enabled", new_val)
+            status = "enabled" if new_val else "disabled"
+            UI.event("Settings", f"Speech-to-Text (STT) {status}", style="success")
+            time.sleep(1.0)
+            
         if action == 'persist':
             new_state = not persist
             agent.config["persist_server"] = new_state

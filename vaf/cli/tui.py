@@ -154,7 +154,7 @@ O))         O))       O))))))))
                 self.all_commands = [
                     'exit', 'quit', 'q', 'clear', 'settings', 'model', 'help',
                     'session', 'theme', 'undo', 'history', 'export', 'tools',
-                    'restore', 'context'  # Context management
+                    'restore', 'context', 'listen'  # Voice input
                 ]
                 # Use FuzzyCompleter for better matching (finds "settings" when typing "s")
                 from prompt_toolkit.completion import FuzzyCompleter
@@ -500,6 +500,44 @@ O))         O))       O))))))))
         except (KeyboardInterrupt, EOFError):
             return None
     
+    def listen_overlay(self) -> Optional[str]:
+        """
+        Activates listening mode UI and captures speech.
+        Returns transcribed text or None.
+        """
+        try:
+            from vaf.core.speech import get_speech_manager
+            sm = get_speech_manager()
+            
+            if not sm.is_stt_enabled():
+                self.warning("Speech Input is disabled. Enable in Settings (vaf settings).")
+                return None
+                
+            # Visual feedback
+            self.console.print()
+            self.console.rule("[bold red]● Recording[/bold red]", style="red")
+            self.console.print(Align.center("[dim]Speak now... (Silence to finish)[/dim]"))
+            
+            # Capture
+            text = sm.listen(prompt="Listening...", timeout=5)
+            
+            # Clear UI artifacts (optional, or just show result)
+            if text:
+                self.console.print(Align.center(f"[green]✓ Heard:[/green] \"{text}\""))
+                self.console.print()
+                return text
+            else:
+                self.console.print(Align.center("[yellow]✗ No speech detected[/yellow]"))
+                self.console.print()
+                return None
+                
+        except ImportError:
+            self.error("Speech module not available.")
+            return None
+        except Exception as e:
+            self.error(f"Speech error: {e}")
+            return None
+
     # ═══════════════════════════════════════════════════════════════════════════
     # PANELS & BOXES
     # ═══════════════════════════════════════════════════════════════════════════

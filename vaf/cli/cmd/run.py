@@ -928,7 +928,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
             
             # Known commands that work with or without /
             KNOWN_COMMANDS = {"exit", "quit", "q", "clear", "help", "settings", 
-                             "theme", "tools", "undo", "restore", "context", "session"}
+                             "theme", "tools", "undo", "restore", "context", "session", "listen", "l"}
             
             # Check if input is a command (with / or standalone single word)
             is_command = False
@@ -975,6 +975,7 @@ help            - Show this help
 settings        - Open settings
 theme <name>    - Change theme (e.g., "theme dark")
 tools           - Show loaded tools
+listen, l       - Start voice input (STT)
 undo            - Undo last code change
 context         - Show context status
 restore         - Restore full context
@@ -1152,6 +1153,14 @@ Created: {current_session.created_at}
                         except Exception as e:
                             tui.error(f"Failed to load session: {e}")
                     continue
+                
+                elif cmd in ("listen", "l"):
+                    captured = tui.listen_overlay()
+                    if captured:
+                        user_input = captured
+                        # Don't continue - fall through to message processing
+                    else:
+                        continue
                 
                 else:
                     tui.warning(f"Unknown command: /{cmd}")
@@ -1452,6 +1461,17 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
                 UI.logo()
                 continue
             
+            elif single_cmd in ("listen", "l"):
+                from vaf.cli.tui import get_tui
+                captured = get_tui().listen_overlay()
+                if captured:
+                    UI.event("User (Voice)", captured, style="normal")
+                    agent.chat_step(captured, stream_callback=lambda x: output_stream(x))
+                    # Show Usage Bar
+                    used, total = agent.get_token_usage()
+                    UI.print_usage_bar(used, total)
+                continue
+
             elif single_cmd == "install-gpu":
                 from vaf.cli.cmd import info
                 info.install_gpu()

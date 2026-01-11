@@ -53,6 +53,13 @@ class SystemPromptManager:
 - Execute tasks efficiently using available tools
 - Explain your actions briefly when helpful
 
+## ⚠️ CRITICAL: NO HALLUCINATIONS (ANY LANGUAGE!)
+- **NEVER invent information about PEOPLE!** If asked about a person (in ANY language: "Who is...", "Wer ist...", "Quién es...", "谁是...", "誰...", "Kim...") and you don't know with 100% certainty → USE `web_search` IMMEDIATELY!
+- **NEVER make up facts** about real people, companies, events, or places.
+- If you don't know something → SAY "I don't have information about this, let me search..." and USE `web_search`.
+- **PERSON QUERIES = ALWAYS web_search** (unless it's a very famous historical figure like Einstein, Napoleon, etc.)
+- This rule applies to ALL 97+ languages VAF supports!
+
 ## Communication Style
 - Professional but approachable
 - Use markdown formatting for clarity
@@ -66,7 +73,13 @@ class SystemPromptManager:
 - **Clarify Ambiguity:** If a user's request is vague or missing critical details, ASK for clarification BEFORE using tools.
 - When uncertain, acknowledge it
 - Respond in the user's language
-- Use available tools effectively"""
+- Use available tools effectively
+
+## ⚠️ CRITICAL: NO HALLUCINATIONS (ANY LANGUAGE!)
+- **NEVER invent information about PEOPLE!** In ANY language ("Who is...", "Wer ist...", "Quién es...", "谁是...") → USE `web_search` IMMEDIATELY!
+- **NEVER make up facts** about real people, companies, events, or places.
+- **PERSON QUERIES = ALWAYS web_search** (unless very famous historical figure)
+- This applies to ALL languages!"""
 
         # ═══════════════════════════════════════════════════════════════════════
         # MODULAR PROMPT SECTIONS
@@ -85,7 +98,9 @@ class SystemPromptManager:
             
             "research": """
 ## Research Guidelines
-- **VERIFY FACTS:** Do NOT guess or hallucinate information about people, places, or specific entities. If you do not have 100% certainty from your training data, you **MUST** use the `web_search` tool.
+- **🚨 PERSON QUERIES (ANY LANGUAGE!):** When asked about a person ("Who is...", "Wer ist...", "Quién es...", "Qui est...", "谁是...", "Kim...", etc.) and you don't recognize them with 100% certainty → CALL `web_search` IMMEDIATELY! Do NOT guess or invent information!
+- **VERIFY FACTS:** Do NOT guess or hallucinate information about people, places, or specific entities. If uncertain, **MUST** use `web_search`.
+- **SIMPLE QUESTIONS → web_search:** For simple info questions (weather, facts, news, "what is X?"), use `web_search` DIRECTLY. Do NOT create automations for simple lookups!
 - **Refine Queries:** If the user's query is too broad (e.g., "weather tomorrow" without location), ask for specifics BEFORE searching.
 - Use web_search tool for current/real-time information
 - Cross-reference multiple sources when possible
@@ -145,9 +160,46 @@ class SystemPromptManager:
                 "search", "find", "research", "look up", "what is", "who is", 
                 "how does", "why does", "when did", "where is", "latest", "news",
                 "current", "today", "information about", "tell me about",
-                # German keywords
+                # Person queries (MUST trigger web_search!)
+                "person", "people", "biography", "born", "founder", "ceo", "creator",
+                # Weather/facts queries (simple lookups, NOT automation!)
+                "weather", "wetter", "temperature", "temperatur", "forecast", "vorhersage",
+                "tomorrow", "morgen", "heute", "how will", "wie wird",
+                # German
                 "suche", "finde", "recherchiere", "wer ist", "was ist", "wie ist",
-                "warum", "wann", "wo ist", "aktuell", "nachrichten", "infos über"
+                "warum", "wann", "wo ist", "aktuell", "nachrichten", "infos über",
+                "sag mir", "kannst du mir sagen", "erzähl mir",
+                # Turkish
+                "kim", "kimdir", "nedir", "nasıl", "ne zaman", "nerede",
+                "söyleyebilir misiniz", "hakkında", "bilgi",
+                # Spanish
+                "quién es", "qué es", "buscar", "busca", "cómo", "cuándo", "dónde",
+                "información sobre", "dime", "clima", "tiempo",
+                # French
+                "qui est", "qu'est-ce que", "chercher", "rechercher", "comment",
+                "quand", "où est", "météo", "informations sur",
+                # Portuguese
+                "quem é", "o que é", "buscar", "pesquisar", "como", "quando", "onde",
+                "informações sobre", "tempo", "clima",
+                # Italian
+                "chi è", "cos'è", "cercare", "cerca", "come", "quando", "dove",
+                "informazioni su", "meteo",
+                # Russian
+                "кто такой", "кто это", "что такое", "искать", "найти", "как",
+                "когда", "где", "погода", "информация о",
+                # Chinese
+                "谁是", "什么是", "搜索", "查找", "怎么", "什么时候", "在哪里",
+                "天气", "关于",
+                # Japanese
+                "誰", "何", "検索", "調べる", "どうやって", "いつ", "どこ", "天気",
+                # Korean
+                "누구", "무엇", "검색", "찾기", "어떻게", "언제", "어디", "날씨",
+                # Arabic
+                "من هو", "ما هو", "بحث", "كيف", "متى", "أين", "طقس",
+                # Dutch
+                "wie is", "wat is", "zoeken", "weer", "wanneer", "waar",
+                # Polish
+                "kto to", "co to", "szukaj", "pogoda", "kiedy", "gdzie"
             ],
             "filesystem": [
                 "file", "read", "write", "create", "delete", "move", "copy",

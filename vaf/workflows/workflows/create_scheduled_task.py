@@ -19,27 +19,22 @@ WORKFLOW = {
         "every day at",
         "automatisch um",
         "automatic at",
-        "scheduled",
-        "zeitplan",
-        "wetter bericht",
-        "weather report",
+        "scheduled task",
+        "zeitplan erstellen",
         "jeden tag um",
-        "every day at",
-        "täglich um",
-        "daily um",
+        "täglich generieren",
+        "daily generate",
     ],
     "trigger_patterns": [
         r"erstell.*automatisier",
         r"create.*automation",
         r"schedule.*task",
-        r"täglich.*um",
-        r"daily.*at",
-        r"immer.*um",
-        r"every.*day.*at",
-        r"automatisch.*um",
-        r"jeden.*tag.*um",
-        r"wetter.*bericht",
-        r"weather.*report",
+        r"täglich.*um.*\d{1,2}:\d{2}",  # Requires time pattern
+        r"daily.*at.*\d{1,2}:\d{2}",     # Requires time pattern
+        r"immer.*um.*\d{1,2}:\d{2}",     # Requires time pattern
+        r"every.*day.*at.*\d{1,2}",      # Requires time
+        r"automatisch.*um.*\d{1,2}",     # Requires time
+        r"jeden.*tag.*um.*\d{1,2}",      # Requires time
     ],
     "variables": {
         "task_description": "What the automation should do (e.g., 'weather summary for Berlin tomorrow')",

@@ -1,8 +1,10 @@
 # LLM Models (zu groß für Git)
-models/*.gguf
-models/*.gguf.*
-vaf/models/*.gguf
-vaf/models/*.gguf.*
+models/**/*.gguf
+models/**/*.gguf.*
+models/**/*.onnx
+models/**/*.onnx.json
+vaf/models/**/*.gguf
+vaf/models/**/*.gguf.*
 
 # Cache und temporäre Dateien
 models/.cache/

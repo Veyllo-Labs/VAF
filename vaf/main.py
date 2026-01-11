@@ -26,6 +26,10 @@ def bootstrap():
         # Automation
         "schedule": "schedule",
         "inquirer": "inquirer",
+        # Speech (TTS/STT)
+        "pyttsx3": "pyttsx3",
+        "SpeechRecognition": "speech_recognition",
+        "pyaudio": "pyaudio",
     }
     
     missing = []
@@ -106,6 +110,82 @@ def bootstrap():
         print("  or:")
         print(f"    pip install {' '.join(missing)}")
         sys.exit(1)
+
+    # Check for Piper TTS if enabled
+    try:
+        from vaf.core.config import Config
+        
+        # Language & Speech Onboarding
+        if not Config.get("speech_language"):
+            print(f"\n{'='*60}")
+            print("  VAF - Speech Setup")
+            print(f"{'='*60}\n")
+            
+            try:
+                import inquirer
+                questions = [
+                    inquirer.List('lang',
+                                  message="Select your primary language (Speech Input/Output)",
+                                  choices=[
+                                      ('English (US)', 'en-US'),
+                                      ('German (DE)', 'de-DE'),
+                                      ('Turkish (TR)', 'tr-TR'),
+                                      ('French (FR)', 'fr-FR'),
+                                      ('Spanish (ES)', 'es-ES'),
+                                      ('Chinese (CN)', 'zh-CN'),
+                                      ('Italian (IT)', 'it-IT'),
+                                      ('Portuguese (PT)', 'pt-PT'),
+                                      ('Russian (RU)', 'ru-RU'),
+                                      ('Arabic (AR)', 'ar-JO'),
+                                      ('Catalan (CA)', 'ca-ES'),
+                                      ('Czech (CS)', 'cs-CZ'),
+                                      ('Welsh (CY)', 'cy-GB'),
+                                      ('Danish (DA)', 'da-DK'),
+                                      ('Greek (EL)', 'el-GR'),
+                                      ('Persian (FA)', 'fa-IR'),
+                                      ('Finnish (FI)', 'fi-FI'),
+                                      ('Hungarian (HU)', 'hu-HU'),
+                                      ('Icelandic (IS)', 'is-IS'),
+                                      ('Georgian (KA)', 'ka-GE'),
+                                      ('Kazakh (KK)', 'kk-KZ'),
+                                      ('Luxembourgish (LB)', 'lb-LU'),
+                                      ('Latvian (LV)', 'lv-LV'),
+                                      ('Nepali (NE)', 'ne-NP'),
+                                      ('Dutch (NL)', 'nl-NL'),
+                                      ('Norwegian (NO)', 'no-NO'),
+                                      ('Polish (PL)', 'pl-PL'),
+                                      ('Romanian (RO)', 'ro-RO'),
+                                      ('Slovak (SK)', 'sk-SK'),
+                                      ('Slovenian (SL)', 'sl-SI'),
+                                      ('Serbian (SR)', 'sr-RS'),
+                                      ('Swedish (SV)', 'sv-SE'),
+                                      ('Swahili (SW)', 'sw-CD'),
+                                      ('Ukrainian (UK)', 'uk-UA'),
+                                      ('Vietnamese (VI)', 'vi-VN'),
+                                  ]
+                    ),
+                    inquirer.Confirm('enable_speech', message="Enable Speech Features (TTS/STT) now?", default=True)
+                ]
+                answers = inquirer.prompt(questions)
+                if answers:
+                    Config.set("speech_language", answers['lang'])
+                    if answers['enable_speech']:
+                        Config.set("speech_tts_enabled", True)
+                        Config.set("speech_stt_enabled", True)
+                        print("  ✓ Speech features enabled.\n")
+                    else:
+                        print("  ✓ Language saved (Speech disabled for now).\n")
+            except Exception:
+                pass # Skip if inquirer fails
+
+        if Config.get("speech_tts_enabled", False):
+            from vaf.core.speech import get_speech_manager
+            # This will trigger auto-install of Piper and default voice if missing
+            get_speech_manager()._check_piper()
+            # Ensure at least German voice is ready
+            get_speech_manager()._ensure_voice_model("de")
+    except:
+        pass
 
 bootstrap()
 
@@ -384,6 +464,16 @@ def chat_command(
                     else:
                         tui.warning("Usage: /export <filename>")
                     continue
+                
+                elif cmd in ("listen", "l"):
+                    # Speech-to-Text Input
+                    captured = tui.listen_overlay()
+                    if captured:
+                        # Replace user input with captured text and proceed to send
+                        user_input = captured
+                        # Don't continue - fall through to message processing
+                    else:
+                        continue
                     
                 else:
                     tui.warning(f"Unknown command: /{cmd}")

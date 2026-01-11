@@ -27,6 +27,12 @@ langid>=1.1.6
 schedule>=1.2.0
 inquirer>=3.1.0
 
+# Speech Processing (Optional - Offline TTS/STT)
+pyttsx3>=2.90
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.14
+# openai-whisper>=20231117  # Recommended for high-quality offline STT (DE, TR, CN...)
+
 # Code Quality & Linting
 ruff>=0.1.0  # Fast Python linter and formatter
 

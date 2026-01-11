@@ -330,7 +330,6 @@ class CoderTUI:
     def append_stream(self, chunk: str):
         """Append text to the current stream (each chunk is a new line)."""
         with self._lock:
-            self._touch()
             # Filter out redacted reasoning tags
             chunk = re.sub(r'</?redacted_reasoning>', '', chunk, flags=re.IGNORECASE)
             chunk = re.sub(r'</?think>', '', chunk, flags=re.IGNORECASE)
@@ -3390,8 +3389,22 @@ All files must be saved inside this directory.
                                         # STREAMING CODE PREVIEW: If writing file, show content live!
                                         if tool_name == 'write_file':
                                             full_args = tc['function']['arguments']
+                                            
+                                            # 1. Try to extract PATH to show file in list immediately
+                                            # Look for complete path string: "path": "..."
+                                            path_match = re.search(r'"path"\s*:\s*"([^"]+)"', full_args)
+                                            fname_preview = "Streaming..."
+                                            if path_match:
+                                                path_hint = path_match.group(1)
+                                                if path_hint:
+                                                    fname_preview = os.path.basename(path_hint)
+                                                    # Add file to list immediately
+                                                    if fname_preview not in tui.files:
+                                                        tui.add_file(fname_preview, 0, "writing")
+                                                        tui._needs_update = True
+
+                                            # 2. Try to extract CONTENT for preview
                                             # Try to find "content": "..."
-                                            # We use simple string search because JSON is incomplete
                                             content_start = full_args.find('"content":')
                                             if content_start != -1:
                                                 # Find start of string value
@@ -3402,9 +3415,14 @@ All files must be saved inside this directory.
                                                     current_content = current_content.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
                                                     
                                                     # Pass FULL content to render so it can calculate line numbers correctly
-                                                    tui.set_code_preview("Streaming...", current_content, "code")
+                                                    tui.set_code_preview(fname_preview, current_content, "code")
                     
                     except json.JSONDecodeError:
+                        try:
+                            if lg:
+                                lg.event("stream_json_error", data=data_str[:100])
+                        except Exception:
+                            pass
                         continue
                 
                 # Flush any remaining line after stream ends
@@ -3792,15 +3810,30 @@ All files must be saved inside this directory.
                 live.update(tui.render())
                 
             except requests.exceptions.Timeout:
+                try:
+                    if lg:
+                        lg.event("llm_timeout", timeout=300)
+                except Exception:
+                    pass
                 tui.end_stream()
                 append_with_context(f"[ERROR] Request timed out after 180s - no response from server")
                 tui._needs_update = True
                 time.sleep(0.1)
                 return "Error: Request timed out after 180 seconds"
             except requests.exceptions.ConnectionError:
+                try:
+                    if lg:
+                        lg.event("llm_connection_error", error="ConnectionError")
+                except Exception:
+                    pass
                 tui.end_stream()  # Mark stream as finished even on error
                 return "Error: VAF Server offline."
             except Exception as e:
+                try:
+                    if lg:
+                        lg.event("llm_stream_error", error=str(e), traceback=str(e))
+                except Exception:
+                    pass
                 tui.end_stream()  # Mark stream as finished even on error
                 return f"Error: Stream failed - {e}"
                 
@@ -4588,6 +4621,7 @@ All files must be saved inside this directory.
             # CRITICAL: Always check if tasks are incomplete, regardless of completion signals
             # This prevents the model from stopping work prematurely
             # IMPORTANT: Skip nudges if tool_calls exist - let them execute first!
+            can_complete = False
             if task_mgr.todos and not task_mgr.is_all_done() and not tool_calls:
                 remaining = [t["task"] for t in task_mgr.todos if t["status"] != "completed"]
                 current = task_mgr.get_current_task()
@@ -5161,6 +5195,7 @@ All files must be saved inside this directory.
                             f"TODO list can only be modified in planning phase (Main Context)."
                         )
                         tui.append_stream("set_todos rejected - in task execution phase!")
+                        _log_to_file(f"[DEBUG-X] set_todos REJECTED: Task execution phase")
 
                     elif task_mgr.todos and len(task_mgr.todos) > 0:
                         # ALLOW: Re-planning in Main Context (e.g., after all tasks completed)
@@ -5190,6 +5225,7 @@ All files must be saved inside this directory.
                                 f"Complete all tasks first, then you can create a new plan."
                             )
                             tui.append_stream(f"set_todos rejected - {remaining} tasks remaining!")
+                            _log_to_file(f"[DEBUG-X] set_todos REJECTED: {remaining} tasks remaining")
 
                     elif tasks:
                         # First time setting todos
@@ -5425,6 +5461,7 @@ All files must be saved inside this directory.
                             "STOP calling task_done. Call set_todos NOW."
                         )
                         tui.append_stream("task_done BLOCKED - no TODOs! Call set_todos first!")
+                        _log_to_file(f"[DEBUG-X] task_done BLOCKED: No TODOs")
                     else:
                         current = task_mgr.get_current_task()
                         
@@ -5448,6 +5485,7 @@ All files must be saved inside this directory.
                                 f"3. Start working on the code for '{current}' immediately."
                             )
                             tui.append_stream(f"❌ task_done REJECTED - No files created for task!")
+                            _log_to_file(f"[DEBUG-X] task_done REJECTED: No files created")
                             tui.set_action("⚠️ Waiting for write_file...")
                         
                         elif is_file_task and files_created:
@@ -5681,6 +5719,9 @@ All files must be saved inside this directory.
                             # All tasks are done - allow completion
                             tui.append_stream("All tasks completed!")
                         
+                        # Fix: Ensure files_for_current_task is defined
+                        files_for_current_task = task_file_map.get(task_mgr.current_task_idx, [])
+                        
                         # CONTENT_ONLY mode: Return actual file content
                         if skip_template and files_created:
                             main_file = None
@@ -5803,6 +5844,7 @@ All files must be saved inside this directory.
                     except Exception as e:
                         result = f"Error fetching {url}: {e}"
                         tui.append_stream(f"❌ Fetch failed: {str(e)[:30]}")
+                        _log_to_file(f"[DEBUG-X] web_fetch ERROR: {str(e)[:100]}")
                 
                 elif fn_name == "web_deep_search":
                     query = fn_args.get("query", "")

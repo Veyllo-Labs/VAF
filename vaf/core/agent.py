@@ -589,6 +589,13 @@ class Agent:
             return
         self._shutdown_called = True
         
+        # Stop Speech
+        try:
+            from vaf.core.speech import get_speech_manager
+            get_speech_manager().stop()
+        except:
+            pass
+        
         # CRITICAL: Check for other sessions BEFORE unregistering this one
         should_keep_server = False
         if self.server and self.use_server:
@@ -1662,10 +1669,11 @@ class Agent:
                 f"- IGNORE typos and spelling errors - understand the intent\n"
                 f"- If request contains TIME (e.g., 'at 21:27', 'um 21:27', 'always at', 'immer um', 'daily at', 'täglich um') → create_scheduled_task\n"
                 f"- If request asks to schedule/automate something → create_scheduled_task\n"
-                f"- If request is about folder/file locations → none (use librarian_agent, not web_lookup)\n"
-                f"- If request is a simple web search → web_lookup\n"
+                f"- If request is about folder/file locations → none (agent will use librarian_agent directly)\n"
+                f"- CRITICAL: Simple info questions (weather, news, facts, 'what is X?', 'how is Y?') → none (agent uses web_search tool directly, NO workflow needed!)\n"
+                f"- Only use workflows for COMPLEX multi-step tasks, NOT for simple lookups!\n"
                 f"- Examples:\n" + "\n".join(examples) + "\n"
-                f"- If no match → none\n\n"
+                f"- If no match or simple question → none\n\n"
                 f"Request: {user_input}\n"
                 f"Output ONLY the workflow ID or 'none'."
             )
@@ -1729,6 +1737,39 @@ class Agent:
         # Automations have their own workflow_steps if they need multi-step execution
         if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
             return None
+            
+        # Determine language for UI messages
+        lang = "auto"
+        if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
+            lang = self.prompt_manager.user_language
+        else:
+            lang = self._detect_user_language(user_input)
+            
+        # Fallback to config if detection failed
+        if lang == "auto":
+            lang = (self.config.get("language", "auto") or "auto").strip().lower()
+
+        # Localized messages
+        msg_analyzing = "Step 1/2: Analyzing workflow match..."
+        msg_brain_matched_ui = "Brain matched: {name} (multi-language support!)"
+        msg_extracting = "Extracting variables from user input..."
+        msg_running_separate = "Running in separate terminal [Task: {task_id}]"
+        msg_runs_independently = "[>] Workflow runs independently. Result will be reported when done."
+        msg_async_return = "[WORKFLOW_ASYNC:{task_id}:{workflow_id}] Workflow '{name}' is running in a separate terminal.\n\nYou can continue using me while the workflow runs. I'll notify you when the result is ready."
+        msg_paused_ui = "⏸️  Workflow paused - waiting for sub-agent [Task: {task_id}]"
+        msg_paused_hint = "💡 You can continue using VAF. The workflow will resume automatically when the sub-agent finishes."
+        msg_paused_return = "⏸️ Workflow '{workflow_id}' is paused, waiting for a sub-agent to complete.\n\nYou can continue using me while we wait. The workflow will automatically resume when the result is ready."
+        
+        if lang == "de":
+            msg_analyzing = "Schritt 1/2: Analysiere Workflow-Übereinstimmung..."
+            msg_brain_matched_ui = "Brain matched: {name} (Mehrsprachige Unterstützung!)"
+            msg_extracting = "Extrahiere Variablen aus Benutzereingabe..."
+            msg_running_separate = "Läuft in separatem Terminal [Task: {task_id}]"
+            msg_runs_independently = "[>] Workflow läuft unabhängig. Ergebnis wird gemeldet, wenn fertig."
+            msg_async_return = "[WORKFLOW_ASYNC:{task_id}:{workflow_id}] Workflow '{name}' läuft in einem separaten Terminal.\n\nDu kannst mich weiter benutzen, während der Workflow läuft. Ich sage Bescheid, wenn das Ergebnis da ist."
+            msg_paused_ui = "⏸️  Workflow pausiert - warte auf Sub-Agent [Task: {task_id}]"
+            msg_paused_hint = "💡 Du kannst VAF weiter nutzen. Der Workflow wird automatisch fortgesetzt, wenn der Sub-Agent fertig ist."
+            msg_paused_return = "⏸️ Workflow '{workflow_id}' ist pausiert und wartet auf einen Sub-Agent.\n\nDu kannst mich weiter nutzen, während wir warten. Der Workflow wird automatisch fortgesetzt, wenn das Ergebnis da ist."
         
         try:
             from vaf.workflows import WorkflowSelector, WorkflowEngine, create_workflow
@@ -1740,7 +1781,7 @@ class Agent:
             # BRAIN-BASED WORKFLOW SELECTION (multi-language support!)
             # Instead of hardcoded pattern matching, use LLM to understand intent in ANY language
             from vaf.cli.ui import UI as UI_Class
-            with UI_Class.console.status("[bold cyan](O_O)  Step 1/2: Analyzing workflow match...[/bold cyan]", spinner="dots"):
+            with UI_Class.console.status(f"[bold cyan](O_O)  {msg_analyzing}[/bold cyan]", spinner="dots"):
                 workflow_id = self.analyze_workflow(user_input)
             
             if not workflow_id:
@@ -1756,11 +1797,11 @@ class Agent:
             if not template:
                 return None
             
-            UI.event("Workflow", f"Brain matched: {template['name']} (multi-language support!)", style="bold cyan")
+            UI.event("Workflow", msg_brain_matched_ui.format(name=template['name']), style="bold cyan")
             
             # Extract variables using WorkflowSelector (pattern matching + fallback)
             from vaf.cli.ui import UI
-            UI.event("Brain", "Extracting variables from user input...", style="dim")
+            UI.event("Brain", msg_extracting, style="dim")
             
             # Use WorkflowSelector to extract variables
             selector = WorkflowSelector()
@@ -1915,20 +1956,20 @@ class Agent:
                     
                     Platform.open_new_terminal(cmd, title=f"VAF Workflow: {workflow_id}")
                     
-                    UI.event("Workflow", f"Running in separate terminal [Task: {task_id[:8]}]", style="cyan")
-                    UI.info("[>] Workflow runs independently. Result will be reported when done.")
+                    UI.event("Workflow", msg_running_separate.format(task_id=task_id[:8]), style="cyan")
+                    UI.info(msg_runs_independently)
                     
                     # Return async marker
-                    return f"[WORKFLOW_ASYNC:{task_id}:{workflow_id}] Workflow '{template['name']}' is running in a separate terminal.\n\nYou can continue using me while the workflow runs. I'll notify you when the result is ready."
+                    return msg_async_return.format(task_id=task_id, workflow_id=workflow_id, name=template['name'])
             
             # Execute workflow inline (without defaults parameter)
             workflow_result = engine.execute(steps, variables=result.variables)
             
             # Handle paused workflows (async sub-agent case)
             if workflow_result.paused:
-                UI.event("Workflow", f"⏸️  Workflow paused - waiting for sub-agent [Task: {workflow_result.waiting_for_task}]", style="cyan")
-                UI.info("💡 You can continue using VAF. The workflow will resume automatically when the sub-agent finishes.")
-                return f"⏸️ Workflow '{workflow_id}' is paused, waiting for a sub-agent to complete.\n\nYou can continue using me while we wait. The workflow will automatically resume when the result is ready."
+                UI.event("Workflow", msg_paused_ui.format(task_id=workflow_result.waiting_for_task), style="cyan")
+                UI.info(msg_paused_hint)
+                return msg_paused_return.format(workflow_id=workflow_id)
             
             if workflow_result.success:
                 # Format the final output
@@ -3233,29 +3274,49 @@ class Agent:
              if not auto_retry:
                  # NUCLEAR OPTION: Rollback and Try Fresh
                  UI.event("System", "Response loop detected. Cleaning context and retrying fresh...", style="warning")
-                 
-                 # Restore history to state before this turn (remove user input + failed attempts)
-                 # Wait, we need to keep the USER input.
-                 # Actually, simpler: Remove everything added AFTER the user input.
-                 # But we also added user input at start.
-                 # Let's just pop everything until we are back to snapshot length.
-                 # But we can't trust current self.history length easily.
-                 
-                 # 1. Remove the failed attempts (System prompts, Assistant thoughts).
-                 # 2. Keep the User prompt.
-                 # 3. Recursively call with auto_retry=True.
-                 
-                 # The user prompt is at index `start_len` (if not skipped).
                  target_len = history_snapshot_len 
                  self.history = self.history[:target_len]
-                 
-                 # Retry with the ORIGINAL user input to regenerate the response
                  return self.chat_step(user_input=user_input, stream_callback=stream_callback, auto_retry=True, skip_input=skip_input)
                  
              fallback_msg = "\n\n*(System: The agent processed the request but failed to generate a final answer. Please see the thought trace above.)*"
              if stream_callback: stream_callback(f"[gold]{fallback_msg}[/gold]")
              self.history.append({"role": "assistant", "content": fallback_msg}) 
              return fallback_msg
+
+        # ═══════════════════════════════════════════════════════════════
+        # TEXT-TO-SPEECH INTEGRATION
+        # ═══════════════════════════════════════════════════════════════
+        try:
+            from vaf.core.speech import get_speech_manager
+            sm = get_speech_manager()
+            
+            # Determine language for TTS
+            # 1. Prefer explicitly set user language
+            tts_lang = "auto"
+            if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
+                tts_lang = self.prompt_manager.user_language
+            else:
+                # 2. Detect language of response
+                # Use content if available to avoid detecting language from reasoning (e.g. English thoughts, German answer)
+                text_to_analyze = full_content if full_content.strip() else full_response
+                tts_lang = self._detect_user_language(text_to_analyze)
+            
+            # Clean text specifically for speech (remove thoughts)
+            # CRITICAL: Use full_content (pure answer) if available to skip reasoning!
+            raw_tts_text = full_content if full_content.strip() else full_response
+            tts_text = sm._clean_markdown(raw_tts_text)
+            
+            # Debug: Show what will be spoken
+            if tts_text:
+                # UI.event("Debug", f"TTS: {tts_text[:60]}...", style="dim")
+                pass
+            
+            # Speak asynchronously
+            sm.speak(tts_text, lang=tts_lang)
+        except Exception:
+            pass  # Silent fail if speech module has issues
+
+        return full_response
 
     def execute_tool(self, name, args):
         from vaf.cli.ui import UI

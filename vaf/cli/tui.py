@@ -139,11 +139,13 @@ O))         O))       O))))))))
         self, 
         prompt: str = "Message", 
         placeholder: str = "Type your message...",
-        multiline: bool = False
+        multiline: bool = False,
+        check_for_auto_exit: bool = False
     ) -> Optional[str]:
         """
         Modern input box with styling.
         Returns user input or None if cancelled.
+        If check_for_auto_exit is True, will automatically exit when sub-agent results are ready.
         """
         # Build completer with cross-platform path support
         class VAFCompleter(Completer):
@@ -381,6 +383,40 @@ O))         O))       O))))))))
         def _get_live_toolbar():
             """Returns status for live display - called every refresh_interval."""
             status = _get_subagent_status()
+            
+            # CRITICAL: Check for pending sub-agent results while waiting for input
+            # If results are ready, auto-exit the prompt to process them
+            if check_for_auto_exit:
+                try:
+                    from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+                    ipc = get_ipc()
+                    curr_sess = get_current_session_id()
+                    if curr_sess:
+                        res = ipc.get_pending_results(session_id=curr_sess)
+                        if res:
+                            # Results ready! Exit the prompt automatically
+                            try:
+                                # Method 1: Try to get app from prompt_toolkit
+                                from prompt_toolkit import get_app
+                                app = get_app()
+                                if app and app.is_running:
+                                    app.exit(result="__AUTO_EXIT_FOR_SUBAGENT__")
+                                    return FormattedText([('class:status-bar', '✓ Processing results...')])
+                            except Exception as e:
+                                # Method 2: If that fails, use the stored session reference
+                                if hasattr(self, '_current_session') and self._current_session:
+                                    try:
+                                        app = self._current_session.app
+                                        if app and app.is_running:
+                                            app.exit(result="__AUTO_EXIT_FOR_SUBAGENT__")
+                                            return FormattedText([('class:status-bar', '✓ Processing results...')])
+                                    except:
+                                        pass
+                except Exception as e:
+                    # Debug: Print error if auto-exit fails
+                    import sys
+                    print(f"\n[DEBUG] Auto-exit error: {e}", file=sys.stderr)
+            
             if status:
                 return FormattedText([('class:status-bar', status)])
             return FormattedText([])  # Empty when no status
@@ -406,13 +442,61 @@ O))         O))       O))))))))
             # Print the input box header
             self._print_input_header(prompt)
             
+            # Background thread for auto-exit when sub-agent results are ready
+            import threading
+            exit_flag = threading.Event()
+            
+            def auto_exit_monitor():
+                """Monitor for sub-agent results and trigger auto-exit."""
+                if not check_for_auto_exit:
+                    return
+                
+                while not exit_flag.is_set():
+                    try:
+                        from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+                        ipc = get_ipc()
+                        curr_sess = get_current_session_id()
+                        if curr_sess:
+                            res = ipc.get_pending_results(session_id=curr_sess)
+                            if res:
+                                # Results ready! Exit the prompt
+                                import time
+                                time.sleep(0.1)  # Small delay to ensure app is fully initialized
+                                try:
+                                    from prompt_toolkit import get_app
+                                    app = get_app()
+                                    if app and app.is_running:
+                                        app.exit(result="__AUTO_EXIT_FOR_SUBAGENT__")
+                                        return
+                                except:
+                                    pass
+                    except:
+                        pass
+                    exit_flag.wait(1.0)  # Check every second
+            
+            # Start monitoring thread
+            monitor_thread = threading.Thread(target=auto_exit_monitor, daemon=True)
+            monitor_thread.start()
+            
+            # Store session reference for auto-exit functionality
+            self._current_session = session
+            
             # Get input with LIVE status on the RIGHT side (updates every second)
-            result = session.prompt(
-                HTML(f'<style fg="{self.primary}">&gt;</style> '),
-                placeholder=HTML(f'<style fg="{self.muted}">{placeholder}</style>'),
-                rprompt=_get_live_toolbar,  # Live status on right side of input
-                refresh_interval=1.0,  # Refresh every second
-            )
+            try:
+                result = session.prompt(
+                    HTML(f'<style fg="{self.primary}">&gt;</style> '),
+                    placeholder=HTML(f'<style fg="{self.muted}">{placeholder}</style>'),
+                    rprompt=_get_live_toolbar,  # Live status on right side of input
+                    refresh_interval=1.0,  # Refresh every second
+                )
+            finally:
+                # Stop monitoring thread
+                exit_flag.set()
+                self._current_session = None
+            
+            # Check if auto-exit was triggered
+            if result == "__AUTO_EXIT_FOR_SUBAGENT__":
+                return ""  # Return empty string to signal auto-exit
             
             # Learn from user input for better future suggestions
             if result:
@@ -512,6 +596,10 @@ O))         O))       O))))))))
             if not sm.is_stt_enabled():
                 self.warning("Speech Input is disabled. Enable in Settings (vaf settings).")
                 return None
+            
+            # CRITICAL: Stop TTS before starting STT to prevent interference
+            # If agent is speaking, we need to stop it so the microphone doesn't pick it up
+            sm.stop()
                 
             # Visual feedback
             self.console.print()

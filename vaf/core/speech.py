@@ -45,6 +45,9 @@ class SpeechManager:
         self._piper_checked = False
         self._has_piper = False
         
+        # TTS sequencing lock - ensures TTS plays sequentially, not in parallel
+        self._tts_lock = threading.Lock()
+        
         # Base paths
         self.base_dir = Path(__file__).parents[2]
         self.bin_dir = self.base_dir / "bin" / "piper"
@@ -310,19 +313,103 @@ class SpeechManager:
             return None
 
     def _play_audio(self, file_path: str):
-        """Play WAV/MP3 file."""
+        """Play WAV/MP3 file (OS-independent)."""
         system = platform.system().lower()
         try:
             if system == "windows":
-                # PowerShell Player for WAV (Piper outputs WAV)
-                cmd = f"(New-Object Media.SoundPlayer '{file_path}').PlaySync()"
-                subprocess.run(['powershell', '-c', cmd], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                # Check file extension to determine player
+                if file_path.lower().endswith('.mp3'):
+                    # For MP3: Use Windows Media Player (wmplayer.exe) in silent mode
+                    # Alternative: Use PowerShell with Windows.Media.Playback (Win10+)
+                    try:
+                        # Try modern PowerShell method first (Win10+)
+                        ps_script = f"""
+Add-Type -AssemblyName PresentationCore
+$player = New-Object System.Windows.Media.MediaPlayer
+$player.Open([System.Uri]::new('{file_path}'))
+$player.Play()
+Start-Sleep -Milliseconds 500
+while ($player.NaturalDuration.HasTimeSpan -eq $false) {{ Start-Sleep -Milliseconds 100 }}
+$duration = $player.NaturalDuration.TimeSpan.TotalSeconds
+Start-Sleep -Seconds $duration
+$player.Stop()
+$player.Close()
+"""
+                        subprocess.run(['powershell', '-NoProfile', '-Command', ps_script], 
+                                     check=True, 
+                                     creationflags=subprocess.CREATE_NO_WINDOW,
+                                     timeout=5)
+                    except:
+                        # Fallback: Use mplayer/vlc if installed, or just skip
+                        pass
+                else:
+                    # For WAV: Use SoundPlayer (works reliably)
+                    cmd = f"(New-Object Media.SoundPlayer '{file_path}').PlaySync()"
+                    subprocess.run(['powershell', '-c', cmd], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
             elif system == "darwin":
+                # macOS: afplay supports both WAV and MP3
                 subprocess.run(['afplay', file_path], check=True)
             else:
-                subprocess.run(['aplay', file_path], check=True)
+                # Linux: Try multiple players (mpg123 for MP3, aplay for WAV)
+                if file_path.lower().endswith('.mp3'):
+                    # Try mpg123 first, then mpv, then ffplay
+                    players = ['mpg123', 'mpv', 'ffplay']
+                    for player in players:
+                        try:
+                            if player == 'mpv':
+                                subprocess.run([player, '--no-video', '--really-quiet', file_path], 
+                                             check=True, timeout=5)
+                            elif player == 'ffplay':
+                                subprocess.run([player, '-nodisp', '-autoexit', '-loglevel', 'quiet', file_path],
+                                             check=True, timeout=5)
+                            else:
+                                subprocess.run([player, '-q', file_path], check=True, timeout=5)
+                            break
+                        except (FileNotFoundError, subprocess.CalledProcessError):
+                            continue
+                else:
+                    # WAV: Use aplay
+                    subprocess.run(['aplay', '-q', file_path], check=True)
         except:
-            pass
+            pass  # Silently fail - sound is optional
+    
+    def _play_success_sound(self):
+        """Play success sound after successful STT (OS-independent)."""
+        try:
+            # Find the sound file
+            sound_path = self.base_dir / "sounds" / "sst.mp3"
+            
+            if not sound_path.exists():
+                return  # No sound file, skip silently
+            
+            # Play in background thread to avoid blocking
+            import threading
+            def play_worker():
+                self._play_audio(str(sound_path))
+            
+            thread = threading.Thread(target=play_worker, daemon=True)
+            thread.start()
+        except:
+            pass  # Silently fail - sound is optional
+    
+    def play_answer_ready_sound(self):
+        """Play sound when agent has finished thinking and answer is ready (OS-independent)."""
+        try:
+            # Find the sound file
+            sound_path = self.base_dir / "sounds" / "tts01.mp3"
+            
+            if not sound_path.exists():
+                return  # No sound file, skip silently
+            
+            # Play in background thread to avoid blocking
+            import threading
+            def play_worker():
+                self._play_audio(str(sound_path))
+            
+            thread = threading.Thread(target=play_worker, daemon=True)
+            thread.start()
+        except:
+            pass  # Silently fail - sound is optional
 
     def stop(self):
         """Stop speaking immediately."""
@@ -351,51 +438,54 @@ class SpeechManager:
         # UI.event("TTS Debug", f"Speaking ({len(clean_text)} chars): {clean_text[:100]}...", style="dim")
 
         def _speak_worker():
-            # 1. Try Piper (High Quality)
-            if self._check_piper():
-                # Attempt to get voice for requested language
-                model_path = self._ensure_voice_model(lang)
-                
-                # Fallback to English if specific language fails
-                if not model_path and lang != "en":
-                    UI.warning(f"Voice for '{lang}' not available/failed. Falling back to English.")
-                    model_path = self._ensure_voice_model("en")
+            # CRITICAL: Acquire TTS lock to ensure sequential playback
+            # This prevents multiple TTS calls from overlapping
+            with self._tts_lock:
+                # 1. Try Piper (High Quality)
+                if self._check_piper():
+                    # Attempt to get voice for requested language
+                    model_path = self._ensure_voice_model(lang)
+                    
+                    # Fallback to English if specific language fails
+                    if not model_path and lang != "en":
+                        UI.warning(f"Voice for '{lang}' not available/failed. Falling back to English.")
+                        model_path = self._ensure_voice_model("en")
 
-                if model_path:
+                    if model_path:
+                        try:
+                            import tempfile
+                            fd, wav_path = tempfile.mkstemp(suffix=".wav")
+                            os.close(fd)
+                            
+                            binary = self._get_piper_binary()
+                            
+                            # Run Piper
+                            proc = subprocess.Popen(
+                                [str(binary), "--model", str(model_path), "--output_file", wav_path],
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL
+                            )
+                            proc.communicate(input=clean_text.encode('utf-8'))
+                            
+                            if proc.returncode == 0 and os.path.exists(wav_path):
+                                self._play_audio(wav_path)
+                                try:
+                                    os.remove(wav_path) 
+                                except:
+                                    pass
+                                return # Success!
+                        except Exception as e:
+                            pass
+
+                # 2. Fallback: pyttsx3 (Robotic but reliable)
+                if HAS_TTS:
                     try:
-                        import tempfile
-                        fd, wav_path = tempfile.mkstemp(suffix=".wav")
-                        os.close(fd)
-                        
-                        binary = self._get_piper_binary()
-                        
-                        # Run Piper
-                        proc = subprocess.Popen(
-                            [str(binary), "--model", str(model_path), "--output_file", wav_path],
-                            stdin=subprocess.PIPE,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL
-                        )
-                        proc.communicate(input=clean_text.encode('utf-8'))
-                        
-                        if proc.returncode == 0 and os.path.exists(wav_path):
-                            self._play_audio(wav_path)
-                            try:
-                                os.remove(wav_path) 
-                            except:
-                                pass
-                            return # Success!
-                    except Exception as e:
-                        pass
+                        import pythoncom
+                        pythoncom.CoInitialize()
+                    except ImportError: pass
 
-            # 2. Fallback: pyttsx3 (Robotic but reliable)
-            if HAS_TTS:
-                try:
-                    import pythoncom
-                    pythoncom.CoInitialize()
-                except ImportError: pass
-
-                with self._lock:
+                    # Note: _lock is already held by _tts_lock, so we use _is_speaking flag instead
                     self._is_speaking = True
                     try:
                         engine = pyttsx3.init()
@@ -430,6 +520,10 @@ class SpeechManager:
         """
         if not HAS_STT: return None
         if not self.stt_mic: return None
+        
+        # CRITICAL: Stop TTS before starting STT to prevent interference
+        # If we're currently speaking, the microphone will pick it up and cause feedback
+        self.stop()
 
         # Determine language
         if not lang:
@@ -518,6 +612,11 @@ class SpeechManager:
                 
                 try:
                     text = self.stt_recognizer.recognize_google(audio, language=locale)
+                    
+                    # SUCCESS! Play success sound
+                    if text:
+                        self._play_success_sound()
+                    
                     return text
                 except sr.UnknownValueError:
                     UI.warning("Audio captured but not understood (UnknownValueError).")
@@ -563,14 +662,84 @@ class SpeechManager:
         for pattern in start_patterns:
             t = re.sub(pattern, '', t, flags=re.IGNORECASE).strip()
 
-        # 4. Remove Code Blocks (replace with brief pause hint)
-        t = re.sub(r'```.*?```', '.', t, flags=re.DOTALL)
-        t = re.sub(r'`.*?`', 'code', t)
+        # 4. Handle Code Blocks and Inline Code intelligently
+        # Multi-line code blocks: Remove completely (too long to speak)
+        t = re.sub(r'```.*?```', '', t, flags=re.DOTALL)
         
-        # 4. Remove Emojis (Disabled for now - caused text loss)
-        # t = re.sub(r'[\U00010000-\U0010ffff]', '', t)
+        # Inline code: Keep short code, remove long code
+        def replace_inline_code(match):
+            code = match.group(1)
+            # If code is short (< 20 chars) and looks like a variable/command, keep it
+            if len(code) < 20 and not any(char in code for char in ['\n', '{', '}', '(', ')', '[', ']']):
+                return code  # Keep short inline code (e.g., `vaf run`, `settings.py`)
+            else:
+                return ''  # Remove long/complex code
         
-        # 5. Clean Markdown & Structure for Natural Reading
+        t = re.sub(r'`([^`]+)`', replace_inline_code, t)
+        
+        # 5. Remove Emojis (all Unicode emoji ranges)
+        # Comprehensive emoji removal covering all Unicode blocks
+        emoji_pattern = re.compile(
+            "["
+            "\U0001F600-\U0001F64F"  # emoticons
+            "\U0001F300-\U0001F5FF"  # symbols & pictographs
+            "\U0001F680-\U0001F6FF"  # transport & map symbols
+            "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+            "\U00002702-\U000027B0"  # dingbats
+            "\U000024C2-\U0001F251"  # enclosed characters
+            "\U0001F900-\U0001F9FF"  # supplemental symbols
+            "\U0001FA00-\U0001FA6F"  # chess symbols
+            "\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-A
+            "\U00002600-\U000026FF"  # miscellaneous symbols
+            "\U00002700-\U000027BF"  # dingbats
+            "\U0001F018-\U0001F270"  # various asian characters
+            "\U0001F300-\U0001F5FF"  # misc symbols and pictographs
+            "]+",
+            flags=re.UNICODE
+        )
+        t = emoji_pattern.sub('', t)
+        
+        # 6. Convert dates to natural speech (DD.MM.YYYY or DD.MM.YY)
+        def convert_date_to_speech(match):
+            """Convert dates like 11.01.2026 to natural speech."""
+            day = match.group(1)
+            month = match.group(2)
+            year = match.group(3)
+            
+            # Month names in German (since most of VAF is in German context)
+            month_names_de = {
+                "01": "Januar", "02": "Februar", "03": "März", "04": "April",
+                "05": "Mai", "06": "Juni", "07": "Juli", "08": "August",
+                "09": "September", "10": "Oktober", "11": "November", "12": "Dezember"
+            }
+            
+            # Month names in English
+            month_names_en = {
+                "01": "January", "02": "February", "03": "March", "04": "April",
+                "05": "May", "06": "June", "07": "July", "08": "August",
+                "09": "September", "10": "October", "11": "November", "12": "December"
+            }
+            
+            # Try to detect language from context (simple heuristic)
+            # For now, default to German (can be enhanced later)
+            month_names = month_names_de
+            
+            day_int = int(day)
+            month_name = month_names.get(month, month)
+            
+            # Format: "elfter Januar zweitausendsechsundzwanzig" is too formal
+            # Better: "11. Januar 2026" or just speak numbers naturally
+            if len(year) == 4:
+                # Full year: "11. Januar 2026"
+                return f"{day_int}. {month_name} {year}"
+            else:
+                # Short year: "11. Januar 26"
+                return f"{day_int}. {month_name} {year}"
+        
+        # Match dates: DD.MM.YYYY or DD.MM.YY
+        t = re.sub(r'\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b', convert_date_to_speech, t)
+        
+        # 7. Clean Markdown & Structure for Natural Reading
         # Shorten Links: https://www.veyllo.io/test -> veyllo.io
         t = re.sub(r'https?://(?:www\.)?([^/\s]+)(?:/[^\s]*)?', r'\1', t)
         

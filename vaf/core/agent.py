@@ -180,6 +180,105 @@ class Agent:
         
         # Flag to prevent multiple shutdown calls
         self._shutdown_called = False
+
+    def _speak(self, text: str):
+        """Helper to speak response via SpeechManager."""
+        try:
+            from vaf.core.speech import get_speech_manager
+            sm = get_speech_manager()
+            
+            # 1. Determine language
+            tts_lang = "auto"
+            if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
+                tts_lang = self.prompt_manager.user_language
+            else:
+                tts_lang = self._detect_user_language(text)
+            
+            # 2. Clean text
+            tts_text = sm._clean_markdown(text)
+            
+            # 3. Speak
+            if tts_text:
+                sm.speak(tts_text, lang=tts_lang)
+        except Exception:
+            pass
+    
+    def _speak_filler(self, filler_type: str = "thinking", tool_name: str = None, query: str = None):
+        """
+        Speak filler phrases during thinking/tool execution to avoid dead silence.
+        Provides natural feedback in the user's language.
+        
+        Args:
+            filler_type: "thinking" or "tool"
+            tool_name: Name of the tool being executed (for tool fillers)
+            query: Search query or task description (for context-aware fillers)
+        """
+        try:
+            from vaf.core.speech import get_speech_manager
+            sm = get_speech_manager()
+            
+            # Only speak if TTS is enabled
+            if not sm.is_tts_enabled():
+                return
+            
+            # Determine language
+            lang = "auto"
+            if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
+                lang = self.prompt_manager.user_language
+            else:
+                # Try to detect from last user message
+                for msg in reversed(self.history):
+                    if msg.get('role') == 'user':
+                        lang = self._detect_user_language(msg.get('content', ''))
+                        break
+            
+            # Import filler phrases from separate config file
+            from vaf.core.speech_fillers import THINKING_FILLERS, TOOL_FILLERS
+            
+            # Select appropriate filler
+            filler_text = ""
+            
+            if filler_type == "thinking":
+                # Random thinking filler
+                import random
+                lang_key = lang if lang in THINKING_FILLERS else "en"
+                fillers = THINKING_FILLERS.get(lang_key, THINKING_FILLERS["en"])
+                filler_text = random.choice(fillers)
+            
+            elif filler_type == "tool" and tool_name:
+                # Tool-specific filler
+                lang_key = lang if lang in TOOL_FILLERS.get(tool_name, {}) else "en"
+                
+                # Get tool-specific filler or generic fallback
+                if tool_name in TOOL_FILLERS:
+                    filler_template = TOOL_FILLERS[tool_name].get(lang_key, TOOL_FILLERS[tool_name].get("en", ""))
+                    
+                    # Replace {query} placeholder if present
+                    if query and "{query}" in filler_template:
+                        # Truncate long queries
+                        short_query = query[:50] + "..." if len(query) > 50 else query
+                        filler_text = filler_template.format(query=short_query)
+                    else:
+                        filler_text = filler_template
+                else:
+                    # Generic tool filler
+                    if lang == "de":
+                        filler_text = f"Ich nutze {tool_name}"
+                    elif lang == "tr":
+                        filler_text = f"{tool_name} kullanıyorum"
+                    elif lang == "es":
+                        filler_text = f"Usando {tool_name}"
+                    elif lang == "fr":
+                        filler_text = f"J'utilise {tool_name}"
+                    else:
+                        filler_text = f"Using {tool_name}"
+            
+            # Speak the filler
+            if filler_text:
+                sm.speak(filler_text, lang=lang)
+                
+        except Exception:
+            pass  # Silently fail - fillers are optional
     
     def _register_session(self):
         """Register this agent instance as an active session."""
@@ -1766,10 +1865,10 @@ class Agent:
             msg_extracting = "Extrahiere Variablen aus Benutzereingabe..."
             msg_running_separate = "Läuft in separatem Terminal [Task: {task_id}]"
             msg_runs_independently = "[>] Workflow läuft unabhängig. Ergebnis wird gemeldet, wenn fertig."
-            msg_async_return = "[WORKFLOW_ASYNC:{task_id}:{workflow_id}] Workflow '{name}' läuft in einem separaten Terminal.\n\nDu kannst mich weiter benutzen, während der Workflow läuft. Ich sage Bescheid, wenn das Ergebnis da ist."
+            msg_async_return = "[WORKFLOW_ASYNC:{task_id}:{workflow_id}] Workflow '{name}' läuft in einem separaten Terminal.\n\nIch bin weiter für dich da, während der Workflow läuft. Ich melde mich, wenn das Ergebnis da ist."
             msg_paused_ui = "⏸️  Workflow pausiert - warte auf Sub-Agent [Task: {task_id}]"
             msg_paused_hint = "💡 Du kannst VAF weiter nutzen. Der Workflow wird automatisch fortgesetzt, wenn der Sub-Agent fertig ist."
-            msg_paused_return = "⏸️ Workflow '{workflow_id}' ist pausiert und wartet auf einen Sub-Agent.\n\nDu kannst mich weiter nutzen, während wir warten. Der Workflow wird automatisch fortgesetzt, wenn das Ergebnis da ist."
+            msg_paused_return = "⏸️ Workflow '{workflow_id}' ist pausiert und wartet auf einen Sub-Agent.\n\nIch bin weiter für dich da, während wir warten. Der Workflow wird automatisch fortgesetzt, wenn das Ergebnis da ist."
         
         try:
             from vaf.workflows import WorkflowSelector, WorkflowEngine, create_workflow
@@ -2291,6 +2390,9 @@ class Agent:
 
         UI.event("Agent", "Thinking...", style="dim")
         
+        # TTS Filler: "Einen kleinen Moment..." (avoid dead silence)
+        self._speak_filler("thinking")
+        
         retries = 0
         MAX_RETRIES = 5
         
@@ -2760,6 +2862,16 @@ class Agent:
 
                     UI.event("Tool", f"{function_name}", style="highlight")
                     
+                    # TTS Filler: "Ich suche im Internet..." (context-aware feedback)
+                    # Extract query/context for filler
+                    filler_query = None
+                    if function_name == "web_search":
+                        filler_query = arguments.get('query', '')
+                    elif function_name in ("coding_agent", "research_agent"):
+                        filler_query = arguments.get('task', '')
+                    
+                    self._speak_filler("tool", tool_name=function_name, query=filler_query)
+                    
                     # Extract user question for web_search to enable per-page analysis
                     if function_name == "web_search":
                         # Find the last user message to get the original question
@@ -2941,6 +3053,16 @@ class Agent:
                         })
                         
                         UI.event("System", "Async task started - returning status immediately", style="dim")
+                        
+                        # TTS for the acknowledgment (BEFORE return!)
+                        # CRITICAL: Start TTS thread BEFORE returning, otherwise thread never starts
+                        self._speak(response_text)
+                        
+                        # Give TTS thread time to start (threading.Thread.start() needs a moment)
+                        # Without this, the return statement kills the function before thread starts
+                        import time
+                        time.sleep(0.05)  # 50ms is enough for thread initialization
+                        
                         # Add a special marker that the CLI can use to force-print this message
                         return f"[ASYNC_ACK]{response_text}"
                     
@@ -3252,12 +3374,17 @@ class Agent:
              
              # Case 1: Loop ended with Tool Output -> Model Silent
              if last_msg.get('role') == 'tool':
-                 return f"✅ Tool '{last_msg.get('name')}' finished: {last_msg.get('content')[:100]}..."
+                 res = f"✅ Tool '{last_msg.get('name')}' finished: {last_msg.get('content')[:100]}..."
+                 self._speak(res)
+                 return res
                  
              # Case 2: Loop ended with Assistant Thought -> Model Silent (Previous was tool)
              if last_msg.get('role') == 'assistant' and prev_msg.get('role') == 'tool':
-                  return f"✅ Tool '{prev_msg.get('name')}' finished. (Model provided no commentary)"
+                  res = f"✅ Tool '{prev_msg.get('name')}' finished. (Model provided no commentary)"
+                  self._speak(res)
+                  return res
 
+             self._speak("...")
              return "..."
         
         # Final empty check - same logic as above
@@ -3281,40 +3408,25 @@ class Agent:
              fallback_msg = "\n\n*(System: The agent processed the request but failed to generate a final answer. Please see the thought trace above.)*"
              if stream_callback: stream_callback(f"[gold]{fallback_msg}[/gold]")
              self.history.append({"role": "assistant", "content": fallback_msg}) 
+             self._speak(fallback_msg)
              return fallback_msg
 
         # ═══════════════════════════════════════════════════════════════
         # TEXT-TO-SPEECH INTEGRATION
         # ═══════════════════════════════════════════════════════════════
-        try:
-            from vaf.core.speech import get_speech_manager
-            sm = get_speech_manager()
-            
-            # Determine language for TTS
-            # 1. Prefer explicitly set user language
-            tts_lang = "auto"
-            if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
-                tts_lang = self.prompt_manager.user_language
-            else:
-                # 2. Detect language of response
-                # Use content if available to avoid detecting language from reasoning (e.g. English thoughts, German answer)
-                text_to_analyze = full_content if full_content.strip() else full_response
-                tts_lang = self._detect_user_language(text_to_analyze)
-            
-            # Clean text specifically for speech (remove thoughts)
-            # CRITICAL: Use full_content (pure answer) if available to skip reasoning!
-            raw_tts_text = full_content if full_content.strip() else full_response
-            tts_text = sm._clean_markdown(raw_tts_text)
-            
-            # Debug: Show what will be spoken
-            if tts_text:
-                # UI.event("Debug", f"TTS: {tts_text[:60]}...", style="dim")
-                pass
-            
-            # Speak asynchronously
-            sm.speak(tts_text, lang=tts_lang)
-        except Exception:
-            pass  # Silent fail if speech module has issues
+        # CRITICAL: Use full_content (pure answer) if available to skip reasoning!
+        tts_source = full_content if full_content.strip() else full_response
+        
+        # Play "answer ready" sound before TTS starts (after thinking is complete)
+        if tts_source.strip():  # Only if we have actual content to speak
+            try:
+                from vaf.core.speech import get_speech_manager
+                sm = get_speech_manager()
+                sm.play_answer_ready_sound()
+            except Exception:
+                pass  # Silently fail - sound is optional
+        
+        self._speak(tts_source)
 
         return full_response
 

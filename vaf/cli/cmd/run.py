@@ -756,9 +756,9 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                     count = len(res)
                     if count > last_count:
                         # New results found!
-                        tui.notification(f"✓ {count} Sub-Agent result(s) ready! (Press Enter to process)")
+                        tui.notification(f"✓ {count} Sub-Agent result(s) ready! → Press Enter to process")
                     last_count = count
-                time.sleep(3) # Poll every 3 seconds
+                time.sleep(2) # Poll every 2 seconds (faster check)
             except:
                 time.sleep(10)
     
@@ -769,28 +769,24 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
     # Interactive loop
     while True:
         try:
-            # ═══════════════════════════════════════════════════════════════════
-            # CHECK FOR SUB-AGENT RESULTS (Non-blocking)
-            # ═══════════════════════════════════════════════════════════════════
+            # Note: Sub-agent status now shown in live toolbar (updates every second)
+            
+            # CHECK FOR SUB-AGENT RESULTS before showing input prompt
+            # This prevents unnecessary wait for user input when results are ready
             found_results = _check_subagent_results(tui, agent)
             if found_results:
-                # Auto-respond to sub-agent results - don't wait for user input!
+                # Results available! Process immediately without waiting for user input
                 tui.info("[i] Processing sub-agent results...")
                 try:
-                    # Detect user language for the summary
                     user_lang = "auto"
                     for msg in reversed(agent.history):
                         if msg.get("role") == "user":
                             user_lang = agent._detect_user_language(msg.get("content", ""))
                             break
                     
-                    # Robust language instruction for the summary
                     native_lang = agent.LANGUAGE_NAMES_NATIVE.get(user_lang, user_lang)
-                    
-                    # Combine all results into one text block (truncated to safe size)
                     combined_results = "\n\n---\n\n".join(r[:1000] for r in found_results)
                     
-                    # Define simple callback for live output
                     def simple_stream_callback(text):
                         tui.console.print(text, end="", markup=True, style=f"bold {tui.primary}")
 
@@ -815,32 +811,99 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                             f"RESPOND EXCLUSIVELY IN {native_lang.upper()}."
                         )
 
-                    # Trigger agent to summarize/respond to the result DIRECTLY
-                    # We inject the result into the prompt so the agent sees it immediately
                     response = agent.chat_step(
                         instruction_prompt,
-                        stream_callback=simple_stream_callback,  # CRITICAL: Show output live!
-                        skip_input=False,  # Show prompt in history to ensure model sees it
-                        disable_workflows=True,  # Prevent recursive workflow triggering
-                        disable_tools=False  # Allow tools so agent can read the file if needed
+                        stream_callback=simple_stream_callback,
+                        skip_input=False,
+                        disable_workflows=True,
+                        disable_tools=False
                     )
                     if response:
                         tui.message_box(response, title="Answer", role="assistant")
                 except Exception as e:
                     tui.error(f"Error processing result: {e}")
-        
-            # Note: Sub-agent status now shown in live toolbar (updates every second)
+                
+                # After processing results, the conversation flow continues
+                # Fall through to show input prompt for user's next message
+                tui.console.print()
             
+            # Show input prompt for user
             user_input = tui.input_box(
                 prompt="Message",
-                placeholder="Type your message... (@ for files, / for commands)"
+                placeholder="Type your message... (@ for files, / for commands)",
+                check_for_auto_exit=True  # Enable auto-exit when sub-agent results are ready
             )
+            
+            # CRITICAL: Check again for sub-agent results AFTER user input
+            # (in case results arrived while user was typing)
+            immediate_results = _check_subagent_results(tui, agent)
+            if immediate_results:
+                # New results found! Process them immediately and loop back
+                tui.info("[i] Processing new sub-agent results...")
+                try:
+                    # Same processing logic as above
+                    user_lang = "auto"
+                    for msg in reversed(agent.history):
+                        if msg.get("role") == "user":
+                            user_lang = agent._detect_user_language(msg.get("content", ""))
+                            break
+                    
+                    native_lang = agent.LANGUAGE_NAMES_NATIVE.get(user_lang, user_lang)
+                    combined_results = "\n\n---\n\n".join(r[:1000] for r in immediate_results)
+                    
+                    def simple_stream_callback(text):
+                        tui.console.print(text, end="", markup=True, style=f"bold {tui.primary}")
+
+                    if user_lang == "de":
+                        instruction_prompt = (
+                            f"Hier sind die Ergebnisse der Sub-Agenten:\n\n"
+                            f"{combined_results}\n\n"
+                            f"Bitte erstelle eine KURZE ZUSAMMENFASSUNG dieser Ergebnisse für den Benutzer auf DEUTSCH.\n"
+                            f"Konzentriere dich auf den Inhalt (was wurde gefunden/getan).\n"
+                            f"Bleib prägnant aber informativ.\n"
+                            f"Du kannst `read_file` nutzen, wenn du den Inhalt sehen musst.\n"
+                            f"ANTWORTE AUSSCHLIESSLICH AUF DEUTSCH."
+                        )
+                    else:
+                        instruction_prompt = (
+                            f"The sub-agent(s) have completed their tasks.\n\n"
+                            f"**RESULTS:**\n{combined_results}\n\n"
+                            f"Please provide a BRIEF SUMMARY of these results for the user in {native_lang}.\n"
+                            f"Focus on the content (what was found/done).\n"
+                            f"Keep it concise but informative.\n"
+                            f"You may use `read_file` if you need to see the content before summarizing.\n"
+                            f"RESPOND EXCLUSIVELY IN {native_lang.upper()}."
+                        )
+
+                    response = agent.chat_step(
+                        instruction_prompt,
+                        stream_callback=simple_stream_callback,
+                        skip_input=False,
+                        disable_workflows=True,
+                        disable_tools=False
+                    )
+                    if response:
+                        tui.message_box(response, title="Answer", role="assistant")
+                except Exception as e:
+                    tui.error(f"Error processing result: {e}")
+                
+                # Show countdown and auto-continue
+                tui.console.print()
+                for remaining in range(3, 0, -1):
+                    tui.console.print(f"\r[dim]Auto-continuing in {remaining}s (press Ctrl+C to type a message)...[/dim]", end="")
+                    time.sleep(1.0)
+                tui.console.print("\r[dim]Auto-continuing...                                                    [/dim]")
+                continue
             
             if user_input is None:
                 break
             
             user_input = user_input.strip()
+            
+            # If user pressed empty Enter, treat it as "check for more results"
+            # This allows the loop to quickly re-check instead of waiting for manual input
             if not user_input:
+                # Empty input - just loop back to check for results
                 continue
             
             # ═══════════════════════════════════════════════════════════════
@@ -914,6 +977,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
   clear         - Clear conversation
   tools         - Show loaded tools
   help          - Show full help
+  halt, stop    - Stop speech output (TTS)
 
 **Special:**
   @filename     - Attach file content
@@ -928,7 +992,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
             
             # Known commands that work with or without /
             KNOWN_COMMANDS = {"exit", "quit", "q", "clear", "help", "settings", 
-                             "theme", "tools", "undo", "restore", "context", "session", "listen", "l"}
+                             "theme", "tools", "undo", "restore", "context", "session", "listen", "l", "halt", "stop", "quiet", "stfu"}
             
             # Check if input is a command (with / or standalone single word)
             is_command = False
@@ -976,6 +1040,7 @@ settings        - Open settings
 theme <name>    - Change theme (e.g., "theme dark")
 tools           - Show loaded tools
 listen, l       - Start voice input (STT)
+halt, stop      - Stop speech output (TTS)
 undo            - Undo last code change
 context         - Show context status
 restore         - Restore full context
@@ -1155,12 +1220,31 @@ Created: {current_session.created_at}
                     continue
                 
                 elif cmd in ("listen", "l"):
+                    # CRITICAL: Stop TTS before starting STT to prevent interference
+                    try:
+                        from vaf.core.speech import get_speech_manager
+                        sm = get_speech_manager()
+                        sm.stop()
+                    except Exception:
+                        pass  # Ignore errors, STT should work even if TTS fails to stop
+                    
                     captured = tui.listen_overlay()
                     if captured:
                         user_input = captured
                         # Don't continue - fall through to message processing
                     else:
                         continue
+                
+                elif cmd in ("halt", "stop", "quiet", "stfu"):
+                    # Stop TTS immediately
+                    try:
+                        from vaf.core.speech import get_speech_manager
+                        sm = get_speech_manager()
+                        sm.stop()
+                        tui.success("🔇 Sprachausgabe gestoppt")
+                    except Exception as e:
+                        tui.error(f"Fehler beim Stoppen: {e}")
+                    continue
                 
                 else:
                     tui.warning(f"Unknown command: /{cmd}")
@@ -1448,6 +1532,8 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
                 UI.print("  clear          Reset conversation")
                 UI.print("  settings       Open Settings")
                 UI.print("  tools          Show loaded tools")
+                UI.print("  listen, l      Start voice input (STT)")
+                UI.print("  halt, stop     Stop speech output (TTS)")
                 UI.print("  help           Show this help")
                 UI.print("  @filename      Attach a file")
                 UI.print("")
@@ -1462,6 +1548,14 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
                 continue
             
             elif single_cmd in ("listen", "l"):
+                # CRITICAL: Stop TTS before starting STT to prevent interference
+                try:
+                    from vaf.core.speech import get_speech_manager
+                    sm = get_speech_manager()
+                    sm.stop()
+                except Exception:
+                    pass  # Ignore errors, STT should work even if TTS fails to stop
+                
                 from vaf.cli.tui import get_tui
                 captured = get_tui().listen_overlay()
                 if captured:
@@ -1470,6 +1564,17 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
                     # Show Usage Bar
                     used, total = agent.get_token_usage()
                     UI.print_usage_bar(used, total)
+                continue
+            
+            elif single_cmd in ("halt", "stop", "quiet", "stfu"):
+                # Stop TTS immediately
+                try:
+                    from vaf.core.speech import get_speech_manager
+                    sm = get_speech_manager()
+                    sm.stop()
+                    UI.success("🔇 Sprachausgabe gestoppt")
+                except Exception as e:
+                    UI.error(f"Fehler beim Stoppen: {e}")
                 continue
 
             elif single_cmd == "install-gpu":

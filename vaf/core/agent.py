@@ -132,7 +132,19 @@ class Agent:
         
         # Initialize Context Manager
         from vaf.core.context import ContextManager
-        self.context_manager = ContextManager(max_tokens=self.config.get("n_ctx", 8192))
+        
+        # Determine appropriate context limit
+        context_limit = self.config.get("n_ctx", 8192)
+        
+        # If running in API mode, use a much larger default context limit
+        # (unless user manually set n_ctx to something huge)
+        if self.provider != "local":
+             # 128k is a safe baseline for modern APIs (GPT-4o, Gemini 1.5 Flash, Claude 3.5 Sonnet)
+             # Only override if n_ctx is the default/small value
+             if context_limit <= 16384:
+                 context_limit = 128000
+                 
+        self.context_manager = ContextManager(max_tokens=context_limit)
         
         # Initialize Prompt Manager
         from vaf.core.system_prompt import SystemPromptManager

@@ -61,9 +61,6 @@ class ReportFilenameTool(BaseTool):
         
         if len(words) > 4:
             try:
-                import requests
-                from vaf.core.config import Config
-                
                 # Fast, cheap call to extract keywords
                 prompt = (
                     f"Extract exactly {max_words} main keywords for a filename from this request.\n"
@@ -71,19 +68,13 @@ class ReportFilenameTool(BaseTool):
                     f"Keywords (space separated):"
                 )
                 
-                res = requests.post(
-                    "http://127.0.0.1:8080/v1/chat/completions",
-                    json={
-                        "model": Config.get("model", ""),
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 20,
-                        "temperature": 0.0,
-                    },
-                    timeout=5
+                content = self.query_llm(
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=20,
+                    temperature=0.0
                 )
                 
-                if res.status_code == 200:
-                    content = res.json()["choices"][0]["message"]["content"].strip()
+                if content:
                     llm_words = _slugify_words(content)
                     if llm_words:
                         words = llm_words

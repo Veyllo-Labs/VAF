@@ -134,10 +134,6 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
             def answer_question_with_page(user_question: str, page_title: str, page_content: str, page_url: str) -> str:
                 """Use separate LLM context to answer user question based on single page."""
                 try:
-                    model_name = Config.get("model", "") or ""
-                    if not model_name:
-                        return None
-                    
                     # Detect language from user question
                     lang = "German" if any(word in user_question.lower() for word in ["wie", "was", "wann", "wo", "wer", "warum"]) else "English"
                     lang_instruction = "Antworte auf Deutsch." if lang == "German" else "Answer in English."
@@ -163,30 +159,19 @@ CRITICAL INSTRUCTIONS:
 
 Answer:"""
 
-                    res = requests.post(
-                        "http://127.0.0.1:8080/v1/chat/completions",
-                        json={
-                            "model": model_name,
-                            "messages": [
-                                {"role": "system", "content": "You are a helpful assistant that answers questions based on web page content. Always use information from the provided page, not your training data."},
-                                {"role": "user", "content": prompt}
-                            ],
-                            "max_tokens": 250,  # Reduced from 400
-                            "temperature": 0.2,
-                        },
-                        timeout=30,
+                    answer = self.query_llm(
+                        messages=[
+                            {"role": "system", "content": "You are a helpful assistant that answers questions based on web page content. Always use information from the provided page, not your training data."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=250,
+                        temperature=0.2
                     )
                     
-                    if res.status_code == 200:
-                        msg = res.json()["choices"][0]["message"]
-                        answer = msg.get("content", "").strip()
-                        if answer:
-                            return answer
-                        else:
-                            UI.event("Debug", f"LLM returned empty answer for '{page_title[:30]}'", style="dim")
-                            return None
+                    if answer:
+                        return answer
                     else:
-                        UI.event("Debug", f"LLM HTTP {res.status_code} for '{page_title[:30]}'", style="dim")
+                        UI.event("Debug", f"LLM returned empty answer for '{page_title[:30]}'", style="dim")
                         return None
                 except Exception as e:
                     UI.event("Debug", f"LLM answer failed for '{page_title[:30]}': {str(e)[:50]}", style="dim")
@@ -195,10 +180,6 @@ Answer:"""
             def synthesize_final_answer(user_question: str, all_answers: list) -> str:
                 """Create ONE final synthesized answer from multiple source answers."""
                 try:
-                    model_name = Config.get("model", "") or ""
-                    if not model_name:
-                        return None
-                    
                     # Detect language from user question
                     lang = "German" if any(word in user_question.lower() for word in ["wie", "was", "wann", "wo", "wer", "warum"]) else "English"
                     lang_instruction = "Antworte auf Deutsch." if lang == "German" else "Answer in English."
@@ -223,50 +204,39 @@ Task: Synthesize ONE clear, concise answer (2-4 sentences) that combines the mos
 
 Final Answer:"""
 
-                    res = requests.post(
-                        "http://127.0.0.1:8080/v1/chat/completions",
-                        json={
-                            "model": model_name,
-                            "messages": [
-                                {"role": "system", "content": "You are a helpful assistant that synthesizes information from multiple sources into a clear, concise answer."},
-                                {"role": "user", "content": prompt}
-                            ],
-                            "max_tokens": 300,
-                            "temperature": 0.3,
-                        },
-                        timeout=30,
+                    answer = self.query_llm(
+                        messages=[
+                            {"role": "system", "content": "You are a helpful assistant that synthesizes information from multiple sources into a clear, concise answer."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=300,
+                        temperature=0.3
                     )
                     
-                    if res.status_code == 200:
-                        msg = res.json()["choices"][0]["message"]
-                        answer = msg.get("content", "").strip()
-                        if answer:
-                            return answer
-                        else:
-                            # DEBUG: Empty answer - save snapshot for analysis
-                            import json
-                            from datetime import datetime
-                            debug_dir = Platform.data_dir() / "debug" / "web_search"
-                            debug_dir.mkdir(parents=True, exist_ok=True)
-                            
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            debug_file = debug_dir / f"empty_synthesis_{timestamp}.json"
-                            
-                            debug_data = {
-                                "timestamp": timestamp,
-                                "user_question": user_question,
-                                "all_answers": all_answers,
-                                "prompt": prompt,
-                                "response": msg
-                            }
-                            
-                            with open(debug_file, 'w', encoding='utf-8') as f:
-                                json.dump(debug_data, f, indent=2, ensure_ascii=False)
-                            
-                            UI.event("Debug", f"Empty synthesis - saved snapshot: {debug_file.name}", style="yellow")
-                            return None
+                    if answer:
+                        return answer
                     else:
-                        UI.event("Debug", f"Final synthesis HTTP {res.status_code}", style="dim")
+                        # DEBUG: Empty answer - save snapshot for analysis
+                        import json
+                        from datetime import datetime
+                        debug_dir = Platform.data_dir() / "debug" / "web_search"
+                        debug_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        debug_file = debug_dir / f"empty_synthesis_{timestamp}.json"
+                        
+                        debug_data = {
+                            "timestamp": timestamp,
+                            "user_question": user_question,
+                            "all_answers": all_answers,
+                            "prompt": prompt,
+                            "response": "EMPTY"
+                        }
+                        
+                        with open(debug_file, 'w', encoding='utf-8') as f:
+                            json.dump(debug_data, f, indent=2, ensure_ascii=False)
+                        
+                        UI.event("Debug", f"Empty synthesis - saved snapshot: {debug_file.name}", style="yellow")
                         return None
                 except Exception as e:
                     UI.event("Debug", f"Final synthesis error: {str(e)[:60]}", style="dim")

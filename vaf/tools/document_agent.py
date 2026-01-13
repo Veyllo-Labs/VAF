@@ -211,20 +211,13 @@ IMPORTANT: Break complex documents into 5-15 sections for optimal generation.
 Output ONLY valid JSON, no explanations."""
 
         try:
-            response = requests.post(
-                "http://127.0.0.1:8080/v1/chat/completions",
-                json={
-                    "model": model_name,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 1024,
-                    "temperature": 0.3,
-                },
-                timeout=60
+            content = self.query_llm(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1024,
+                temperature=0.3
             )
             
-            if response.status_code == 200:
-                content = response.json()['choices'][0]['message']['content']
-                
+            if content:
                 # Extract JSON from response
                 json_match = re.search(r'\{.*\}', content, re.DOTALL)
                 if json_match:
@@ -251,8 +244,6 @@ Output ONLY valid JSON, no explanations."""
         This prevents context overflow for large documents.
         """
         
-        model_name = self._get_model_name()
-        
         # Context-efficient prompt (only this section)
         prompt = f"""You are writing section {section_index} of {total_sections} for a {document_type}.
 
@@ -266,22 +257,16 @@ Output format: Clean text ready for document (no markdown headers, just content)
 Language: Match the document type (German for German contracts, etc.)."""
 
         try:
-            response = requests.post(
-                "http://127.0.0.1:8080/v1/chat/completions",
-                json={
-                    "model": model_name,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0.5,
-                },
-                timeout=120
+            content = self.query_llm(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=2048,
+                temperature=0.5
             )
             
-            if response.status_code == 200:
-                content = response.json()['choices'][0]['message']['content']
+            if content:
                 return content.strip()
             else:
-                return f"[ERROR generating section: {response.status_code}]"
+                return f"[ERROR generating section: No response from LLM]"
                 
         except Exception as e:
             return f"[ERROR generating section: {e}]"
@@ -410,14 +395,4 @@ Language: Match the document type (German for German contracts, etc.)."""
 
 ✅ Document generation completed successfully!"""
     
-    def _get_model_name(self) -> str:
-        """Get the current model name from server."""
-        try:
-            res = requests.get("http://127.0.0.1:8080/v1/models", timeout=2)
-            if res.status_code == 200:
-                data = res.json()
-                if 'data' in data and len(data['data']) > 0:
-                    return data['data'][0]['id']
-        except:
-            pass
-        return "user-model"
+    def run(self, **kwargs) -> str:

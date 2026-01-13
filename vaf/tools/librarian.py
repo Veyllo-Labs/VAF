@@ -42,6 +42,7 @@ Use for:
 - File operations: 'How many files...', 'List files in...', 'Find file...', 'Read file...'
 - System information: 'How many storage devices...', 'What drives are available...', 'Disk space...'
 - Storage devices: Counts HDD, SSD, USB drives and shows their capacity
+- Folder sizes: 'How big is folder X', 'Check disk usage of directory', 'Largest files in...'
 Fast and context-efficient. Has access to storage device information (HDD, SSD, USB drives)."""
     
     parameters = {
@@ -228,17 +229,6 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             
         UI.event("Librarian", f"Split content into {len(chunks)} chunks for processing.", style="info")
         
-        # Get model name dynamically
-        model_name = "user-model"
-        try:
-            m_res = requests.get("http://127.0.0.1:8080/v1/models", timeout=2)
-            if m_res.status_code == 200:
-                data = m_res.json()
-                if 'data' in data and len(data['data']) > 0:
-                    model_name = data['data'][0]['id']
-        except:
-            pass
-        
         summaries = []
         
         # 3. Process chunks
@@ -259,21 +249,15 @@ Keep it concise but detailed enough to be useful.
 Output ONLY the summary/extraction.
 """
             try:
-                response = requests.post(
-                    "http://127.0.0.1:8080/v1/chat/completions",
-                    json={
-                        "model": model_name,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 1024,
-                        "temperature": 0.0,
-                    },
-                    timeout=120
+                content = self.query_llm(
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=1024,
+                    temperature=0.0
                 )
-                if response.status_code == 200:
-                    content = response.json()['choices'][0]['message']['content']
+                if content:
                     summaries.append(content)
                 else:
-                    summaries.append(f"[Error summarizing chunk {i}: {response.text}]")
+                    summaries.append(f"[Error summarizing chunk {i}: No response from LLM]")
             except Exception as e:
                 summaries.append(f"[Exception summarizing chunk {i}: {e}]")
         
@@ -295,18 +279,13 @@ Combine these partial summaries into a coherent final report that answers the us
 Remove duplicates and ensure smooth flow.
 """
             try:
-                response = requests.post(
-                    "http://127.0.0.1:8080/v1/chat/completions",
-                    json={
-                        "model": model_name,
-                        "messages": [{"role": "user", "content": final_prompt}],
-                        "max_tokens": 2048,
-                        "temperature": 0.3,
-                    },
-                    timeout=120
+                content = self.query_llm(
+                    messages=[{"role": "user", "content": final_prompt}],
+                    max_tokens=2048,
+                    temperature=0.3
                 )
-                if response.status_code == 200:
-                    return f"### Librarian Map-Reduce Report\n\n{response.json()['choices'][0]['message']['content']}"
+                if content:
+                    return f"### Librarian Map-Reduce Report\n\n{content}"
             except:
                 pass
         
@@ -1123,7 +1102,7 @@ Remove duplicates and ensure smooth flow.
             # Text Files (default)
             # ═══════════════════════════════════════════════════════════
             else:
-            content = file_path.read_text(encoding='utf-8', errors='replace')
+                content = file_path.read_text(encoding='utf-8', errors='replace')
             
             # Truncate if needed
             if len(content) > 5000:
@@ -1651,11 +1630,7 @@ TOOL SELECTION GUIDE:
 - "Files by size" / "Dateien nach Größe" -> Use list_files(path, sort_by='size') to sort files by size
 - "Multiple files analysis" / "Mehrere Dateien analysieren" -> Use list_files with sort_by='size' or find_files, then analyze results
 - "Calculate" / "Math" / "Compute" / "Algorithm" -> Use python_sandbox(code) for mathematical calculations and data processing
-
-COMPLEX FILE QUERIES:
-- For "largest files" / "biggest files" / "größte Dateien": Use list_files(path, sort_by='size', limit=20) to get top files by size
-- For "analyze data files" / "multiple files": Use find_files to find all matching files, then list_files with sort_by='size' to analyze
-- For complex analysis: Combine find_files + list_files + python_sandbox if needed for calculations
+- "Folder size" / "Ordnergröße" -> Use folder_size(path)
 
 Common paths:
 - Downloads: {self.folder_aliases.get('downloads', 'N/A')}
@@ -1721,26 +1696,17 @@ Common paths:
                 history = context_manager.compress(history)
             
             try:
-                # Get model name
-                model_name = "user-model"
-                try:
-                    m_res = requests.get("http://127.0.0.1:8080/v1/models", timeout=2)
-                    if m_res.status_code == 200:
-                        data = m_res.json()
-                        if 'data' in data and len(data['data']) > 0:
-                            model_name = data['data'][0]['id']
-                except:
-                    pass
+                from vaf.core.config import Config
+                config = Config.load()
+                provider = config.get("provider", "local")
+                model_name = config.get("model", "")
                 
                 # Build tools schema with validation
                 tools_schema = []
                 for t in self.tools.values():
                     params = getattr(t, 'parameters', {})
-                    # Ensure parameters is a valid dict
                     if not isinstance(params, dict):
                         params = {"type": "object", "properties": {}}
-                    
-                    # Validate required fields
                     if "type" not in params:
                         params["type"] = "object"
                     if "properties" not in params:
@@ -1755,62 +1721,96 @@ Common paths:
                         }
                     })
                 
-                # API call with better error handling
-                try:
-                    history = _sanitize_history(history)
-                    res = requests.post(
-                        "http://127.0.0.1:8080/v1/chat/completions",
-                        json={
-                            "model": model_name,
-                            "messages": history,
-                            "max_tokens": 1024,
-                            "temperature": 0.1,
-                            "tools": tools_schema,
-                            "tool_choice": "auto",
-                        },
-                        timeout=60,
-                    )
-                    
-                    # Handle Context Size Error (400) - automatically compress and retry
-                    if res.status_code == 400:
-                        try:
+                history = _sanitize_history(history)
+                response_msg = None
+                
+                # ---------------------------------------------------------------
+                # 1. API Backend Path (OpenAI, Anthropic, DeepSeek, Google, etc.)
+                # ---------------------------------------------------------------
+                if provider != "local":
+                    try:
+                        from vaf.core.api_backend import APIBackendManager
+                        backend = APIBackendManager(provider)
+                        
+                        full_content = ""
+                        tool_calls = []
+                        
+                        for chunk in backend.chat_completion(
+                            messages=history,
+                            temperature=0.1,
+                            max_tokens=1024,
+                            stream=True,
+                            model=model_name,
+                            tools=tools_schema
+                        ):
+                            if chunk.strip().startswith("{") and ("tool_calls" in chunk or "tool_use" in chunk):
+                                try:
+                                    data = json.loads(chunk)
+                                    if "tool_calls" in data:
+                                        tool_calls.extend(data["tool_calls"])
+                                    elif "tool_use" in data:
+                                        # Anthropic conversion
+                                        tool_calls.append({
+                                            "id": data["tool_use"].get("id"),
+                                            "type": "function",
+                                            "function": {
+                                                "name": data["tool_use"].get("name"),
+                                                "arguments": json.dumps(data["tool_use"].get("input", {}))
+                                            }
+                                        })
+                                except:
+                                    pass
+                            else:
+                                full_content += chunk
+                        
+                        response_msg = {"role": "assistant", "content": full_content}
+                        if tool_calls:
+                            response_msg["tool_calls"] = tool_calls
+                            
+                    except Exception as e:
+                        live.stop()
+                        return self._format_connection_error(f"API Error: {str(e)}", task)
+
+                # ---------------------------------------------------------------
+                # 2. Local Server Path (Fallback)
+                # ---------------------------------------------------------------
+                else:
+                    try:
+                        res = requests.post(
+                            "http://127.0.0.1:8080/v1/chat/completions",
+                            json={
+                                "model": model_name,
+                                "messages": history,
+                                "max_tokens": 1024,
+                                "temperature": 0.1,
+                                "tools": tools_schema,
+                                "tool_choice": "auto",
+                            },
+                            timeout=60,
+                        )
+                        
+                        if res.status_code == 400:
+                            # Context Size Error handling
                             error_data = res.json()
                             error_msg = error_data.get("error", {}).get("message", "")
-                            if "exceed_context_size" in error_msg.lower() or "exceed" in error_msg.lower():
-                                UI.event("Librarian", "Context size exceeded. Compressing...", style="warning")
-                                # Aggressively compress context
+                            if "exceed" in error_msg.lower():
                                 history = context_manager.compress(history)
-                                # Also truncate old messages if still too large
-                                if len(history) > 20:
-                                    # Keep system prompt, last user message, and last 10 messages
-                                    system_msgs = [m for m in history if m.get("role") == "system"]
-                                    user_msgs = [m for m in history if m.get("role") == "user"]
-                                    assistant_msgs = [m for m in history if m.get("role") == "assistant"]
-                                    
-                                    # Keep first system message, last user message, last 5 assistant messages
-                                    new_history = []
-                                    if system_msgs:
-                                        new_history.append(system_msgs[0])  # Keep first system prompt
-                                    if user_msgs:
-                                        new_history.append(user_msgs[-1])  # Keep last user message
-                                    if assistant_msgs:
-                                        new_history.extend(assistant_msgs[-5:])  # Keep last 5 assistant messages
-                                    
-                                    history = new_history
-                                UI.event("Librarian", f"Compressed to {len(history)} messages. Retrying...", style="info")
-                                # Retry the request with compressed context (continue loop)
                                 continue
-                        except (json.JSONDecodeError, KeyError, ValueError):
-                            pass  # Not a context size error, fall through to normal error handling
-                    
-                    if res.status_code != 200:
+                        
+                        if res.status_code != 200:
+                            live.stop()
+                            return self._format_error_response(res, task, history, tools_schema)
+                            
+                        response_msg = res.json()['choices'][0]['message']
+                        
+                    except requests.exceptions.RequestException as e:
                         live.stop()
-                        return self._format_error_response(res, task, history, tools_schema)
-                except requests.exceptions.RequestException as e:
-                    live.stop()
-                    return self._format_connection_error(str(e), task)
+                        return self._format_connection_error(str(e), task)
                 
-                msg = res.json()['choices'][0]['message']
+                if not response_msg:
+                    continue
+
+                msg = response_msg
                 content = msg.get('content', '')
                 tool_calls = msg.get('tool_calls', [])
                 

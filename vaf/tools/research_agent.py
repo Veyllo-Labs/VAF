@@ -379,47 +379,28 @@ class ResearchAgentTool(BaseTool):
                 f"Title:"
             )
             
-            # Retry loop for model loading
-            for attempt in range(5):
-                try:
-                    res = requests.post(
-                        "http://127.0.0.1:8080/v1/chat/completions",
-                        json={
-                            "model": Config.get("model", ""),
-                            "messages": [{"role": "user", "content": prompt}],
-                            "max_tokens": 550,
-                            "temperature": 0.7,
-                        },
-                        timeout=20
-                    )
-                    
-                    if res.status_code == 503:
-                        # UI.event("Debug", "Title gen: Model loading (503)...", style="dim")
-                        time.sleep(2)
-                        continue
-                        
-                    if res.status_code == 200:
-                        content = res.json()["choices"][0]["message"]["content"].strip()
-                        title = content.strip('"').strip("'").split("\n")[0] # Take first line only
-                        
-                        # Remove common prefixes if model is chatty
-                        for prefix in ["Title:", "Report Title:", "Here is a title:", "The title is:", "Answer:"]:
-                            if title.lower().startswith(prefix.lower()):
-                                title = title[len(prefix):].strip()
-                                
-                        if len(title) > 1: # Relaxed length check
-                            UI.event("Research", f"Title: {title}", style="dim")
-                            return title
-                        else:
-                            UI.event("Debug", f"Title gen: Result too short ('{title}')", style="warning")
-                    else:
-                        UI.event("Debug", f"Title gen: Server returned {res.status_code}", style="warning")
-                except Exception as e:
-                    UI.event("Debug", f"Title gen attempt {attempt} failed: {e}", style="dim")
-                    time.sleep(1)
+            # Unified LLM query using BaseTool method
+            content = self.query_llm(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=550,
+                temperature=0.7
+            )
             
-            # If we fall through here, all attempts failed
-            UI.event("Debug", "Title generation gave up (all attempts failed).", style="warning")
+            if content:
+                title = content.strip('"').strip("'").split("\n")[0] # Take first line only
+                
+                # Remove common prefixes if model is chatty
+                for prefix in ["Title:", "Report Title:", "Here is a title:", "The title is:", "Answer:"]:
+                    if title.lower().startswith(prefix.lower()):
+                        title = title[len(prefix):].strip()
+                        
+                if len(title) > 1: # Relaxed length check
+                    UI.event("Research", f"Title: {title}", style="dim")
+                    return title
+                else:
+                    UI.event("Debug", f"Title gen: Result too short ('{title}')", style="warning")
+            else:
+                UI.event("Debug", f"Title gen: Failed (no response)", style="warning")
         except Exception as e:
             UI.event("Debug", f"Title generation critical error: {e}", style="error")
             pass

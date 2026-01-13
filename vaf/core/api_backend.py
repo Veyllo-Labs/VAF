@@ -123,7 +123,7 @@ class APIBackendManager:
         if self.provider == "anthropic":
             yield from self._anthropic_chat(messages, temperature, max_tokens, stream, model, tools)
         elif self.provider == "google":
-            yield from self._google_chat(messages, temperature, max_tokens, stream, model)
+            yield from self._google_chat(messages, temperature, max_tokens, stream, model, tools)
         else:
             # OpenAI-compatible (OpenAI, DeepSeek, OpenRouter)
             yield from self._openai_compatible_chat(messages, temperature, max_tokens, stream, model, tools)
@@ -218,7 +218,7 @@ class APIBackendManager:
             error_text = e.response.text[:200]
             
             # Non-retryable errors: Don't yield empty, raise exception to break retry loop
-            if error_code in [401, 403, 429]:  # Unauthorized, Forbidden, Rate Limit
+            if error_code in [400, 401, 403, 429]:  # Bad Request, Unauthorized, Forbidden, Rate Limit
                 UI.error(f"{self.provider.upper()} API request failed: {error_code} - {error_text}")
                 raise  # Re-raise to break retry loop
             
@@ -324,7 +324,7 @@ class APIBackendManager:
             error_text = e.response.text[:200]
             
             # Non-retryable errors: Don't yield empty, raise exception to break retry loop
-            if error_code in [401, 403, 429]:  # Unauthorized, Forbidden, Rate Limit
+            if error_code in [400, 401, 403, 429]:  # Bad Request, Unauthorized, Forbidden, Rate Limit
                 UI.error(f"Anthropic API request failed: {error_code} - {error_text}")
                 raise  # Re-raise to break retry loop
             
@@ -341,11 +341,13 @@ class APIBackendManager:
         temperature: float, 
         max_tokens: int, 
         stream: bool, 
-        model: str
+        model: str,
+        tools: Optional[List[Dict]] = None
     ) -> Generator[str, None, None]:
         """
         Google AI Studio specific format (Gemini)
         Best Practice: Google uses different message structure and auth method
+        Supports function calling via tools parameter
         """
         if stream:
             endpoint = self.provider_config.get("stream_endpoint", self.provider_config["chat_endpoint"])
@@ -389,6 +391,39 @@ class APIBackendManager:
         if system_instruction:
             payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
         
+        # Add tools if provided (Google function calling format)
+        if tools:
+            def sanitize_schema(schema: Dict) -> Dict:
+                """Recursively remove 'additionalProperties' from schema."""
+                if not isinstance(schema, dict):
+                    return schema
+                new_schema = {}
+                for k, v in schema.items():
+                    if k == "additionalProperties":
+                        continue
+                    if isinstance(v, dict):
+                        new_schema[k] = sanitize_schema(v)
+                    elif isinstance(v, list):
+                        new_schema[k] = [sanitize_schema(i) if isinstance(i, dict) else i for i in v]
+                    else:
+                        new_schema[k] = v
+                return new_schema
+
+            # Convert OpenAI tool format to Google format
+            google_tools = []
+            for tool in tools:
+                if tool.get("type") == "function":
+                    func = tool["function"]
+                    parameters = func.get("parameters", {"type": "object", "properties": {}})
+                    google_tools.append({
+                        "name": func["name"],
+                        "description": func.get("description", ""),
+                        "parameters": sanitize_schema(parameters)
+                    })
+            
+            if google_tools:
+                payload["tools"] = [{"functionDeclarations": google_tools}]
+        
         try:
             response = requests.post(
                 url, 
@@ -414,6 +449,21 @@ class APIBackendManager:
                                         for part in parts:
                                             if "text" in part:
                                                 yield part["text"]
+                                            elif "functionCall" in part:
+                                                # Google function calling format
+                                                func_call = part["functionCall"]
+                                                # Convert to OpenAI-compatible format
+                                                tool_call_json = json.dumps({
+                                                    "tool_calls": [{
+                                                        "id": f"call_{func_call['name']}_{hash(json.dumps(func_call.get('args', {})))}",
+                                                        "type": "function",
+                                                        "function": {
+                                                            "name": func_call["name"],
+                                                            "arguments": json.dumps(func_call.get("args", {}))
+                                                        }
+                                                    }]
+                                                })
+                                                yield tool_call_json
                             except json.JSONDecodeError:
                                 continue
             else:
@@ -425,6 +475,21 @@ class APIBackendManager:
                         for part in parts:
                             if "text" in part:
                                 yield part["text"]
+                            elif "functionCall" in part:
+                                # Google function calling format
+                                func_call = part["functionCall"]
+                                # Convert to OpenAI-compatible format
+                                tool_call_json = json.dumps({
+                                    "tool_calls": [{
+                                        "id": f"call_{func_call['name']}_{hash(json.dumps(func_call.get('args', {})))}",
+                                        "type": "function",
+                                        "function": {
+                                            "name": func_call["name"],
+                                            "arguments": json.dumps(func_call.get("args", {}))
+                                        }
+                                    }]
+                                })
+                                yield tool_call_json
         
         except requests.exceptions.Timeout:
             UI.error(f"Google API request timed out")
@@ -434,7 +499,7 @@ class APIBackendManager:
             error_text = e.response.text[:200]
             
             # Non-retryable errors: Don't yield empty, raise exception to break retry loop
-            if error_code in [401, 403, 429]:  # Unauthorized, Forbidden, Rate Limit
+            if error_code in [400, 401, 403, 429]:  # Bad Request, Unauthorized, Forbidden, Rate Limit
                 UI.error(f"Google API request failed: {error_code} - {error_text}")
                 raise  # Re-raise to break retry loop
             

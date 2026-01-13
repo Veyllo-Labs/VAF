@@ -78,6 +78,69 @@ class BaseTool(ABC):
     # UTILITY METHODS
     # ═══════════════════════════════════════════════════════════════════════════
     
+    def query_llm(self, messages, max_tokens=300, temperature=0.7) -> Optional[str]:
+        """
+        Unified LLM query method for tools. 
+        Supports both API providers and Local mode automatically.
+        
+        Args:
+            messages: List of message dicts {"role": "...", "content": "..."}
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            
+        Returns:
+            Optional[str]: Generated text or None if failed
+        """
+        from vaf.core.config import Config
+        import requests
+        import json
+        
+        config = Config.load()
+        provider = config.get("provider", "local")
+        model = config.get("model", "")
+        
+        # 1. API Backend Mode
+        if provider != "local":
+            try:
+                from vaf.core.api_backend import APIBackendManager
+                backend = APIBackendManager(provider)
+                response_text = ""
+                # API calls are streamed, consume generator
+                for chunk in backend.chat_completion(
+                    messages=messages, 
+                    temperature=temperature, 
+                    max_tokens=max_tokens, 
+                    stream=True, 
+                    model=model
+                ):
+                     # Simple filtering of JSON tool calls if they leak (unlikely here)
+                     if not chunk.strip().startswith("{"): 
+                         response_text += chunk
+                return response_text.strip()
+            except Exception:
+                return None
+        
+        # 2. Local Server Mode (Fallback)
+        try:
+            payload = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            res = requests.post(
+                "http://127.0.0.1:8080/v1/chat/completions",
+                json=payload,
+                timeout=60
+            )
+            if res.status_code == 200:
+                data = res.json()
+                if "choices" in data and len(data["choices"]) > 0:
+                    return data["choices"][0]["message"].get("content", "").strip()
+            return None
+        except Exception:
+            return None
+
     def get_schema(self) -> Dict[str, Any]:
         """Get the tool schema for the model."""
         return {

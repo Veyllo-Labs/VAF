@@ -27,6 +27,7 @@ class ServerManager:
         self.bin_dir = os.path.join(self.base_dir, "bin")
         self.process = None
         self._log_file = None  # Server log file handle
+        self._job_handle = None  # Windows Job Object for process group management
         
         # PID file for tracking server process (survives crashes)
         self.pid_file = os.path.join(os.path.expanduser("~"), ".vaf", "server.pid")
@@ -43,7 +44,73 @@ class ServerManager:
         
         # Cleanup any orphaned server from previous crash
         self._cleanup_orphan_server()
-
+        
+        # Windows: Create Job Object to ensure child process terminates with parent
+        if self.system == "Windows":
+            self._create_job_object()
+    
+    def __del__(self):
+        """Destructor: Clean up job object handle on Windows."""
+        if hasattr(self, 'system') and self.system == "Windows" and hasattr(self, '_job_handle') and self._job_handle:
+            try:
+                import ctypes
+                ctypes.windll.kernel32.CloseHandle(self._job_handle)
+            except Exception:
+                pass
+    
+    def _create_job_object(self):
+        """
+        Windows-specific: Create a Job Object to ensure child processes terminate with parent.
+        This prevents orphaned llama-server processes when the terminal is closed.
+        """
+        try:
+            import ctypes
+            from ctypes import wintypes
+            
+            # Windows API constants
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+            
+            # Create Job Object
+            job_name = None  # Anonymous job
+            self._job_handle = ctypes.windll.kernel32.CreateJobObjectW(None, job_name)
+            
+            if not self._job_handle:
+                return  # Failed to create job, continue anyway
+            
+            # Configure job to kill all processes when the job handle is closed
+            class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("BasicLimitInformation", ctypes.c_byte * 64),  # JOBOBJECT_BASIC_LIMIT_INFORMATION
+                    ("IoInfo", ctypes.c_byte * 32),  # IO_COUNTERS
+                    ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t),
+                ]
+            
+            job_info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+            # Set the flag in BasicLimitInformation.LimitFlags (offset 16 bytes, DWORD)
+            limit_flags_offset = 16
+            ctypes.memmove(
+                ctypes.addressof(job_info) + limit_flags_offset,
+                ctypes.byref(wintypes.DWORD(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)),
+                ctypes.sizeof(wintypes.DWORD)
+            )
+            
+            # Set job information
+            JobObjectExtendedLimitInformation = 9
+            ctypes.windll.kernel32.SetInformationJobObject(
+                self._job_handle,
+                JobObjectExtendedLimitInformation,
+                ctypes.byref(job_info),
+                ctypes.sizeof(job_info)
+            )
+            
+        except Exception:
+            # If job object creation fails, continue without it
+            # The process will still be managed via PID tracking
+            self._job_handle = None
+    
     def _cleanup_orphan_server(self):
         """Kill any orphaned server process from a previous crash."""
         if not os.path.exists(self.pid_file):
@@ -464,12 +531,34 @@ class ServerManager:
             # Open log file with UTF-8 encoding to avoid Windows cp1252 issues
             self._log_file = open(log_file, 'w', encoding='utf-8', errors='replace')
             
+            # CRITICAL FIX: Ensure child process terminates when parent exits
+            # On Windows, use CREATE_BREAKAWAY_FROM_JOB to prevent orphaned processes
+            # This ensures the server process is linked to the parent process lifecycle
+            if self.system == "Windows":
+                # CREATE_NO_WINDOW: Don't show console window
+                # CREATE_NEW_PROCESS_GROUP: Allow clean shutdown via CTRL+BREAK
+                creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+            
             self.process = subprocess.Popen(
                 cmd,
                 stdout=self._log_file,      # Write to log file
                 stderr=self._log_file,      # Write errors to same log
                 creationflags=creationflags
             )
+            
+            # Windows: Add process to job object for automatic cleanup
+            if self.system == "Windows" and self._job_handle:
+                try:
+                    import ctypes
+                    process_handle = int(self.process._handle)
+                    ctypes.windll.kernel32.AssignProcessToJobObject(
+                        self._job_handle,
+                        process_handle
+                    )
+                except Exception:
+                    # Failed to assign to job, but process is still running
+                    # Fall back to manual cleanup
+                    pass
             
             # Wait for startup (up to 60s for large models/slow disks)
             for _ in range(120):
@@ -557,6 +646,15 @@ class ServerManager:
             except:
                 pass
             self._log_file = None
+        
+        # Windows: Close job object handle (this will automatically terminate all processes in the job)
+        if self.system == "Windows" and self._job_handle:
+            try:
+                import ctypes
+                ctypes.windll.kernel32.CloseHandle(self._job_handle)
+                self._job_handle = None
+            except Exception:
+                pass
         
         # Always remove PID file on clean stop
         self._remove_pid()

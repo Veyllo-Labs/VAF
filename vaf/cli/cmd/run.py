@@ -818,8 +818,8 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                         disable_workflows=True,
                         disable_tools=False
                     )
-                    if response:
-                        tui.message_box(response, title="Answer", role="assistant")
+                    # if response:
+                    #    tui.message_box(response, title="Answer", role="assistant")
                 except Exception as e:
                     tui.error(f"Error processing result: {e}")
                 
@@ -882,17 +882,13 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                         disable_workflows=True,
                         disable_tools=False
                     )
-                    if response:
-                        tui.message_box(response, title="Answer", role="assistant")
+                    # if response:
+                    #    tui.message_box(response, title="Answer", role="assistant")
                 except Exception as e:
                     tui.error(f"Error processing result: {e}")
                 
-                # Show countdown and auto-continue
+                # Auto-continue immediately (no countdown needed)
                 tui.console.print()
-                for remaining in range(3, 0, -1):
-                    tui.console.print(f"\r[dim]Auto-continuing in {remaining}s (press Ctrl+C to type a message)...[/dim]", end="")
-                    time.sleep(1.0)
-                tui.console.print("\r[dim]Auto-continuing...                                                    [/dim]")
                 continue
             
             if user_input is None:

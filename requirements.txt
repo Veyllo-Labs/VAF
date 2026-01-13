@@ -36,6 +36,12 @@ pyaudio>=0.2.14
 # Code Quality & Linting
 ruff>=0.1.0  # Fast Python linter and formatter
 
+# Document Processing (PDF, Word, etc.)
+PyPDF2>=3.0.0  # PDF reading
+python-docx>=1.1.0  # Word document reading
+openpyxl>=3.1.0  # Excel file reading
+python-pptx>=0.6.21  # PowerPoint reading
+
 # System Requirements (must be installed separately)
 # Git: Required for version control in coding projects
 # - Windows: https://git-scm.com/download/win or `winget install Git.Git`

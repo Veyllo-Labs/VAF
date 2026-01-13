@@ -3,12 +3,14 @@ VAF Trust Map - Multi-Layer Source Quality Rating
 
 Categorizes and rates URLs by trustworthiness to prevent low-quality sources
 from polluting research reports.
+
+Now integrated with SourceManager for centralized JSON-based source management.
 """
 
 from __future__ import annotations
 
 from urllib.parse import urlparse
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TRUST MAP - Categorized Trusted Domains
@@ -95,6 +97,10 @@ def rate_url_quality(url: str) -> Tuple[int, str]:
     """
     Rates a URL with a score from 0 to 10 and a category.
     
+    Now checks both:
+    1. SourceManager (JSON-based sources) - PRIMARY
+    2. Legacy TRUSTED_MAP (hardcoded) - FALLBACK
+    
     Returns:
         (score, category) - score 0-10, category string (e.g., "science", "gov", "tech", "low")
     """
@@ -111,11 +117,26 @@ def rate_url_quality(url: str) -> Tuple[int, str]:
     if any(blocked in netloc for blocked in BLACKLIST):
         return (0, "blacklisted")
     
-    # 2. Special handling for Google Scholar (medium quality - broad search but not peer-reviewed)
+    # 2. Check SourceManager (JSON-based sources) - PRIMARY
+    try:
+        from vaf.core.sources import get_source_manager
+        source_manager = get_source_manager()
+        
+        if source_manager.is_trusted(netloc):
+            source = source_manager.get_source_by_domain(netloc)
+            if source:
+                # Use trust_score directly (already 1-10)
+                category = source.category if source.category else "trusted"
+                return (source.trust_score, category)
+    except Exception:
+        # If SourceManager fails, fall back to legacy TRUSTED_MAP
+        pass
+    
+    # 3. Special handling for Google Scholar (medium quality - broad search but not peer-reviewed)
     if "scholar.google.com" in netloc or "scholar.google." in netloc:
         return (6, "scholar")  # Medium quality - provides broad scholarly literature search
     
-    # 3. Check high-trust domains
+    # 4. Check high-trust domains (LEGACY FALLBACK)
     for category, domains in TRUSTED_MAP.items():
         for domain in domains:
             # Check for exact domain or suffix (e.g., .gov)
@@ -138,15 +159,15 @@ def rate_url_quality(url: str) -> Tuple[int, str]:
                     elif category == "business":
                         return (5, category)  # Medium quality - useful for business info
     
-    # 4. Bonus for educational institutions (universal)
+    # 5. Bonus for educational institutions (universal)
     if netloc.endswith(".edu") or netloc.endswith(".ac.uk") or netloc.endswith(".edu.au"):
         return (9, "academic")
     
-    # 5. Bonus for Wikipedia (good for overview, but not gold)
+    # 6. Bonus for Wikipedia (good for overview, but not gold)
     if "wikipedia.org" in netloc:
         return (6, "wikipedia")
     
-    # 6. Default: Low quality (blogs, forums, unknown domains)
+    # 7. Default: Low quality (blogs, forums, unknown domains)
     return (1, "low")
 
 

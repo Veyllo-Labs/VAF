@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "VAF Academic & Research Sources",
+  "description": "Trusted academic, scientific, and research sources",
+  "version": "1.0.0",
+  
+  "categories": {
+    "science_journals": {
+      "name": "Science Journals",
+      "description": "Top-tier peer-reviewed scientific journals",
+      "sources": [
+        {
+          "name": "Nature",
+          "url": "https://www.nature.com",
+          "domains": ["nature.com"],
+          "trust_score": 10,
+          "tags": ["science", "peer-reviewed", "multidisciplinary"]
+        },
+        {
+          "name": "Science",
+          "url": "https://www.sciencemag.org",
+          "domains": ["sciencemag.org", "science.org"],
+          "trust_score": 10,
+          "tags": ["science", "peer-reviewed", "multidisciplinary"]
+        },
+        {
+          "name": "PLOS",
+          "url": "https://plos.org",
+          "domains": ["plos.org", "journals.plos.org"],
+          "trust_score": 9,
+          "tags": ["science", "open-access", "peer-reviewed"]
+        },
+        {
+          "name": "Cell",
+          "url": "https://www.cell.com",
+          "domains": ["cell.com"],
+          "trust_score": 10,
+          "tags": ["biology", "medicine", "peer-reviewed"]
+        }
+      ]
+    },
+    
+    "preprints": {
+      "name": "Preprint Repositories",
+      "description": "Pre-publication research papers",
+      "sources": [
+        {
+          "name": "arXiv",
+          "url": "https://arxiv.org",
+          "domains": ["arxiv.org"],
+          "trust_score": 9,
+          "tags": ["preprint", "physics", "cs", "math"]
+        },
+        {
+          "name": "bioRxiv",
+          "url": "https://www.biorxiv.org",
+          "domains": ["biorxiv.org"],
+          "trust_score": 8,
+          "tags": ["preprint", "biology"]
+        },
+        {
+          "name": "medRxiv",
+          "url": "https://www.medrxiv.org",
+          "domains": ["medrxiv.org"],
+          "trust_score": 8,
+          "tags": ["preprint", "medicine"]
+        }
+      ]
+    },
+    
+    "databases": {
+      "name": "Research Databases",
+      "description": "Scientific databases and repositories",
+      "sources": [
+        {
+          "name": "PubMed",
+          "url": "https://pubmed.ncbi.nlm.nih.gov",
+          "domains": ["pubmed.ncbi.nlm.nih.gov"],
+          "trust_score": 10,
+          "tags": ["database", "medicine", "biology", "official"]
+        },
+        {
+          "name": "IEEE Xplore",
+          "url": "https://ieeexplore.ieee.org",
+          "domains": ["ieeexplore.ieee.org", "ieee.org"],
+          "trust_score": 10,
+          "tags": ["database", "engineering", "computer-science"]
+        },
+        {
+          "name": "ACM Digital Library",
+          "url": "https://dl.acm.org",
+          "domains": ["dl.acm.org", "acm.org"],
+          "trust_score": 10,
+          "tags": ["database", "computer-science"]
+        },
+        {
+          "name": "Springer",
+          "url": "https://link.springer.com",
+          "domains": ["springer.com", "link.springer.com"],
+          "trust_score": 9,
+          "tags": ["database", "multidisciplinary", "books"]
+        },
+        {
+          "name": "ScienceDirect",
+          "url": "https://www.sciencedirect.com",
+          "domains": ["sciencedirect.com"],
+          "trust_score": 9,
+          "tags": ["database", "multidisciplinary"]
+        }
+      ]
+    },
+    
+    "research_institutions": {
+      "name": "Research Institutions",
+      "description": "Leading research institutions and universities",
+      "sources": [
+        {
+          "name": "MIT",
+          "url": "https://www.mit.edu",
+          "domains": ["mit.edu"],
+          "trust_score": 10,
+          "tags": ["university", "research", "technology"]
+        },
+        {
+          "name": "Stanford",
+          "url": "https://www.stanford.edu",
+          "domains": ["stanford.edu"],
+          "trust_score": 10,
+          "tags": ["university", "research"]
+        },
+        {
+          "name": "Max Planck Society",
+          "url": "https://www.mpg.de",
+          "domains": ["mpg.de", "max-planck.de"],
+          "trust_score": 10,
+          "tags": ["research", "germany", "institute"]
+        },
+        {
+          "name": "Fraunhofer",
+          "url": "https://www.fraunhofer.de",
+          "domains": ["fraunhofer.de"],
+          "trust_score": 10,
+          "tags": ["research", "germany", "applied-research"]
+        },
+        {
+          "name": "CERN",
+          "url": "https://home.cern",
+          "domains": ["cern.ch"],
+          "trust_score": 10,
+          "tags": ["research", "physics", "international"]
+        }
+      ]
+    },
+    
+    "patents": {
+      "name": "Patent Databases",
+      "description": "Official patent search engines",
+      "sources": [
+        {
+          "name": "Google Patents",
+          "url": "https://patents.google.com",
+          "domains": ["patents.google.com"],
+          "trust_score": 10,
+          "tags": ["patents", "search", "official"]
+        },
+        {
+          "name": "USPTO",
+          "url": "https://www.uspto.gov",
+          "domains": ["uspto.gov"],
+          "trust_score": 10,
+          "tags": ["patents", "us", "official"]
+        },
+        {
+          "name": "EPO",
+          "url": "https://www.epo.org",
+          "domains": ["epo.org"],
+          "trust_score": 10,
+          "tags": ["patents", "europe", "official"]
+        },
+        {
+          "name": "DPMA",
+          "url": "https://www.dpma.de",
+          "domains": ["dpma.de"],
+          "trust_score": 10,
+          "tags": ["patents", "germany", "official"]
+        }
+      ]
+    },
+    
+    "government_research": {
+      "name": "Government Research",
+      "description": "Government research agencies and statistics",
+      "sources": [
+        {
+          "name": "NASA",
+          "url": "https://www.nasa.gov",
+          "domains": ["nasa.gov"],
+          "trust_score": 10,
+          "tags": ["research", "space", "government", "us"]
+        },
+        {
+          "name": "NOAA",
+          "url": "https://www.noaa.gov",
+          "domains": ["noaa.gov"],
+          "trust_score": 10,
+          "tags": ["research", "climate", "weather", "government", "us"]
+        },
+        {
+          "name": "DFG",
+          "url": "https://www.dfg.de",
+          "domains": ["dfg.de"],
+          "trust_score": 10,
+          "tags": ["research", "funding", "germany"]
+        },
+        {
+          "name": "Destatis",
+          "url": "https://www.destatis.de",
+          "domains": ["destatis.de"],
+          "trust_score": 10,
+          "tags": ["statistics", "government", "germany"]
+        }
+      ]
+    }
+  },
+  
+  "metadata": {
+    "last_updated": "2026-01-13",
+    "maintainer": "VAF Team",
+    "trust_score_scale": "1-10 (10 = highest trust)"
+  }
+}

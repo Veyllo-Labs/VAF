@@ -114,7 +114,7 @@ class WorkflowEngine:
         final_output = None
         error = None
         
-        UI.event("Workflow", f"Starting {len(steps)}-step workflow...", style="bold cyan")
+        # Don't show "Starting workflow" message - will show Step 1/N instead
         
         for i, step in enumerate(steps, 1):
             step_start = time.time()
@@ -129,7 +129,10 @@ class WorkflowEngine:
             
             # Progress callback
             self.callback("start", step, i, len(steps))
-            UI.event("Workflow", f"Step {i}/{len(steps)}: {step.tool}", style="info")
+            
+            # Show workflow progress (like "Step 1/2" display)
+            step_desc = step.description if step.description else step.tool
+            UI.event(f"Step {i}/{len(steps)}", step_desc, style="bold cyan")
             
             # Check if tool exists
             if step.tool not in self.tools:

@@ -23,6 +23,8 @@ def bootstrap():
         "tqdm": "tqdm",  # Progress bars for downloads
         # Search
         "ddgs": "ddgs",
+        # Language Detection
+        "langid": "langid",
         # Automation
         "schedule": "schedule",
         "inquirer": "inquirer",
@@ -30,6 +32,13 @@ def bootstrap():
         "pyttsx3": "pyttsx3",
         "SpeechRecognition": "speech_recognition",
         "pyaudio": "pyaudio",
+        # Document Processing (PDF, Word, Excel, PowerPoint)
+        "PyPDF2": "PyPDF2",
+        "python-docx": "docx",             # pip name != import name
+        "openpyxl": "openpyxl",
+        "python-pptx": "pptx",             # pip name != import name
+        # Code Quality & Linting
+        "ruff": "ruff",
     }
     
     missing = []

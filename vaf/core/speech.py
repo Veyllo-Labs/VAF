@@ -467,10 +467,10 @@ $player.Close()
                     # Attempt to get voice for requested language
                     model_path = self._ensure_voice_model(lang)
                     
-                    # Fallback to English if specific language fails
-                    if not model_path and lang != "en":
-                        UI.warning(f"Voice for '{lang}' not available/failed. Falling back to English.")
-                        model_path = self._ensure_voice_model("en")
+                    # Do not fallback to English here. 
+                    # If the requested language model is missing, we prefer to fall through 
+                    # to pyttsx3 (System TTS) which might have the correct language installed,
+                    # rather than speaking German/French text with an English accent.
 
                     if model_path:
                         try:

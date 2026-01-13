@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "VAF News Sources",
+  "description": "Trusted news sources categorized by region and type",
+  "version": "1.0.0",
+  
+  "categories": {
+    "news_de": {
+      "name": "German News",
+      "description": "Trusted German news sources",
+      "sources": [
+        {
+          "name": "Tagesschau",
+          "url": "https://www.tagesschau.de",
+          "domains": ["tagesschau.de"],
+          "trust_score": 9,
+          "tags": ["news", "politics", "germany", "public-broadcaster"]
+        },
+        {
+          "name": "Zeit Online",
+          "url": "https://www.zeit.de",
+          "domains": ["zeit.de"],
+          "trust_score": 9,
+          "tags": ["news", "politics", "analysis", "germany"]
+        },
+        {
+          "name": "Süddeutsche Zeitung",
+          "url": "https://www.sueddeutsche.de",
+          "domains": ["sueddeutsche.de"],
+          "trust_score": 9,
+          "tags": ["news", "politics", "germany"]
+        },
+        {
+          "name": "Spiegel Online",
+          "url": "https://www.spiegel.de",
+          "domains": ["spiegel.de"],
+          "trust_score": 8,
+          "tags": ["news", "politics", "germany"]
+        },
+        {
+          "name": "Frankfurter Allgemeine",
+          "url": "https://www.faz.net",
+          "domains": ["faz.net"],
+          "trust_score": 9,
+          "tags": ["news", "business", "politics", "germany"]
+        },
+        {
+          "name": "Deutsche Welle",
+          "url": "https://www.dw.com",
+          "domains": ["dw.com"],
+          "trust_score": 9,
+          "tags": ["news", "international", "germany", "public-broadcaster"]
+        },
+        {
+          "name": "Handelsblatt",
+          "url": "https://www.handelsblatt.com",
+          "domains": ["handelsblatt.com"],
+          "trust_score": 8,
+          "tags": ["business", "finance", "germany"]
+        }
+      ]
+    },
+    
+    "news_us": {
+      "name": "US News",
+      "description": "Trusted US news sources",
+      "sources": [
+        {
+          "name": "Reuters",
+          "url": "https://www.reuters.com",
+          "domains": ["reuters.com"],
+          "trust_score": 10,
+          "tags": ["news", "international", "business", "wire-service"]
+        },
+        {
+          "name": "Associated Press",
+          "url": "https://apnews.com",
+          "domains": ["apnews.com"],
+          "trust_score": 10,
+          "tags": ["news", "international", "wire-service"]
+        },
+        {
+          "name": "New York Times",
+          "url": "https://www.nytimes.com",
+          "domains": ["nytimes.com"],
+          "trust_score": 9,
+          "tags": ["news", "politics", "analysis"]
+        },
+        {
+          "name": "Washington Post",
+          "url": "https://www.washingtonpost.com",
+          "domains": ["washingtonpost.com"],
+          "trust_score": 9,
+          "tags": ["news", "politics"]
+        },
+        {
+          "name": "Wall Street Journal",
+          "url": "https://www.wsj.com",
+          "domains": ["wsj.com"],
+          "trust_score": 9,
+          "tags": ["business", "finance", "news"]
+        },
+        {
+          "name": "NPR",
+          "url": "https://www.npr.org",
+          "domains": ["npr.org"],
+          "trust_score": 9,
+          "tags": ["news", "public-broadcaster"]
+        }
+      ]
+    },
+    
+    "news_uk": {
+      "name": "UK News",
+      "description": "Trusted UK news sources",
+      "sources": [
+        {
+          "name": "BBC News",
+          "url": "https://www.bbc.com/news",
+          "domains": ["bbc.com", "bbc.co.uk"],
+          "trust_score": 10,
+          "tags": ["news", "international", "public-broadcaster"]
+        },
+        {
+          "name": "The Guardian",
+          "url": "https://www.theguardian.com",
+          "domains": ["theguardian.com"],
+          "trust_score": 8,
+          "tags": ["news", "politics", "analysis"]
+        },
+        {
+          "name": "Financial Times",
+          "url": "https://www.ft.com",
+          "domains": ["ft.com"],
+          "trust_score": 9,
+          "tags": ["business", "finance", "international"]
+        },
+        {
+          "name": "The Economist",
+          "url": "https://www.economist.com",
+          "domains": ["economist.com"],
+          "trust_score": 9,
+          "tags": ["business", "analysis", "international"]
+        }
+      ]
+    },
+    
+    "news_international": {
+      "name": "International News",
+      "description": "International and multilingual news sources",
+      "sources": [
+        {
+          "name": "Al Jazeera",
+          "url": "https://www.aljazeera.com",
+          "domains": ["aljazeera.com"],
+          "trust_score": 8,
+          "tags": ["news", "international", "middle-east"]
+        },
+        {
+          "name": "France 24",
+          "url": "https://www.france24.com",
+          "domains": ["france24.com"],
+          "trust_score": 8,
+          "tags": ["news", "international", "france"]
+        },
+        {
+          "name": "Euronews",
+          "url": "https://www.euronews.com",
+          "domains": ["euronews.com"],
+          "trust_score": 8,
+          "tags": ["news", "europe", "international"]
+        }
+      ]
+    },
+    
+    "finance": {
+      "name": "Financial News",
+      "description": "Specialized financial and business news",
+      "sources": [
+        {
+          "name": "Bloomberg",
+          "url": "https://www.bloomberg.com",
+          "domains": ["bloomberg.com"],
+          "trust_score": 9,
+          "tags": ["finance", "business", "markets"]
+        },
+        {
+          "name": "CNBC",
+          "url": "https://www.cnbc.com",
+          "domains": ["cnbc.com"],
+          "trust_score": 8,
+          "tags": ["finance", "business", "markets"]
+        },
+        {
+          "name": "MarketWatch",
+          "url": "https://www.marketwatch.com",
+          "domains": ["marketwatch.com"],
+          "trust_score": 7,
+          "tags": ["finance", "markets"]
+        }
+      ]
+    }
+  },
+  
+  "metadata": {
+    "last_updated": "2026-01-13",
+    "maintainer": "VAF Team aka Mert and some AI tools :D",
+    "trust_score_scale": "1-10 (10 = highest trust)"
+  }
+}

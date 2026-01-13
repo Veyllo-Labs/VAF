@@ -10,10 +10,11 @@ WORKFLOW = {
     "triggers": [
         "recherchiere und erstelle code",
         "research and create code",
+        "recherchiere und implementiere",
+        "research and implement",
         "suche nach und implementiere",
         "find out how to and code it",
         "look up and implement",
-        "basierend auf recherche",
     ],
     "trigger_patterns": [
         r"recherchier.*code",

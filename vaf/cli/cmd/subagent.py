@@ -42,12 +42,12 @@ def _auto_close_countdown(delay: int = AUTO_CLOSE_DELAY):
 
 @app.command(name="run")
 def run_subagent(
-    agent_type: str = typer.Argument(..., help="Sub-agent type: coding_agent, librarian_agent, or research_agent"),
+    agent_type: str = typer.Argument(..., help="Sub-agent type: coding_agent, librarian_agent, research_agent, or document_agent"),
     task: str = typer.Option("", "--task", "-t", help="Task for the sub-agent"),
     task_id: Optional[str] = typer.Option(None, "--task-id", help="Task ID for IPC tracking"),
     project_path: Optional[str] = typer.Option(None, "--project-path", "-p", help="Project path (for coding_agent)"),
     topic: Optional[str] = typer.Option(None, "--topic", help="Topic (for research_agent)"),
-    format: Optional[str] = typer.Option("html", "--format", help="Output format (for research_agent)"),
+    format: Optional[str] = typer.Option("html", "--format", help="Output format (for research_agent/document_agent)"),
     max_results: Optional[int] = typer.Option(5, "--max-results", help="Max results (for research_agent)"),
     no_auto_close: bool = typer.Option(False, "--no-auto-close", help="Don't auto-close terminal after completion"),
 ):
@@ -144,6 +144,17 @@ def run_subagent(
             result = tool.run(**kwargs)
             
             # Show result in terminal (summary, not full HTML)
+            print()
+            print("="*70)
+            print(result)
+            print("="*70)
+        
+        elif agent_type == "document_agent":
+            from vaf.tools.document_agent import DocumentAgentTool
+            tool = DocumentAgentTool()
+            result = tool.run(task=task)
+            
+            # Show result in terminal
             print()
             print("="*70)
             print(result)

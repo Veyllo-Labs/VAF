@@ -938,11 +938,32 @@ class Agent:
         """
         from vaf.cli.ui import UI
         from vaf.core.subagent_ipc import get_ipc
+        import re
         
         ipc = get_ipc()
         
         if task.status == "completed":
             UI.success(f"✓ Sub-Agent [{task.task_id}] delivered result!")
+            
+            # Extract file paths from result (research reports, generated documents, etc.)
+            file_paths = re.findall(
+                r'(?:Saved to|Output|File|Path|Ausgabe|Datei):\s*([^\n]+\.(?:html?|pdf|docx?|txt|md|json|csv|xlsx?))',
+                task.result,
+                re.IGNORECASE
+            )
+            
+            file_hint = ""
+            if file_paths:
+                # Clean up paths (remove ANSI codes, extra spaces)
+                cleaned_paths = [re.sub(r'\x1b\[[0-9;]*m', '', fp).strip() for fp in file_paths]
+                file_hint = f"\n\n🔗 **EXTRACTED FILE PATHS (from Sub-Agent output):**\n"
+                for fp in cleaned_paths[:3]:  # Limit to first 3 files
+                    file_hint += f"- `{fp}`\n"
+                file_hint += (
+                    f"\n💡 **TIP:** To read/analyze this file, use:\n"
+                    f"- `read_file('{cleaned_paths[0]}')` for quick reading\n"
+                    f"- `librarian_agent(file='{cleaned_paths[0]}', task='Summarize this document')` for detailed analysis\n"
+                )
             
             # Add result to history as if it was a tool response
             self.history.append({
@@ -951,7 +972,8 @@ class Agent:
                     f"📬 **Sub-Agent Task COMPLETED / TERMINATED** [Task: {task.task_id}]\n"
                     f"Agent: {task.agent_type}\n"
                     f"Original Task: {task.task_description[:200]}\n\n"
-                    f"**FINAL RESULT (Task is DONE):**\n{task.result}\n\n"
+                    f"**FINAL RESULT (Task is DONE):**\n{task.result}"
+                    f"{file_hint}\n\n"
                     f"IMPORTANT: This task is completely finished. The agent is NO LONGER working on it.\n"
                     f"Analyze the result above and answer the user."
                 )
@@ -1178,6 +1200,40 @@ class Agent:
             {"role": "system", "content": system_prompt}
         ]
 
+    def _clean_reasoning(self, text: str) -> str:
+        """Removes internal reasoning/CoT blocks from the model response."""
+        import re
+        t = text
+        
+        # 1. Remove XML-style thinking blocks
+        t = re.sub(r'<think>.*?</think>', '', t, flags=re.DOTALL)
+        t = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', t, flags=re.DOTALL)
+        
+        # 2. Remove VQ-1 specific thinking patterns
+        # These are patterns where the model "talks to itself" at the start of a response
+        thought_patterns = [
+            r'^Okay, the user.*?(?:\n\n|\n|\Z)',
+            r'^First, I should.*?(?:\n\n|\n|\Z)',
+            r'^Let me check.*?(?:\n\n|\n|\Z)',
+            r'^I need to.*?(?:\n\n|\n|\Z)',
+            r'^I will.*?(?:\n\n|\n|\Z)',
+            r'^The user wants.*?(?:\n\n|\n|\Z)',
+        ]
+        for pattern in thought_patterns:
+            # Loop to remove multiple paragraphs of thinking
+            while re.search(pattern, t, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE):
+                t = re.sub(pattern, '', t, count=1, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE).strip()
+
+        # 3. Aggressive Reasoning Filter: "Answer in [Lang]"
+        # If the model explicitly tells itself to answer in a language, 
+        # everything BEFORE that instruction is likely reasoning/garbage.
+        answer_instruction = re.search(r'(?:Answer|Antworte|Respond) (?:in|auf) [A-Z][a-z]+(?: \([A-Z][a-z]+\))?[\.:]?\s*', t, flags=re.IGNORECASE)
+        if answer_instruction:
+             # Keep only what comes AFTER "Answer in German."
+             t = t[answer_instruction.end():].strip()
+        
+        return t.strip()
+
     def _detect_user_language(self, text: str) -> str:
         """
         Very small heuristic for per-turn language pinning.
@@ -1196,40 +1252,50 @@ class Agent:
 
         # Optional: if user has langid installed, use it to recognize many languages offline.
         # We keep this OPTIONAL (no hard dependency) to stay lightweight/cross-platform.
-        try:
-            # langid is pure-Python and supports many languages (offline).
-            import langid  # type: ignore
-
-            # langid can be noisy on very short strings; prefer it when we have some length.
-            if len(t) >= 20 and any(ch.isalpha() for ch in t):
-                code, _score = langid.classify(t)
-                code = (code or "").strip().lower()
-                if code:
-                    # Normalize some common variants
-                    if code == "iw":  # legacy Hebrew code sometimes seen
-                        code = "he"
-                    return code
-        except Exception:
-            pass
-
-        # Strong German markers
+        # 1. Strong hardcoded markers (Fast & Accurate for specific context)
+        # Check for Umlauts (German)
         if any(ch in t for ch in ("ä", "ö", "ü", "ß")):
             return "de"
 
+        # Check for strong German keywords
         german_cues = (
             "kannst", "bitte", "wetter", "morgen", "heute", "gestern", "wie ", "was ", "wo ", "warum",
             "ich ", "du ", "wir ", "ihr ", "nicht", "und", "für", "über", "dass", "mach", "erstelle", "zeige",
+            "ein ", "eine ", "der ", "die ", "das ", "den ", "dem ", "des ", "ist ", "sind ", "hat ", "haben ", 
+            "auf ", "mit ", "von ", "zu ", "bei ", "oder ", "aber ", "als ", "wenn ", "lesen", "dokumente",
         )
         if any(cue in t for cue in german_cues):
             return "de"
 
-        # Basic English cues (keep conservative; otherwise leave auto)
+        # Check for strong English keywords
         english_cues = (
             "please", "weather", "tomorrow", "today", "yesterday", "how ", "what ", "where ", "why ",
             "i ", "you ", "we ", "they ", "don't", "and", "for", "about", "make", "create", "show",
+            "read", "document", "can ", "is ", "are ", "the ", "with ", "from ",
         )
         if any(cue in t for cue in english_cues):
             return "en"
+
+        # 2. Fallback to langid (Probabilistic / General Purpose)
+        try:
+            # langid is pure-Python and supports many languages (offline).
+            import langid  # type: ignore
+
+            # Use langid for detection. It is generally robust even for short phrases.
+            # We relax the length constraint to > 3 chars to catch "Was ist das" etc.
+            if len(t) >= 3 and any(ch.isalpha() for ch in t):
+                code, score = langid.classify(t)
+                code = (code or "").strip().lower()
+                
+                if code:
+                    # Normalize some common variants
+                    if code == "iw":  # legacy Hebrew code sometimes seen
+                        code = "he"
+                    
+                    # Return if valid code
+                    return code
+        except Exception:
+            pass
 
         return "auto"
 
@@ -1751,68 +1817,115 @@ class Agent:
     
     def analyze_workflow(self, user_input):
         """
-        Brain-based workflow selection - understands languages, not just hardcoded patterns.
-        Returns the best matching workflow template ID or None.
+        Brain-powered workflow selection with reasoning process.
+        LLM decides based on INTENT and THINKING, not trigger matching!
+        Similar to adaptive temperature system.
+        
+        Returns:
+            (workflow_id, tier) tuple where tier is 1, 2, or 3
+            or (None, 2) if no match (Tier 2: Agent Choice)
         """
+        # Track which tier was used (for status display)
+        self._workflow_selection_tier = 1  # Default: Tier 1 (LLM Reasoning)
+        
         try:
             from vaf.workflows.templates import WORKFLOW_TEMPLATES, list_templates
             
-            # Get available workflows
+            # Get available workflows (NO trigger examples - LLM must think!)
             available_workflows = list_templates()
             workflow_list = "\n".join([
-                f"- {w['id']}: {w['name']} - {w['description']}"
+                f"- {w['id']}: {w['description']}"
                 for w in available_workflows
             ])
             
-            # Use same logic as analyze_intent (which works!)
-            # Build dynamic examples from available workflows
-            workflow_ids = list(WORKFLOW_TEMPLATES.keys())
-            examples = []
-            for wf_id in workflow_ids:
-                wf = WORKFLOW_TEMPLATES[wf_id]
-                # Get trigger examples from the workflow
-                triggers = wf.get("triggers", [])[:3]  # First 3 triggers as examples
-                if triggers:
-                    examples.append(f"- {', '.join(triggers)} → {wf_id}")
-            
             prompt = (
-                f"You are a workflow classifier. Your ONLY job is to match the user request to a workflow ID.\n"
+                f"You are an intelligent workflow orchestrator. Analyze the request and select the most appropriate workflow.\n\n"
                 f"Available Workflows:\n{workflow_list}\n\n"
-                f"Guidelines:\n"
-                f"- Match by INTENT, not exact words (works in ANY language!)\n"
-                f"- IGNORE typos and spelling errors - understand the intent\n"
-                f"- If request contains TIME (e.g., 'at 21:27', 'um 21:27', 'always at', 'immer um', 'daily at', 'täglich um') → create_scheduled_task\n"
-                f"- If request asks to schedule/automate something → create_scheduled_task\n"
-                f"- If request is about folder/file locations → none (agent will use librarian_agent directly)\n"
-                f"- CRITICAL: Simple info questions (weather, news, facts, 'what is X?', 'how is Y?') → none (agent uses web_search tool directly, NO workflow needed!)\n"
-                f"- Only use workflows for COMPLEX multi-step tasks, NOT for simple lookups!\n"
-                f"- Examples:\n" + "\n".join(examples) + "\n"
-                f"- If no match or simple question → none\n\n"
-                f"Request: {user_input}\n"
-                f"Output ONLY the workflow ID or 'none'."
+                f"═══════════════════════════════════════════════════════════\n"
+                f"REASONING PROCESS (think step-by-step):\n"
+                f"═══════════════════════════════════════════════════════════\n\n"
+                f"1. INTENT ANALYSIS:\n"
+                f"   - What is the user trying to achieve?\n"
+                f"   - What output type (document/code/data/analysis)?\n\n"
+                f"2. RESEARCH REQUIREMENT:\n"
+                f"   - Does this need current/external information?\n"
+                f"   - Keywords: recherche, research, rechtssicher, legally sound, aktuell, current, basierend auf\n\n"
+                f"3. OUTPUT TYPE:\n"
+                f"   - Legal contract (Vertrag, contract, Arbeitsvertrag, Mietvertrag)?\n"
+                f"   - Technical docs (API, guide, manual, technisch, dokumentation)?\n"
+                f"   - General document (report, letter, bericht, brief)?\n"
+                f"   - Code/implementation?\n"
+                f"   - Website/HTML?\n\n"
+                f"4. COMPLEXITY:\n"
+                f"   - Multi-stage (research → create)?\n"
+                f"   - Scheduled/automated (time mentioned)?\n"
+                f"   - Simple creation?\n"
+                f"   - Simple lookup (no workflow)?\n\n"
+                f"═══════════════════════════════════════════════════════════\n"
+                f"DECISION RULES (prioritized by specificity):\n"
+                f"═══════════════════════════════════════════════════════════\n\n"
+                f"Priority 1 - Scheduled/Automated Tasks:\n"
+                f"  • TIME mentioned (21:07, um 9:00, at 10am, täglich, daily) → create_scheduled_task\n\n"
+                f"Priority 2 - Research + Legal Contracts:\n"
+                f"  • (rechtssicher OR legally sound) + contract/vertrag → legal_contract_research\n"
+                f"  • Contract + (research OR recherche OR current laws) → legal_contract_research\n\n"
+                f"Priority 3 - Research + Technical Docs:\n"
+                f"  • (technical OR technisch) + (research OR recherche) → technical_doc_research\n"
+                f"  • API/guide/manual + research → technical_doc_research\n\n"
+                f"Priority 4 - Research + General Document:\n"
+                f"  • (research OR recherche) + document/guide/report → research_and_document\n"
+                f"  • 'basierend auf recherche' + document → research_and_document\n\n"
+                f"Priority 5 - Research + Code:\n"
+                f"  • (research OR recherche) + (code OR implement) → research_and_code\n\n"
+                f"Priority 6 - Simple Creation (no research):\n"
+                f"  • Website/HTML → create_website\n"
+                f"  • Document without research → create_document\n"
+                f"  • File creation → create_file\n\n"
+                f"Priority 7 - Analysis:\n"
+                f"  • Deep research (10 sources, multi-perspective) → deep_research\n"
+                f"  • Website analysis → analyze_website\n\n"
+                f"🚨 Priority 8 - NO WORKFLOW (Agent handles with direct tools):\n"
+                f"  • Simple lookups (weather, news, facts, 'what is X?') → none\n"
+                f"  • Multiple simple questions ('Weather + News') → none (agent calls web_search 2x!)\n"
+                f"  • Person queries ('Who is X?') → none (agent uses web_search)\n"
+                f"  • File/folder locations → none (agent uses librarian)\n"
+                f"  • Single tool usage → none\n"
+                f"  • Quick status checks → none\n\n"
+                f"🔥 CRITICAL: 'Weather + News' = none (NOT deep_research!)\n"
+                f"🔥 CRITICAL: 'Politics + Finance news' = none (NOT deep_research!)\n\n"
+                f"═══════════════════════════════════════════════════════════\n\n"
+                f"Request: \"{user_input}\"\n\n"
+                f"Think carefully about INTENT, then output ONLY the workflow_id or 'none'."
             )
             
-            # Quick Inference (same as analyze_intent)
+            # Quick Inference with reasoning (temperature 0.2 for consistent logic)
             messages = [{"role": "user", "content": prompt}]
             
             content = ""
             if self.use_server:
-                # Sub-Agent Mode: Full thinking capacity with 120s timeout (same as analyze_intent)
+                # Full thinking capacity with 120s timeout
                 payload = {"messages": messages, "max_tokens": 1024, "temperature": 0.2}
                 try:
                     res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=120).json()
                     content = res['choices'][0]['message']['content']
                 except Exception as e:
-                    # Fall back to pattern matching on error
-                    from vaf.workflows.selector import WorkflowSelector
-                    selector = WorkflowSelector()
-                    result = selector.select(user_input)
-                    if result and result.matched and result.confidence >= 0.5:
-                        return result.template_id
+                    # ERROR: LLM server request failed
+                    # Return None → Tier 2 (Agent Choice) will handle
+                    self._workflow_selection_tier = 2  # Agent will get workflow list
                     return None
+            else:
+                # No LLM server available → Use Tier 3 (Pattern Matching) immediately
+                self._workflow_selection_tier = 3
+                from vaf.workflows.selector import WorkflowSelector
+                selector = WorkflowSelector()
+                result = selector.select(user_input)
+                if result and result.matched and result.confidence >= 0.5:
+                    return result.template_id
+                # Even pattern matching found nothing → Tier 2 (Agent Choice)
+                self._workflow_selection_tier = 2
+                return None
             
-            # Parse workflow ID (same pattern as analyze_intent parses float)
-            # Dynamically build regex from all available workflow IDs (plug and play!)
+            # Parse workflow ID (dynamically from all available workflows)
             workflow_ids_pattern = '|'.join(re.escape(wf_id) for wf_id in WORKFLOW_TEMPLATES.keys())
             match = re.search(rf'\b({workflow_ids_pattern})\b', content.lower())
             if match:
@@ -1824,12 +1937,10 @@ class Agent:
             if "none" in content.lower():
                 return None
             
-            # If we couldn't parse, fall back to pattern matching
-            from vaf.workflows.selector import WorkflowSelector
-            selector = WorkflowSelector()
-            result = selector.select(user_input)
-            if result and result.matched and result.confidence >= 0.5:
-                return result.template_id
+            # If we couldn't parse the LLM response:
+            # Return None → Tier 2 (Agent Choice) will handle
+            # Agent gets workflow list and can decide
+            self._workflow_selection_tier = 2  # Let agent choose from list
             return None
             
         except Exception as e:
@@ -1862,6 +1973,12 @@ class Agent:
         # Fallback to config if detection failed
         if lang == "auto":
             lang = (self.config.get("language", "auto") or "auto").strip().lower()
+
+        # If still auto, try to use speech_language preference as fallback for fillers
+        if lang == "auto":
+            speech_lang = self.config.get("speech_language", "")
+            if speech_lang:
+                lang = speech_lang[:2].lower() # e.g. "de-DE" -> "de"
 
         # Localized messages
         msg_analyzing = "Step 1/2: Analyzing workflow match..."
@@ -1916,11 +2033,21 @@ class Agent:
                 workflow_id = self.analyze_workflow(user_input)
             
             if not workflow_id:
-                # No workflow match - fall back to LLM agent
-                UI.event("Step 1/2", "Workflow", style="dim")
+                # No workflow match - give agent brief hint (not full list!)
+                # Agent can use list_workflows tool if they need to see options
+                self.history.append({
+                    "role": "system",
+                    "content": (
+                        "ℹ️ No workflow automatically matched for this request. "
+                        "You can handle it directly with your tools, or if you think a multi-step workflow "
+                        "would be beneficial, use the 'list_workflows' tool to see available options. "
+                        "Most simple requests (weather, news, questions) don't need workflows."
+                    )
+                })
+                
+                # Show Tier 2 status (Agent Choice)
+                UI.event("Step 1/2", f"Workflow [Tier 2: No auto-match - Agent deciding]", style="cyan")
                 return None
-            
-            UI.event("Brain", f"Workflow matched: {workflow_id}", style="bold cyan")
             
             # Get the matched template
             from vaf.workflows.templates import get_template
@@ -1928,6 +2055,16 @@ class Agent:
             if not template:
                 return None
             
+            # Show workflow selection status with tier information
+            tier = getattr(self, '_workflow_selection_tier', 1)
+            tier_names = {
+                1: "LLM Reasoning",
+                2: "Agent Choice", 
+                3: "Pattern Matching"
+            }
+            tier_name = tier_names.get(tier, "Unknown")
+            
+            UI.event("Step 1/2", f"Workflow [Tier {tier}: {tier_name} → '{workflow_id}']", style="bold cyan")
             UI.event("Workflow", msg_brain_matched_ui.format(name=template['name']), style="bold cyan")
             
             # Extract variables using WorkflowSelector (pattern matching + fallback)
@@ -2312,12 +2449,26 @@ class Agent:
             UI.event("Debug", f"Workflow error: {e}", style="dim")
             return None
 
+    def _clean_workflow_context(self):
+        """
+        Remove old workflow system messages from conversation history.
+        Prevents workflow lists from cluttering context.
+        """
+        self.history = [
+            msg for msg in self.history 
+            if not (msg.get("role") == "system" and 
+                    "Available workflows:" in msg.get("content", ""))
+        ]
+    
     def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False, disable_workflows=False, disable_tools=False):
         from vaf.cli.ui import UI
         
         if not self.llm and not self.use_server:
             UI.error("Agent not initialized. Run 'vaf run' first.")
             return
+        
+        # Clean old workflow messages from context (prevents clutter)
+        self._clean_workflow_context()
 
         # ------------------------------------------------------------------
         # Sub-Agent Results: Check for completed async tasks
@@ -2355,6 +2506,13 @@ class Agent:
             
             # Rebuild system prompt
             new_prompt = self.prompt_manager.build_prompt(self.filename)
+        
+        # ------------------------------------------------------------------
+        # Context Compression: Check threshold and compress if needed
+        # ------------------------------------------------------------------
+        if hasattr(self, 'context_manager') and self.context_manager.should_compress(self.history):
+            UI.event("Context", f"Threshold reached ({self.context_manager.get_usage_percent(self.history):.0%}) - compressing...", style="warning")
+            self.history = self.context_manager.compress(self.history)
             
             # Inject PROACTIVE CONTEXT GLUE (Stability)
             # This ensures the agent always knows which files exist, what errors happened, etc.
@@ -3257,6 +3415,40 @@ class Agent:
                 # Check retry limit - but DO NOT BREAK (infinite patience)
                 empty_retry_count += 1
                 
+                # ═══════════════════════════════════════════════════════════════
+                # CONTEXT OVERFLOW DETECTION (Fix for Issue #VAF-CTX-001)
+                # ═══════════════════════════════════════════════════════════════
+                # If retry count exceeds 50 attempts, assume context overflow
+                # LLM cannot generate response because context is too full
+                MAX_RETRIES_BEFORE_EMERGENCY = 50
+                
+                if empty_retry_count >= MAX_RETRIES_BEFORE_EMERGENCY:
+                    UI.event("Emergency", f"Context overflow detected after {empty_retry_count} retries - emergency fallback!", style="warning")
+                    
+                    # Emergency fallback: Provide a SHORT summary instead of full response
+                    emergency_summary = "⚠️ **Context Overflow Detected**\n\n"
+                    emergency_summary += "The conversation has become too long for me to process effectively. "
+                    emergency_summary += "I've attempted to respond multiple times but cannot generate a complete answer.\n\n"
+                    
+                    # Extract key info from recent context (last 3 tool results)
+                    recent_tool_results = []
+                    for i in range(len(self.history) - 1, max(0, len(self.history) - 20), -1):
+                        msg = self.history[i]
+                        if msg.get('role') == 'tool' and len(recent_tool_results) < 3:
+                            tool_name = msg.get('name', 'unknown')
+                            content = str(msg.get('content', ''))[:200]  # First 200 chars only
+                            recent_tool_results.append(f"- **{tool_name}**: {content}...")
+                    
+                    if recent_tool_results:
+                        emergency_summary += "**Recent tool results:**\n" + "\n".join(recent_tool_results) + "\n\n"
+                    
+                    emergency_summary += "**Suggestion:** Start a new conversation or ask me to focus on a specific aspect."
+                    
+                    # Return emergency response and break the loop
+                    if stream_callback:
+                        stream_callback(emergency_summary)
+                    return emergency_summary
+                
                 # Dynamic Temperature Sweep to break loops
                 # Oscillate around target_temp: -0.1, +0.1, -0.2, +0.2, ...
                 delta = ((empty_retry_count + 1) // 2) * 0.1
@@ -3464,7 +3656,9 @@ class Agent:
         
         self._speak(tts_source)
 
-        return full_response
+        # Return CLEANED response for the UI (Answer Box)
+        # The raw response is already stored in history, so we don't lose information.
+        return self._clean_reasoning(full_response)
 
     def execute_tool(self, name, args):
         from vaf.cli.ui import UI

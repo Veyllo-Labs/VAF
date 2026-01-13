@@ -289,7 +289,17 @@ class FolderSizeTool(BaseTool):
 
 class ReadFileTool(BaseTool):
     name = "read_file"
-    description = "Reads the content of a file."
+    description = """Reads the content of a file. Supports text, PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx).
+
+Use this when:
+- User asks to read a specific file
+- Sub-agent created a file (look for "🔗 EXTRACTED FILE PATHS" in sub-agent result!)
+- Need to analyze document content quickly
+
+**IMPORTANT:** If a sub-agent just created a file, the path is already in the conversation context!
+Example: research_agent says "Saved to: C:\\...\\report.html" → use read_file("C:\\...\\report.html")
+
+For detailed analysis of large files, consider using librarian_agent instead."""
 
     parameters = {
         "type": "object",
@@ -305,9 +315,172 @@ class ReadFileTool(BaseTool):
             if not os.path.exists(res): return "Error: File not found."
             if not os.path.isfile(res): return "Error: Not a file."
             
-            with open(res, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-            return content
+            # Get file extension
+            from pathlib import Path
+            file_path = Path(res)
+            ext = file_path.suffix.lower()
+            
+            # ═══════════════════════════════════════════════════════════
+            # PDF Files
+            # ═══════════════════════════════════════════════════════════
+            if ext == '.pdf':
+                try:
+                    import PyPDF2
+                    content = []
+                    with open(res, 'rb') as f:
+                        pdf_reader = PyPDF2.PdfReader(f)
+                        num_pages = len(pdf_reader.pages)
+                        
+                        # Limit to first 50 pages
+                        max_pages = min(num_pages, 50)
+                        
+                        for page_num in range(max_pages):
+                            page = pdf_reader.pages[page_num]
+                            page_text = page.extract_text()
+                            if page_text.strip():
+                                content.append(f"--- Page {page_num + 1} ---\n{page_text}")
+                        
+                        if num_pages > max_pages:
+                            content.append(f"\n... ({num_pages - max_pages} more pages not shown)")
+                    
+                    full_text = "\n\n".join(content)
+                    
+                    # Truncate if still too long
+                    if len(full_text) > 15000:
+                        full_text = full_text[:15000] + "\n\n... (truncated)"
+                    
+                    return f"### PDF: {file_path.name}\n**Pages:** {num_pages}\n\n{full_text}"
+                    
+                except ImportError:
+                    return "Error: PDF support not installed. Run: pip install PyPDF2"
+                except Exception as e:
+                    return f"Error reading PDF: {e}"
+            
+            # ═══════════════════════════════════════════════════════════
+            # Word Documents (.docx)
+            # ═══════════════════════════════════════════════════════════
+            elif ext == '.docx':
+                try:
+                    from docx import Document
+                    doc = Document(res)
+                    
+                    content = []
+                    
+                    # Extract paragraphs
+                    for para in doc.paragraphs:
+                        text = para.text.strip()
+                        if text:
+                            content.append(text)
+                    
+                    # Extract tables
+                    if doc.tables:
+                        content.append("\n--- Tables ---")
+                        for i, table in enumerate(doc.tables[:5], 1):
+                            content.append(f"\nTable {i}:")
+                            for row in table.rows[:10]:
+                                row_text = " | ".join([cell.text.strip() for cell in row.cells])
+                                if row_text:
+                                    content.append(row_text)
+                    
+                    full_text = "\n".join(content)
+                    
+                    # Truncate if too long
+                    if len(full_text) > 15000:
+                        full_text = full_text[:15000] + "\n\n... (truncated)"
+                    
+                    return f"### Word Document: {file_path.name}\n**Paragraphs:** {len(doc.paragraphs)}\n**Tables:** {len(doc.tables)}\n\n{full_text}"
+                    
+                except ImportError:
+                    return "Error: Word document support not installed. Run: pip install python-docx"
+                except Exception as e:
+                    return f"Error reading Word document: {e}"
+            
+            # ═══════════════════════════════════════════════════════════
+            # Excel Files (.xlsx, .xls)
+            # ═══════════════════════════════════════════════════════════
+            elif ext in ['.xlsx', '.xls']:
+                try:
+                    import openpyxl
+                    wb = openpyxl.load_workbook(res, read_only=True, data_only=True)
+                    
+                    content = []
+                    content.append(f"**Sheets:** {', '.join(wb.sheetnames)}\n")
+                    
+                    # Read first 3 sheets
+                    for sheet_name in wb.sheetnames[:3]:
+                        sheet = wb[sheet_name]
+                        content.append(f"\n--- Sheet: {sheet_name} ---")
+                        
+                        # Get dimensions
+                        max_row = min(sheet.max_row, 50)
+                        max_col = min(sheet.max_column, 20)
+                        
+                        # Read data
+                        for row in sheet.iter_rows(min_row=1, max_row=max_row, max_col=max_col, values_only=True):
+                            row_text = " | ".join([str(cell) if cell is not None else "" for cell in row])
+                            if row_text.strip():
+                                content.append(row_text)
+                    
+                    if len(wb.sheetnames) > 3:
+                        content.append(f"\n... ({len(wb.sheetnames) - 3} more sheets not shown)")
+                    
+                    full_text = "\n".join(content)
+                    
+                    # Truncate if too long
+                    if len(full_text) > 15000:
+                        full_text = full_text[:15000] + "\n\n... (truncated)"
+                    
+                    return f"### Excel File: {file_path.name}\n{full_text}"
+                    
+                except ImportError:
+                    return "Error: Excel support not installed. Run: pip install openpyxl"
+                except Exception as e:
+                    return f"Error reading Excel file: {e}"
+            
+            # ═══════════════════════════════════════════════════════════
+            # PowerPoint Files (.pptx)
+            # ═══════════════════════════════════════════════════════════
+            elif ext == '.pptx':
+                try:
+                    from pptx import Presentation
+                    prs = Presentation(res)
+                    
+                    content = []
+                    content.append(f"**Slides:** {len(prs.slides)}\n")
+                    
+                    # Read first 20 slides
+                    for i, slide in enumerate(prs.slides[:20], 1):
+                        content.append(f"\n--- Slide {i} ---")
+                        
+                        # Extract text from shapes
+                        for shape in slide.shapes:
+                            if hasattr(shape, "text") and shape.text.strip():
+                                content.append(shape.text)
+                    
+                    if len(prs.slides) > 20:
+                        content.append(f"\n... ({len(prs.slides) - 20} more slides not shown)")
+                    
+                    full_text = "\n".join(content)
+                    
+                    # Truncate if too long
+                    if len(full_text) > 15000:
+                        full_text = full_text[:15000] + "\n\n... (truncated)"
+                    
+                    return f"### PowerPoint: {file_path.name}\n{full_text}"
+                    
+                except ImportError:
+                    return "Error: PowerPoint support not installed. Run: pip install python-pptx"
+                except Exception as e:
+                    return f"Error reading PowerPoint file: {e}"
+            
+            # ═══════════════════════════════════════════════════════════
+            # Text Files (default)
+            # ═══════════════════════════════════════════════════════════
+            else:
+                with open(res, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                return content
+                
         except Exception as e: return str(e)
 
 class WriteFileTool(BaseTool):

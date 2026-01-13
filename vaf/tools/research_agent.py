@@ -328,8 +328,11 @@ class ResearchAgentTool(BaseTool):
 
     name = "research_agent"
     description = (
-        "Topic-by-topic web research that avoids context overflow. "
-        "Produces an HTML report by running web_search per section and summarizing each section separately."
+        "Comprehensive multi-section research with detailed analysis. "
+        "USE ONLY FOR: Deep research (10+ sources), multi-perspective analysis, detailed reports. "
+        "DON'T USE FOR: Simple lookups (weather, news, facts) - use web_search instead! "
+        "For multiple simple questions, just call web_search multiple times. "
+        "Example: ✅ 'Research AI market trends' ❌ 'Weather + News' (use web_search twice!)"
     )
 
     parameters = {

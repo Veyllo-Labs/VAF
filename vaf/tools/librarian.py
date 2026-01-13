@@ -505,7 +505,9 @@ Remove duplicates and ensure smooth flow.
         
         for pattern in read_patterns:
             if re.search(pattern, task_lower) and file_path:
-                return self._read_file(file_path)
+                # Check if chunking is requested
+                enable_chunking = 'chunk' in task_lower or 'preview' in task_lower or 'vorschau' in task_lower
+                return self._read_file(file_path, enable_chunking=True)
         
         # ─────────────────────────────────────────────────────────────────────
         # PATTERN: Write file ("write file", "create file", "save to file")
@@ -885,8 +887,13 @@ Remove duplicates and ensure smooth flow.
         except Exception as e:
             return f"Error writing file: {str(e)}"
     
-    def _read_file(self, file_path: Path) -> str:
-        """Read file contents."""
+    def _read_file(self, file_path: Path, enable_chunking: bool = True) -> str:
+        """Read file contents - supports text, PDF, Word, Excel, PowerPoint.
+        
+        Args:
+            file_path: Path to the file to read
+            enable_chunking: If True, automatically chunk large files (default: True)
+        """
         UI.event("Librarian", f"Reading {file_path}...", style="dim")
         
         if not file_path.exists():
@@ -896,11 +903,219 @@ Remove duplicates and ensure smooth flow.
             return f"[ERROR] Not a file: {file_path}"
         
         try:
-            # Check file size
-            size = file_path.stat().st_size
-            if size > 100 * 1024:  # 100KB limit
-                return f"[ERROR] File too large ({size // 1024}KB). Max 100KB."
+            # Get file extension
+            ext = file_path.suffix.lower()
             
+            # Check file size with enhanced limits and chunking support
+            size = file_path.stat().st_size
+            size_kb = size // 1024
+            size_mb = size / (1024 * 1024)
+            
+            # Enhanced size limits based on file type (configurable via config.json)
+            from vaf.core.config import Config
+            config = Config.load()
+            
+            size_limits = {
+                '.pdf': config.get('librarian_max_pdf_size_mb', 50) * 1024 * 1024,
+                '.docx': config.get('librarian_max_doc_size_mb', 20) * 1024 * 1024,
+                '.xlsx': config.get('librarian_max_excel_size_mb', 30) * 1024 * 1024,
+                '.pptx': config.get('librarian_max_doc_size_mb', 20) * 1024 * 1024,
+                'text': config.get('librarian_max_text_size_kb', 500) * 1024,
+            }
+            
+            max_size = size_limits.get(ext, size_limits['text'])
+            auto_chunk = config.get('librarian_auto_chunk_large_files', True)
+            
+            # Check if file is too large
+            if size > max_size:
+                max_mb = max_size / (1024 * 1024)
+                
+                # Offer chunking for supported formats (if enabled in config)
+                if auto_chunk and enable_chunking and ext in ['.pdf', '.txt', '.md', '.json', '.xml']:
+                    return (
+                        f"[INFO] File is large ({size_mb:.1f} MB, max {max_mb:.0f} MB direct read)\n\n"
+                        f"**Auto-Chunking Enabled:** Reading file in manageable sections...\n\n"
+                        f"{self._read_file_chunked(file_path, ext)}\n\n"
+                        f"**Configuration:**\n"
+                        f"- To change size limits, edit `~/.vaf/config.json`\n"
+                        f"- Current limit for {ext} files: {max_mb:.0f} MB\n"
+                        f"- Auto-chunking: {'Enabled' if auto_chunk else 'Disabled'}"
+                    )
+                else:
+                    return (
+                        f"[ERROR] File too large: {size_mb:.1f} MB\n\n"
+                        f"**File:** {file_path.name}\n"
+                        f"**Size:** {size_kb:,} KB ({size_mb:.2f} MB)\n"
+                        f"**Maximum:** {max_mb:.0f} MB for {ext} files\n\n"
+                        f"**Suggestions:**\n"
+                        f"- Split the file into smaller parts\n"
+                        f"- Extract specific pages/sections you need\n"
+                        f"- For PDFs: Use a PDF editor to extract pages\n"
+                        f"- For Excel: Export specific sheets as separate files\n"
+                        f"- Compress the file if possible"
+                    )
+            
+            # ═══════════════════════════════════════════════════════════
+            # PDF Files
+            # ═══════════════════════════════════════════════════════════
+            if ext == '.pdf':
+                try:
+                    import PyPDF2
+                    from vaf.core.config import Config
+                    config = Config.load()
+                    
+                    content = []
+                    with open(file_path, 'rb') as f:
+                        pdf_reader = PyPDF2.PdfReader(f)
+                        num_pages = len(pdf_reader.pages)
+                        
+                        # Limit to configured max pages (default: 50)
+                        max_pages_config = config.get('librarian_pdf_max_pages_preview', 50)
+                        max_pages = min(num_pages, max_pages_config)
+                        
+                        for page_num in range(max_pages):
+                            page = pdf_reader.pages[page_num]
+                            page_text = page.extract_text()
+                            if page_text.strip():
+                                content.append(f"--- Page {page_num + 1} ---\n{page_text}")
+                        
+                        if num_pages > max_pages:
+                            content.append(f"\n... ({num_pages - max_pages} more pages not shown)")
+                    
+                    full_text = "\n\n".join(content)
+                    
+                    # Truncate if still too long
+                    if len(full_text) > 15000:
+                        full_text = full_text[:15000] + "\n\n... (truncated)"
+                    
+                    return f"### PDF: {file_path.name}\n**Pages:** {num_pages}\n\n{full_text}"
+                    
+                except ImportError:
+                    return f"[ERROR] PDF support not installed. Run: pip install PyPDF2"
+                except Exception as e:
+                    return f"[ERROR] Failed to read PDF: {e}"
+            
+            # ═══════════════════════════════════════════════════════════
+            # Word Documents (.docx)
+            # ═══════════════════════════════════════════════════════════
+            elif ext == '.docx':
+                try:
+                    from docx import Document
+                    doc = Document(file_path)
+                    
+                    content = []
+                    
+                    # Extract paragraphs
+                    for para in doc.paragraphs:
+                        text = para.text.strip()
+                        if text:
+                            content.append(text)
+                    
+                    # Extract tables
+                    if doc.tables:
+                        content.append("\n--- Tables ---")
+                        for i, table in enumerate(doc.tables[:5], 1):  # Limit to 5 tables
+                            content.append(f"\nTable {i}:")
+                            for row in table.rows[:10]:  # Limit to 10 rows per table
+                                row_text = " | ".join([cell.text.strip() for cell in row.cells])
+                                if row_text:
+                                    content.append(row_text)
+                    
+                    full_text = "\n".join(content)
+                    
+                    # Truncate if too long
+                    if len(full_text) > 15000:
+                        full_text = full_text[:15000] + "\n\n... (truncated)"
+                    
+                    return f"### Word Document: {file_path.name}\n**Paragraphs:** {len(doc.paragraphs)}\n**Tables:** {len(doc.tables)}\n\n{full_text}"
+                    
+                except ImportError:
+                    return f"[ERROR] Word document support not installed. Run: pip install python-docx"
+                except Exception as e:
+                    return f"[ERROR] Failed to read Word document: {e}"
+            
+            # ═══════════════════════════════════════════════════════════
+            # Excel Files (.xlsx, .xls)
+            # ═══════════════════════════════════════════════════════════
+            elif ext in ['.xlsx', '.xls']:
+                try:
+                    import openpyxl
+                    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+                    
+                    content = []
+                    content.append(f"**Sheets:** {', '.join(wb.sheetnames)}\n")
+                    
+                    # Read first 3 sheets
+                    for sheet_name in wb.sheetnames[:3]:
+                        sheet = wb[sheet_name]
+                        content.append(f"\n--- Sheet: {sheet_name} ---")
+                        
+                        # Get dimensions
+                        max_row = min(sheet.max_row, 50)  # Limit to 50 rows
+                        max_col = min(sheet.max_column, 20)  # Limit to 20 columns
+                        
+                        # Read data
+                        for row in sheet.iter_rows(min_row=1, max_row=max_row, max_col=max_col, values_only=True):
+                            row_text = " | ".join([str(cell) if cell is not None else "" for cell in row])
+                            if row_text.strip():
+                                content.append(row_text)
+                    
+                    if len(wb.sheetnames) > 3:
+                        content.append(f"\n... ({len(wb.sheetnames) - 3} more sheets not shown)")
+                    
+                    full_text = "\n".join(content)
+                    
+                    # Truncate if too long
+                    if len(full_text) > 15000:
+                        full_text = full_text[:15000] + "\n\n... (truncated)"
+                    
+                    return f"### Excel File: {file_path.name}\n{full_text}"
+                    
+                except ImportError:
+                    return f"[ERROR] Excel support not installed. Run: pip install openpyxl"
+                except Exception as e:
+                    return f"[ERROR] Failed to read Excel file: {e}"
+            
+            # ═══════════════════════════════════════════════════════════
+            # PowerPoint Files (.pptx)
+            # ═══════════════════════════════════════════════════════════
+            elif ext == '.pptx':
+                try:
+                    from pptx import Presentation
+                    prs = Presentation(file_path)
+                    
+                    content = []
+                    content.append(f"**Slides:** {len(prs.slides)}\n")
+                    
+                    # Read first 20 slides
+                    for i, slide in enumerate(prs.slides[:20], 1):
+                        content.append(f"\n--- Slide {i} ---")
+                        
+                        # Extract text from shapes
+                        for shape in slide.shapes:
+                            if hasattr(shape, "text") and shape.text.strip():
+                                content.append(shape.text)
+                    
+                    if len(prs.slides) > 20:
+                        content.append(f"\n... ({len(prs.slides) - 20} more slides not shown)")
+                    
+                    full_text = "\n".join(content)
+                    
+                    # Truncate if too long
+                    if len(full_text) > 15000:
+                        full_text = full_text[:15000] + "\n\n... (truncated)"
+                    
+                    return f"### PowerPoint: {file_path.name}\n{full_text}"
+                    
+                except ImportError:
+                    return f"[ERROR] PowerPoint support not installed. Run: pip install python-pptx"
+                except Exception as e:
+                    return f"[ERROR] Failed to read PowerPoint file: {e}"
+            
+            # ═══════════════════════════════════════════════════════════
+            # Text Files (default)
+            # ═══════════════════════════════════════════════════════════
+            else:
             content = file_path.read_text(encoding='utf-8', errors='replace')
             
             # Truncate if needed
@@ -911,6 +1126,65 @@ Remove duplicates and ensure smooth flow.
             
         except Exception as e:
             return f"[ERROR] Error reading file: {e}"
+    
+    def _read_file_chunked(self, file_path: Path, ext: str) -> str:
+        """Read large files in chunks and provide summary.
+        
+        This method implements a Map-Reduce strategy for large files:
+        1. Split file into manageable chunks
+        2. Process each chunk separately
+        3. Provide navigation links for detailed sections
+        """
+        UI.event("Librarian", f"Reading file in chunks: {file_path.name}...", style="dim")
+        
+        try:
+            # PDF chunking
+            if ext == '.pdf':
+                import PyPDF2
+                with open(file_path, 'rb') as f:
+                    pdf_reader = PyPDF2.PdfReader(f)
+                    num_pages = len(pdf_reader.pages)
+                    
+                    # Read first 20 pages as preview
+                    preview_pages = min(20, num_pages)
+                    content = []
+                    
+                    for page_num in range(preview_pages):
+                        page = pdf_reader.pages[page_num]
+                        page_text = page.extract_text()
+                        if page_text.strip():
+                            # Only show first 200 chars per page for overview
+                            preview = page_text[:200].strip()
+                            content.append(f"**Page {page_num + 1}:** {preview}...")
+                    
+                    result = f"### PDF Preview: {file_path.name}\n"
+                    result += f"**Total Pages:** {num_pages}\n"
+                    result += f"**Showing:** First {preview_pages} pages (preview)\n\n"
+                    result += "\n".join(content)
+                    result += f"\n\n**Note:** This is a preview. The full document has {num_pages} pages."
+                    result += f"\n**Tip:** Ask me to 'read pages 10-20 of {file_path.name}' for specific sections."
+                    
+                    return result
+            
+            # Text file chunking
+            elif ext in ['.txt', '.md', '.json', '.xml', '.csv', '.log']:
+                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                    # Read first 10,000 characters
+                    content = f.read(10000)
+                    
+                    result = f"### Text File Preview: {file_path.name}\n"
+                    result += f"**Showing:** First 10,000 characters\n\n"
+                    result += content
+                    result += "\n\n... (file continues)"
+                    result += f"\n**Tip:** Ask me to 'read next section' or 'search for [keyword] in {file_path.name}'"
+                    
+                    return result
+            
+            else:
+                return f"[INFO] Chunked reading not supported for {ext} files yet."
+                
+        except Exception as e:
+            return f"[ERROR] Failed to read file in chunks: {e}"
     
     def _show_tree(self, path: Path, max_depth: int = 3) -> str:
         """Show directory tree."""
@@ -1339,7 +1613,7 @@ Remove duplicates and ensure smooth flow.
 User's Home: '{self.home}'
 
 Available Tools:
-- read_file(path): Reads a file's contents
+- read_file(path): Reads a file's contents. **SUPPORTS: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), and text files**
 - write_file(path, content): Writes content to a file
 - list_files(path, sort_by='name'|'date'|'size', limit=100): Lists files and folders in a directory. Use this to see what folders exist on a drive.
 - tree(path, depth): Shows directory tree structure. Use this to explore folder structure on a drive.
@@ -1353,8 +1627,15 @@ RULES:
 3. Summarize results (don't dump raw data)
 4. If unsure about path, use the home directory
 
+DOCUMENT READING CAPABILITIES:
+- **PDF files (.pdf)**: Extracts text from all pages (up to 50 pages shown)
+- **Word documents (.docx)**: Reads paragraphs and tables
+- **Excel files (.xlsx, .xls)**: Reads all sheets and cells (up to 3 sheets, 50 rows each)
+- **PowerPoint (.pptx)**: Extracts text from slides (up to 20 slides)
+- **Text files**: All text-based formats (txt, md, json, xml, csv, etc.)
+
 TOOL SELECTION GUIDE:
-- "Read file content" / "Read file X" -> Use read_file(path)
+- "Read file content" / "Read file X" / "Read PDF" / "Read Word document" -> Use read_file(path)
 - "Write to file" / "Create file" / "Save content to file" -> Use write_file(path, content)
 - "What folders on drive X?" / "Welche Ordner auf Laufwerk X?" -> Use list_files(path) to see all folders
 - "Show folder structure" -> Use tree(path, depth) for visual tree

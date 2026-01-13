@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "VAF Tech Sources",
+  "description": "Trusted technology news and documentation sources",
+  "version": "1.0.0",
+  
+  "categories": {
+    "tech_news": {
+      "name": "Technology News",
+      "description": "Major tech news publications",
+      "sources": [
+        {
+          "name": "TechCrunch",
+          "url": "https://techcrunch.com",
+          "domains": ["techcrunch.com"],
+          "trust_score": 8,
+          "tags": ["tech", "startups", "news"]
+        },
+        {
+          "name": "The Verge",
+          "url": "https://www.theverge.com",
+          "domains": ["theverge.com"],
+          "trust_score": 8,
+          "tags": ["tech", "consumer-tech", "news"]
+        },
+        {
+          "name": "Ars Technica",
+          "url": "https://arstechnica.com",
+          "domains": ["arstechnica.com"],
+          "trust_score": 9,
+          "tags": ["tech", "science", "in-depth"]
+        },
+        {
+          "name": "Wired",
+          "url": "https://www.wired.com",
+          "domains": ["wired.com"],
+          "trust_score": 8,
+          "tags": ["tech", "culture", "science"]
+        },
+        {
+          "name": "Heise Online",
+          "url": "https://www.heise.de",
+          "domains": ["heise.de"],
+          "trust_score": 9,
+          "tags": ["tech", "germany", "it-security"]
+        },
+        {
+          "name": "c't Magazin",
+          "url": "https://www.ct.de",
+          "domains": ["ct.de"],
+          "trust_score": 9,
+          "tags": ["tech", "germany", "in-depth"]
+        }
+      ]
+    },
+    
+    "ai_ml": {
+      "name": "AI & Machine Learning",
+      "description": "AI/ML specific news and research",
+      "sources": [
+        {
+          "name": "AI News",
+          "url": "https://artificialintelligence-news.com",
+          "domains": ["artificialintelligence-news.com"],
+          "trust_score": 7,
+          "tags": ["ai", "ml", "news"]
+        },
+        {
+          "name": "VentureBeat AI",
+          "url": "https://venturebeat.com/ai",
+          "domains": ["venturebeat.com"],
+          "trust_score": 7,
+          "tags": ["ai", "ml", "business"]
+        },
+        {
+          "name": "MIT Technology Review",
+          "url": "https://www.technologyreview.com",
+          "domains": ["technologyreview.com"],
+          "trust_score": 9,
+          "tags": ["tech", "ai", "research", "analysis"]
+        }
+      ]
+    },
+    
+    "documentation": {
+      "name": "Official Documentation",
+      "description": "Official programming language and framework docs",
+      "sources": [
+        {
+          "name": "MDN Web Docs",
+          "url": "https://developer.mozilla.org",
+          "domains": ["developer.mozilla.org"],
+          "trust_score": 10,
+          "tags": ["documentation", "web", "javascript", "official"]
+        },
+        {
+          "name": "Python Docs",
+          "url": "https://docs.python.org",
+          "domains": ["docs.python.org"],
+          "trust_score": 10,
+          "tags": ["documentation", "python", "official"]
+        },
+        {
+          "name": "Rust Docs",
+          "url": "https://doc.rust-lang.org",
+          "domains": ["doc.rust-lang.org", "rust-lang.org"],
+          "trust_score": 10,
+          "tags": ["documentation", "rust", "official"]
+        },
+        {
+          "name": "Go Docs",
+          "url": "https://go.dev/doc",
+          "domains": ["go.dev", "golang.org"],
+          "trust_score": 10,
+          "tags": ["documentation", "go", "official"]
+        },
+        {
+          "name": "TypeScript Docs",
+          "url": "https://www.typescriptlang.org/docs",
+          "domains": ["typescriptlang.org"],
+          "trust_score": 10,
+          "tags": ["documentation", "typescript", "official"]
+        },
+        {
+          "name": "React Docs",
+          "url": "https://react.dev",
+          "domains": ["react.dev"],
+          "trust_score": 10,
+          "tags": ["documentation", "react", "javascript", "official"]
+        },
+        {
+          "name": "Vue Docs",
+          "url": "https://vuejs.org",
+          "domains": ["vuejs.org"],
+          "trust_score": 10,
+          "tags": ["documentation", "vue", "javascript", "official"]
+        }
+      ]
+    },
+    
+    "developer_platforms": {
+      "name": "Developer Platforms",
+      "description": "Developer communities and Q&A sites",
+      "sources": [
+        {
+          "name": "GitHub",
+          "url": "https://github.com",
+          "domains": ["github.com"],
+          "trust_score": 8,
+          "tags": ["code", "repository", "documentation"]
+        },
+        {
+          "name": "Stack Overflow",
+          "url": "https://stackoverflow.com",
+          "domains": ["stackoverflow.com"],
+          "trust_score": 8,
+          "tags": ["qa", "programming", "community"]
+        },
+        {
+          "name": "Dev.to",
+          "url": "https://dev.to",
+          "domains": ["dev.to"],
+          "trust_score": 6,
+          "tags": ["blog", "tutorials", "community"]
+        }
+      ]
+    },
+    
+    "cloud_providers": {
+      "name": "Cloud Provider Docs",
+      "description": "Official cloud platform documentation",
+      "sources": [
+        {
+          "name": "AWS Documentation",
+          "url": "https://docs.aws.amazon.com",
+          "domains": ["docs.aws.amazon.com", "aws.amazon.com"],
+          "trust_score": 10,
+          "tags": ["documentation", "cloud", "aws", "official"]
+        },
+        {
+          "name": "Azure Documentation",
+          "url": "https://docs.microsoft.com/azure",
+          "domains": ["docs.microsoft.com"],
+          "trust_score": 10,
+          "tags": ["documentation", "cloud", "azure", "official"]
+        },
+        {
+          "name": "Google Cloud Docs",
+          "url": "https://cloud.google.com/docs",
+          "domains": ["cloud.google.com"],
+          "trust_score": 10,
+          "tags": ["documentation", "cloud", "gcp", "official"]
+        }
+      ]
+    }
+  },
+  
+  "metadata": {
+    "last_updated": "2026-01-13",
+    "maintainer": "VAF Team",
+    "trust_score_scale": "1-10 (10 = highest trust)"
+  }
+}

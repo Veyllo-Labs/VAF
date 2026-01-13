@@ -19,7 +19,21 @@ from vaf.tools.base import BaseTool
 
 class WebSearchTool(BaseTool):
     name = "web_search"
-    description = "Search the web. Supports quick search and optional deep page previews for top results."
+    description = """Search the web for information. Automatically fetches full page content for accurate data extraction.
+
+**USE THIS FOR:**
+- Weather queries: web_search("weather [location] today") → Returns actual temperatures, conditions
+- News queries: web_search("latest news [topic]") → Returns headlines and summaries
+- Facts/definitions: web_search("what is X") → Returns specific facts and data
+- Person info: web_search("who is [person]") → Returns biographical data
+- Quick lookups: web_search("current [X]") → Returns current data/status
+
+**IMPORTANT:** You can call this tool MULTIPLE TIMES in ONE response!
+Example: User asks "Weather + News" → Call web_search TWICE (weather, then news)
+
+**TIP:** For multiple searches, consider max_results=3 to keep context manageable.
+
+**DON'T use research_agent or workflows for simple lookups!**"""
 
     parameters = {
         "type": "object",
@@ -44,7 +58,7 @@ class WebSearchTool(BaseTool):
     def run(self, **kwargs) -> str:
         query = kwargs.get('query', '')
         max_results = int(kwargs.get("max_results", 5) or 5)
-        deep = bool(kwargs.get("deep", False))
+        deep = bool(kwargs.get("deep", True))  # Changed from False to True - always fetch full pages!
         open_in_browser = kwargs.get("open_in_browser", None)
         return_raw = bool(kwargs.get("return_raw", False))  # Internal: return raw results dict
         user_question = kwargs.get("user_question", query)  # Extract original user question (fallback to query)
@@ -54,9 +68,38 @@ class WebSearchTool(BaseTool):
         try:
             max_results = max(1, min(max_results, 10))
 
-            # 1) Search
-            raw = DDGS().text(query, max_results=max_results, safesearch="strict")
+            # ═══════════════════════════════════════════════════════════════
+            # SMART SOURCE SELECTION (New Feature)
+            # ═══════════════════════════════════════════════════════════════
+            # Analyze query to detect intent and suggest relevant sources
+            try:
+                from vaf.core.query_analyzer import analyze_query
+                intent = analyze_query(query)
+                
+                # If we have suggested sources and high confidence, add site: filter
+                if intent.suggested_sources and intent.confidence > 0.7:
+                    # Build site: filter for DuckDuckGo
+                    # Format: (site:domain1.com OR site:domain2.com OR ...)
+                    site_filter = " (" + " OR ".join(f"site:{domain}" for domain in intent.suggested_sources[:10]) + ")"
+                    query_with_filter = query + site_filter
+                    
+                    UI.event("Smart Search", f"Using {intent.intent_type} sources ({len(intent.suggested_sources)} sites)", style="dim")
+                else:
+                    query_with_filter = query
+            except Exception:
+                # If QueryAnalyzer fails, fall back to normal search
+                query_with_filter = query
+
+            # 1) Search (with or without site filter)
+            raw = DDGS().text(query_with_filter, max_results=max_results, safesearch="strict")
             results = list(raw) if raw else []
+            
+            # If no results with filter, retry without filter
+            if not results and query_with_filter != query:
+                UI.event("Smart Search", "No results with source filter - retrying without filter", style="dim")
+                raw = DDGS().text(query, max_results=max_results, safesearch="strict")
+                results = list(raw) if raw else []
+            
             if not results:
                 return [] if return_raw else "No results found."
             
@@ -109,12 +152,14 @@ Page Content:
 
 {lang_instruction}
 
-Based ONLY on the information from this page, answer the user's question.
-- If the page contains the answer, provide it clearly and accurately
-- If the page doesn't contain relevant information, say so
-- Be concise but complete
-- **IMPORTANT: Limit your answer to a maximum of 3-4 sentences.**
-- Use dates, times, and facts from the page (not from your training data)
+CRITICAL INSTRUCTIONS:
+- Extract SPECIFIC data: numbers, temperatures, dates, facts, names
+- Example for weather: "Temperature: 5°C, Conditions: Partly cloudy, Humidity: 78%"
+- Example for news: "Headline: [title], Key point: [summary]"
+- DON'T say "page has no information" - extract what IS available!
+- If truly no relevant data, say: "No specific data in snippet - visit source for details"
+- Be precise and factual (2-3 sentences max)
+- Use ONLY information from this page (not your training data)
 
 Answer:"""
 
@@ -126,7 +171,7 @@ Answer:"""
                                 {"role": "system", "content": "You are a helpful assistant that answers questions based on web page content. Always use information from the provided page, not your training data."},
                                 {"role": "user", "content": prompt}
                             ],
-                            "max_tokens": 400,
+                            "max_tokens": 250,  # Reduced from 400
                             "temperature": 0.2,
                         },
                         timeout=30,
@@ -135,10 +180,96 @@ Answer:"""
                     if res.status_code == 200:
                         msg = res.json()["choices"][0]["message"]
                         answer = msg.get("content", "").strip()
-                        return answer
-                    return None
+                        if answer:
+                            return answer
+                        else:
+                            UI.event("Debug", f"LLM returned empty answer for '{page_title[:30]}'", style="dim")
+                            return None
+                    else:
+                        UI.event("Debug", f"LLM HTTP {res.status_code} for '{page_title[:30]}'", style="dim")
+                        return None
                 except Exception as e:
-                    UI.event("Debug", f"LLM answer failed: {e}", style="dim")
+                    UI.event("Debug", f"LLM answer failed for '{page_title[:30]}': {str(e)[:50]}", style="dim")
+                    return None
+            
+            def synthesize_final_answer(user_question: str, all_answers: list) -> str:
+                """Create ONE final synthesized answer from multiple source answers."""
+                try:
+                    model_name = Config.get("model", "") or ""
+                    if not model_name:
+                        return None
+                    
+                    # Detect language from user question
+                    lang = "German" if any(word in user_question.lower() for word in ["wie", "was", "wann", "wo", "wer", "warum"]) else "English"
+                    lang_instruction = "Antworte auf Deutsch." if lang == "German" else "Answer in English."
+                    
+                    # Combine all answers into one text
+                    all_answers_text = ""
+                    for i, ans in enumerate(all_answers, 1):
+                        all_answers_text += f"\n\nSource {i} ({ans['title']}):\n{ans['answer']}"
+                    
+                    prompt = f"""User Question: "{user_question}"
+
+Multiple web search results:
+{all_answers_text}
+
+{lang_instruction}
+
+Task: Synthesize ONE clear, concise answer (2-4 sentences) that combines the most relevant and accurate information from all sources.
+- Focus on directly answering the user's question
+- Include specific facts, dates, numbers when available
+- If sources disagree, mention the most reliable/recent information
+- Be natural and conversational
+
+Final Answer:"""
+
+                    res = requests.post(
+                        "http://127.0.0.1:8080/v1/chat/completions",
+                        json={
+                            "model": model_name,
+                            "messages": [
+                                {"role": "system", "content": "You are a helpful assistant that synthesizes information from multiple sources into a clear, concise answer."},
+                                {"role": "user", "content": prompt}
+                            ],
+                            "max_tokens": 300,
+                            "temperature": 0.3,
+                        },
+                        timeout=30,
+                    )
+                    
+                    if res.status_code == 200:
+                        msg = res.json()["choices"][0]["message"]
+                        answer = msg.get("content", "").strip()
+                        if answer:
+                            return answer
+                        else:
+                            # DEBUG: Empty answer - save snapshot for analysis
+                            import json
+                            from datetime import datetime
+                            debug_dir = Platform.data_dir() / "debug" / "web_search"
+                            debug_dir.mkdir(parents=True, exist_ok=True)
+                            
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            debug_file = debug_dir / f"empty_synthesis_{timestamp}.json"
+                            
+                            debug_data = {
+                                "timestamp": timestamp,
+                                "user_question": user_question,
+                                "all_answers": all_answers,
+                                "prompt": prompt,
+                                "response": msg
+                            }
+                            
+                            with open(debug_file, 'w', encoding='utf-8') as f:
+                                json.dump(debug_data, f, indent=2, ensure_ascii=False)
+                            
+                            UI.event("Debug", f"Empty synthesis - saved snapshot: {debug_file.name}", style="yellow")
+                            return None
+                    else:
+                        UI.event("Debug", f"Final synthesis HTTP {res.status_code}", style="dim")
+                        return None
+                except Exception as e:
+                    UI.event("Debug", f"Final synthesis error: {str(e)[:60]}", style="dim")
                     return None
 
             summary = title
@@ -150,7 +281,9 @@ Answer:"""
             all_answers = []  # Collect answers from each page
             
             # HARD LIMIT: Stop if summary gets too large (approx 4000 tokens)
-            MAX_SUMMARY_CHARS = 12000
+            # REDUCED from 12000 to 8000 to prevent context overflow (Issue #VAF-CTX-001)
+            # When multiple web_search calls are made, 12000 chars each = 36000+ total chars
+            MAX_SUMMARY_CHARS = 8000
 
             for i, res in enumerate(results, 1):
                 # Check total size before adding more
@@ -179,13 +312,13 @@ Answer:"""
                 page_content = None
                 if deep and link and i <= preview_limit:
                     # Fetch full page content if deep=True
-                    # Limit to 2000 chars to be safe
+                    # REDUCED from 2000 to 1500 chars to prevent context overflow (Issue #VAF-CTX-001)
                     page_content = fetch_text(link)
-                    if page_content and len(page_content) > 2000:
-                        page_content = page_content[:2000]
+                    if page_content and len(page_content) > 1500:
+                        page_content = page_content[:1500]
                 elif snippet:
-                    # Use snippet if deep=False
-                    page_content = snippet
+                    # Use snippet if deep=False (limit snippet length too)
+                    page_content = snippet[:500] if len(snippet) > 500 else snippet
                 
                 if page_content:
                     UI.event("Web Search", f"Analyzing {page_title[:40]}...", style="dim")
@@ -196,21 +329,64 @@ Answer:"""
                             "url": link,
                             "answer": answer
                         })
-                        summary += f"   - Answer: {answer}\n"
+                        # DEBUG: Show individual answer summary (full answer for debugging)
+                        UI.event("Debug", f"Summary {len(all_answers)}: {answer}", style="dim")
+                        # Don't add individual answers to summary - we'll synthesize them later
                     elif deep:
                         # Fallback to preview if LLM fails
-                        summary += f"   - Preview: {page_content[:800]}...\n"
+                        summary += f"   - Preview: {page_content[:300]}...\n"
 
                 summary += "\n"
 
-            # Add summary of all answers at the end
+            # Create ONE final synthesized answer from all sources (not individual answers)
             if all_answers:
-                summary += "\n### Summary of Answers\n"
+                # DEBUG: Show all collected answers before synthesis
+                UI.event("Debug", f"Collected {len(all_answers)} answers for synthesis", style="dim")
                 for idx, ans in enumerate(all_answers, 1):
-                    summary += f"{idx}. **{ans['title']}**: {ans['answer']}\n"
-                    if ans['url']:
-                        summary += f"   Source: {ans['url']}\n"
-                    summary += "\n"
+                    # Show full answer for debugging (no truncation)
+                    UI.event("Debug", f"  {idx}. {ans['title']}: {ans['answer']}", style="dim")
+                
+                UI.event("Web Search", "Synthesizing final answer...", style="dim")
+                
+                # RETRY LOOP: Try synthesis multiple times until we get an answer
+                final_answer = None
+                max_retries = 3
+                retry_count = 0
+                
+                while not final_answer and retry_count < max_retries:
+                    if retry_count > 0:
+                        UI.event("Web Search", f"Retrying synthesis (attempt {retry_count + 1}/{max_retries})...", style="yellow")
+                    
+                    final_answer = synthesize_final_answer(user_question, all_answers)
+                    
+                    if not final_answer:
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            import time
+                            time.sleep(1)  # Wait 1s before retry
+                
+                if final_answer:
+                    # DEBUG: Show final synthesized answer (full text for debugging)
+                    UI.event("Debug", f"Final synthesis result: {final_answer}", style="dim")
+                    
+                    summary += f"\n### 🎯 Answer\n{final_answer}\n\n"
+                    summary += "**Sources:**\n"
+                    for idx, ans in enumerate(all_answers, 1):
+                        summary += f"{idx}. [{ans['title']}]({ans['url']})\n"
+                else:
+                    # Final fallback after all retries failed
+                    UI.event("Warning", f"Synthesis failed after {max_retries} attempts - showing raw data", style="yellow")
+                    summary += "\n### 📊 Results (Synthesis unavailable - raw answers)\n"
+                    for idx, ans in enumerate(all_answers, 1):
+                        # Show full answers if synthesis completely failed
+                        summary += f"{idx}. **{ans['title']}**: {ans['answer']}\n"
+                        summary += f"   [Source]({ans['url']})\n\n"
+            else:
+                # Fallback 2: No LLM answers generated (LLM calls failed or snippets insufficient)
+                # Snippets are already shown above - the agent can use them directly
+                # Just add a note for transparency
+                summary += f"\n💡 **Note:** Found {len(results)} search results (shown above with snippets). "
+                summary += "LLM synthesis was not available. Visit source links for full details.\n"
 
             # Optional UX: auto-open links in browser (tabs)
             if open_in_browser is None:

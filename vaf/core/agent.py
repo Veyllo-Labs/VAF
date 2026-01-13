@@ -2801,22 +2801,29 @@ class Agent:
                                     user_msgs = [m for m in self.history if m.get("role") == "user"]
                                     assistant_msgs = [m for m in self.history if m.get("role") == "assistant"]
                                     
-                                    # Keep first system message, last user message, last 3 assistant messages
+                                    # Keep system prompt + last 6 messages (preserving order and alternation)
+                                    # This ensures we don't break User -> Assistant -> User flow
                                     new_history = []
-                                    if system_msgs:
-                                        new_history.append(system_msgs[0])  # Keep first system prompt
-                                    if user_msgs:
-                                        new_history.append(user_msgs[-1])  # Keep last user message
                                     
-                                    # For assistant messages, we need to be careful with huge tool outputs
-                                    # Only keep the last 3, and truncate content if needed
-                                    for msg in assistant_msgs[-3:]:
-                                        if len(str(msg.get("content", ""))) > 2000:
-                                             msg["content"] = str(msg.get("content", ""))[:2000] + "... [TRUNCATED]"
-                                        new_history.append(msg)
+                                    # 1. System Prompt
+                                    if self.history and self.history[0].get("role") == "system":
+                                        new_history.append(self.history[0])
+                                    
+                                    # 2. Last 6 messages (User/Assistant/Tool)
+                                    # Ensure we include the latest interaction
+                                    recent = self.history[-6:]
+                                    
+                                    # Truncate heavy messages in the recent block to save space
+                                    for msg in recent:
+                                        # Use copy to avoid mutating if we refer to same dict objects
+                                        msg_copy = msg.copy()
+                                        content = str(msg_copy.get("content", ""))
+                                        if len(content) > 2000:
+                                             msg_copy["content"] = content[:2000] + "... [TRUNCATED]"
+                                        new_history.append(msg_copy)
                                     
                                     self.history = new_history
-                                    UI.event("Context", f"Compressed to {len(self.history)} messages (Aggressive Pruning).", style="info")
+                                    UI.event("Context", f"Compressed to {len(self.history)} messages (Aggressive Pruning - Order Preserved).", style="info")
                                 
                                 UI.event("Context", "Retrying request with optimized context...", style="success")
                                 # Retry the request with compressed context (payload will be rebuilt in next iteration)
@@ -2852,17 +2859,27 @@ class Agent:
                                         user_msgs = [m for m in self.history if m.get("role") == "user"]
                                         assistant_msgs = [m for m in self.history if m.get("role") == "assistant"]
                                         
-                                        # Keep first system message, last user message, last 5 assistant messages
+                                        # Keep system prompt + last 6 messages (preserving order and alternation)
+                                        # This ensures we don't break User -> Assistant -> User flow
                                         new_history = []
-                                        if system_msgs:
-                                            new_history.append(system_msgs[0])  # Keep first system prompt
-                                        if user_msgs:
-                                            new_history.append(user_msgs[-1])  # Keep last user message
-                                        if assistant_msgs:
-                                            new_history.extend(assistant_msgs[-5:])  # Keep last 5 assistant messages
+                                        
+                                        # 1. System Prompt
+                                        if self.history and self.history[0].get("role") == "system":
+                                            new_history.append(self.history[0])
+                                        
+                                        # 2. Last 6 messages (User/Assistant/Tool)
+                                        recent = self.history[-6:]
+                                        
+                                        # Truncate heavy messages
+                                        for msg in recent:
+                                            msg_copy = msg.copy()
+                                            content = str(msg_copy.get("content", ""))
+                                            if len(content) > 2000:
+                                                 msg_copy["content"] = content[:2000] + "... [TRUNCATED]"
+                                            new_history.append(msg_copy)
                                         
                                         self.history = new_history
-                                        UI.event("Context", f"Compressed to {len(self.history)} messages (Aggressive Pruning).", style="info")
+                                        UI.event("Context", f"Compressed to {len(self.history)} messages (Aggressive Pruning - Order Preserved).", style="info")
                                     
                                     UI.event("Context", "Retrying request with optimized context...", style="success")
                                     # Retry the request with compressed context (payload will be rebuilt in next iteration)

@@ -484,6 +484,13 @@ class ResearchAgentTool(BaseTool):
             if session_id:
                 os.environ["VAF_SESSION_ID"] = session_id
             
+            # Pass provider configuration to sub-agent
+            use_separate_provider = Config.get("subagent_use_separate_provider", False)
+            if use_separate_provider:
+                subagent_provider = Config.get("subagent_provider", "inherit")
+                if subagent_provider != "inherit":
+                    os.environ["VAF_PROVIDER"] = subagent_provider
+            
             # Pass RAW topic to sub-agent (it will clean it up)
             cmd_parts = ['vaf', 'subagent', 'run', 'research_agent', '--topic', raw_topic, '--task-id', task_id]
             if out_format:

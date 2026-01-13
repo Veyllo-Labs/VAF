@@ -383,6 +383,26 @@ class ServerManager:
             return False
 
     def start_server(self, model_path, n_gpu_layers=99, n_ctx=8192, port=8080):
+        """
+        Start llama-server only if provider is 'local' and auto-start is enabled.
+        
+        Best Practice: Skip server startup when using API providers to save resources.
+        """
+        from vaf.core.config import Config
+        
+        provider = Config.get("provider", "local")
+        auto_start = Config.get("auto_start_local_server", True)
+        
+        # Skip server start if using API provider
+        if provider != "local":
+            UI.event("Backend", f"Using API provider: {provider}, skipping local server", style="dim")
+            return True
+        
+        # Skip if auto-start is disabled (user wants manual control)
+        if not auto_start:
+            UI.event("Backend", "Local server auto-start disabled in settings", style="dim")
+            return True
+        
         if not self.ensure_server_exists():
             return False
         

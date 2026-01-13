@@ -1,10 +1,12 @@
 import typer
 import sys
+import os
 import signal
 import time
 import requests
 import platform
 import subprocess
+from datetime import datetime
 from rich.console import Console
 from rich.panel import Panel
 from vaf.core.agent import Agent
@@ -702,25 +704,39 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
         agent = Agent(verbose=verbose)
         global_agent = agent
         
-        # Download model first (if needed) - this shows tqdm progress bar
-        # Do this BEFORE the spinner, so tqdm output is visible
-        agent.ensure_model_exists()
-        
-        # Now load the model (this is fast if model already exists)
-        # Skip download check since we already did it
-        with tui.spinner("Loading model..."):
+        # Initialize backend (local or API)
+        if agent.provider == "local":
+            # Download model first (if needed) - this shows tqdm progress bar
+            # Do this BEFORE the spinner, so tqdm output is visible
+            agent.ensure_model_exists()
+            
+            # Now load the model (this is fast if model already exists)
+            # Skip download check since we already did it
+            with tui.spinner("Loading model..."):
+                agent.load_model(skip_download_check=True)
+                agent.init_chat()
+        else:
+            # API provider - initialize API backend
+            tui.event("System", f"Using API provider: {agent.provider.upper()}", style="dim")
+            # load_model() also initializes API backend, so we need to call it
             agent.load_model(skip_download_check=True)
             agent.init_chat()
         
         # Show success after spinner ends (Backend Ready message moved here)
         if agent.use_server:
             tui.event("Server", "Backend Ready (GPU Accelerated)", style="success")
+        elif agent.api_backend:
+            tui.event("API", f"Backend Ready ({agent.provider.upper()})", style="success")
         
         # ═══════════════════════════════════════════════════════════════
         # MODEL WARMUP - Actually load model into VRAM before user prompt
+        # Skip for API providers (no local model to warm up)
         # ═══════════════════════════════════════════════════════════════
-        tui.event("System", "Warming up model...", style="dim")
-        _warmup_model(tui)
+        if not agent.api_backend:
+            tui.event("System", "Warming up model...", style="dim")
+            _warmup_model(tui)
+        else:
+            tui.event("System", "API Backend ready - no warmup needed", style="dim")
         
     except Exception as e:
         tui.error(f"Startup failed: {e}")
@@ -1275,13 +1291,21 @@ Created: {current_session.created_at}
         except Exception as e:
             tui.error(f"Error in interaction loop: {e}")
             import traceback
-            # Save traceback to log for debugging
-            with open("logs/crash.log", "a", encoding="utf-8") as f:
-                # Make sure logs dir exists
-                os.makedirs("logs", exist_ok=True)
-                f.write(f"\n--- {datetime.now().isoformat()} ---\n")
-                f.write(traceback.format_exc())
-            tui.info("Traceback saved to logs/crash.log")
+            # Save traceback to log for debugging (use absolute path)
+            try:
+                # Ensure logs directory exists first
+                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+                log_dir = os.path.join(base_dir, "logs")
+                os.makedirs(log_dir, exist_ok=True)
+                
+                crash_log = os.path.join(log_dir, "crash.log")
+                with open(crash_log, "a", encoding="utf-8") as f:
+                    f.write(f"\n--- {datetime.now().isoformat()} ---\n")
+                    f.write(traceback.format_exc())
+                tui.info(f"Traceback saved to {crash_log}")
+            except Exception:
+                # If logging fails, just print traceback
+                traceback.print_exc()
     
     # Cleanup
     agent.shutdown()
@@ -1383,9 +1407,14 @@ def _process_agent_message(agent, user_input: str, tui, session):
         full_response = "".join(response_parts)
         session.add_message("assistant", full_response)
         
-        # Show token usage
+        # Show token usage (or message count for API)
         used, total = agent.get_token_usage()
-        tui.progress_bar(used, total, label="Tokens")
+        if agent.api_backend:
+            # For API: show as In[X] Out[Y]
+            tui.console.print(f"[dim]Conversation: In[{used}] Out[{total}][/dim]", justify="right")
+        else:
+            # For local: show as token progress bar
+            tui.progress_bar(used, total, label="Tokens")
         
     except Exception as e:
         tui.error(f"Agent error: {e}")
@@ -1557,9 +1586,13 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
                 if captured:
                     UI.event("User (Voice)", captured, style="normal")
                     agent.chat_step(captured, stream_callback=lambda x: output_stream(x))
-                    # Show Usage Bar
+                    # Show Usage Bar (or message count for API)
                     used, total = agent.get_token_usage()
-                    UI.print_usage_bar(used, total)
+                    if agent.api_backend:
+                        UI.console.print(f"[dim]                      Conversation: In[{used}] Out[{total}][/dim]", justify="right")
+                        UI.print()
+                    else:
+                        UI.print_usage_bar(used, total)
                 continue
             
             elif single_cmd in ("halt", "stop", "quiet", "stfu"):
@@ -1614,9 +1647,15 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
 
         agent.chat_step(user_input, stream_callback=lambda x: output_stream(x))
         
-        # Show Usage Bar
+        # Show Usage Bar (or message count for API)
         used, total = agent.get_token_usage()
-        UI.print_usage_bar(used, total)
+        if agent.api_backend:
+            # For API: show as In[X] Out[Y]
+            UI.console.print(f"[dim]                      Conversation: In[{used}] Out[{total}][/dim]", justify="right")
+            UI.print()
+        else:
+            # For local: show as token progress bar
+            UI.print_usage_bar(used, total)
 
 def output_stream(text):
     UI.console.print(text, end="", markup=True, style="bold cyan")

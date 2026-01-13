@@ -101,9 +101,27 @@ class Agent:
 
         self.model_path = os.path.join(self.models_dir, self.filename)
         
+        # Backend initialization (Local or API)
+        # Check for provider override from environment (for sub-agents)
+        env_provider = os.environ.get("VAF_PROVIDER", "").strip()
+        if env_provider:
+            self.provider = env_provider
+        else:
+            self.provider = self.config.get("provider", "local")
+        
         self.llm = None           # Local Library instance
         self.server = None        # ServerManager instance
+        self.api_backend = None   # API Backend instance
         self.use_server = False   # Flag
+        
+        # Initialize API backend immediately if using API provider
+        if self.provider != "local":
+            try:
+                from vaf.core.api_backend import APIBackendManager
+                self.api_backend = APIBackendManager(self.provider)
+            except Exception as e:
+                # If API backend fails, we'll fallback to local in load_model()
+                pass
         
         self.history = []
 
@@ -1055,6 +1073,11 @@ class Agent:
         from vaf.cli.ui import UI
         from vaf.core.gpu_detection import get_primary_gpu, _check_cuda_available
         
+        # Skip model loading if using API backend
+        if self.provider != "local":
+            UI.event("System", f"Using API provider: {self.provider}, skipping model load", style="dim")
+            return
+        
         if not skip_download_check:
             self.ensure_model_exists()
         
@@ -1094,6 +1117,19 @@ class Agent:
         n_gpu = self.config.get("gpu_layers", 99) # Default to max for server
         n_ctx = self.config.get("n_ctx", 8192)
 
+        # API Provider Check (Best Practice: Use API if configured)
+        if self.provider != "local":
+            UI.event("System", f"Initializing API Backend: {self.provider.upper()}...", style="warning")
+            try:
+                from vaf.core.api_backend import APIBackendManager
+                self.api_backend = APIBackendManager(self.provider)
+                UI.event("Success", f"API Backend ready: {self.provider.upper()}", style="success")
+                return  # Success - no local model needed
+            except ValueError as e:
+                UI.error(f"API Backend initialization failed: {e}")
+                UI.event("System", "Falling back to local backend...", style="warning")
+                # Fall through to local backend
+        
         # Check for Python 3.13 or explicit config to force server
         py_ver = sys.version_info
         is_py313 = py_ver.major == 3 and py_ver.minor == 13
@@ -1609,6 +1645,14 @@ class Agent:
 
     def get_token_usage(self):
         """Calculates current token usage from history."""
+        # API Backend: Return message count instead of tokens
+        if self.api_backend:
+            # Count input/output messages (like a notebook)
+            user_msgs = sum(1 for m in self.history if m.get("role") == "user")
+            assistant_msgs = sum(1 for m in self.history if m.get("role") == "assistant")
+            # Return as (input_count, output_count) - will be displayed as In[X] Out[Y]
+            return user_msgs, assistant_msgs
+        
         # Simple approximation if server mode (1 char ~= 0.3 tokens)
         if self.use_server:
             # Naive estimation without tokenizer
@@ -2463,7 +2507,8 @@ class Agent:
     def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False, disable_workflows=False, disable_tools=False):
         from vaf.cli.ui import UI
         
-        if not self.llm and not self.use_server:
+        # Check if any backend is available (local, server, or API)
+        if not self.llm and not self.use_server and not self.api_backend:
             UI.error("Agent not initialized. Run 'vaf run' first.")
             return
         
@@ -2614,7 +2659,59 @@ class Agent:
             streaming_tools = {}
             tool_calls_detected = []
             
-            if self.use_server:
+            # API Backend Path (OpenAI, Anthropic, DeepSeek, Google, OpenRouter)
+            if self.api_backend:
+                try:
+                    # Prepare messages
+                    prepared_messages = self._prepare_messages(self.history)
+                    
+                    # Disable tools if requested
+                    current_tools = self.TOOLS if not disable_tools else None
+                    
+                    first_token = True
+                    for chunk in self.api_backend.chat_completion(
+                        messages=prepared_messages,
+                        temperature=current_temp,
+                        max_tokens=8192,
+                        stream=True,
+                        tools=current_tools
+                    ):
+                        # Handle tool calls (comes as JSON)
+                        if chunk.startswith("{") and ("tool_calls" in chunk or "tool_use" in chunk):
+                            try:
+                                tool_data = json.loads(chunk)
+                                # Convert to compatible format (handled below)
+                                if "tool_calls" in tool_data:
+                                    for tc in tool_data["tool_calls"]:
+                                        tool_calls_detected.append(tc)
+                                elif "tool_use" in tool_data:
+                                    # Anthropic format conversion
+                                    tool_calls_detected.append({
+                                        "function": {
+                                            "name": tool_data["tool_use"].get("name"),
+                                            "arguments": json.dumps(tool_data["tool_use"].get("input", {}))
+                                        }
+                                    })
+                            except json.JSONDecodeError:
+                                pass
+                        else:
+                            # Regular content
+                            if first_token:
+                                if stream_callback: stream_callback("")
+                                first_token = False
+                            
+                            if stream_callback:
+                                stream_callback(f"{escape(chunk)}")
+                            full_response += chunk
+                            full_content += chunk
+                    
+                    if stream_callback: stream_callback("\n")
+                    
+                except Exception as e:
+                    UI.error(f"API Backend Error: {e}")
+                    return
+            
+            elif self.use_server:
                 # Proactive Context Management: Compress before request to prevent overflow
                 # Check token usage and compress if > 85% of limit
                 current_tokens, max_tokens = self.get_token_usage()

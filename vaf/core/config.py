@@ -2,6 +2,7 @@ import os
 import json
 from pathlib import Path
 from typing import Optional
+import base64
 
 class Config:
     APP_DIR = Path.home() / ".vaf"
@@ -13,6 +14,32 @@ class Config:
         "gpu_layers": -1,
         "n_ctx": 8192,
         "temperature": 0.7,
+
+        # AI Provider Settings
+        # Options: "local", "openai", "anthropic", "deepseek", "google", "openrouter"
+        "provider": "local",
+        
+        # API Keys (Base64 encoded for basic obfuscation - NOT encryption!)
+        # For production, consider using system keyring
+        "api_key_openai": "",
+        "api_key_anthropic": "",
+        "api_key_deepseek": "",
+        "api_key_google": "",
+        "api_key_openrouter": "",
+        
+        # API Model Selection per Provider
+        "api_model_openai": "gpt-4o",
+        "api_model_anthropic": "claude-3-5-sonnet-20241022",
+        "api_model_deepseek": "deepseek-chat",
+        "api_model_google": "gemini-1.5-flash",  # Free tier, fast & capable
+        "api_model_openrouter": "anthropic/claude-3.5-sonnet",
+        
+        # Sub-Agent Provider Configuration
+        "subagent_provider": "inherit",  # Options: "inherit", or any provider name
+        "subagent_use_separate_provider": False,
+        
+        # Auto-start local llama-server (disable if only using APIs)
+        "auto_start_local_server": True,
 
         # UX toggles (opt-in)
         # Auto open web search source links in the user's default browser (tabs)
@@ -63,3 +90,61 @@ class Config:
         config = cls.load()
         config[key] = value
         cls.save(config)
+    
+    @classmethod
+    def set_api_key(cls, provider: str, api_key: str):
+        """
+        Securely store API key with basic obfuscation.
+        Best Practice: Base64 encoding for storage (not encryption, but prevents casual viewing)
+        
+        Args:
+            provider: Provider name (openai, anthropic, deepseek, google, openrouter)
+            api_key: Raw API key string
+        """
+        if not api_key:
+            return
+        
+        # Basic obfuscation using base64
+        encoded = base64.b64encode(api_key.encode()).decode()
+        cls.set(f"api_key_{provider}", encoded)
+    
+    @classmethod
+    def get_api_key(cls, provider: str) -> str:
+        """
+        Retrieve and decode API key.
+        
+        Args:
+            provider: Provider name
+            
+        Returns:
+            Decoded API key string
+        """
+        encoded = cls.get(f"api_key_{provider}", "")
+        if not encoded:
+            return ""
+        
+        try:
+            # Decode from base64
+            return base64.b64decode(encoded.encode()).decode()
+        except Exception:
+            # If decoding fails, assume it's plain text (backward compatibility)
+            return encoded
+    
+    @classmethod
+    def mask_api_key(cls, api_key: str) -> str:
+        """
+        Best Practice: Mask API key for display (show first 8 chars + ...)
+        
+        Args:
+            api_key: Full API key
+            
+        Returns:
+            Masked key string
+        """
+        if not api_key:
+            return "(not set)"
+        
+        if len(api_key) <= 8:
+            return "***"
+        
+        return f"{api_key[:8]}...{api_key[-4:]}"

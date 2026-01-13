@@ -168,6 +168,19 @@ def set_context_limit_menu():
 
 
 def select_model_menu():
+    """Select model - supports both local and API providers"""
+    current_provider = Config.get("provider", "local")
+    
+    UI.clear()
+    
+    # Check if using API provider
+    if current_provider != "local":
+        UI.panel(f"Select {current_provider.upper()} Model", style="highlight")
+        _select_api_model(current_provider)
+        UI.console.input("\n[dim]Press Enter to continue...[/dim]")
+        return
+    
+    # Local model selection
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     models_dir = os.path.join(base_dir, "models")
     
@@ -497,6 +510,297 @@ def show_automations_menu():
                     time.sleep(1)
 
 
+def _select_api_model(provider: str):
+    """Helper function to select model for API provider"""
+    from vaf.core.api_backend import APIBackendManager
+    
+    UI.event("Loading", f"Fetching available {provider.upper()} models...", style="dim")
+    models = APIBackendManager.get_available_models(provider)
+    
+    if models:
+        # Add current model to list if not already there
+        current_model = Config.get(f"api_model_{provider}")
+        if current_model and current_model not in models:
+            models.insert(0, f"{current_model} (current)")
+        
+        # Add "Keep current" and "Enter custom" options
+        model_choices = models + ["Keep current", "Enter custom model ID"]
+        
+        model_q = [inquirer.List('model', 
+                                 message=f"Select {provider.upper()} model ({len(models)} available)",
+                                 choices=model_choices)]
+        model_ans = inquirer.prompt(model_q)
+        
+        if model_ans:
+            if model_ans['model'] == "Enter custom model ID":
+                # Allow manual input for new/unlisted models
+                custom = UI.console.input("[bold cyan]Enter custom model ID: [/bold cyan]")
+                if custom.strip():
+                    Config.set(f"api_model_{provider}", custom.strip())
+                    UI.success(f"Model set to: {custom.strip()}")
+            elif model_ans['model'] != "Keep current":
+                # Remove "(current)" suffix if present
+                model_id = model_ans['model'].replace(" (current)", "")
+                Config.set(f"api_model_{provider}", model_id)
+                UI.success(f"Model set to: {model_id}")
+    else:
+        UI.warning("Could not fetch models. Using default.")
+
+
+def api_provider_menu():
+    """Configure AI provider and API keys - Best Practice implementation"""
+    UI.clear()
+    
+    current_provider = Config.get("provider", "local")
+    
+    # Display current status
+    UI.panel(f"Current Provider: {current_provider.upper()}", title="🌐 AI Provider Settings", style="highlight")
+    
+    providers = [
+        ("🖥️  Local (llama-server)", "local"),
+        ("🤖 OpenAI (GPT-4, etc.)", "openai"),
+        ("🧠 Anthropic (Claude)", "anthropic"),
+        ("💫 DeepSeek", "deepseek"),
+        ("✨ Google AI Studio (Gemini)", "google"),
+        ("🌐 OpenRouter (Multi-provider)", "openrouter"),
+        ("Back", "back"),
+    ]
+    
+    questions = [inquirer.List('provider', message="Select AI Provider", choices=providers)]
+    answers = inquirer.prompt(questions)
+    
+    if not answers or answers['provider'] == 'back':
+        return
+    
+    selected = answers['provider']
+    
+    if selected == "local":
+        Config.set("provider", "local")
+        UI.success("✓ Provider set to: Local (llama-server)")
+        
+        # Ask about auto-start
+        auto_start = Config.get("auto_start_local_server", True)
+        toggle_q = [inquirer.Confirm('auto_start', 
+                                      message=f"Auto-start llama-server on launch? (currently: {'ON' if auto_start else 'OFF'})",
+                                      default=auto_start)]
+        toggle_ans = inquirer.prompt(toggle_q)
+        if toggle_ans:
+            Config.set("auto_start_local_server", toggle_ans['auto_start'])
+            UI.event("Settings", f"Auto-start set to: {toggle_ans['auto_start']}", style="info")
+    else:
+        # API Provider - check if key already exists
+        current_key = Config.get_api_key(selected)
+        masked_key = Config.mask_api_key(current_key)
+        
+        # If key exists, offer to change model or key
+        if current_key:
+            UI.print(f"\n[bold]Current API Key:[/bold] {masked_key}")
+            UI.print(f"[bold]Current Provider:[/bold] {selected.upper()}\n")
+            
+            action_choices = [
+                ("Change Model", "model"),
+                ("Change API Key", "key"),
+                ("Keep current settings", "keep"),
+            ]
+            
+            action_q = [inquirer.List('action', message="What would you like to do?", choices=action_choices)]
+            action_ans = inquirer.prompt(action_q)
+            
+            if not action_ans or action_ans['action'] == 'keep':
+                UI.console.input("[dim]Press Enter to continue...[/dim]")
+                return
+            
+            if action_ans['action'] == 'model':
+                # Jump directly to model selection
+                Config.set("provider", selected)  # Ensure provider is set
+                _select_api_model(selected)
+                UI.console.input("\n[dim]Press Enter to continue...[/dim]")
+                return
+            
+            # If 'key' selected, continue to key input below
+        
+        # Prompt for new API key
+        UI.print(f"\n[bold]Current API Key:[/bold] {masked_key}")
+        UI.print(f"[dim]Keys are stored with Base64 encoding in ~/.vaf/config.json[/dim]\n")
+        
+        # Best Practice: Use getpass for sensitive input (better paste support)
+        import getpass
+        try:
+            UI.print(f"[bold cyan]Enter {selected.upper()} API key (leave empty to keep current):[/bold cyan]")
+            UI.print(f"[dim]Note: Input is hidden for security. Paste with Ctrl+V, then press Enter.[/dim]")
+            key_input = getpass.getpass("API Key (input hidden): ")
+            
+            # Visual feedback: show how many characters were entered
+            if key_input.strip():
+                UI.event("Input", f"Received {len(key_input.strip())} characters", style="dim")
+        except (EOFError, KeyboardInterrupt):
+            UI.warning("\nInput cancelled.")
+            UI.console.input("[dim]Press Enter to continue...[/dim]")
+            return
+        
+        if key_input.strip():
+            # Best Practice: Validate key format before saving
+            if len(key_input.strip()) < 10:
+                UI.error("API key seems too short. Please check and try again.")
+                UI.console.input("[dim]Press Enter to continue...[/dim]")
+                return
+            
+            Config.set_api_key(selected, key_input.strip())
+            
+            # Test connection (Best Practice)
+            UI.event("Testing", "Verifying API key...", style="dim")
+            try:
+                from vaf.core.api_backend import APIBackendManager
+                if APIBackendManager.test_connection(selected):
+                    Config.set("provider", selected)
+                    UI.success(f"✓ API key verified! Provider set to: {selected.upper()}")
+                    UI.event("Important", "Please type 'r' or '/reload' to reload the agent with new provider", style="warning")
+                    
+                    # Offer to select model
+                    _select_api_model(selected)
+                else:
+                    UI.error("✗ API key verification failed. Provider not changed.")
+            except Exception as e:
+                UI.error(f"Error testing API: {e}")
+                UI.event("Settings", "API key saved, but verification failed. Check key and try again.", style="warning")
+        else:
+            if current_key:
+                Config.set("provider", selected)
+                UI.success(f"✓ Provider set to: {selected.upper()} (using existing key)")
+            else:
+                UI.error("No API key configured. Cannot switch to this provider.")
+    
+    UI.console.input("\n[dim]Press Enter to continue...[/dim]")
+
+
+def select_api_model_menu():
+    """Select API model for current provider (dynamically fetched)"""
+    UI.clear()
+    
+    current_provider = Config.get("provider", "local")
+    
+    if current_provider == "local":
+        UI.warning("You are using local provider. Switch to an API provider first.")
+        UI.console.input("[dim]Press Enter to continue...[/dim]")
+        return
+    
+    current_model = Config.get(f"api_model_{current_provider}")
+    
+    UI.panel(
+        f"Provider: {current_provider.upper()}\nCurrent Model: {current_model}", 
+        title="🤖 Select API Model", 
+        style="highlight"
+    )
+    
+    # Dynamically fetch models
+    UI.print("\n[dim]Fetching available models from API...[/dim]")
+    try:
+        from vaf.core.api_backend import APIBackendManager
+        models = APIBackendManager.get_available_models(current_provider)
+        
+        if not models:
+            UI.error("Could not fetch models. Check your API key.")
+            UI.console.input("[dim]Press Enter to continue...[/dim]")
+            return
+        
+        UI.print(f"[success]Found {len(models)} models[/success]\n")
+        
+        # Mark current model
+        choices = []
+        for model in models:
+            if model == current_model:
+                choices.append((f"✓ {model} (current)", model))
+            else:
+                choices.append((model, model))
+        
+        choices.extend([
+            ("─────────────────", None),
+            ("Enter custom model ID", "custom"),
+            ("Back", "back")
+        ])
+        
+        questions = [inquirer.List('model', message="Select Model", choices=choices)]
+        answers = inquirer.prompt(questions)
+        
+        if not answers or answers['model'] == 'back' or answers['model'] is None:
+            return
+        
+        selected = answers['model']
+        
+        if selected == "custom":
+            custom = UI.console.input("[bold cyan]Enter custom model ID: [/bold cyan]")
+            if custom.strip():
+                Config.set(f"api_model_{current_provider}", custom.strip())
+                UI.success(f"✓ Model set to: {custom.strip()}")
+        else:
+            Config.set(f"api_model_{current_provider}", selected)
+            UI.success(f"✓ Model set to: {selected}")
+    
+    except Exception as e:
+        UI.error(f"Error fetching models: {e}")
+    
+    UI.console.input("\n[dim]Press Enter to continue...[/dim]")
+
+
+def subagent_provider_menu():
+    """Configure whether sub-agents use same or different provider"""
+    UI.clear()
+    
+    main_provider = Config.get("provider", "local")
+    subagent_provider = Config.get("subagent_provider", "inherit")
+    use_separate = Config.get("subagent_use_separate_provider", False)
+    
+    display_provider = subagent_provider if subagent_provider != "inherit" else f"{main_provider} (inherited)"
+    
+    UI.panel(
+        f"Main Agent: {main_provider.upper()}\nSub-Agent: {display_provider.upper()}", 
+        title="🔧 Sub-Agent Provider Settings", 
+        style="highlight"
+    )
+    
+    UI.print("\n[dim]Sub-agents can use a different AI provider than the main agent.[/dim]")
+    UI.print("[dim]Example: Main uses Claude (API), Sub-agents use Local (free)[/dim]\n")
+    
+    choices = [
+        ("Inherit from Main Agent", "inherit"),
+        ("─────────────────", None),
+        ("Use Local (llama-server)", "local"),
+        ("Use OpenAI", "openai"),
+        ("Use Anthropic (Claude)", "anthropic"),
+        ("Use DeepSeek", "deepseek"),
+        ("Use Google AI Studio", "google"),
+        ("Use OpenRouter", "openrouter"),
+        ("─────────────────", None),
+        ("Back", "back"),
+    ]
+    
+    questions = [inquirer.List('provider', message="Select Sub-Agent Provider", choices=choices)]
+    answers = inquirer.prompt(questions)
+    
+    if not answers or answers['provider'] == 'back' or answers['provider'] is None:
+        return
+    
+    selected = answers['provider']
+    
+    # Validate API key if not local or inherit
+    if selected not in ["local", "inherit"]:
+        api_key = Config.get_api_key(selected)
+        if not api_key:
+            UI.error(f"No API key configured for {selected}. Please set it up in AI Provider Settings first.")
+            UI.console.input("[dim]Press Enter to continue...[/dim]")
+            return
+    
+    Config.set("subagent_provider", selected)
+    Config.set("subagent_use_separate_provider", selected != "inherit")
+    
+    if selected == "inherit":
+        UI.success(f"✓ Sub-agents will use the same provider as main agent ({main_provider})")
+    else:
+        UI.success(f"✓ Sub-agents will use: {selected.upper()}")
+    
+    UI.console.input("\n[dim]Press Enter to continue...[/dim]")
+
+
 def show_about():
     UI.clear()
     
@@ -621,7 +925,34 @@ def main_menu(agent=None):
         except:
             tools_label = '🔧 Show All Tools'
         
+        # Get current provider
+        current_provider = Config.get("provider", "local")
+        provider_label = f"🌐 AI Provider: {current_provider.upper()}"
+        
+        subagent_provider = Config.get("subagent_provider", "inherit")
+        if subagent_provider == "inherit":
+            subagent_label = f"🔧 Sub-Agent Provider: {current_provider.upper()} (inherited)"
+        else:
+            subagent_label = f"🔧 Sub-Agent Provider: {subagent_provider.upper()}"
+        
+        # Get current API model if using API
+        if current_provider != "local":
+            current_api_model = Config.get(f"api_model_{current_provider}", "not set")
+            api_model_label = f"🤖 API Model: {current_api_model}"
+        else:
+            api_model_label = None
+        
         menu_choices = [
+            (provider_label, 'provider'),
+            (subagent_label, 'subagent_provider'),
+        ]
+        
+        # Add API model selector if using API
+        if api_model_label:
+            menu_choices.append((api_model_label, 'api_model'))
+        
+        menu_choices.extend([
+            ('─────────────────', None),
             ('Set Context Limit', 'context'),
             ('Select Active Model', 'list'),
             ('Search & Download New Models', 'search'),
@@ -633,7 +964,7 @@ def main_menu(agent=None):
             (timeout_label, 'subagent_timeout'),
             (tts_label, 'speech_tts'),
             (stt_label, 'speech_stt'),
-        ]
+        ])
         
         if stt_enabled:
             menu_choices.append((mic_label, 'speech_mic'))
@@ -725,7 +1056,13 @@ def main_menu(agent=None):
             UI.event("Settings", f"Speech-to-Text (STT) {status}", style="success")
             time.sleep(1.0)
             
-        if action == 'persist':
+        if action == 'provider':
+            api_provider_menu()
+        elif action == 'api_model':
+            select_api_model_menu()
+        elif action == 'subagent_provider':
+            subagent_provider_menu()
+        elif action == 'persist':
             new_state = not persist
             agent.config["persist_server"] = new_state
             Config.save(agent.config)  # Config already imported at top of file

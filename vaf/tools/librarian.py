@@ -131,6 +131,13 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             if session_id:
                 os.environ["VAF_SESSION_ID"] = session_id
             
+            # Pass provider configuration to sub-agent (Best Practice: Inherit or override)
+            use_separate_provider = Config.get("subagent_use_separate_provider", False)
+            if use_separate_provider:
+                subagent_provider = Config.get("subagent_provider", "inherit")
+                if subagent_provider != "inherit":
+                    os.environ["VAF_PROVIDER"] = subagent_provider
+            
             cmd_parts = ['vaf', 'subagent', 'run', 'librarian_agent', '--task', task, '--task-id', task_id]
             
             if Platform.is_windows():

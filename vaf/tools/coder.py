@@ -1654,6 +1654,13 @@ Thumbs.db
             if session_id:
                 os.environ["VAF_SESSION_ID"] = session_id
             
+            # Pass provider configuration to sub-agent
+            use_separate_provider = Config.get("subagent_use_separate_provider", False)
+            if use_separate_provider:
+                subagent_provider = Config.get("subagent_provider", "inherit")
+                if subagent_provider != "inherit":
+                    os.environ["VAF_PROVIDER"] = subagent_provider
+            
             # CRITICAL FIX: Use current python executable instead of 'vaf' command
             # This ensures we use the exact same code/environment as the main process
             import sys

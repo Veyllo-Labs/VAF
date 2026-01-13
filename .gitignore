@@ -19,6 +19,12 @@ logs/
 *.log
 console.log
 
+# Config files with API keys (SECURITY: Never commit!)
+.vaf/
+**/.vaf/
+config.json
+**/config.json
+
 # Dump-Dateien
 payload_dump.json
 

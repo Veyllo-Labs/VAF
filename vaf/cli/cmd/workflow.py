@@ -106,6 +106,7 @@ def run_workflow(
         from vaf.tools.filesystem import WriteFileTool, ReadFileTool, ListFilesTool, MoveFileTool
         from vaf.tools.bash import BashTool
         from vaf.tools.search import WebSearchTool
+        from vaf.tools.webfetch import WebFetchTool
         
         tools = {
             "write_file": WriteFileTool(),
@@ -114,6 +115,7 @@ def run_workflow(
             "move_file": MoveFileTool(),
             "bash": BashTool(),
             "web_search": WebSearchTool(),
+            "webfetch": WebFetchTool(),
         }
         
         # Load sub-agent tools
@@ -140,6 +142,39 @@ def run_workflow(
         def progress_callback(event, step, current, total):
             if event == "start":
                 UI.event("Workflow", f"Step {current}/{total}: {step.tool}...", style="cyan")
+                
+                # Try to speak filler for this tool
+                try:
+                    from vaf.core.speech import get_speech_manager
+                    from vaf.core.speech_fillers import TOOL_FILLERS
+                    from vaf.core.config import Config
+                    
+                    sm = get_speech_manager()
+                    if sm.is_tts_enabled():
+                        lang = Config.get("language", "de")
+                        # Get filler for this tool
+                        filler = TOOL_FILLERS.get(step.tool, {}).get(lang)
+                        
+                        # Fallback to English if filler not found for current language
+                        if not filler and lang != "en":
+                            filler = TOOL_FILLERS.get(step.tool, {}).get("en")
+                        
+                        # If no specific filler, but it's a "thinking" moment, maybe use generic?
+                        # For now, only use if we have a specific match
+                        if filler:
+                            # Format with args if available (e.g. {query})
+                            # We need to reconstruct args from resolved input
+                            try:
+                                # This is a bit hacky as we don't have the resolved args here easily
+                                # But we can try to use raw input if it's simple
+                                pass
+                            except:
+                                pass
+                                
+                            sm.speak(filler, lang=lang)
+                except Exception:
+                    pass
+                    
             elif event == "success":
                 UI.event("Workflow", f"[OK] Step {current}/{total}: {step.tool}", style="green")
             elif event == "error":

@@ -322,5 +322,22 @@ TOOL_FILLERS = {
         "sv": "Kör Python-koden",
         "ar": "أنفذ كود Python",
         "hi": "Python कोड चला रहा हूं"
+    },
+    "webfetch": {
+        "de": "Ich rufe die Webseite auf",
+        "en": "Accessing the website",
+        "tr": "Web sitesine erişiyorum",
+        "es": "Accediendo al sitio web",
+        "fr": "J'accède au site web",
+        "it": "Accesso al sito web",
+        "ru": "Открываю веб-сайт",
+        "ja": "ウェブサイトにアクセスしています",
+        "zh": "正在访问网站",
+        "pt": "Acessando o site",
+        "nl": "Ik open de website",
+        "pl": "Otwieram stronę internetową",
+        "sv": "Öppnar webbplatsen",
+        "ar": "جارٍ الوصول إلى الموقع",
+        "hi": "वेबसाइट खोल रहा हूं"
     }
 }

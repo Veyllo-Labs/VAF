@@ -187,19 +187,27 @@ class Agent:
             from vaf.core.speech import get_speech_manager
             sm = get_speech_manager()
             
-            # 1. Determine language
-            tts_lang = "auto"
-            if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
-                tts_lang = self.prompt_manager.user_language
-            else:
-                tts_lang = self._detect_user_language(text)
-            
-            # 2. Clean text
+            # 1. Clean text first (remove artifacts that might confuse language detection)
             tts_text = sm._clean_markdown(text)
+            if not tts_text.strip():
+                return
+
+            # 2. Determine language (Prioritize Config > PromptManager > Auto-Detect)
+            tts_lang = "auto"
+            
+            # Check Config first
+            config_lang = self.config.get("language", "auto")
+            if config_lang and config_lang != "auto":
+                tts_lang = config_lang
+            # Check PromptManager
+            elif hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
+                tts_lang = self.prompt_manager.user_language
+            # Fallback to detection on CLEANED text
+            else:
+                tts_lang = self._detect_user_language(tts_text)
             
             # 3. Speak
-            if tts_text:
-                sm.speak(tts_text, lang=tts_lang)
+            sm.speak(tts_text, lang=tts_lang)
         except Exception:
             pass
     
@@ -221,10 +229,17 @@ class Agent:
             if not sm.is_tts_enabled():
                 return
             
-            # Determine language
+            # Determine language (Prioritize Config > PromptManager > Auto-Detect)
             lang = "auto"
-            if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
+            
+            # Check Config first
+            config_lang = self.config.get("language", "auto")
+            if config_lang and config_lang != "auto":
+                lang = config_lang
+            # Check PromptManager
+            elif hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
                 lang = self.prompt_manager.user_language
+            # Fallback to detection
             else:
                 # Try to detect from last user message
                 for msg in reversed(self.history):
@@ -1880,6 +1895,23 @@ class Agent:
             # BRAIN-BASED WORKFLOW SELECTION (multi-language support!)
             # Instead of hardcoded pattern matching, use LLM to understand intent in ANY language
             from vaf.cli.ui import UI as UI_Class
+            
+            # PLAY THINKING FILLER HERE (to mask latency)
+            try:
+                from vaf.core.speech import get_speech_manager
+                from vaf.core.speech_fillers import THINKING_FILLERS
+                import random
+                
+                sm = get_speech_manager()
+                if sm.is_tts_enabled():
+                    # Get generic thinking fillers for current language
+                    fillers = THINKING_FILLERS.get(lang, THINKING_FILLERS.get("en", []))
+                    if fillers:
+                        filler = random.choice(fillers)
+                        sm.speak(filler, lang=lang)
+            except Exception:
+                pass  # Ignore speech errors during thinking
+            
             with UI_Class.console.status(f"[bold cyan](O_O)  {msg_analyzing}[/bold cyan]", spinner="dots"):
                 workflow_id = self.analyze_workflow(user_input)
             
@@ -2356,7 +2388,9 @@ class Agent:
         # Otherwise, fall back to LLM agent for flexible handling
         # Workflows provide structured, multi-step pipelines for common tasks
         
+        workflow_tried = False
         if not skip_input and not disable_workflows:
+            workflow_tried = True
             # Try workflow matching BEFORE adding to history
             workflow_result = self._try_workflow(user_input, stream_callback)
             if workflow_result:
@@ -2391,7 +2425,9 @@ class Agent:
         UI.event("Agent", "Thinking...", style="dim")
         
         # TTS Filler: "Einen kleinen Moment..." (avoid dead silence)
-        self._speak_filler("thinking")
+        # Skip if already played during workflow match analysis (Step 1/2)
+        if not workflow_tried:
+            self._speak_filler("thinking")
         
         retries = 0
         MAX_RETRIES = 5

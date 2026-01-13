@@ -105,9 +105,9 @@ def _check_subagent_results(tui, agent):
                     # Add TRUNCATED result to history to avoid context overflow
                     # The full result is displayed above, so we just need a summary
                     result_len = len(str(task.result)) if task.result else 0
-                    if result_len > 1000:
-                        # For large results, only add first 500 chars + note
-                        truncated = task.result[:500] + f"\n\n[... {result_len - 500} more characters - see output above ... ]"
+                    if result_len > 2000:
+                        # For large results, only add first 2000 chars + note
+                        truncated = task.result[:2000] + f"\n\n[... {result_len - 2000} more characters - see output above ... ]"
                         agent.history.append({
                             "role": "system",
                             "content": f"**Sub-Agent Result [{task.task_id}]** ({task.agent_type}):\n\n{truncated}"
@@ -199,8 +199,8 @@ def _resume_paused_workflow(tui, agent, paused_wf, subagent_result: str):
             ))
             
             # Add TRUNCATED result to history to avoid context overflow
-            if len(output_str) > 1000:
-                truncated = output_str[:500] + f"\n\n[... {len(output_str) - 500} more characters - see output above ... ]"
+            if len(output_str) > 2000:
+                truncated = output_str[:2000] + f"\n\n[... {len(output_str) - 2000} more characters - see output above ... ]"
                 agent.history.append({
                     "role": "system",
                     "content": f"**Workflow Completed** ({paused_wf.workflow_name}):\n\n{truncated}"

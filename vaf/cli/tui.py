@@ -655,25 +655,29 @@ O))         O))       O))))))))
         self,
         content: str,
         role: str = "assistant",
-        timestamp: datetime = None
+        timestamp: datetime = None,
+        title: str = None
     ):
         """Display a chat message in a styled box."""
         if role == "user":
             color = self.accent
             icon = "👤"
-            title = "You"
+            default_title = "You"
         elif role == "assistant":
             color = self.primary
             icon = "🤖"
-            title = "VAF"
+            default_title = "VAF"
         elif role == "system":
             color = self.muted
             icon = "⚙️"
-            title = "System"
+            default_title = "System"
         else:
             color = self.secondary
             icon = "💬"
-            title = role.title()
+            default_title = role.title()
+        
+        # Use provided title or default
+        display_title = title if title is not None else default_title
         
         time_str = ""
         if timestamp:
@@ -681,7 +685,7 @@ O))         O))       O))))))))
         
         panel = Panel(
             Markdown(content) if role == "assistant" else content,
-            title=f"{icon} [bold]{title}[/bold]{time_str}",
+            title=f"{icon} [bold]{display_title}[/bold]{time_str}",
             title_align="left",
             border_style=color,
             box=ROUNDED,

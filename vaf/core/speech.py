@@ -44,6 +44,7 @@ class SpeechManager:
         self._is_speaking = False
         self._piper_checked = False
         self._has_piper = False
+        self._speech_generation = 0  # To invalidate pending tasks on stop()
         
         # TTS sequencing lock - ensures TTS plays sequentially, not in parallel
         self._tts_lock = threading.Lock()
@@ -414,12 +415,25 @@ $player.Close()
     def stop(self):
         """Stop speaking immediately."""
         self._is_speaking = False
-        # Kill player process if running (Windows PowerShell specific)
-        if platform.system().lower() == "windows":
+        self._speech_generation += 1  # Invalidate pending tasks
+        
+        # Kill player processes
+        system = platform.system().lower()
+        if system == "windows":
             try:
+                # Kill powershell (used for playback) and piper
                 subprocess.run(['taskkill', '/F', '/IM', 'powershell.exe'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(['taskkill', '/F', '/IM', 'piper.exe'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except:
                 pass
+        else:
+            # Kill linux/mac players
+            for proc in ['piper', 'aplay', 'afplay', 'mpg123', 'mpv', 'ffplay']:
+                try:
+                    subprocess.run(['pkill', '-9', proc], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except:
+                    pass
+                    
         # pyttsx3 stop
         if self.tts_engine:
             try:
@@ -434,6 +448,9 @@ $player.Close()
         clean_text = self._clean_markdown(text)
         if not clean_text.strip(): return
 
+        # Capture generation ID to detect stop() calls while waiting
+        current_gen = self._speech_generation
+
         # DEBUG: Show what is actually being sent to TTS
         # UI.event("TTS Debug", f"Speaking ({len(clean_text)} chars): {clean_text[:100]}...", style="dim")
 
@@ -441,6 +458,10 @@ $player.Close()
             # CRITICAL: Acquire TTS lock to ensure sequential playback
             # This prevents multiple TTS calls from overlapping
             with self._tts_lock:
+                # ABORT if stop() was called while we were waiting
+                if self._speech_generation != current_gen:
+                    return
+
                 # 1. Try Piper (High Quality)
                 if self._check_piper():
                     # Attempt to get voice for requested language
@@ -648,7 +669,17 @@ $player.Close()
             r'^The user wants.*?(?:\n\n|\n|\Z)',
         ]
         for pattern in thought_patterns:
-            t = re.sub(pattern, '', t, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE)
+            # Loop to remove multiple paragraphs of thinking
+            while re.search(pattern, t, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE):
+                t = re.sub(pattern, '', t, count=1, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE).strip()
+
+        # 2b. Aggressive Reasoning Filter: "Answer in [Lang]"
+        # If the model explicitly tells itself to answer in a language, 
+        # everything BEFORE that instruction is likely reasoning/garbage.
+        answer_instruction = re.search(r'(?:Answer|Antworte|Respond) (?:in|auf) [A-Z][a-z]+(?: \([A-Z][a-z]+\))?[\.:]?\s*', t, flags=re.IGNORECASE)
+        if answer_instruction:
+            # Keep only what comes AFTER "Answer in German."
+            t = t[answer_instruction.end():].strip()
 
         # 3. Remove introductory labels (Answer:, Antwort:, etc.)
         # Only at the very start of the string

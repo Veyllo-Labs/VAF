@@ -180,12 +180,131 @@ Fast and context-efficient. Has access to storage device information (HDD, SSD, 
             return direct_result
         
         # ═══════════════════════════════════════════════════════════════════════
+        # MAP-REDUCE PATH: Huge content - use Chunking & Summarization
+        # ═══════════════════════════════════════════════════════════════════════
+        if len(task) > 15000:
+            return self._summarize_chunks(task)
+        
+        # ═══════════════════════════════════════════════════════════════════════
         # SLOW PATH: Complex task - use LLM reasoning
         # ═══════════════════════════════════════════════════════════════════════
         
         # LLM path has its own animation
         return self._execute_with_llm(task)
     
+    def _summarize_chunks(self, task: str) -> str:
+        """
+        Handle excessively large inputs by chunking and summarizing iteratively (Map-Reduce).
+        """
+        UI.event("Librarian", f"Input text too large ({len(task)} chars). Switching to Map-Reduce strategy...", style="warning")
+        
+        # 1. Split task into instruction (start) and content (rest)
+        # We assume instructions are at the beginning.
+        instruction_limit = 2000
+        if len(task) > instruction_limit:
+            instruction = task[:instruction_limit] + "..."
+        else:
+            instruction = task
+            
+        # 2. Chunking configuration
+        CHUNK_SIZE = 12000  # Safe size for 8k/16k context
+        OVERLAP = 500
+        
+        chunks = []
+        start = 0
+        total_len = len(task)
+        
+        while start < total_len:
+            end = min(start + CHUNK_SIZE, total_len)
+            chunks.append(task[start:end])
+            start = end - OVERLAP
+            
+        UI.event("Librarian", f"Split content into {len(chunks)} chunks for processing.", style="info")
+        
+        # Get model name dynamically
+        model_name = "user-model"
+        try:
+            m_res = requests.get("http://127.0.0.1:8080/v1/models", timeout=2)
+            if m_res.status_code == 200:
+                data = m_res.json()
+                if 'data' in data and len(data['data']) > 0:
+                    model_name = data['data'][0]['id']
+        except:
+            pass
+        
+        summaries = []
+        
+        # 3. Process chunks
+        for i, chunk in enumerate(chunks, 1):
+            UI.event("Librarian", f"Summarizing chunk {i}/{len(chunks)}...", style="dim")
+            
+            prompt = f"""You are a helpful researcher.
+User Instruction: {instruction}
+
+PARTIAL TEXT CONTENT (Part {i}/{len(chunks)}):
+{chunk}
+
+TASK:
+Extract key information from this part that is relevant to the user's instruction. 
+If it's a list of items, extract the items.
+If it's an article, summarize the main points of this section.
+Keep it concise but detailed enough to be useful.
+Output ONLY the summary/extraction.
+"""
+            try:
+                response = requests.post(
+                    "http://127.0.0.1:8080/v1/chat/completions",
+                    json={
+                        "model": model_name,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 1024,
+                        "temperature": 0.0,
+                    },
+                    timeout=120
+                )
+                if response.status_code == 200:
+                    content = response.json()['choices'][0]['message']['content']
+                    summaries.append(content)
+                else:
+                    summaries.append(f"[Error summarizing chunk {i}: {response.text}]")
+            except Exception as e:
+                summaries.append(f"[Exception summarizing chunk {i}: {e}]")
+        
+        # 4. Final Combination
+        combined_summaries = "\n\n".join(summaries)
+        
+        # If we have multiple chunks, do a final pass to synthesize
+        if len(chunks) > 1:
+            UI.event("Librarian", "Synthesizing final report from chunk summaries...", style="dim")
+            final_prompt = f"""You are a helpful researcher.
+User Instruction: {instruction}
+
+I have processed the document in parts. Here are the summaries of each part:
+
+{combined_summaries}
+
+TASK:
+Combine these partial summaries into a coherent final report that answers the user's instruction.
+Remove duplicates and ensure smooth flow.
+"""
+            try:
+                response = requests.post(
+                    "http://127.0.0.1:8080/v1/chat/completions",
+                    json={
+                        "model": model_name,
+                        "messages": [{"role": "user", "content": final_prompt}],
+                        "max_tokens": 2048,
+                        "temperature": 0.3,
+                    },
+                    timeout=120
+                )
+                if response.status_code == 200:
+                    return f"### Librarian Map-Reduce Report\n\n{response.json()['choices'][0]['message']['content']}"
+            except:
+                pass
+        
+        return f"### Librarian Map-Reduce Report (Raw Combination)\n\n{combined_summaries}"
+
     # ═══════════════════════════════════════════════════════════════════════════
     # DIRECT EXECUTION (Fast Path)
     # ═══════════════════════════════════════════════════════════════════════════

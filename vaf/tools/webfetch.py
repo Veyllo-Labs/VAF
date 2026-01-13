@@ -45,7 +45,7 @@ Examples:
     def run(self, **kwargs) -> str:
         url = kwargs.get("url", "")
         extract_main = kwargs.get("extract_main", True)
-        max_length = kwargs.get("max_length", 50000)
+        max_length = kwargs.get("max_length", 20000)
         
         if not url or not url.strip():
             return "Error: No URL provided"

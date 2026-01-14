@@ -716,12 +716,17 @@ Place your custom workflow files in `~/.vaf/workflows/*.py` - they're automatica
 vaf/
 ├── core/
 │   ├── agent.py          # Main Agent logic
-│   ├── backend.py        # llama-server Manager
+│   ├── api_backend.py    # Cloud API Provider Integration
+│   ├── backend.py        # Local LLM Server Manager
 │   ├── config.py         # Global Configuration
+│   ├── context.py        # Context Management (Cursor-style)
 │   ├── session.py        # Session Management
 │   ├── snapshot.py       # Undo/Snapshot System
 │   ├── automation.py     # Scheduled Tasks
-│   ├── context.py        # Context Management
+│   ├── subagent_ipc.py   # Sub-Agent Inter-Process Communication
+│   ├── system_prompt.py  # Dynamic Prompt Router
+│   ├── speech.py         # TTS/STT Speech Engine
+│   ├── trust.py          # Security & Permission Gating
 │   └── platform.py       # Cross-Platform Utils
 ├── cli/
 │   ├── tui.py            # Modern Terminal UI
@@ -735,17 +740,25 @@ vaf/
 │       ├── automate.py   # Test/Build Automation
 │       ├── debug.py      # AI Error Analysis
 │       ├── git.py        # Git Integration
+│       ├── info.py       # System & GPU Info
+│       ├── subagent.py   # Sub-Agent Runner
 │       └── settings.py   # Settings UI
 ├── tools/
 │   ├── base.py           # Plugin Base Class
 │   ├── coder.py          # Coding Sub-Agent
-│   ├── librarian.py      # Search Sub-Agent
-│   ├── bash.py           # Shell Commands
+│   ├── librarian.py      # Librarian Sub-Agent
+│   ├── research_agent.py # Research Sub-Agent
+│   ├── document_agent.py # Document Sub-Agent
+│   ├── bash.py           # Shell Execution
+│   ├── python_exec.py    # Python Execution
+│   ├── filesystem.py     # File Operations
 │   ├── webfetch.py       # Web Content Fetching
-│   ├── codesearch.py     # Code Search
-│   ├── automation.py     # Automation Tool
 │   ├── search.py         # Web Search
-│   └── python_sandbox.py # Safe Python Execution
+│   ├── codesearch.py     # Code Search
+│   ├── mcp_client.py     # Model Context Protocol Client
+│   ├── linter.py         # Code Linting Tool
+│   ├── batch.py          # Parallel Tool Execution
+│   └── automation.py     # Automation Tool
 ├── workflows/
 │   ├── engine.py         # Workflow Execution Engine
 │   ├── selector.py       # Workflow Matching (Brain + Patterns)
@@ -760,7 +773,9 @@ vaf/
 │       ├── code_review.py
 │       ├── generate_docs.py
 │       ├── create_file.py
-│       └── web_lookup.py
+│       ├── create_document.py
+│       ├── legal_contract_research.py
+│       └── technical_doc_research.py
 └── main.py               # CLI Entry Point
 ```
 

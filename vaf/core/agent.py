@@ -1433,34 +1433,38 @@ class Agent:
         
         return False
 
-    def _check_language_mismatch(self, user_input: str, assistant_response: str) -> None:
+    def _check_language_mismatch(self, user_input: str, assistant_response: str) -> bool:
         """
         Check if the assistant responded in a different language than the user.
-        If mismatch detected, add a warning to history prompting the model to translate/reformulate.
+        If so, inject a system warning into history.
         
-        IMPORTANT: Intelligently ignores mismatches when the user likely requested a translation.
-        
-        This helps catch cases where the model ignores LANGUAGE_HINT and responds in English
-        when the user asked in Turkish, Spanish, etc.
+        Returns:
+            True if mismatch detected and correction requested, False otherwise.
         """
-        if not assistant_response or len(assistant_response.strip()) < 10:
-            return  # Too short to reliably detect
+        # ... (rest of implementation)
         
-        user_lang = self._detect_user_language(user_input)
-        response_lang = self._detect_user_language(assistant_response)
+        # Determine language (simplified check for common cases)
+        # Using langid for robust detection
+        try:
+            import langid
+            user_lang, _ = langid.classify(user_input)
+            response_lang, _ = langid.classify(assistant_response)
+        except ImportError:
+            # Fallback if langid missing
+            return False
         
         # Skip if either is "auto" (unclear) or if they match
         if user_lang == "auto" or response_lang == "auto":
-            return
+            return False
         if user_lang == response_lang:
-            return
+            return False
         
         # INTELLIGENT check: Did the user explicitly request a translation?
         # Uses existing language detection, no hardcoded words!
         if self._user_requested_translation(user_input, response_lang):
             # User likely requested a translation - that's OK
             # (Silently ignored - no debug output needed)
-            return
+            return False
         
         # Language names for friendly messages (comprehensive list for langid's 97 languages)
         language_names = {
@@ -1482,7 +1486,7 @@ class Agent:
             "kn": "Kannada", "gu": "Gujarati", "pa": "Punjabi", "ur": "Urdu",
             "ne": "Nepali", "si": "Sinhala", "ka": "Georgian",
             "hy": "Armenian", "az": "Azerbaijani", "kk": "Kazakh", "ky": "Kyrgyz",
-            "uz": "Uzbek", "mn": "Mongolian", "bo": "Tibetan",
+            "uz": "Oʻzbek", "mn": "Mongol", "bo": "Tibetan",
             # Middle Eastern & African languages
             "ar": "Arabic", "he": "Hebrew", "fa": "Persian", "ps": "Pashto",
             "sw": "Swahili", "am": "Amharic", "zu": "Zulu", "af": "Afrikaans",
@@ -1499,14 +1503,14 @@ class Agent:
             warning = (
                 f"[!] **Sprach-Mismatch erkannt**: Du hast auf {response_lang_name} geantwortet, "
                 f"aber der Nutzer spricht {user_lang_name}. "
-                f"Bitte übersetze deine Antwort sofort ins {user_lang_name} oder formuliere sie auf {user_lang_name} um."
+                f"Bitte übersetze deine Antwort sofort ins {user_lang_name}."
             )
         elif user_lang in language_names:
             # Try to generate a warning in the user's language (simple approach)
             warning = (
                 f"[!] **Language mismatch detected**: You responded in {response_lang_name}, "
                 f"but the user is speaking {user_lang_name}. "
-                f"Please translate your response immediately to {user_lang_name} or reformulate it in {user_lang_name}."
+                f"Please translate your response immediately to {user_lang_name}."
             )
         else:
             # Fallback: bilingual
@@ -1525,6 +1529,8 @@ class Agent:
         
         from vaf.cli.ui import UI
         UI.event("Language", f"Mismatch: User={user_lang_name}, Response={response_lang_name} - Auto-correction requested", style="warning")
+        
+        return True
 
     def _refresh_language_hint(self, user_input: str) -> None:
         """
@@ -3749,7 +3755,20 @@ class Agent:
             # Check for language mismatch: Did the model respond in a different language than the user?
             # This helps catch cases where LANGUAGE_HINT was ignored (e.g., user asks in Turkish, model responds in English)
             if not skip_input and user_input and history_content:
-                self._check_language_mismatch(user_input, history_content)
+                if self._check_language_mismatch(user_input, history_content):
+                    # Mismatch detected! The warning is already in history (as system msg).
+                    # Now we must REMOVE the bad response and RETRY immediately.
+                    
+                    # 1. Remove the bad response (it was just added)
+                    self.history.pop()  # Removes the assistant message
+                    
+                    # 2. Treat as a retry (reuses logic for patience/backoff if needed)
+                    empty_retry_count += 1
+                    
+                    UI.event("System", "Triggering immediate retry for language correction...", style="warning")
+                    
+                    # 3. Restart loop - model will see the system warning and try again
+                    continue
             
             # Context Management: Check after adding assistant response
             # Long reasoning phases can push us over the limit

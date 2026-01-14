@@ -127,8 +127,10 @@ O))         O))       O))))))))
         self.console.print()
     
     def logo_minimal(self):
-        """Display a minimal logo."""
+        """Show small VAF logo."""
+        shortcuts = f"[{self.muted}][bold]S[/bold] Settings  [bold]C[/bold] Model  [bold]L[/bold] Voice  [bold]T[/bold] Theme  [bold]H[/bold] History  [bold]?[/bold] Help  [bold]/exit[/bold] Quit[/{self.muted}]"
         self.console.print(f"[{self.primary} bold]文 VAF[/{self.primary} bold] [{self.muted}]• Veyllo Agentic Framework[/{self.muted}]")
+        self.console.print(shortcuts)
         self.console.print()
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -138,7 +140,7 @@ O))         O))       O))))))))
     def input_box(
         self, 
         prompt: str = "Message", 
-        placeholder: str = "Type your message...",
+        placeholder: str = "Type your message... (@ for files, / for commands, L + Enter for voice)",
         multiline: bool = False,
         check_for_auto_exit: bool = False
     ) -> Optional[str]:
@@ -156,7 +158,7 @@ O))         O))       O))))))))
                 self.all_commands = [
                     'exit', 'quit', 'q', 'clear', 'settings', 'model', 'help',
                     'session', 'theme', 'undo', 'history', 'export', 'tools',
-                    'restore', 'context', 'listen'  # Voice input
+                    'restore', 'context', 'listen', 'l'  # Voice input
                 ]
                 # Use FuzzyCompleter for better matching (finds "settings" when typing "s")
                 from prompt_toolkit.completion import FuzzyCompleter

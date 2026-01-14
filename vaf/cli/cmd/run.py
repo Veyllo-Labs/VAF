@@ -846,7 +846,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
             # Show input prompt for user
             user_input = tui.input_box(
                 prompt="Message",
-                placeholder="Type your message... (@ for files, / for commands)",
+                placeholder="Type your message... (@ for files, / for commands, L for voice)",
                 check_for_auto_exit=True  # Enable auto-exit when sub-agent results are ready
             )
             
@@ -980,6 +980,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
 **Keyboard Shortcuts:**
   S  - Open Settings
   C  - Change Model  
+  L  - Voice Input (STT)
   T  - Change Theme
   H  - Session History
   ?  - This Help

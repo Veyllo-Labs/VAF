@@ -191,6 +191,22 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 
 See `vaf/core/context.py` for the full implementation.
 
+### Context Protection & Retry Mechanism
+
+To ensure stability during long reasoning chains or network issues, VAF employs a robust retry mechanism with snapshot protection:
+
+1.  **Snapshots**: Before a retry attempt starts, the system records the current history length (`history_snapshot_len`).
+2.  **Automatic Reset**: If a response remains empty or breaks off, the history is **immediately** truncated back to this snapshot.
+3.  **No Error Accumulation**: The "failed" attempt (empty response or fragments) is **not** permanently stored. Each new iteration starts with a "clean" history.
+4.  **System Hint**: A short, invisible system hint is temporarily added (*"You didn't respond, please continue"*) to nudge the model. If this attempt also fails, this hint is removed upon the next reset, ensuring nothing "piles up".
+
+**New: Aggressive Cleanup (Early Warning)**
+At 15 retries, the system triggers an "Early Warning" cleanup:
+- Clears all intermediate history
+- Preserves **only** the original System Prompt and User Snapshot
+- Displays a gray status message: `Cleared: 8192 -> 400 Tokens | Snapshot preserved`
+- Ensures the original request is never lost, even during severe context overflows.
+
 ---
 
 ## Sub-Agents

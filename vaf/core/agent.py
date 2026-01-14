@@ -2038,7 +2038,7 @@ class Agent:
 
         # Localized messages
         msg_analyzing = "Step 1/2: Analyzing workflow match..."
-        msg_brain_matched_ui = "Brain matched: {name} (multi-language support!)"
+        msg_brain_matched_ui = "Selected: {name} (multi-language support!)"
         msg_extracting = "Extracting variables from user input..."
         msg_running_separate = "Running in separate terminal [Task: {task_id}]"
         msg_runs_independently = "[>] Workflow runs independently. Result will be reported when done."
@@ -2049,7 +2049,7 @@ class Agent:
         
         if lang == "de":
             msg_analyzing = "Schritt 1/2: Analysiere Workflow-Übereinstimmung..."
-            msg_brain_matched_ui = "Brain matched: {name} (Mehrsprachige Unterstützung!)"
+            msg_brain_matched_ui = "Ausgewählt: {name} (Mehrsprachige Unterstützung!)"
             msg_extracting = "Extrahiere Variablen aus Benutzereingabe..."
             msg_running_separate = "Läuft in separatem Terminal [Task: {task_id}]"
             msg_runs_independently = "[>] Workflow läuft unabhängig. Ergebnis wird gemeldet, wenn fertig."
@@ -2670,6 +2670,7 @@ class Agent:
             
             streaming_tools = {}
             tool_calls_detected = []
+            auto_continue = False  # Track if response was cut off
             
             # API Backend Path (OpenAI, Anthropic, DeepSeek, Google, OpenRouter)
             if self.api_backend:
@@ -2688,20 +2689,27 @@ class Agent:
                         stream=True,
                         tools=current_tools
                     ):
-                        # Handle tool calls (comes as JSON)
-                        if chunk.startswith("{") and ("tool_calls" in chunk or "tool_use" in chunk):
+                        # Handle JSON chunks (Tools or Finish Reason)
+                        if chunk.startswith("{"):
                             try:
-                                tool_data = json.loads(chunk)
-                                # Convert to compatible format (handled below)
-                                if "tool_calls" in tool_data:
-                                    for tc in tool_data["tool_calls"]:
+                                data = json.loads(chunk)
+                                
+                                # Handle Finish Reason (e.g. "length")
+                                if "finish_reason" in data:
+                                    if data["finish_reason"] == "length":
+                                        auto_continue = True
+                                        UI.event("System", "Response cut off - Auto-continuing...", style="dim")
+                                
+                                # Handle Tools
+                                elif "tool_calls" in data:
+                                    for tc in data["tool_calls"]:
                                         tool_calls_detected.append(tc)
-                                elif "tool_use" in tool_data:
+                                elif "tool_use" in data:
                                     # Anthropic format conversion
                                     tool_calls_detected.append({
                                         "function": {
-                                            "name": tool_data["tool_use"].get("name"),
-                                            "arguments": json.dumps(tool_data["tool_use"].get("input", {}))
+                                            "name": data["tool_use"].get("name"),
+                                            "arguments": json.dumps(data["tool_use"].get("input", {}))
                                         }
                                     })
                             except json.JSONDecodeError:
@@ -3542,13 +3550,92 @@ class Agent:
                 empty_retry_count += 1
                 
                 # ═══════════════════════════════════════════════════════════════
+                # PROACTIVE CONTEXT CLEARING (User Request: "1 verschen" -> 15 attempts)
+                # ═══════════════════════════════════════════════════════════════
+                if empty_retry_count == 15:
+                    # Calculate tokens before
+                    tokens_before, _ = self.get_token_usage()
+                    
+                    UI.event("System", f"Early Warning ({empty_retry_count}) - Aggressive Context Clearing...", style="dim")
+                    
+                    # Preservation Strategy:
+                    # 1. System Prompt (Index 0)
+                    # 2. Snapshot (User Prompt + First Thinking) - controlled by history_snapshot_len
+                    # 3. Last Message (System prompt injected at end of loop)
+                    
+                    # We want to clear the "middle" where the mess accumulates
+                    if len(self.history) > history_snapshot_len + 2:
+                        # Keep System Prompt + Snapshot (User Prompt)
+                        # history_snapshot_len points to where the NEW content started for this turn
+                        # We want to keep everything UP TO that snapshot point
+                        kept_history = self.history[:history_snapshot_len]
+                        
+                        # Add user input if it was added this turn (it's usually at history_snapshot_len)
+                        if len(self.history) > history_snapshot_len:
+                             kept_history.append(self.history[history_snapshot_len])
+                        
+                        # Force update
+                        self.history = kept_history
+                        
+                        # Calculate tokens after (estimate)
+                        tokens_after, _ = self.get_token_usage()
+                        
+                        UI.event("Context", f"Cleared: {tokens_before} -> {tokens_after} Tokens | Snapshot preserved", style="dim")
+                    else:
+                         UI.event("Context", "History already minimal - skipping clear.", style="dim")
+                
+                # ═══════════════════════════════════════════════════════════════
+                # PROACTIVE CONTEXT CLEARING (User Request: "1 verschen" -> 15 attempts)
+                # ═══════════════════════════════════════════════════════════════
+                if empty_retry_count == 15:
+                    # Calculate tokens before
+                    tokens_before, _ = self.get_token_usage()
+                    
+                    UI.event("System", f"Early Warning ({empty_retry_count}) - Aggressive Context Clearing...", style="dim")
+                    
+                    # Preservation Strategy:
+                    # 1. System Prompt (Index 0)
+                    # 2. Snapshot (User Prompt + First Thinking) - controlled by history_snapshot_len
+                    # 3. Last Message (System prompt injected at end of loop)
+                    
+                    # We want to clear the "middle" where the mess accumulates
+                    if len(self.history) > history_snapshot_len + 2:
+                        # Keep System Prompt + Snapshot (User Prompt)
+                        # history_snapshot_len points to where the NEW content started for this turn
+                        # We want to keep everything UP TO that snapshot point
+                        kept_history = self.history[:history_snapshot_len]
+                        
+                        # Add user input if it was added this turn (it's usually at history_snapshot_len)
+                        if len(self.history) > history_snapshot_len:
+                             kept_history.append(self.history[history_snapshot_len])
+                        
+                        # Force update
+                        self.history = kept_history
+                        
+                        # Calculate tokens after (estimate)
+                        tokens_after, _ = self.get_token_usage()
+                        
+                        UI.event("Context", f"Cleared: {tokens_before} -> {tokens_after} Tokens | Snapshot preserved", style="dim")
+                    else:
+                         UI.event("Context", "History already minimal - skipping clear.", style="dim")
+
+                # ═══════════════════════════════════════════════════════════════
                 # CONTEXT OVERFLOW DETECTION (Fix for Issue #VAF-CTX-001)
                 # ═══════════════════════════════════════════════════════════════
                 # If retry count exceeds 50 attempts, assume context overflow
                 # LLM cannot generate response because context is too full
                 MAX_RETRIES_BEFORE_EMERGENCY = 50
                 
-                if empty_retry_count >= MAX_RETRIES_BEFORE_EMERGENCY:
+                # Extended limits to allow for auto-clearing at 50
+                HARD_LIMIT = 70
+                
+                if empty_retry_count == MAX_RETRIES_BEFORE_EMERGENCY:
+                    UI.event("System", f"High retry count ({empty_retry_count}) - Triggering Emergency Context Clearing", style="bold yellow")
+                    # Force context management to reduce tokens
+                    self.manage_context()
+                    # Continue the loop to retry generation with reduced context
+                
+                elif empty_retry_count >= HARD_LIMIT:
                     UI.event("Emergency", f"Context overflow detected after {empty_retry_count} retries - emergency fallback!", style="warning")
                     
                     # Emergency fallback: Provide a SHORT summary instead of full response

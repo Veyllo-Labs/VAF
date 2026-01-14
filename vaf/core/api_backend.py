@@ -195,6 +195,11 @@ class APIBackendManager:
                                     if tool_calls:
                                         # For now, yield as JSON (agent will parse)
                                         yield json.dumps({"tool_calls": tool_calls})
+                                    
+                                    # Handle finish_reason
+                                    finish_reason = chunk["choices"][0].get("finish_reason")
+                                    if finish_reason:
+                                        yield json.dumps({"finish_reason": finish_reason})
                             except json.JSONDecodeError:
                                 continue
             else:
@@ -305,6 +310,15 @@ class APIBackendManager:
                                     block = chunk.get("content_block", {})
                                     if block.get("type") == "tool_use":
                                         yield json.dumps({"tool_use": block})
+                                
+                                # Handle stop reason
+                                elif chunk.get("type") == "message_delta":
+                                    delta = chunk.get("delta", {})
+                                    stop_reason = delta.get("stop_reason")
+                                    if stop_reason:
+                                        # Map to openai format for consistency
+                                        finish_reason = "length" if stop_reason == "max_tokens" else stop_reason
+                                        yield json.dumps({"finish_reason": finish_reason})
                             except json.JSONDecodeError:
                                 continue
             else:

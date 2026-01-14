@@ -11,33 +11,66 @@ O))         O))       O))))))))
       O))          O))O))     (OO ) 
 ```
 
-VAF is a comprehensive agent suite designed to transform LLMs like VQ-1 into autonomous powerhouses. It features a modular plug-and-play architecture, allowing you to extend agent capabilities with custom Python workflows. Built for Python 3.13, VAF offers a modern terminal UI, cross-platform support (Windows, Linux, macOS), session management, and powerful automation tools.
+VAF is a comprehensive agent suite designed to transform LLMs like VQ-1 into autonomous powerhouses. It features a modular plug-and-play architecture, allowing you to extend agent capabilities with custom Python workflows. Built for Python 3.10+, VAF offers a terminal UI, cross-platform support (Windows, Linux, macOS), session management, and powerful automation tools.
 
-## 🚀 Quick Install
+---
 
-**All Platforms:**
+## 📥 Installation & Setup
+
+### Prerequisites
+- **Python 3.10 or higher**
+- **pip** (Python package installer)
+- **Git** (for cloning the repository)
+
+Dependencies are automatically handled during installation.
+
+### 1. Clone & Install
+
+**All Platforms (Windows, macOS, Linux):**
 ```bash
+# Clone the repository
 git clone https://github.com/Veyllo-Labs/VAF.git
 cd VAF
+
+# Install in editable mode (recommended for developers)
 pip install -e .
 ```
 
-**Linux/macOS:**
-- The `vaf` command is usually available immediately after installation
-- If not found, add to PATH: `export PATH="$HOME/.local/bin:$PATH"` (add to `~/.bashrc` or `~/.zshrc` for persistence)
+### 2. Platform-Specific Setup
 
-**Windows:**
-- After installation, **restart your terminal** (PATH is updated automatically)
-- Or manually add to PATH: `%LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python.*\LocalCache\local-packages\Python*\Scripts`
-- Alternative: Use `python -m vaf` instead of `vaf`
+**🐧 Linux & 🍎 macOS:**
+The `vaf` command should be available immediately. If not found:
+1.  Check if `~/.local/bin` is in your PATH.
+2.  Add it permanently:
+    ```bash
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc  # or ~/.zshrc
+    source ~/.bashrc  # or ~/.zshrc
+    ```
+3.  *Alternative:* Install system-wide with `sudo pip install -e .`
 
-**Verify installation:**
+**🪟 Windows:**
+1.  After installation, **restart your terminal** to update the PATH.
+2.  If `vaf` is still not recognized, add the Python Scripts directory to your PATH:
+    - Path usually looks like: `%LOCALAPPDATA%\Programs\Python\Python31x\Scripts` or `%APPDATA%\Python\Python31x\Scripts`
+3.  *Alternative:* Run via Python module:
+    ```powershell
+    python -m vaf run
+    ```
+
+### 3. Verify Installation
 ```bash
 vaf --version
 ```
 
-See [Installation](#installation) below for detailed platform-specific instructions.
+### 4. Run VAF
+To start the interactive AI assistant, simply execute:
+```bash
+vaf run
+```
 
+*Note: If the `vaf` command is not found, you can use the fallback:* `python -m vaf run`
+
+---
 
 ## ✨ Highlights
 
@@ -51,14 +84,14 @@ See [Installation](#installation) below for detailed platform-specific instructi
 - 🛠️ **Powerful Tools** - Bash execution, web fetching, parallel operations
 - 🤖 **Sub-Agents** - Specialized agents for coding, research, and file navigation
 - 🚀 **Non-Interactive Mode** - Run one-shot prompts: `vaf prompt "..."` or `vaf run "..."`
-- 🔒 **Privacy-First** - Links open in incognito/private mode by default
+- 🔒 **Local-First & Privacy** - Zero data collection. All intelligence is processed locally on your hardware. Data only leaves your system if you explicitly use cloud APIs, external Workflows, or Tools (e.g., Web Search). Links open in incognito mode by default.
 - 📊 **Live Progress** - Real-time TUI for research and coding tasks
 
 ---
 
 ## Features
 
-### 🎨 Modern Terminal UI
+### 🎨 Python-based TUI
 
 Beautiful, modern terminal interface with input box, themes, and rich formatting.
 
@@ -590,42 +623,6 @@ vaf git log
 
 ---
 
-## Installation
-
-<a name="installation"></a>
-
-Install VAF globally to use the `vaf` command from anywhere (just like `git`, `npm`, or other CLI tools):
-
-```bash
-# Clone the repository
-git clone https://github.com/Veyllo-Labs/VAF.git
-cd VAF
-
-# Install globally (creates 'vaf' command)
-pip install -e .
-```
-
-**That's it!** After installation, you can use `vaf run` from any directory.
-
-### Platform-Specific Notes
-
-**Linux & macOS:**
-- Usually works immediately - pip automatically adds scripts to `~/.local/bin` (which is typically in PATH)
-- If `vaf` is not found, add to PATH: `export PATH="$HOME/.local/bin:$PATH"` (add to `~/.bashrc` or `~/.zshrc` for persistence)
-- Or install system-wide: `sudo pip install -e .` (installs to `/usr/local/bin`)
-
-**Windows:**
-- Scripts are installed to `%LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python.*\LocalCache\local-packages\Python*\Scripts`
-- You may need to restart your terminal or add the Scripts directory to PATH manually
-- Or use `python -m vaf` as an alternative
-
-### Why Global Installation?
-
-- ✅ **Works from anywhere** - No need to be in the VAF directory
-- ✅ **Standard practice** - This is how CLI tools are typically installed (like `git`, `npm`, `docker`)
-- ✅ **Easy updates** - Just run `pip install -e .` again to update
-- ✅ **No conflicts** - VAF is a standalone tool with no system conflicts
-
 ## Quick Start
 
 ```bash
@@ -847,15 +844,85 @@ WORKFLOW = {
 
 See `vaf/workflows/README.md` for complete documentation and examples.
 
+
+## System Architecture & Resource Management
+
+VAF uses an intelligent resource management system that adapts to your hardware capabilities:
+
+### 🎮 VRAM Detection & Parallelism
+The system automatically detects your available VRAM and calculates the memory cost for running agents.
+
+- **High VRAM Mode (Parallel):**
+  If your GPU has enough memory (`Model Size + 2x Context`), VAF runs the Main Agent and Sub-Agents in **parallel slots**. This is the fastest mode, allowing seamless background execution.
+
+- **Low VRAM Mode (Sequential):**
+  If VRAM is limited, VAF switches to **sequential execution**. The Main Agent pauses to free up resources, the Sub-Agent runs, and then the Main Agent resumes. This prevents Out-Of-Memory (OOM) crashes while still allowing full functionality on weaker hardware.
+
+### 🛡️ Context Isolation vs. Separation
+It is important to distinguish between **execution** (Parallel/Sequential) and **context** (Isolated):
+
+1.  **Execution (Hardware-dependent):** Decides *when* agents run (simultaneously or one after another) based on VRAM.
+2.  **Context (Architecture-guaranteed):** Regardless of VRAM, Sub-Agents **ALWAYS** run with their own isolated context.
+    - **Main Agent:** Keeps high-level plan and conversation history.
+    - **Sub-Agent:** Gets a fresh, task-specific context window.
+    - **Benefit:** Massive tasks (like reading 50 files) never pollute or overflow the Main Agent's context, ensuring long-term stability.
+
+## 🌐 API & Model Integration
+
+VAF is model-agnostic and supports both local privacy-first models and powerful cloud APIs.
+
+### 🤗 Hugging Face Integration
+VAF has built-in integration with Hugging Face for local GGUF models.
+- **Search & Download:** Directly from the CLI settings menu.
+- **Auto-GGUF:** Automatically filters for compatible GGUF quantized models.
+- **Zero Config:** Downloaded models are instantly available for selection.
+
+### ☁️ Cloud Providers
+Connect to leading AI providers for maximum performance:
+- **OpenAI** (GPT-4o, o1)
+- **Anthropic** (Claude 3.5 Sonnet)
+- **Google** (Gemini 1.5 Pro/Flash)
+- **DeepSeek** (DeepSeek-V3/R1)
+- **OpenRouter** (Access to Llama 3, Mistral, and 100+ others)
+
+### 🔄 Dynamic Switching
+Switch models instantly without restarting:
+- Press **`C`** in the main chat interface.
+- Use the slash command: `/model gpt-4o`
+- Configure defaults in **Settings (`S`)**.
+
+### ⚡ Sub-Agent Optimization
+You can configure **Sub-Agents** to use a different provider than the Main Agent.
+- **Example:** Use **Claude 3.5 Sonnet** for the Main Agent (high reasoning) and a fast **Local Model** for the Librarian (file reading) to save costs and latency.
+
 ## Version
 
 ```bash
 vaf --version
 ```
 
-## License
+## License & Usage
 
-MIT
+**VAF (Veyllo Agentic Framework)** is distributed under the **MIT License, modified with the Commons Clause v1.0**. See [LICENSE](LICENSE) for full terms.
+
+This means the software is source-available but carries specific restrictions on **selling VAF itself** or offering paid services whose value derives substantially from VAF.
+
+### ✅ You CAN:
+- Use VAF for any purpose (personal, commercial, academic).
+- Modify source code for your own use.
+- Distribute copies.
+- **Create and sell custom Workflows, Tools, or Plugins** built *on top of* VAF.
+- Build internal business solutions.
+
+### ❌ You CANNOT:
+- **Sell VAF as a standalone product or service** (including hardware embedding).
+- **Offer VAF as a hosted SaaS or cloud service**.
+- Create direct competing products based substantially on VAF's codebase.
+
+### 💼 Business & OEM Licensing
+For commercial use including hardware embedding, SaaS, or proprietary distribution:
+
+**Contact Veyllo GmbH** for Business/OEM licensing options.
 
 ---
 

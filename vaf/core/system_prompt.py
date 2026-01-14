@@ -18,6 +18,8 @@ class SystemPromptManager:
     Dynamically adjusts active modules based on conversation context.
     """
     
+    DECAY_START = 3  # Modules stay active for 3 turns after trigger
+    
     def __init__(self, tools: List[Any] = None, model_name: str = "VQ-1"):
         """
         Initialize the prompt manager with available tools and model name.
@@ -27,7 +29,7 @@ class SystemPromptManager:
             model_name: The name of the underlying AI model
         """
         self.tools = tools or []
-        self.active_modules: Dict[str, bool] = {}
+        self.active_modules: Dict[str, int] = {}  # module_name -> remaining_turns
         self.user_language: str = "auto"
         self.model_name = model_name
         
@@ -211,6 +213,13 @@ call web_search 2-3 times IN THE SAME RESPONSE! Don't use workflows or sub-agent
 - Use relative paths when possible
 - Check file existence before reading
 
+### 📂 Handling File Summaries (CRITICAL)
+If the user asks "Summarize this file", "What's in the file?", or "Check the results" after a workflow/sub-agent created a file:
+1.  **LOOK BACK** in the conversation history for file paths (e.g. "Output saved to: ...").
+2.  **CALL `read_file(path)`** immediately with that path.
+3.  **DO NOT ASK** the user for the path if it is visible in the context.
+4.  **DO NOT SAY** "I can't read files" or "I don't have access" - YOU HAVE THE `read_file` TOOL! USE IT!
+
 ### 🔍 Extracting File Paths from Context
 **CRITICAL:** When sub-agent results mention file paths, EXTRACT and USE them directly!
 
@@ -219,6 +228,7 @@ call web_search 2-3 times IN THE SAME RESPONSE! Don't use workflows or sub-agent
 - "Output: [path]"
 - "File: [path]"
 - "Ausgabe: [path]" (German)
+- "Output saved to: successfully to [path]"
 
 **Example:**
 ```
@@ -227,6 +237,7 @@ User: "Kannst du die Datei ansehen?"
 
 ✅ CORRECT: read_file("C:\\Users\\...\\report.html")
 ❌ WRONG: Ask user for file path (it's already in context!)
+❌ WRONG: Say "I can't read files"
 ```
 
 **Best Practice:** Look for the "🔗 EXTRACTED FILE PATHS" section in sub-agent results for ready-to-use paths!
@@ -390,8 +401,9 @@ Sub-agents run asynchronously - results arrive later
         # 3. ACTIVE MODULES
         # ═══════════════════════════════════════════════════════════════════════
         active_module_parts = []
-        for module_name, is_active in self.active_modules.items():
-            if is_active and module_name in self.modules:
+        # Sort for stable prompt order
+        for module_name in sorted(self.active_modules.keys()):
+            if module_name in self.modules:
                 active_module_parts.append(self.modules[module_name])
         
         if active_module_parts:
@@ -469,24 +481,33 @@ Use tools proactively to accomplish tasks. Don't ask for permission - just use t
         self.user_language = language
         user_lower = user_input.lower()
         
-        # Check each module's keywords
+        # 1. Decay existing modules
+        # We iterate over a list of keys because we might delete items
+        for module in list(self.active_modules.keys()):
+            self.active_modules[module] -= 1
+            if self.active_modules[module] <= 0:
+                del self.active_modules[module]
+        
+        # 2. Check keywords and activate/reset modules
         for module_name, keywords in self.module_keywords.items():
             # Activate module if any keyword is found
-            is_relevant = any(kw in user_lower for kw in keywords)
-            self.active_modules[module_name] = is_relevant
+            if any(kw in user_lower for kw in keywords):
+                # Reset counter to max
+                self.active_modules[module_name] = self.DECAY_START
     
     def get_active_modules(self) -> List[str]:
         """Get list of currently active module names."""
-        return [name for name, active in self.active_modules.items() if active]
+        return list(self.active_modules.keys())
     
     def activate_module(self, module_name: str) -> None:
         """Manually activate a module."""
         if module_name in self.modules:
-            self.active_modules[module_name] = True
+            self.active_modules[module_name] = self.DECAY_START
     
     def deactivate_module(self, module_name: str) -> None:
         """Manually deactivate a module."""
-        self.active_modules[module_name] = False
+        if module_name in self.active_modules:
+            del self.active_modules[module_name]
     
     def reset_modules(self) -> None:
         """Reset all modules to inactive."""

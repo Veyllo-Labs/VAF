@@ -90,6 +90,36 @@ def info():
     # Tip
     UI.print("\n[dim]To repair GPU support, run: 'vaf install-gpu'[/dim]")
 
+@app.command("about")
+def about():
+    """Show About / License information."""
+    UI.panel("文 VAF - Veyllo Agentic Framework", style="bold cyan")
+    
+    logo = """
+   O))         O))       O))))))))
+    O))       O))))      O))      
+     O))     O))  O))    O))      
+      O))   O))    O))   O))))))  
+       O)) O)) )))) O))  O))      
+        O))))        O)) O))      
+         O))          O))O))     (OO ) 
+    """
+    UI.print(f"[cyan]{logo}[/cyan]")
+    
+    UI.print(f"[bold]Version:[/bold] {importlib.metadata.version('vaf') if importlib.util.find_spec('vaf') else 'Dev'}")
+    UI.print("[bold]Copyright:[/bold] (c) 2026 Veyllo GmbH")
+    UI.print("[bold]Credits:[/bold] Built with ❤️ by Veyllo Labs")
+    UI.print()
+    
+    UI.print("[bold]License:[/bold]")
+    UI.print("Distributed under the [bold]MIT License, modified with the Commons Clause v1.0[/bold].")
+    UI.print("See [bold]LICENSE[/bold] file for full terms.")
+    UI.print()
+    
+    UI.print("[bold]Links:[/bold]")
+    UI.print("🌐 Website: https://vaf.ai")
+    UI.print("💻 GitHub:  https://github.com/Veyllo-Labs/VAF")
+
 @app.command("install-gpu")
 def install_gpu():
     """Force reinstall of GPU-accelerated dependencies."""

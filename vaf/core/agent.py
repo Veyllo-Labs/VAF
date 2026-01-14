@@ -1298,6 +1298,20 @@ class Agent:
         if not t:
             return "auto"
 
+        # 0. Context Persistence Check (Fix for Sub-Agent Errors)
+        # If this is a system error message (usually English), preserve the USER'S language context.
+        # Otherwise, the error "Sub-Agent failed..." makes the model switch to English.
+        is_system_error = (
+            "sub-agent failed" in t or
+            "error:" in t or
+            "[x] sub-agent" in t or
+            "task_id" in t
+        )
+        
+        if is_system_error and hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
+            # Return the previously detected user language instead of the error's language
+            return self.prompt_manager.user_language
+
         # Optional: if user has langid installed, use it to recognize many languages offline.
         # We keep this OPTIONAL (no hard dependency) to stay lightweight/cross-platform.
         # 1. Strong hardcoded markers (Fast & Accurate for specific context)
@@ -1663,13 +1677,11 @@ class Agent:
 
     def get_token_usage(self):
         """Calculates current token usage from history."""
-        # API Backend: Return message count instead of tokens
+        # API Backend: Return token usage (Input, Output)
         if self.api_backend:
-            # Count input/output messages (like a notebook)
-            user_msgs = sum(1 for m in self.history if m.get("role") == "user")
-            assistant_msgs = sum(1 for m in self.history if m.get("role") == "assistant")
-            # Return as (input_count, output_count) - will be displayed as In[X] Out[Y]
-            return user_msgs, assistant_msgs
+            # Return real token usage from API
+            usage = self.api_backend.session_usage
+            return usage["input_tokens"], usage["output_tokens"]
         
         # Simple approximation if server mode (1 char ~= 0.3 tokens)
         if self.use_server:

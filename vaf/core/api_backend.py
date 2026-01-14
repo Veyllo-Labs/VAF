@@ -160,6 +160,10 @@ class APIBackendManager:
             "stream": stream,
         }
         
+        # Enable usage reporting for streaming (OpenAI standard)
+        if stream:
+            payload["stream_options"] = {"include_usage": True}
+        
         # Add tools if provided (function calling)
         if tools:
             payload["tools"] = tools
@@ -200,6 +204,13 @@ class APIBackendManager:
                                     finish_reason = chunk["choices"][0].get("finish_reason")
                                     if finish_reason:
                                         yield json.dumps({"finish_reason": finish_reason})
+                                
+                                # Handle usage stats (last chunk)
+                                if "usage" in chunk:
+                                    usage = chunk["usage"]
+                                    self.session_usage["input_tokens"] += usage.get("prompt_tokens", 0)
+                                    self.session_usage["output_tokens"] += usage.get("completion_tokens", 0)
+                                    
                             except json.JSONDecodeError:
                                 continue
             else:
@@ -214,6 +225,12 @@ class APIBackendManager:
                     tool_calls = message.get("tool_calls")
                     if tool_calls:
                         yield json.dumps({"tool_calls": tool_calls})
+                
+                # Handle usage stats
+                if "usage" in data:
+                    usage = data["usage"]
+                    self.session_usage["input_tokens"] += usage.get("prompt_tokens", 0)
+                    self.session_usage["output_tokens"] += usage.get("completion_tokens", 0)
         
         except requests.exceptions.Timeout:
             UI.error(f"API request timed out for {self.provider}")
@@ -305,6 +322,24 @@ class APIBackendManager:
                                     if content:
                                         yield content
                                 
+                                # Handle usage stats (Anthropic)
+                                elif chunk.get("type") == "message_start":
+                                    # Input tokens are in message_start
+                                    usage = chunk.get("message", {}).get("usage", {})
+                                    self.session_usage["input_tokens"] += usage.get("input_tokens", 0)
+                                    
+                                elif chunk.get("type") == "message_delta":
+                                    # Output tokens are in message_delta
+                                    usage = chunk.get("usage", {})
+                                    self.session_usage["output_tokens"] += usage.get("output_tokens", 0)
+                                    
+                                    delta = chunk.get("delta", {})
+                                    stop_reason = delta.get("stop_reason")
+                                    if stop_reason:
+                                        # Map to openai format for consistency
+                                        finish_reason = "length" if stop_reason == "max_tokens" else stop_reason
+                                        yield json.dumps({"finish_reason": finish_reason})
+                                
                                 # Handle tool use
                                 elif chunk.get("type") == "content_block_start":
                                     block = chunk.get("content_block", {})
@@ -329,6 +364,12 @@ class APIBackendManager:
                             yield block.get("text", "")
                         elif block.get("type") == "tool_use":
                             yield json.dumps({"tool_use": block})
+                
+                # Handle usage stats
+                if "usage" in data:
+                    usage = data["usage"]
+                    self.session_usage["input_tokens"] += usage.get("input_tokens", 0)
+                    self.session_usage["output_tokens"] += usage.get("output_tokens", 0)
         
         except requests.exceptions.Timeout:
             UI.error(f"Anthropic API request timed out")
@@ -449,6 +490,9 @@ class APIBackendManager:
             response.raise_for_status()
             
             if stream:
+                # Track usage for this request (Google sends cumulative usage)
+                last_usage = None
+                
                 for line in response.iter_lines():
                     if line:
                         line = line.decode('utf-8')
@@ -456,6 +500,11 @@ class APIBackendManager:
                             data = line[6:]
                             try:
                                 chunk = json.loads(data)
+                                
+                                # Track usage
+                                if "usageMetadata" in chunk:
+                                    last_usage = chunk["usageMetadata"]
+                                
                                 if "candidates" in chunk and len(chunk["candidates"]) > 0:
                                     candidate = chunk["candidates"][0]
                                     if "content" in candidate:
@@ -480,8 +529,20 @@ class APIBackendManager:
                                                 yield tool_call_json
                             except json.JSONDecodeError:
                                 continue
+                
+                # Update session usage with final stats
+                if last_usage:
+                    self.session_usage["input_tokens"] += last_usage.get("promptTokenCount", 0)
+                    self.session_usage["output_tokens"] += last_usage.get("candidatesTokenCount", 0)
             else:
                 data = response.json()
+                
+                # Handle usage stats
+                if "usageMetadata" in data:
+                    usage = data["usageMetadata"]
+                    self.session_usage["input_tokens"] += usage.get("promptTokenCount", 0)
+                    self.session_usage["output_tokens"] += usage.get("candidatesTokenCount", 0)
+                
                 if "candidates" in data and len(data["candidates"]) > 0:
                     candidate = data["candidates"][0]
                     if "content" in candidate:

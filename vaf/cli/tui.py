@@ -5,6 +5,7 @@ Beautiful input box, panels, and interactive elements
 import os
 import sys
 import time
+import threading
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.text import Text
@@ -142,7 +143,8 @@ O))         O))       O))))))))
         prompt: str = "Message", 
         placeholder: str = "Type your message... (@ for files, / for commands, L + Enter for voice)",
         multiline: bool = False,
-        check_for_auto_exit: bool = False
+        check_for_auto_exit: bool = False,
+        wake_word_event: Optional[threading.Event] = None
     ) -> Optional[str]:
         """
         Modern input box with styling.
@@ -386,6 +388,11 @@ O))         O))       O))))))))
             """Returns status for live display - called every refresh_interval."""
             status = _get_subagent_status()
             
+            # Clean up ANSI codes from status (rich might inject them)
+            # prompt_toolkit doesn't support raw ANSI in FormattedText easily
+            import re
+            status = re.sub(r'\x1b\[[0-9;]*m', '', status)
+            
             # CRITICAL: Check for pending sub-agent results while waiting for input
             # If results are ready, auto-exit the prompt to process them
             if check_for_auto_exit:
@@ -415,10 +422,19 @@ O))         O))       O))))))))
                                     except:
                                         pass
                 except Exception as e:
-                    # Debug: Print error if auto-exit fails
-                    import sys
-                    print(f"\n[DEBUG] Auto-exit error: {e}", file=sys.stderr)
+                    pass
             
+            # Check for Wake Word Trigger
+            if wake_word_event and wake_word_event.is_set():
+                try:
+                    from prompt_toolkit import get_app
+                    app = get_app()
+                    if app and app.is_running:
+                        app.exit(result="__WAKE_WORD_TRIGGERED__")
+                        return FormattedText([('class:status-bar', '🎤 Wake Word Detected!')])
+                except:
+                    pass
+
             if status:
                 return FormattedText([('class:status-bar', status)])
             return FormattedText([])  # Empty when no status
@@ -445,36 +461,54 @@ O))         O))       O))))))))
             self._print_input_header(prompt)
             
             # Background thread for auto-exit when sub-agent results are ready
-            import threading
             exit_flag = threading.Event()
             
             def auto_exit_monitor():
                 """Monitor for sub-agent results and trigger auto-exit."""
-                if not check_for_auto_exit:
-                    return
-                
                 while not exit_flag.is_set():
-                    try:
-                        from vaf.core.subagent_ipc import get_ipc, get_current_session_id
-                        ipc = get_ipc()
-                        curr_sess = get_current_session_id()
-                        if curr_sess:
-                            res = ipc.get_pending_results(session_id=curr_sess)
-                            if res:
-                                # Results ready! Exit the prompt
-                                import time
-                                time.sleep(0.1)  # Small delay to ensure app is fully initialized
-                                try:
-                                    from prompt_toolkit import get_app
-                                    app = get_app()
-                                    if app and app.is_running:
-                                        app.exit(result="__AUTO_EXIT_FOR_SUBAGENT__")
-                                        return
-                                except:
-                                    pass
-                    except:
-                        pass
-                    exit_flag.wait(1.0)  # Check every second
+                    # 1. Check Sub-Agent Results
+                    if check_for_auto_exit:
+                        try:
+                            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+                            ipc = get_ipc()
+                            curr_sess = get_current_session_id()
+                            if curr_sess:
+                                res = ipc.get_pending_results(session_id=curr_sess)
+                                if res:
+                                    # Results ready! Exit the prompt
+                                    import time
+                                    time.sleep(0.1)  # Small delay to ensure app is fully initialized
+                                    try:
+                                        from prompt_toolkit import get_app
+                                        app = get_app()
+                                        if app and app.is_running:
+                                            app.exit(result="__AUTO_EXIT_FOR_SUBAGENT__")
+                                            return
+                                    except:
+                                        pass
+                        except:
+                            pass
+                    
+                    # 2. Check Wake Word (CRITICAL - must work reliably)
+                    if wake_word_event and wake_word_event.is_set():
+                        try:
+                            from prompt_toolkit.application import get_app
+                            app = get_app()
+                            if app and app.is_running:
+                                # CRITICAL FIX: Use thread-safe exit call!
+                                # app.exit() is NOT thread-safe. We must schedule it on the loop.
+                                if app.loop:
+                                    app.loop.call_soon_threadsafe(
+                                        lambda: app.exit(result="__WAKE_WORD_TRIGGERED__")
+                                    )
+                                else:
+                                    # Fallback (risky but better than nothing)
+                                    app.exit(result="__WAKE_WORD_TRIGGERED__")
+                                return
+                        except Exception:
+                            pass
+
+                    exit_flag.wait(0.1)  # Check every 0.1 seconds
             
             # Start monitoring thread
             monitor_thread = threading.Thread(target=auto_exit_monitor, daemon=True)
@@ -489,7 +523,7 @@ O))         O))       O))))))))
                     HTML(f'<style fg="{self.primary}">&gt;</style> '),
                     placeholder=HTML(f'<style fg="{self.muted}">{placeholder}</style>'),
                     rprompt=_get_live_toolbar,  # Live status on right side of input
-                    refresh_interval=1.0,  # Refresh every second
+                    refresh_interval=0.5,  # Refresh faster for responsiveness
                 )
             finally:
                 # Stop monitoring thread
@@ -499,6 +533,8 @@ O))         O))       O))))))))
             # Check if auto-exit was triggered
             if result == "__AUTO_EXIT_FOR_SUBAGENT__":
                 return ""  # Return empty string to signal auto-exit
+            elif result == "__WAKE_WORD_TRIGGERED__":
+                return "__WAKE_WORD_TRIGGERED__"
             
             # Learn from user input for better future suggestions
             if result:
@@ -1077,10 +1113,13 @@ class UI:
         # CRITICAL: Suppress Main Agent events if Coder TUI is active!
         # This prevents debug messages from breaking the active TUI layout
         try:
-            from vaf.tools.coder import CodingAgentTool
-            if CodingAgentTool._active_instance is not None:
-                return
-        except ImportError:
+            # Delayed import to avoid circular dependencies
+            import sys
+            if 'vaf.tools.coder' in sys.modules:
+                from vaf.tools.coder import CodingAgentTool
+                if hasattr(CodingAgentTool, '_active_instance') and CodingAgentTool._active_instance is not None:
+                    return
+        except Exception:
             pass
             
         color_map = {

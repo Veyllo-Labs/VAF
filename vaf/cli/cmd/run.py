@@ -781,12 +781,82 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
     # Start polling thread
     notifier_thread = threading.Thread(target=result_notifier, daemon=True)
     notifier_thread.start()
-    
+
+    # ═══════════════════════════════════════════════════════════════
+    # WAKE WORD DETECTION (Background) - 100% Local & Free
+    # ═══════════════════════════════════════════════════════════════
+    wake_word_manager = None
+    wake_word_detected_flag = threading.Event()
+
+    if agent.config.get("stt_wake_word_enabled", False):
+        try:
+            from vaf.core.speech import WakeWordManager
+            wake_word_manager = WakeWordManager.get_instance()
+
+            if wake_word_manager.is_available():
+                def on_wake_word_detected():
+                    """Callback when wake word is detected."""
+                    # DEBUG: Log that flag is being set
+                    try:
+                        with open("C:\\Users\\mert1\\wake_word_debug.log", "a") as f:
+                            import datetime
+                            f.write(f"{datetime.datetime.now()}: Callback: Setting wake_word_detected_flag...\n")
+                    except:
+                        pass
+
+                    wake_word_detected_flag.set()
+
+                    # DEBUG: Confirm flag was set
+                    try:
+                        with open("C:\\Users\\mert1\\wake_word_debug.log", "a") as f:
+                            f.write(f"  Flag is_set: {wake_word_detected_flag.is_set()}\n")
+                    except:
+                        pass
+
+                wake_word_manager.start_listening(on_wake_word_detected)
+                # Wake word active - shown in status bar, no need for message
+            else:
+                tui.warning("Wake Word enabled but dependencies missing. Install: pip install openwakeword pyaudio")
+        except Exception as e:
+            tui.warning(f"Wake Word setup failed: {e}")
+
     # Interactive loop
     while True:
         try:
             # Note: Sub-agent status now shown in live toolbar (updates every second)
             
+            # 0. Check for Wake Word Trigger (Early Check - before input box)
+            if wake_word_detected_flag.is_set():
+                # DEBUG: Log early detection
+                try:
+                    with open("C:\\Users\\mert1\\wake_word_debug.log", "a") as f:
+                        import datetime
+                        f.write(f"{datetime.datetime.now()}: Early check detected wake word! Starting STT...\n")
+                except:
+                    pass
+
+                wake_word_detected_flag.clear()
+
+                # CRITICAL: Stop TTS before starting STT
+                try:
+                    from vaf.core.speech import get_speech_manager
+                    sm = get_speech_manager()
+                    sm.stop()
+                except Exception:
+                    pass
+
+                # Give user feedback that wake word was heard
+                tui.console.print("🎤 [bold green]Wake word detected![/] Starting voice input...\n")
+
+                # Start listening UI immediately
+                captured = tui.listen_overlay()
+                if captured:
+                    tui.event("User (Voice)", captured, style="normal")
+                    _process_agent_message(agent, captured, tui, current_session)
+
+                # Loop back immediately to skip normal input prompt
+                continue
+
             # CHECK FOR SUB-AGENT RESULTS before showing input prompt
             # This prevents unnecessary wait for user input when results are ready
             found_results = _check_subagent_results(tui, agent)
@@ -842,14 +912,36 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                 # After processing results, the conversation flow continues
                 # Fall through to show input prompt for user's next message
                 tui.console.print()
-            
+
             # Show input prompt for user
             user_input = tui.input_box(
                 prompt="Message",
-                placeholder="Type your message... (@ for files, / for commands, L for voice)",
-                check_for_auto_exit=True  # Enable auto-exit when sub-agent results are ready
+                placeholder="Type your message... (@ for files, / for commands, L + Enter for voice)",
+                check_for_auto_exit=True,  # Enable auto-exit when sub-agent results are ready
+                wake_word_event=wake_word_detected_flag
             )
             
+            # Handle Wake Word Trigger (Auto-Exit from Input Box)
+            if user_input == "__WAKE_WORD_TRIGGERED__":
+                wake_word_detected_flag.clear()
+                
+                # CRITICAL: Stop TTS before starting STT
+                try:
+                    from vaf.core.speech import get_speech_manager
+                    sm = get_speech_manager()
+                    sm.stop()
+                except Exception:
+                    pass
+
+                # Start listening UI immediately
+                captured = tui.listen_overlay()
+                if captured:
+                    tui.event("User (Voice)", captured, style="normal")
+                    _process_agent_message(agent, captured, tui, current_session)
+                
+                # Loop back immediately to skip normal input prompt logic
+                continue
+
             # CRITICAL: Check again for sub-agent results AFTER user input
             # (in case results arrived while user was typing)
             immediate_results = _check_subagent_results(tui, agent)
@@ -1233,6 +1325,10 @@ Created: {current_session.created_at}
                     continue
                 
                 elif cmd in ("listen", "l"):
+                    # Clear any pending wake word trigger to prevent "ghost" activations later
+                    if 'wake_word_detected_flag' in locals() and wake_word_detected_flag.is_set():
+                        wake_word_detected_flag.clear()
+
                     # CRITICAL: Stop TTS before starting STT to prevent interference
                     try:
                         from vaf.core.speech import get_speech_manager
@@ -1287,6 +1383,11 @@ Created: {current_session.created_at}
         except KeyboardInterrupt:
             tui.newline()
             if tui.confirm("Exit?"):
+                # Stop wake word listener if running
+                if wake_word_manager and wake_word_manager.is_listening():
+                    wake_word_manager.stop_listening()
+                    tui.event("WakeWord", "Stopped listening", style="dim")
+
                 _handle_exit(tui, session_mgr, current_session)
                 break
         except Exception as e:
@@ -1307,8 +1408,12 @@ Created: {current_session.created_at}
             except Exception:
                 # If logging fails, just print traceback
                 traceback.print_exc()
-    
+
     # Cleanup
+    # Stop wake word listener if still running
+    if wake_word_manager and wake_word_manager.is_listening():
+        wake_word_manager.stop_listening()
+
     agent.shutdown()
     tui.print(f"\n[{tui.muted}]Goodbye![/{tui.muted}]")
 
@@ -1412,7 +1517,7 @@ def _process_agent_message(agent, user_input: str, tui, session):
         used, total = agent.get_token_usage()
         if agent.api_backend:
             # For API: show as In[X] Out[Y]
-            tui.console.print(f"[dim]Conversation: In[{used}] Out[{total}][/dim]", justify="right")
+            tui.console.print(f"[dim]Tokens: In: {used:,} | Out: {total:,}[/dim]", justify="right")
         else:
             # For local: show as token progress bar
             tui.progress_bar(used, total, label="Tokens")
@@ -1590,7 +1695,7 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
                     # Show Usage Bar (or message count for API)
                     used, total = agent.get_token_usage()
                     if agent.api_backend:
-                        UI.console.print(f"[dim]                      Conversation: In[{used}] Out[{total}][/dim]", justify="right")
+                        UI.console.print(f"[dim]                      Tokens: In: {used:,} | Out: {total:,}[/dim]", justify="right")
                         UI.print()
                     else:
                         UI.print_usage_bar(used, total)
@@ -1652,7 +1757,7 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
         used, total = agent.get_token_usage()
         if agent.api_backend:
             # For API: show as In[X] Out[Y]
-            UI.console.print(f"[dim]                      Conversation: In[{used}] Out[{total}][/dim]", justify="right")
+            UI.console.print(f"[dim]                      Tokens: In: {used:,} | Out: {total:,}[/dim]", justify="right")
             UI.print()
         else:
             # For local: show as token progress bar

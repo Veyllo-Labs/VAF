@@ -473,14 +473,14 @@ class CoderTUI:
                 last_match = matches[-1]
                 start_idx = last_match.end()
                 language = last_match.group(1) or "text"
-                
+
                 code_content = full_text[start_idx:].strip()
-                
+
                 # Only show if substantial content
                 if len(code_content) > 20:
                     self.active_code_preview = {
                         "filename": "Generating...",
-                        "content": code_content,
+                        "content": code_content,  # Will auto-scroll if > 40 lines
                         "language": language,
                         "timestamp": time.time()  # Always fresh
                     }
@@ -506,10 +506,11 @@ class CoderTUI:
                 
                 if code_score >= 2:
                     # Heuristic match! Show as code preview
-                    # Try to capture from start of potential code
+                    # Show recent part (auto-scroll to end)
+                    recent_text = full_text[-2000:]  # Capture more context for scrolling
                     self.active_code_preview = {
                         "filename": "Generating (detected)...",
-                        "content": full_text[-800:], # Show recent part
+                        "content": recent_text,
                         "language": detected_lang,
                         "timestamp": time.time()
                     }
@@ -526,27 +527,38 @@ class CoderTUI:
                 else:
                     content = self.active_code_preview["content"]
                     lines = content.split('\n')
-                    
-                    if len(lines) > 100:
-                        # Show last 100 lines
-                        start_line = len(lines) - 100 + 1
-                        display_content = f"... ({start_line-1} lines above)\n" + '\n'.join(lines[-100:])
+
+                    # AUTO-SCROLL: Show last 25 lines for live generation view
+                    # This keeps the view focused on what's currently being generated
+                    MAX_VISIBLE_LINES = 25
+
+                    if len(lines) > MAX_VISIBLE_LINES:
+                        # Show last N lines (auto-scroll to bottom)
+                        start_line = len(lines) - MAX_VISIBLE_LINES + 1
+                        skipped_lines = len(lines) - MAX_VISIBLE_LINES
+                        display_content = f"... ({skipped_lines} lines above)\n" + '\n'.join(lines[-MAX_VISIBLE_LINES:])
                     else:
                         start_line = 1
                         display_content = content
                     
                     syntax = Syntax(
-                        display_content, 
-                        self.active_code_preview["language"], 
-                        theme="monokai", 
+                        display_content,
+                        self.active_code_preview["language"],
+                        theme="monokai",
                         line_numbers=True,
                         start_line=start_line,
                         word_wrap=True
                     )
-                    
+
+                    # Show auto-scroll indicator in title if content is scrolled
+                    title_text = f"📝 Editing: {self.active_code_preview['filename']}"
+                    if len(lines) > MAX_VISIBLE_LINES:
+                        # Add scroll indicator to show we're auto-scrolling
+                        title_text += f" [dim](showing last {MAX_VISIBLE_LINES} lines)[/dim]"
+
                     preview_panel = Panel(
                         syntax,
-                        title=f"[bold yellow]📝 Editing: {self.active_code_preview['filename']}[/bold yellow]",
+                        title=f"[bold yellow]{title_text}[/bold yellow]",
                         border_style="yellow",
                         padding=(1, 2),
                         width=WIDTH
@@ -1959,6 +1971,25 @@ Thumbs.db
                 tui.append_stream(f"[WARN] Template selection failed: {str(e)[:50]} - continuing without template")
                 template_type, decision_info = None, f"Template selection failed - will create from scratch"
             
+            # ═══════════════════════════════════════════════════════════════════
+            # FALLBACK: Keyword-Based Template Detection
+            # ═══════════════════════════════════════════════════════════════════
+            # If LLM returned None, but task clearly matches a template, force it!
+            # This prevents workflow instructions from confusing the LLM
+            if not template_type:
+                task_lower = task.lower()
+                # Check for clear template indicators
+                if any(kw in task_lower for kw in ['website', 'webseite', 'webpage', 'homepage', 'web page', 'landing page']):
+                    template_type = "website"
+                    decision_info += "\n\n[FALLBACK] Keyword detection overrode LLM decision"
+                    decision_info += "\nDetected keywords: website/webseite → Forcing 'website' template"
+                    tui.append_stream("[FALLBACK] Keyword match detected → Forcing 'website' template")
+                elif any(kw in task_lower for kw in ['python script', 'python skript', '.py script']):
+                    template_type = "python_script"
+                    decision_info += "\n\n[FALLBACK] Keyword detection overrode LLM decision"
+                    decision_info += "\nDetected keywords: python script → Forcing 'python_script' template"
+                    tui.append_stream("[FALLBACK] Keyword match detected → Forcing 'python_script' template")
+
             # Output detailed decision process
             # CRITICAL: Force immediate update to show template selection
             tui.append_stream("─" * 60)
@@ -1967,7 +1998,7 @@ Thumbs.db
                 if line.strip():
                     tui.append_stream(f"  {line}")
             tui.append_stream("─" * 60)
-            
+
             if template_type:
                 tui.append_stream(f"[OK] Selected template: {template_type}")
             else:
@@ -2028,12 +2059,122 @@ Thumbs.db
             
             tui.append_stream(f"{len(template_files)} template files")
             # append_stream() now triggers live.update() automatically via callback
-        
+
+        # ═══════════════════════════════════════════════════════════════════
+        # GUIDED TEMPLATE MODE - Helper Functions
+        # ═══════════════════════════════════════════════════════════════════
+
+        def generate_guided_todos(template_files: list, task_description: str) -> list:
+            """
+            Generate ACTION-ORIENTED step-by-step todos for template modification.
+            Each task is concrete and action-focused, not vague.
+            This creates a "rail-guided" workflow that even 4B models can follow.
+            """
+            todos = []
+
+            # Extract key info from task for better context
+            task_short = task_description[:80] if len(task_description) > 80 else task_description
+
+            for tf in template_files:
+                fname = os.path.basename(tf)
+
+                # Task 1: Read (concrete action)
+                todos.append(f"Call read_file to read {fname} and identify all {{{{PLACEHOLDERS}}}}")
+
+                # Task 2: Replace (concrete action with context)
+                if fname.endswith('.html'):
+                    todos.append(f"Call write_file to replace placeholders in {fname} with content for: {task_short}")
+                elif fname.endswith('.css'):
+                    todos.append(f"Call write_file to update styles in {fname} if needed for: {task_short}")
+                elif fname.endswith('.js'):
+                    todos.append(f"Call write_file to update JavaScript in {fname} if needed for: {task_short}")
+                else:
+                    todos.append(f"Call write_file to update {fname} with content for: {task_short}")
+
+            # Final verification step (concrete action)
+            todos.append(f"Call read_file to verify all placeholders are replaced with real content")
+
+            return todos
+
+        def create_guided_task_prompt(task_idx: int, task_description: str, template_file: str, user_task: str) -> str:
+            """
+            Generate ultra-simple, step-by-step prompt for template tasks.
+            Uses concrete examples instead of abstract rules.
+            """
+            fname = os.path.basename(template_file)
+
+            # Match new action-oriented task format
+            if "Call read_file to read" in task_description:
+                return f"""🎯 ACTION-FOCUSED GUIDED MODE - You MUST use tools!
+
+## TASK: {task_description}
+
+**Main Goal:** {user_task}
+
+**ACTION STEPS - DO NOW:**
+1. Call: `read_file(path="{template_file}")`
+2. Identify {{{{PLACEHOLDERS}}}} (like {{{{BUSINESS_NAME}}}}, {{{{TITLE}}}})
+3. Call: `task_done(summary="Read {fname}")`
+
+**NO THINKING - JUST DO IT!**
+Tools: read_file, task_done"""
+
+            elif "Call write_file to replace" in task_description or "Call write_file to update" in task_description:
+                return f"""🎯 ACTION-FOCUSED GUIDED MODE - You MUST use tools!
+
+## TASK: {task_description}
+
+**Main Goal:** {user_task}
+
+**ACTION STEPS - DO NOW:**
+1. Replace ALL {{{{PLACEHOLDERS}}}} with content for: "{user_task}"
+2. Call: `write_file(path="{template_file}", content="[FULL content]")`
+3. Call: `task_done(summary="Updated {fname}")`
+
+**TEMPLATE PRESERVATION (CRITICAL):**
+✅ ONLY replace {{{{PLACEHOLDER}}}} text
+✅ KEEP ALL tags (<div>, <section>, <nav>)
+✅ KEEP ALL class/ID names
+❌ NO structure changes!
+
+**Example:**
+Before: `<div class="logo">{{{{NAME}}}}</div>`
+After:  `<div class="logo">Hair Salon</div>` ✅
+NOT:    `<h1>Hair Salon</h1>` ❌ (changed tag!)
+
+**NO THINKING - CALL WRITE_FILE NOW!**
+Tools: write_file, read_file, task_done"""
+
+            elif "verify" in task_description.lower() or "Call read_file to verify" in task_description:
+                return f"""🎯 ACTION-FOCUSED GUIDED MODE - Final Verification!
+
+## TASK: {task_description}
+
+**Main Goal:** {user_task}
+
+**ACTION STEPS - DO NOW:**
+1. Call `read_file(path="...")` for EACH file
+2. Check: ALL {{{{PLACEHOLDERS}}}} replaced?
+3. Check: Structure intact?
+4. Call: `task_done(summary="Verified")`
+
+**Files to check:**
+{chr(10).join(['- ' + os.path.basename(tf) for tf in template_files])}
+
+**NO THINKING - READ FILES NOW!**
+Tools: read_file, task_done"""
+
+            else:
+                # Fallback for any other task
+                return f"""You are working on task: {task_description}
+
+**Tools available:** read_file, write_file, task_done"""
+
         # ═══════════════════════════════════════════════════════════════════
         # Animation thread is already started immediately after live.start()
         # No need to start it again here
         # ═══════════════════════════════════════════════════════════════════
-        
+
         def stop_live():
             """Stop live display cleanly."""
             animation_running.clear()
@@ -2110,6 +2251,13 @@ All file paths must be OS-independent (use forward slashes or Path objects).
 ## YOUR GOAL
 Complete this task: "{task}"
 
+## 🎯 ACTION-FIRST PHILOSOPHY
+**YOU ARE A DOER, NOT A TALKER!**
+- EVERY response MUST include at least ONE tool call (read_file, write_file, task_done, etc.)
+- Explaining what you'll do WITHOUT doing it = FAILURE
+- Short thinking → Immediate action → Results
+- If you find yourself writing long explanations, STOP and use tools instead!
+
 ## CRITICAL WORKFLOW (MUST FOLLOW):
 1. **RESEARCH** (optional): Use `web_search` if you need docs/examples BEFORE planning.
 2. **PLAN**: Call `set_todos` with a list of specific steps.
@@ -2118,24 +2266,43 @@ Complete this task: "{task}"
 5. **FINISH**: Call `task_done` ONLY after you've actually written files with `write_file`.
 
 **CRITICAL RULES:**
+- **ACTION REQUIRED**: Every response MUST contain at least one tool call - no exceptions!
 - **IMPORTANT**: If you use `web_search` for research, you MUST then call `set_todos` immediately - do not loop searches!
 - You MUST call `write_file` before calling `task_done` - no exceptions!
 - Thinking about code or describing code is NOT enough - you must actually create files.
 - DO NOT call `task_done` without first calling `write_file` for the current task.
 - Work on ONE task at a time, complete it fully, then move to the next.
-"""        
-        # Build user message with STRONG emphasis on set_todos first
-        user_msg = f"Task: {task}\n\n"
-        if template_files:
-            user_msg += "⚠️ TEMPLATE FILES EXIST! You MUST:\n"
-            user_msg += "1. Call `set_todos` FIRST with your task breakdown\n"
-            user_msg += "2. Then call `read_file` to read each template file\n"
-            user_msg += "3. Then call `write_file` to modify (not replace) each file\n\n"
+- **REMEMBER YOUR TASK**: You are working on: "{task}" - keep this in mind with every action!
+"""
+        # ═══════════════════════════════════════════════════════════════════
+        # GUIDED TEMPLATE MODE - Auto-Generate TODOs
+        # ═══════════════════════════════════════════════════════════════════
+        # If templates exist, we automatically generate step-by-step tasks
+        # This creates a "rail-guided" workflow that even small models can follow
+
+        guided_mode = bool(template_files)  # Flag for later use
+
+        if guided_mode:
+            # AUTO-GENERATE todos for template mode
+            auto_todos = generate_guided_todos(template_files, task)
+            tui.append_stream(f"[GUIDED MODE] Auto-generated {len(auto_todos)} step-by-step tasks")
+
+            # Build simplified user message for guided mode
+            user_msg = f"Task: {task}\n\n"
+            user_msg += "✅ GUIDED TEMPLATE MODE ACTIVATED!\n\n"
+            user_msg += "I've prepared a step-by-step guide with specific tasks for you.\n"
+            user_msg += "Each task tells you EXACTLY what to do - just follow the instructions.\n\n"
+            user_msg += f"**Your tasks ({len(auto_todos)} steps):**\n"
+            for i, todo in enumerate(auto_todos):
+                user_msg += f"{i+1}. {todo}\n"
+            user_msg += "\n**START NOW with Task 1.**\n"
+            user_msg += "The system prompt will give you detailed instructions for each step."
         else:
+            # NORMAL MODE - LLM must plan
+            user_msg = f"Task: {task}\n\n"
             user_msg += "⚠️ IMPORTANT: Your FIRST action MUST be to call `set_todos` with your task breakdown!\n"
             user_msg += "You CANNOT use write_file or other tools until you've set your TODO list.\n\n"
-        
-        user_msg += "Start now by calling `set_todos` with your task breakdown (as many tasks as needed)."
+            user_msg += "Start now by calling `set_todos` with your task breakdown (as many tasks as needed)."
         
         # ═══════════════════════════════════════════════════════════════
         # HIERARCHICAL CONTEXT STRUCTURE
@@ -2161,12 +2328,24 @@ Complete this task: "{task}"
             {"role": "user", "content": user_msg}
         ]
 
-        # Initialize Main ContextState
+        # Initialize Main ContextState (needed before switch_to_task_context)
         current_state = ContextState(
             context_manager=main_context_manager,
             history=main_history,
             phase="main"
         )
+
+        # ═══════════════════════════════════════════════════════════════════
+        # GUIDED MODE: Auto-set TODOs and immediately switch to Task 1
+        # ═══════════════════════════════════════════════════════════════════
+        guided_mode_skipped_planning = False
+        if guided_mode:
+            # Automatically set the generated TODOs
+            task_mgr.set_todos(auto_todos)
+            tui.append_stream(f"[GUIDED MODE] TODOs automatically set ({len(auto_todos)} tasks)")
+            tui.append_stream(f"[GUIDED MODE] Skipping planning phase - switching to Task 1")
+            # Set flag to skip the planning phase in main loop
+            guided_mode_skipped_planning = True
 
         # Backup for rollback on errors
         last_stable_state = current_state.clone()
@@ -2382,11 +2561,29 @@ The following files were already created from a template:
 **If you remove template structure, write_file will be BLOCKED!**
 """
             
-            # Rebuild system prompt with current state
-            # IMPORTANT: Keep task-context prompts SMALL to avoid n_ctx overflow.
-            # The agent may have more tools available locally, but task execution should
-            # only advertise the minimal tool set required to complete the task.
-            fresh_system_prompt = f"""You are a Senior software developer Sub-agent.
+            # ═══════════════════════════════════════════════════════════════════
+            # GUIDED MODE: Use Ultra-Simple Task-Specific Prompts
+            # ═══════════════════════════════════════════════════════════════════
+            if guided_mode:
+                # Use the simplified, step-by-step prompts for guided mode
+                # This maps to the specific template file for this task
+                file_idx = task_idx // 2  # Each file gets 2 tasks (read, replace)
+                if file_idx < len(template_files):
+                    template_file = template_files[file_idx]
+                else:
+                    template_file = template_files[0]  # Fallback to first file
+
+                fresh_system_prompt = create_guided_task_prompt(task_idx, current_task, template_file, task)
+                fresh_user_msg = f"Start working on this task now. Follow the exact steps in the system prompt."
+            else:
+                # ═══════════════════════════════════════════════════════════════════
+                # NORMAL MODE: Use Complex Full System Prompt
+                # ═══════════════════════════════════════════════════════════════════
+                # Rebuild system prompt with current state
+                # IMPORTANT: Keep task-context prompts SMALL to avoid n_ctx overflow.
+                # The agent may have more tools available locally, but task execution should
+                # only advertise the minimal tool set required to complete the task.
+                fresh_system_prompt = f"""You are a Senior software developer Sub-agent.
 
 ## PROJECT DIRECTORY
 `{base_dir}`
@@ -2410,9 +2607,9 @@ All files must be saved inside this directory.
 - **CRITICAL**: After `web_search`, immediately use the results to call `write_file` - DO NOT just think or plan
 - When finished, call `task_done(summary="...")`
 """
-            
-            # Build user message for this specific task (ONLY current task, not entire list)
-            fresh_user_msg = f"""## YOUR CURRENT TASK (Task {task_idx + 1})
+
+                # Build user message for this specific task (ONLY current task, not entire list)
+                fresh_user_msg = f"""## YOUR CURRENT TASK (Task {task_idx + 1})
 
 **Task:** {current_task}
 
@@ -2424,14 +2621,14 @@ All files must be saved inside this directory.
 - Focus ONLY on completing the task above
 - Use the necessary tools (read_file, write_file, etc.) to complete it
 - When finished, call `task_done(summary="...")` to mark it complete"""
-            
-            if template_files:
-                fresh_user_msg += f"\n\n⚠️ TEMPLATE FILES EXIST! You MUST:\n"
-                fresh_user_msg += f"1. Call `read_file` to read each template file BEFORE modifying\n"
-                fresh_user_msg += f"2. Call `write_file` to modify (not replace) each file\n"
-                fresh_user_msg += f"3. Preserve ALL template structure (sections, functions, classes, imports, etc.)"
-            
-            fresh_user_msg += "\n\nStart working on this task now."
+
+                if template_files:
+                    fresh_user_msg += f"\n\n⚠️ TEMPLATE FILES EXIST! You MUST:\n"
+                    fresh_user_msg += f"1. Call `read_file` to read each template file BEFORE modifying\n"
+                    fresh_user_msg += f"2. Call `write_file` to modify (not replace) each file\n"
+                    fresh_user_msg += f"3. Preserve ALL template structure (sections, functions, classes, imports, etc.)"
+
+                fresh_user_msg += "\n\nStart working on this task now."
             
             # Create fresh history (only system + user, no old history)
             task_history = [
@@ -2462,7 +2659,62 @@ All files must be saved inside this directory.
 
         def get_tools_schema_for_context(is_main_context: bool) -> List[Dict]:
             """Get tools schema based on context type. Enforces strict phase separation."""
-            
+
+            # ═══════════════════════════════════════════════════════════════════
+            # GUIDED MODE TOOL RESTRICTION
+            # ═══════════════════════════════════════════════════════════════════
+            # In guided mode with templates, restrict tools to minimal set
+            # This prevents small models from getting confused by too many options
+            if guided_mode and bool(task_mgr.todos) and not is_main_context:
+                # GUIDED EXECUTION: Only these 3 tools
+                return [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "description": "Read a file to see its content.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"path": {"type": "string"}},
+                                "required": ["path"]
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "write_file",
+                            "description": "Write content to a file. Keep the structure intact, only replace placeholders.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {"type": "string", "description": f"Absolute path (use {base_dir}/)"},
+                                    "content": {"type": "string", "description": "Complete file content"}
+                                },
+                                "required": ["path", "content"]
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "task_done",
+                            "description": "Mark current task as complete and move to next task.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "summary": {"type": "string", "description": "Brief summary"}
+                                },
+                                "required": ["summary"]
+                            }
+                        }
+                    }
+                ]
+
+            # ═══════════════════════════════════════════════════════════════════
+            # NORMAL MODE (No guided template mode)
+            # ═══════════════════════════════════════════════════════════════════
+
             # Common tools (Research/Read-only) available in both phases
             common_tools = [
                 {
@@ -2490,7 +2742,7 @@ All files must be saved inside this directory.
                     }
                 }
             ]
-            
+
             if is_main_context:
                 # PLANNING PHASE: ONLY set_todos + read tools
                 # write_file and task_done are HIDDEN to force planning
@@ -2749,11 +3001,28 @@ All files must be saved inside this directory.
                     )
             except Exception:
                 pass
-            
+
+            # ═══════════════════════════════════════════════════════════════
+            # GUIDED MODE: Skip planning phase and go directly to Task 1
+            # ═══════════════════════════════════════════════════════════════
+            if guided_mode_skipped_planning:
+                tui.append_stream("[GUIDED MODE] Switching to Task 1 context immediately")
+                first_task = task_mgr.get_current_task()
+                if first_task:
+                    # Switch to Task 1 context
+                    success = switch_to_task_context(0, first_task)
+                    if success:
+                        sync_legacy_vars()  # Update legacy variables
+                        tui.append_stream(f"[GUIDED MODE] Now executing: {first_task[:50]}")
+                    else:
+                        tui.append_stream("[WARN] Failed to switch to Task 1 - continuing in planning mode")
+                # Clear flag so we don't do this again
+                guided_mode_skipped_planning = False
+
             # Initialize write_file tracking for this loop (will be updated if write_file is called)
             if loop.loop_count > len(recent_loop_write_files):
                 recent_loop_write_files.append(False)
-            
+
             # Check if we should continue
             should_continue, reason = loop.should_continue()
             if not should_continue:
@@ -2806,7 +3075,20 @@ All files must be saved inside this directory.
                 sync_legacy_vars()
             tui.set_action(f"Loop {loop.loop_count}")
             live.update(tui.render())
-            
+
+            # ═══════════════════════════════════════════════════════════════
+            # PROACTIVE AUTO-EXIT CHECK - Break immediately if all tasks done
+            # ═══════════════════════════════════════════════════════════════
+            if task_mgr and task_mgr.is_all_done():
+                tui.append_stream("🎉 [AUTO-EXIT] All tasks completed!")
+                _trace(f"[AUTO-EXIT] Loop {loop.loop_count}: is_all_done=True, breaking immediately")
+                try:
+                    if lg:
+                        lg.event("auto_exit", loop=loop.loop_count, reason="all_tasks_done_proactive_check")
+                except Exception:
+                    pass
+                break
+
             # ═══════════════════════════════════════════════════════════════
             # LLM REQUEST
             # ═══════════════════════════════════════════════════════════════
@@ -4301,37 +4583,103 @@ All files must be saved inside this directory.
             # These checks ensure the agent doesn't skip work!
             # ═══════════════════════════════════════════════════════════════
             
-            # Idle Detection: Force tool usage if stuck in thinking loop
+            # ═══════════════════════════════════════════════════════════════
+            # ACTION-REQUIRED MODE: Idle Detection with Task-Context Preservation
+            # ═══════════════════════════════════════════════════════════════
+            # Track loops without tool calls and force action while preserving task context
+
             if not tool_calls:
                 idle_loop_count += 1
             else:
                 idle_loop_count = 0
-            
+
             # Update TUI with Idle Status
             tui.set_action(f"Thinking... (Idle: {idle_loop_count})")
-            
-            if idle_loop_count >= 3:
-                # Escalation Strategy
-                if idle_loop_count == 3:
-                    nudge_msg = "⚠️ You are thinking too much. You MUST use a tool in the next step."
-                else:
-                    nudge_msg = f"🛑 SYSTEM OVERRIDE (Idle {idle_loop_count}): STOP THINKING. CALL `write_file` or `task_done` IMMEDIATELY."
 
-                # Inject as USER message for higher priority attention
+            # Get current task context for better nudging
+            current_task_context = ""
+            if task_mgr and task_mgr.todos:
+                current_task = task_mgr.get_current_task()
+                if current_task:
+                    current_task_context = f"\n\n**Your current task:** {current_task}\n**Main goal:** {task}"
+            else:
+                current_task_context = f"\n\n**Main goal:** {task}"
+
+            if idle_loop_count >= 3:
+                # ESCALATION STRATEGY with Task-Context Preservation
+                if idle_loop_count == 3:
+                    nudge_msg = f"""⚠️ ACTION REQUIRED!
+
+You've been thinking for {idle_loop_count} loops without using any tools.
+{current_task_context}
+
+**YOU MUST take action NOW:**
+- Call `write_file` to create/update files
+- Call `read_file` to check existing code
+- Call `task_done` if the current task is complete
+
+STOP THINKING. START DOING."""
+
+                elif idle_loop_count == 5:
+                    nudge_msg = f"""🚨 FINAL WARNING (Idle: {idle_loop_count})
+
+You are STUCK in analysis paralysis!
+{current_task_context}
+
+**IMMEDIATE ACTION REQUIRED:**
+1. If you need to write code → Call `write_file` NOW
+2. If task is done → Call `task_done` NOW
+3. If you need info → Call `read_file` NOW
+
+DO NOT respond with more text. ONLY use tools."""
+
+                else:
+                    nudge_msg = f"""🛑 SYSTEM OVERRIDE (Idle: {idle_loop_count})
+
+STOP ALL THINKING IMMEDIATELY.
+{current_task_context}
+
+**MANDATORY:** Your next response MUST contain a tool call.
+No explanations. No planning. Just ACTION.
+
+Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
+
+                # Inject as SYSTEM message for maximum authority while preserving context
                 history.append({
-                    "role": "user",
+                    "role": "system",
                     "content": nudge_msg
                 })
-                
-                tui.set_action(f"⚠️ FORCING TOOL CALL (Idle: {idle_loop_count})")
-                _trace(f"Triggered Aggressive Idle Nudge (Count: {idle_loop_count})")
-                
-                # If we hit 10 idle loops, restart the context completely (Soft Reset)
-                if idle_loop_count >= 10:
-                     _trace("Idle limit reached (10). Forcing context reset.")
-                     # Clear conversation history but keep system prompt
-                     history = [history[0]] + [{"role": "user", "content": "You were stuck. Please check your TODOs and create the missing files now."}]
-                     idle_loop_count = 0 # Reset counter after nuclear option
+
+                # Update context state
+                current_state.history = history
+                context_states[current_state.phase] = current_state
+
+                tui.set_action(f"⚠️ FORCING ACTION (Idle: {idle_loop_count})")
+                _trace(f"Triggered Action-Required Mode (Count: {idle_loop_count}, Task: {current_task_context[:100]})")
+
+                # If we hit 8 idle loops, force context compression with task reminder
+                if idle_loop_count >= 8:
+                    _trace("Idle limit critical (8). Compressing context with task reminder.")
+                    # Keep system prompt + task reminder + last 3 messages
+                    system_msgs = [m for m in history if m.get("role") == "system"]
+                    recent_msgs = history[-3:] if len(history) > 3 else []
+
+                    history = system_msgs[:1] + [
+                        {
+                            "role": "system",
+                            "content": f"""🔄 CONTEXT RESET - You were stuck in thinking loops.
+
+{current_task_context}
+
+**RESET:** Start fresh but remember your goal.
+**ACTION:** Call tools immediately - no more thinking!"""
+                        }
+                    ] + recent_msgs
+
+                    # Update context state
+                    current_state.history = history
+                    context_states[current_state.phase] = current_state
+                    idle_loop_count = 0  # Reset counter after compression
 
             # Initialize flags to prevent NameError
             has_task_done = False
@@ -4790,6 +5138,7 @@ All files must be saved inside this directory.
                     elif task_mgr.is_all_done():
                         result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
                         tui.append_stream("🎉 All tasks done (auto-complete)!")
+                        break  # Exit loop - all tasks completed
                     else:
                         result = "✅ Task auto-completed. Continue with remaining work."
 
@@ -5302,7 +5651,19 @@ All files must be saved inside this directory.
                             'ensure', 'make sure', 'überprüfen', 'testen', 'prüfen'
                         ])
 
-                        if not has_files and write_file_calls_in_session == 0:
+                        # TEMPLATE MODE: Extra strict - Check if this is a "Read" task
+                        is_read_only_task = any(kw in task_lower for kw in [
+                            'read and understand', 'read file', 'analyze', 'review existing',
+                            'lesen und verstehen', 'datei lesen'
+                        ])
+
+                        # CRITICAL: If current_task is None (out of bounds), skip file checks
+                        # This happens when current_task_idx exceeds the number of tasks
+                        # In this case, we should allow task_done to proceed to trigger the "all done" logic
+                        if current_task is None:
+                            # Out of bounds - allow task_done to proceed
+                            tui.append_stream("[DEBUG] current_task is None - allowing task_done to check is_all_done()")
+                        elif not has_files and write_file_calls_in_session == 0:
                             # No write_file calls at all - BLOCK task_done
                             current = task_mgr.get_current_task()
                             result = (
@@ -5316,20 +5677,40 @@ All files must be saved inside this directory.
                                 f"2. Then call task_done again\n"
                             )
                             tui.append_stream(f"❌ task_done REJECTED - No files in this context!")
-                        elif not has_files and not is_non_file_task:
+                        elif not has_files and not is_non_file_task and not is_read_only_task:
                             # Files exist globally, but not in this context
-                            # AND this is not a verify/test task
+                            # AND this is not a verify/test/read-only task
                             current = task_mgr.get_current_task()
-                            result = (
-                                f"[bold yellow]WARNING: NO FILES FOR THIS TASK![/]\n\n"
-                                f"Task: '{current}'\n\n"
-                                f"You have created {len(files_created)} files total, but NONE in this task context.\n\n"
-                                f"**Action required:**\n"
-                                f"1. Call write_file to create files for THIS specific task\n"
-                                f"2. Complete the task by actually writing the code\n"
-                                f"3. Then call task_done again\n"
-                            )
-                            tui.append_stream(f"⚠️ task_done WARNING - No files for current task!")
+
+                            # TEMPLATE MODE: Extra strict validation
+                            if guided_mode and template_files:
+                                result = (
+                                    f"🚨 [bold red]TASK INCOMPLETE - NO ACTION TAKEN![/]\n\n"
+                                    f"Task: '{current}'\n\n"
+                                    f"**TEMPLATE MODE VIOLATION:**\n"
+                                    f"You have NOT called write_file for this specific task.\n"
+                                    f"Total files in project: {len(files_created)}\n"
+                                    f"Files created in THIS task: {len(current_state.files_created)}\n\n"
+                                    f"**MANDATORY ACTION:**\n"
+                                    f"1. Call `write_file` to update/create files for: '{current}'\n"
+                                    f"2. Actually implement the changes described in the task\n"
+                                    f"3. Then call `task_done` again\n\n"
+                                    f"⚠️ In Template Mode, EVERY task must result in file modifications!\n"
+                                    f"**Remember your main goal:** {task}"
+                                )
+                                tui.append_stream(f"❌ task_done BLOCKED - Template Mode requires write_file per task!")
+                            else:
+                                result = (
+                                    f"[bold yellow]WARNING: NO FILES FOR THIS TASK![/]\n\n"
+                                    f"Task: '{current}'\n\n"
+                                    f"You have created {len(files_created)} files total, but NONE in this task context.\n\n"
+                                    f"**Action required:**\n"
+                                    f"1. Call write_file to create files for THIS specific task\n"
+                                    f"2. Complete the task by actually writing the code\n"
+                                    f"3. Then call task_done again\n\n"
+                                    f"**Remember your main goal:** {task}"
+                                )
+                                tui.append_stream(f"⚠️ task_done WARNING - No files for current task!")
                         else:
                             # Files were created in this context - allow task_done
                             # Continue with normal task_done logic below
@@ -5740,49 +6121,60 @@ All files must be saved inside this directory.
                                         break
                                 if main_file:
                                     break
-                                
-                                # CRITICAL FIX: Mark task as completed!
-                                summary = fn_args.get("summary", "done")
-                                task_mgr.complete_current_task(summary)
-                                # Run linter for files of this task (if supported types)
-                                _run_linter_for_files(files_for_current_task or files_created, history, self.local_tools)
-                                next_task = task_mgr.get_current_task()
-                                
-                                tui.append_stream(f"Completed: {current[:40] if current else 'task'}")
-                                tui.set_action(f"{task_mgr.get_progress()}")
-                                
-                                # ═══════════════════════════════════════════════════════════════
-                                # TASK CHECKPOINTING (The Glue) - Archive old context
-                                # ═══════════════════════════════════════════════════════════════
-                                # Before switching, compress/archive the current task's history
-                                # This ensures we don't lose the "lessons learned" but free up tokens
-                                current_context_manager.compress(history)
-                                
-                                # ═══════════════════════════════════════════════════════════════
-                                # CREATE FRESH CONTEXT FOR NEW TASK - Isolated context per task
-                                # ═══════════════════════════════════════════════════════════════
-                                if next_task:
-                                    # Build summary of completed work for context continuity
-                                    completed_info = "\n".join([f"- {t['task']}: {t.get('result', 'done')}" for t in task_mgr.todos if t['status'] == 'completed'])
-                                    
-                                    # Create completely fresh context for the new task
-                                    # This isolates each task with its own ContextManager and history
-                                    task_idx = task_mgr.current_task_idx
-                                    current_context_manager, history = create_fresh_context_for_task(task_idx, next_task, completed_info)
-                                    history_snapshot_len = len(history)  # Update snapshot for new context
-                                    tui.append_stream(f"🔄 Fresh context created for Task {task_idx + 1}: {next_task[:40]}")
-                                
-                                if next_task:
-                                    result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
-                                    tui.append_stream(f"Next: {next_task[:40]}")
-                                elif task_mgr.is_all_done():
-                                    result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
-                                    tui.append_stream("All tasks done!")
-                                else:
-                                    result = "✅ Task completed. Continue with remaining work."
+
+                            # CRITICAL FIX: Mark task as completed!
+                            # This code runs AFTER the for loop, regardless of whether main_file was found
+                            summary = fn_args.get("summary", "done")
+                            task_mgr.complete_current_task(summary)
+                            # Run linter for files of this task (if supported types)
+                            _run_linter_for_files(files_for_current_task or files_created, history, self.local_tools)
+                            next_task = task_mgr.get_current_task()
+
+                            tui.append_stream(f"Completed: {current[:40] if current else 'task'}")
+                            tui.set_action(f"{task_mgr.get_progress()}")
+
+                            # ═══════════════════════════════════════════════════════════════
+                            # TASK CHECKPOINTING (The Glue) - Archive old context
+                            # ═══════════════════════════════════════════════════════════════
+                            # Before switching, compress/archive the current task's history
+                            # This ensures we don't lose the "lessons learned" but free up tokens
+                            current_context_manager.compress(history)
+
+                            # ═══════════════════════════════════════════════════════════════
+                            # CREATE FRESH CONTEXT FOR NEW TASK - Isolated context per task
+                            # ═══════════════════════════════════════════════════════════════
+                            if next_task:
+                                # Build summary of completed work for context continuity
+                                completed_info = "\n".join([f"- {t['task']}: {t.get('result', 'done')}" for t in task_mgr.todos if t['status'] == 'completed'])
+
+                                # Create completely fresh context for the new task
+                                # This isolates each task with its own ContextManager and history
+                                task_idx = task_mgr.current_task_idx
+                                current_context_manager, history = create_fresh_context_for_task(task_idx, next_task, completed_info)
+                                history_snapshot_len = len(history)  # Update snapshot for new context
+                                tui.append_stream(f"🔄 Fresh context created for Task {task_idx + 1}: {next_task[:40]}")
+
+                            if next_task:
+                                result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
+                                tui.append_stream(f"Next: {next_task[:40]}")
+                            elif task_mgr.is_all_done():
+                                result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
+                                tui.append_stream("All tasks done!")
+                                break  # Exit loop - all tasks completed
+                            else:
+                                result = "✅ Task completed. Continue with remaining work."
                         else:
                             # Non-file task or no files created yet - allow completion
                             summary = fn_args.get("summary", "done")
+
+                            # CRITICAL FIX: Check if all tasks are done BEFORE trying to complete
+                            # This handles the case where current_task_idx is out of bounds
+                            if task_mgr.current_task_idx >= len(task_mgr.todos) and task_mgr.is_all_done():
+                                result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
+                                tui.append_stream("🎉 [EARLY-EXIT] All tasks completed!")
+                                _log_to_file(f"[DEBUG-X] Early exit: task_idx {task_mgr.current_task_idx} >= {len(task_mgr.todos)}, all done")
+                                break  # Exit loop immediately - all tasks completed
+
                             task_mgr.complete_current_task(summary)
                             _run_linter_for_files(files_for_current_task, history, self.local_tools)
                             next_task = task_mgr.get_current_task()
@@ -5816,6 +6208,7 @@ All files must be saved inside this directory.
                             elif task_mgr.is_all_done():
                                 result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
                                 tui.append_stream("🎉 All tasks done!")
+                                break  # Exit loop - all tasks completed
                             else:
                                 result = "✅ Task completed. Continue with remaining work."
                 

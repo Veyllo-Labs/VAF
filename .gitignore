@@ -6,6 +6,14 @@ models/**/*.onnx.json
 vaf/models/**/*.gguf
 vaf/models/**/*.gguf.*
 
+# openWakeWord Models (License restriction: CC BY-NC-SA 4.0 - Do NOT commit!)
+**/*_v0.1.onnx
+**/hey_jarvis*.onnx
+**/alexa*.onnx
+**/hey_mycroft*.onnx
+**/hey_rhasspy*.onnx
+**/timer*.onnx
+
 # Cache und temporäre Dateien
 models/.cache/
 __pycache__/

@@ -801,6 +801,107 @@ def subagent_provider_menu():
     UI.console.input("\n[dim]Press Enter to continue...[/dim]")
 
 
+def voice_settings_menu():
+    """Configure Voice / STT / Wake Word settings."""
+    while True:
+        UI.clear()
+        
+        stt_enabled = bool(Config.get("speech_stt_enabled", False))
+        wake_word_enabled = bool(Config.get("stt_wake_word_enabled", False))
+        current_wake_word = Config.get("stt_wake_word", "hey_jarvis")
+
+        # Check openWakeWord availability
+        try:
+            import openwakeword
+            has_wake_word = True
+        except ImportError:
+            has_wake_word = False
+
+        UI.panel(f"STT: {'ON' if stt_enabled else 'OFF'} | Wake Word: {'ON' if wake_word_enabled else 'OFF'} ({current_wake_word})",
+                 title="🎤 Voice Settings (100% Local & Free)", style="highlight")
+
+        choices = [
+            (f"Speech-to-Text (STT) [{'ON' if stt_enabled else 'OFF'}]", 'toggle_stt'),
+            ("Select Microphone", 'mic'),
+            ("Select Input Language", 'lang'),
+            ("─────────────────", None),
+        ]
+
+        if has_wake_word:
+            choices.extend([
+                (f"Wake Word Detection (Auto Mode) [{'ON' if wake_word_enabled else 'OFF'}]", 'toggle_wake'),
+                (f"Select Wake Word (Current: {current_wake_word})", 'select_wake'),
+            ])
+        else:
+            choices.append(("[dim]Wake Word (Install openwakeword first)[/dim]", None))
+            
+        choices.extend([
+            ("─────────────────", None),
+            ("Back", "back")
+        ])
+        
+        questions = [inquirer.List('action', message="Voice Options", choices=choices)]
+        answers = inquirer.prompt(questions)
+        
+        if not answers or answers['action'] == 'back':
+            break
+            
+        action = answers['action']
+        
+        if action == 'toggle_stt':
+            new_val = not stt_enabled
+            Config.set("speech_stt_enabled", new_val)
+            UI.event("Settings", f"STT {'enabled' if new_val else 'disabled'}", style="success")
+            
+        elif action == 'mic':
+            try:
+                from vaf.core.speech import get_speech_manager
+                mics = get_speech_manager().list_microphones()
+                if not mics:
+                    UI.error("No microphones found.")
+                else:
+                    mic_choices = [(f"{i}: {name}", i) for i, name in enumerate(mics)]
+                    mic_choices.append(("Cancel", None))
+                    q = [inquirer.List('mic', message="Select Microphone", choices=mic_choices)]
+                    ans = inquirer.prompt(q)
+                    if ans and ans['mic'] is not None:
+                        # ans['mic'] is already the index (from the tuple value)
+                        idx = ans['mic']
+                        get_speech_manager().set_microphone(idx)
+                        UI.success(f"Microphone set to index {idx}")
+            except Exception as e:
+                UI.error(f"Error: {e}")
+                
+        elif action == 'lang':
+            lang_choices = [
+                ("English (US)", "en-US"), ("German (DE)", "de-DE"), ("Turkish (TR)", "tr-TR"),
+                ("French (FR)", "fr-FR"), ("Spanish (ES)", "es-ES"), ("Chinese (CN)", "zh-CN"),
+                ("Russian (RU)", "ru-RU"), ("Italian (IT)", "it-IT"), ("Cancel", None)
+            ]
+            q = [inquirer.List('lang', message="Select Input Language", choices=lang_choices)]
+            ans = inquirer.prompt(q)
+            if ans and ans['lang']:
+                Config.set("speech_language", ans['lang'])
+                UI.success(f"Language set to: {ans['lang']}")
+                
+        elif action == 'toggle_wake':
+            new_val = not wake_word_enabled
+            Config.set("stt_wake_word_enabled", new_val)
+            UI.event("Settings", f"Wake Word {'enabled' if new_val else 'disabled'}", style="success")
+
+        elif action == 'select_wake':
+            # Available openWakeWord models (free & local)
+            from vaf.core.speech import WakeWordManager
+            keywords = WakeWordManager.get_instance().get_available_models()
+            q = [inquirer.List('kw', message="Select Wake Word Model", choices=keywords)]
+            ans = inquirer.prompt(q)
+            if ans and ans['kw']:
+                Config.set("stt_wake_word", ans['kw'])
+                UI.success(f"Wake Word set to: {ans['kw']}")
+            
+        time.sleep(0.5)
+
+
 def show_about():
     UI.clear()
     
@@ -893,22 +994,18 @@ def main_menu(agent=None):
         separate_terminals = bool(Config.get("sub_agents_in_separate_terminals", True))
         timeout_enabled = bool(Config.get("subagent_timeout_enabled", True))
         timeout_minutes = int(Config.get("subagent_timeout_minutes", 120))
-        
+
+        # UX labels
+        links_label = f"🔗 Auto-Open Links [{'ON' if auto_links else 'OFF'}]"
+        outputs_label = f"📄 Auto-Open Outputs [{'ON' if auto_outputs else 'OFF'}] (max {max_tabs})"
+        terminals_label = f"💻 Separate Terminals [{'ON' if separate_terminals else 'OFF'}]"
+        timeout_label = f"⏱️ Sub-Agent Timeout [{'ON' if timeout_enabled else 'OFF'}] ({timeout_minutes}m)"
+
         # Speech toggles
         tts_enabled = bool(Config.get("speech_tts_enabled", False))
-        stt_enabled = bool(Config.get("speech_stt_enabled", False))
-        
-        links_label = f"UX: Auto-open browser links [{'ON' if auto_links else 'OFF'}] (max {max_tabs})"
-        outputs_label = f"UX: Auto-open output folders/files [{'ON' if auto_outputs else 'OFF'}]"
-        terminals_label = f"Sub-Agents: Run in separate terminals [{'ON' if separate_terminals else 'OFF'}]"
-        timeout_label = f"Sub-Agents: Timeout [{'ON - ' + str(timeout_minutes) + ' min' if timeout_enabled else 'OFF'}]"
-        
         tts_label = f"🔊 Speech Output (TTS) [{'ON' if tts_enabled else 'OFF'}]"
-        stt_label = f"🎤 Speech Input (STT) [{'ON' if stt_enabled else 'OFF'}]"
-        mic_label = "   ↳ Select Microphone" if stt_enabled else None
-        
-        current_lang = Config.get("speech_language", "en-US")
-        lang_label = f"   ↳ Speech Language: {current_lang}" if stt_enabled else None
+
+        voice_label = "🎤 Voice / STT / Wake Word Settings"
         
         # Get automation count
         try:
@@ -963,12 +1060,8 @@ def main_menu(agent=None):
             (terminals_label, 'separate_terminals'),
             (timeout_label, 'subagent_timeout'),
             (tts_label, 'speech_tts'),
-            (stt_label, 'speech_stt'),
+            (voice_label, 'voice_menu'),
         ])
-        
-        if stt_enabled:
-            menu_choices.append((mic_label, 'speech_mic'))
-            menu_choices.append((lang_label, 'speech_lang'))
             
         menu_choices.extend([
             (auto_label, 'automations'),
@@ -994,46 +1087,8 @@ def main_menu(agent=None):
         if action is None:  # Separator
             continue
         
-        if action == 'speech_lang':
-            lang_choices = [
-                ("English (US)", "en-US"),
-                ("German (DE)", "de-DE"),
-                ("Turkish (TR)", "tr-TR"),
-                ("French (FR)", "fr-FR"),
-                ("Spanish (ES)", "es-ES"),
-                ("Chinese (CN)", "zh-CN"),
-                ("Russian (RU)", "ru-RU"),
-                ("Italian (IT)", "it-IT"),
-                ("Cancel", None)
-            ]
-            q = [inquirer.List('lang', message="Select Input Language", choices=lang_choices)]
-            ans = inquirer.prompt(q)
-            
-            if ans and ans['lang']:
-                Config.set("speech_language", ans['lang'])
-                UI.success(f"Speech language set to: {ans['lang']}")
-                time.sleep(1.0)
-        
-        if action == 'speech_mic':
-            try:
-                from vaf.core.speech import get_speech_manager
-                mics = get_speech_manager().list_microphones()
-                if not mics:
-                    UI.error("No microphones found.")
-                else:
-                    mic_choices = [(f"{i}: {name}", i) for i, name in enumerate(mics)]
-                    mic_choices.append(("Cancel", None))
-                    
-                    q = [inquirer.List('mic', message="Select Microphone", choices=mic_choices)]
-                    ans = inquirer.prompt(q)
-                    
-                    if ans and ans['mic'] is not None:
-                        get_speech_manager().set_microphone(ans['mic'])
-                        UI.success(f"Microphone set to: {mics[ans['mic']]}")
-                        time.sleep(1.0)
-            except Exception as e:
-                UI.error(f"Error listing microphones: {e}")
-                time.sleep(2.0)
+        if action == 'voice_menu':
+            voice_settings_menu()
         
         if action == 'speech_tts':
             new_val = not tts_enabled
@@ -1047,13 +1102,6 @@ def main_menu(agent=None):
                     get_speech_manager().speak("Speech output enabled.")
                 except ImportError:
                     UI.warning("Speech libraries not installed. Run: pip install pyttsx3")
-            time.sleep(1.0)
-            
-        if action == 'speech_stt':
-            new_val = not stt_enabled
-            Config.set("speech_stt_enabled", new_val)
-            status = "enabled" if new_val else "disabled"
-            UI.event("Settings", f"Speech-to-Text (STT) {status}", style="success")
             time.sleep(1.0)
             
         if action == 'provider':

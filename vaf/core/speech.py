@@ -801,3 +801,201 @@ $player.Close()
 
 def get_speech_manager() -> SpeechManager:
     return SpeechManager.get_instance()
+
+
+class WakeWordManager:
+    """
+    Manages "Wake Word" detection using openWakeWord (100% local & free).
+    Runs in a background thread and triggers a callback when the keyword is detected.
+
+    Available wake words: hey_jarvis, alexa, hey_mycroft, hey_rhasspy
+    """
+    _instance = None
+    _lock = threading.Lock()
+
+    def __init__(self):
+        self.config = Config.load()
+        self.oww_model = None
+        self.audio_stream = None
+        self._is_listening = False
+        self._thread = None
+        self._stop_event = threading.Event()
+        self._callback = None
+        
+        # Ensure models are downloaded (fixes NO_SUCHFILE error)
+        if self.is_available():
+            try:
+                import openwakeword.utils
+                # This ensures default models (hey_jarvis etc.) are in the package dir
+                openwakeword.utils.download_models()
+            except Exception:
+                pass  # Ignore download errors (offline mode or already exists)
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
+
+    def is_available(self) -> bool:
+        """Check if openWakeWord dependencies are available."""
+        try:
+            import openwakeword
+            import pyaudio
+            return True
+        except ImportError:
+            return False
+
+    def get_available_models(self) -> list:
+        """Get list of available wake word models."""
+        return [
+            "hey_jarvis",
+            "alexa",
+            "hey_mycroft",
+            "hey_rhasspy",
+            "timer"  # Can also be used
+        ]
+
+    def start_listening(self, callback):
+        """
+        Start listening for the wake word in a background thread.
+
+        Args:
+            callback: Function to call when wake word is detected.
+        """
+        if self._is_listening:
+            return
+
+        if not self.is_available():
+            UI.warning("Wake Word requires 'openwakeword' and 'pyaudio'. Install: pip install openwakeword pyaudio")
+            return
+
+        self._callback = callback
+        self._stop_event.clear()
+        self._is_listening = True
+
+        self._thread = threading.Thread(target=self._listen_loop, daemon=True)
+        self._thread.start()
+
+    def stop_listening(self):
+        """Stop the background listening thread."""
+        if not self._is_listening:
+            return
+
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+
+        self._is_listening = False
+        self._cleanup()
+
+    def is_listening(self) -> bool:
+        return self._is_listening
+
+    def _cleanup(self):
+        """Release resources."""
+        if self.audio_stream:
+            try:
+                self.audio_stream.stop_stream()
+                self.audio_stream.close()
+            except: pass
+            self.audio_stream = None
+
+        self.oww_model = None
+
+    def _listen_loop(self):
+        """Background loop for wake word detection."""
+        try:
+            from openwakeword.model import Model
+            import pyaudio
+            import numpy as np
+        except ImportError as e:
+            UI.error(f"Missing dependency: {e}. Install: pip install openwakeword pyaudio")
+            self._is_listening = False
+            return
+
+        wake_word = self.config.get("stt_wake_word", "hey_jarvis")
+
+        # Validate wake word
+        available_models = self.get_available_models()
+        if wake_word not in available_models:
+            UI.warning(f"Invalid wake word '{wake_word}'. Defaulting to 'hey_jarvis'.")
+            wake_word = "hey_jarvis"
+
+        try:
+            # Initialize openWakeWord model (silent - no UI spam)
+            self.oww_model = Model(wakeword_models=[wake_word], inference_framework="onnx")
+
+            # Initialize PyAudio stream
+            mic_index = self.config.get("speech_mic_index", None)
+            audio = pyaudio.PyAudio()
+            self.audio_stream = audio.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=16000,  # openWakeWord uses 16kHz
+                input=True,
+                frames_per_buffer=1280,  # 80ms chunks
+                input_device_index=mic_index
+            )
+
+            # Wake word ready - no message needed (shown in status bar)
+
+            while not self._stop_event.is_set():
+                # Read audio chunk
+                audio_data = self.audio_stream.read(1280, exception_on_overflow=False)
+                audio_array = np.frombuffer(audio_data, dtype=np.int16)
+
+                # Process with openWakeWord
+                prediction = self.oww_model.predict(audio_array)
+
+                # Check if wake word detected (threshold: 0.5)
+                if prediction[wake_word] > 0.5:
+                    # Wake word detected - DEBUG: Log it
+                    try:
+                        log_path = os.path.join(os.path.expanduser("~"), "wake_word_debug.log")
+                        with open(log_path, "a", encoding="utf-8") as f:
+                            import datetime
+                            f.write(f"{datetime.datetime.now()}: Wake word detected! Score: {prediction[wake_word]:.2f}\n")
+                            f.write(f"  Callback exists: {self._callback is not None}\n")
+                            f.flush()
+                    except Exception as e:
+                        # If logging fails, at least print to console
+                        print(f"WAKE WORD DEBUG: Detected! Score: {prediction[wake_word]:.2f}, Callback: {self._callback is not None}, Error: {e}")
+
+                    # Trigger callback (CRITICAL for STT start)
+                    if self._callback:
+                        try:
+                            self._callback()
+                            # DEBUG: Log callback success
+                            try:
+                                log_path = os.path.join(os.path.expanduser("~"), "wake_word_debug.log")
+                                with open(log_path, "a", encoding="utf-8") as f:
+                                    f.write(f"  Callback executed successfully!\n")
+                                    f.flush()
+                            except:
+                                pass
+                        except Exception as e:
+                            # DEBUG: Log callback error
+                            try:
+                                log_path = os.path.join(os.path.expanduser("~"), "wake_word_debug.log")
+                                with open(log_path, "a", encoding="utf-8") as f:
+                                    f.write(f"  Callback ERROR: {e}\n")
+                                    f.flush()
+                            except:
+                                pass
+                            print(f"WAKE WORD DEBUG: Callback error: {e}")
+
+                    # Reset model state to avoid immediate re-triggering
+                    self.oww_model.reset()
+
+                    # Pause briefly to avoid self-triggering
+                    import time
+                    time.sleep(1.0)
+
+        except Exception as e:
+            UI.error(f"Wake Word Error: {e}")
+            self._is_listening = False
+        finally:
+            self._cleanup()

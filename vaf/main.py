@@ -28,10 +28,12 @@ def bootstrap():
         # Automation
         "schedule": "schedule",
         "inquirer": "inquirer",
-        # Speech (TTS/STT)
+        # Speech (TTS/STT/Wake Word)
         "pyttsx3": "pyttsx3",
         "SpeechRecognition": "speech_recognition",
         "pyaudio": "pyaudio",
+        "openwakeword": "openwakeword",
+        "onnxruntime": "onnxruntime",
         # Document Processing (PDF, Word, Excel, PowerPoint)
         "PyPDF2": "PyPDF2",
         "python-docx": "docx",             # pip name != import name

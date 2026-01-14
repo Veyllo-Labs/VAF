@@ -50,12 +50,17 @@ class Config:
         "ux_auto_open_max_tabs": 8,
         # Run each sub-agent in its own terminal window
         "sub_agents_in_separate_terminals": True,
-        # Sub-agent timeout settings
-        "subagent_timeout_enabled": True,      # Enable/disable timeout for sub-agents
-        "subagent_timeout_minutes": 120,       # Timeout in minutes (default: 2 hours)
-        
-        # Librarian Agent settings
-        "librarian_max_pdf_size_mb": 50,       # Max PDF size in MB (default: 50)
+                # Sub-Agent timeout settings
+                "subagent_timeout_enabled": True,      # Enable/disable timeout for sub-agents
+                "subagent_timeout_minutes": 120,       # Timeout in minutes (default: 2 hours)
+                
+                # Voice / STT Settings
+                "stt_enabled": False,                  # Enable Speech-to-Text
+                "stt_wake_word_enabled": False,        # Enable Wake Word detection (Auto Mode)
+                "stt_wake_word": "hey_jarvis",         # Wake Word model name (openWakeWord)
+                
+                # Librarian Agent settings
+                "librarian_max_pdf_size_mb": 50,       # Max PDF size in MB (default: 50)
         "librarian_max_doc_size_mb": 20,       # Max Word/PowerPoint size in MB (default: 20)
         "librarian_max_excel_size_mb": 30,     # Max Excel size in MB (default: 30)
         "librarian_max_text_size_kb": 500,     # Max text file size in KB (default: 500)
@@ -103,7 +108,7 @@ class Config:
         """
         if not api_key:
             return
-        
+
         # Basic obfuscation using base64
         encoded = base64.b64encode(api_key.encode()).decode()
         cls.set(f"api_key_{provider}", encoded)
@@ -120,6 +125,7 @@ class Config:
             Decoded API key string
         """
         encoded = cls.get(f"api_key_{provider}", "")
+
         if not encoded:
             return ""
         

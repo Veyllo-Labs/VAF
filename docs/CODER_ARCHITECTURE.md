@@ -143,7 +143,7 @@ Inside the loop, `current_tools` is generated dynamically based on state:
     *   **IF Errors:** Sets `current_state.linter_errors_active = True`.
     *   Injects system message with error details.
 
-### `task_done` (Lines ~5300) - The Enforcement Gate
+### `task_done` (Lines ~5287-5823) - The Enforcement Gate
 *   **Gate 1: "No Files Created"**
     *   **IF** task type implies creation (e.g. "create script") **AND** `files_created` is empty:
     *   **BLOCK:** `🚨 CRITICAL ERROR: HALLUCINATION DETECTED! No files created.`
@@ -162,7 +162,7 @@ Inside the loop, `current_tools` is generated dynamically based on state:
         *   Calls `switch_to_task_context(next_idx)`.
         *   Resets loop.
     *   **IF** all tasks done:
-        *   Exits loop.
+        *   **Executes `break` statement** (Lines 4793, 5782, 5821) to exit the main `while True` loop.
         *   Returns final summary string to Main Agent.
 
 ### `web_search` (Lines ~5950)

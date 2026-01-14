@@ -106,7 +106,7 @@ vaf run --theme nord
 # Resume a previous session
 vaf run --session abc123
 
-# Use classic simple interface
+# Use minimal interface (troubleshooting/SSH fallback)
 vaf run --classic
 ```
 

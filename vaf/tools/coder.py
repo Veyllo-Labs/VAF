@@ -1,7 +1,7 @@
 """
 VAF Coding Agent - Agentic Loop Implementation
 
-Design Philosophy (like OpenCode/Cursor):
+Design Philosophy: Plan-Do-Check-Act:
 - NO max_steps - runs until DONE
 - Agent decides when task is complete
 - Quality checks prevent premature completion

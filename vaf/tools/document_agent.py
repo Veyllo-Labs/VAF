@@ -57,7 +57,11 @@ Handles documents of any size using section-by-section generation (no context ov
         super().__init__()
         self.home = Path.home()
     
-    def run(self, **kwargs) -> str:
+        def run(self, **kwargs) -> str:
+    
+            pass
+    
+    
         task = kwargs.get('task', '').strip()
         if not task:
             return "Error: No task provided."

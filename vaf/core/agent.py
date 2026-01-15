@@ -3406,7 +3406,6 @@ class Agent:
                         
                         # Give TTS thread time to start (threading.Thread.start() needs a moment)
                         # Without this, the return statement kills the function before thread starts
-                        import time
                         time.sleep(0.05)  # 50ms is enough for thread initialization
                         
                         # Add a special marker that the CLI can use to force-print this message

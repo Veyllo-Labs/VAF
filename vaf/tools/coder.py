@@ -1686,7 +1686,8 @@ Thumbs.db
                 escaped_parts = []
                 for part in cmd_parts:
                     if ' ' in part or '"' in part:
-                        escaped_parts.append(f'"{part.replace('"', '\\"')}"')
+                        escaped_part = part.replace('"', '\\"')
+                        escaped_parts.append(f'"{escaped_part}"')
                     else:
                         escaped_parts.append(part)
                 cmd = ' '.join(escaped_parts)

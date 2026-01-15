@@ -59,8 +59,15 @@ For large/complex documents, use document_agent instead."""
         if not content:
             return "[ERROR] No content provided for document."
         
+        from vaf.core.platform import Platform
+        docs_dir = Platform.documents_dir()
+        
+        # Create a subdirectory for VAF documents
+        vaf_docs_dir = docs_dir / "VAF_Documents"
+        vaf_docs_dir.mkdir(exist_ok=True)
+        
         # Auto-detect format from filename
-        file_path = Path(filename)
+        file_path = vaf_docs_dir / Path(filename)
         if file_path.suffix == '.docx':
             format_type = 'word'
         elif file_path.suffix == '.md':

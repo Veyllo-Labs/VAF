@@ -16,7 +16,7 @@ from vaf.core.platform import Platform
 
 WORKFLOW = {
     "name": "Research & Document",
-    "description": "Research topic thoroughly, then create professional document",
+    "description": "Research topic thoroughly, then create professional document. This workflow must be used for all legal texts.",
     "triggers": [
         "recherchiere und erstelle dokument",
         "research and create document",

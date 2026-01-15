@@ -207,18 +207,15 @@ call web_search 2-3 times IN THE SAME RESPONSE! Don't use workflows or sub-agent
             
             "filesystem": """
 ## File System Guidelines
-- Always confirm before overwriting important files
-- Use appropriate file encodings (UTF-8 default)
-- Create directories as needed
-- Use relative paths when possible
-- Check file existence before reading
+- You can read and analyze local files by using the `librarian_agent`.
+- Always confirm before overwriting important files.
 
-### 📂 Handling File Summaries (CRITICAL)
-If the user asks "Summarize this file", "What's in the file?", or "Check the results" after a workflow/sub-agent created a file:
-1.  **LOOK BACK** in the conversation history for file paths (e.g. "Output saved to: ...").
-2.  **CALL `read_file(path)`** immediately with that path.
-3.  **DO NOT ASK** the user for the path if it is visible in the context.
-4.  **DO NOT SAY** "I can't read files" or "I don't have access" - YOU HAVE THE `read_file` TOOL! USE IT!
+### 📂 Handling Local Files and Summaries (CRITICAL)
+If the user provides a local file path (e.g., `file:///...` or `C:\\...`) and asks you to read or summarize it:
+1.  **DELEGATE to `librarian_agent`**: Call the `librarian_agent` tool.
+2.  **FORMULATE the task**: The task for the librarian should be 'read file <path>'.
+    - Example: `librarian_agent(task="read file /path/to/your/report.html")`
+3.  **DO NOT SAY** "I can't read files" or "I don't have access". Delegate to the `librarian_agent`.
 
 ### 🔍 Extracting File Paths from Context
 **CRITICAL:** When sub-agent results mention file paths, EXTRACT and USE them directly!
@@ -232,10 +229,10 @@ If the user asks "Summarize this file", "What's in the file?", or "Check the res
 
 **Example:**
 ```
-Sub-Agent Result: "📄 Saved to: C:\\Users\\...\\report.html"
+Sub-Agent Result: "📄 Saved to: /path/to/your/report.html"
 User: "Kannst du die Datei ansehen?"
 
-✅ CORRECT: read_file("C:\\Users\\...\\report.html")
+✅ CORRECT: librarian_agent(task="read file /path/to/your/report.html")
 ❌ WRONG: Ask user for file path (it's already in context!)
 ❌ WRONG: Say "I can't read files"
 ```

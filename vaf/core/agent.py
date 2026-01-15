@@ -2537,6 +2537,8 @@ class Agent:
     def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False, disable_workflows=False, disable_tools=False):
         from vaf.cli.ui import UI
         
+        self.context_manager.decay_state()
+        
         # Check if any backend is available (local, server, or API)
         if not self.llm and not self.use_server and not self.api_backend:
             UI.error("Agent not initialized. Run 'vaf run' first.")
@@ -3138,6 +3140,19 @@ class Agent:
                                                 if found_call: break
 
                                     if should_block:
+                                        # Allow redundant call if user has provided a new message since the last call
+                                        user_message_since_last_call = False
+                                        # i is the index of the last tool message
+                                        for msg_idx in range(i + 1, len(self.history)):
+                                            if self.history[msg_idx].get('role') == 'user':
+                                                user_message_since_last_call = True
+                                                break
+                                        
+                                        if user_message_since_last_call:
+                                            should_block = False
+                                            UI.event("Info", f"Allowing repeated tool call '{tool_name}' due to user intervention.", style="dim")
+
+                                    if should_block:
                                         UI.event("Warning", f"Blocked redundant tool call: {tool_name}", style="warning")
                                         self.history.append({
                                             "role": "system",
@@ -3299,12 +3314,24 @@ class Agent:
                         # ═══════════════════════════════════════════════════════════════
                         processed_result = self.context_manager.process_tool_output(function_name, result_str)
                         
-                        self.history.append({
-                            "role": "tool",
-                            "tool_call_id": tc['id'],
-                            "name": function_name,
-                            "content": processed_result
-                        })
+                        if function_name == 'document_agent' and "Could not create document plan" in result_str:
+                            self.history.append({
+                                "role": "tool",
+                                "tool_call_id": tc['id'],
+                                "name": function_name,
+                                "content": processed_result
+                            })
+                            self.history.append({
+                                "role": "system",
+                                "content": "[INFO] The document creation failed because the task was too vague. Ask the user for more details about the document they want to create (e.g., what sections, what content should be included, what is the purpose of the document)."
+                            })
+                        else:
+                            self.history.append({
+                                "role": "tool",
+                                "tool_call_id": tc['id'],
+                                "name": function_name,
+                                "content": processed_result
+                            })
                     
                     # Check if this was an async sub-agent task
                     if result and self._handle_async_subagent_marker(result_str):

@@ -33,9 +33,9 @@ class IntentContext:
 @dataclass
 class StateContext:
     """Tracks project/conversation state."""
-    files_created: List[str] = field(default_factory=list)
-    files_read: List[str] = field(default_factory=list)
-    files_modified: List[str] = field(default_factory=list)
+    files_created: List[tuple[str, int]] = field(default_factory=list)
+    files_read: List[tuple[str, int]] = field(default_factory=list)
+    files_modified: List[tuple[str, int]] = field(default_factory=list)
     errors_encountered: List[str] = field(default_factory=list)
     tools_used: List[str] = field(default_factory=list)
     key_decisions: List[str] = field(default_factory=list)
@@ -112,6 +112,20 @@ class ContextManager:
         """Get context usage as percentage."""
         tokens = self.estimate_tokens(history)
         return tokens / self.max_tokens
+
+    def decay_state(self):
+        """Decay the TTL of state items."""
+        
+        def decay_list(items: List[tuple[str, int]]) -> List[tuple[str, int]]:
+            new_items = []
+            for item, ttl in items:
+                if ttl > 1:
+                    new_items.append((item, ttl - 1))
+            return new_items
+
+        self.state.files_created = decay_list(self.state.files_created)
+        self.state.files_read = decay_list(self.state.files_read)
+        self.state.files_modified = decay_list(self.state.files_modified)
     
     # ═══════════════════════════════════════════════════════════════════════════
     # INTENT TRACKING
@@ -173,27 +187,28 @@ class ContextManager:
         content = str(message.get("content", ""))
         role = message.get("role", "")
         
+        def update_file_list(file_list: List[tuple[str, int]], new_files: List[str]):
+            for f in new_files:
+                found = False
+                for i, (path, ttl) in enumerate(file_list):
+                    if path == f:
+                        file_list[i] = (path, 5)
+                        found = True
+                        break
+                if not found:
+                    file_list.append((f, 5))
+            return file_list[-15:]
+
         # 1. Proactive Fact Extraction (The "Glue")
         # File operations
         created = re.findall(r'(?:created|wrote|saved|erstellt|geschrieben)[:\s]+[`"\']?([^\s`"\'<>]+\.\w{1,10})', content, re.I)
         read = re.findall(r'(?:read|loaded|opened|gelesen|geöffnet)[:\s]+[`"\']?([^\s`"\'<>]+\.\w{1,10})', content, re.I)
         modified = re.findall(r'(?:modified|updated|changed|geändert|aktualisiert)[:\s]+[`"\']?([^\s`"\'<>]+\.\w{1,10})', content, re.I)
         
-        for f in created[:3]:
-            if f not in self.state.files_created:
-                self.state.files_created.append(f)
-        for f in read[:3]:
-            if f not in self.state.files_read:
-                self.state.files_read.append(f)
-        for f in modified[:3]:
-            if f not in self.state.files_modified:
-                self.state.files_modified.append(f)
-        
-        # Limit lists
-        self.state.files_created = self.state.files_created[-15:] # Increased for better glue
-        self.state.files_read = self.state.files_read[-15:]
-        self.state.files_modified = self.state.files_modified[-15:]
-        
+        self.state.files_created = update_file_list(self.state.files_created, created[:3])
+        self.state.files_read = update_file_list(self.state.files_read, read[:3])
+        self.state.files_modified = update_file_list(self.state.files_modified, modified[:3])
+
         # Errors
         if 'error' in content.lower() or 'failed' in content.lower() or 'fehler' in content.lower():
             for line in content.split('\n'):
@@ -375,11 +390,11 @@ class ContextManager:
         # 2. PROJECT STATE
         state_parts = []
         if self.state.files_created:
-            state_parts.append(f"**Created:** {', '.join(self.state.files_created[-8:])}")
+            state_parts.append(f"**Created:** {', '.join([p for p, t in self.state.files_created[-8:]])}")
         if self.state.files_modified:
-            state_parts.append(f"**Modified:** {', '.join(self.state.files_modified[-8:])}")
+            state_parts.append(f"**Modified:** {', '.join([p for p, t in self.state.files_modified[-8:]])}")
         if self.state.files_read:
-            state_parts.append(f"**Read:** {', '.join(self.state.files_read[-8:])}")
+            state_parts.append(f"**Read:** {', '.join([p for p, t in self.state.files_read[-8:]])}")
         
         if state_parts:
             parts.append("### 📁 PROJECT STATE\n" + "\n".join(state_parts))
@@ -516,4 +531,3 @@ class ContextManager:
             "errors": len(self.state.errors_encountered),
             "archives_available": len(self.archive) + len(list(self.ARCHIVE_DIR.glob("context_*.json")))
         }
-

@@ -13,11 +13,8 @@ Similar architecture to research_agent but for document creation.
 import os
 import re
 import json
-import time
-import requests
-import subprocess
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 
 from vaf.tools.base import BaseTool
@@ -56,12 +53,8 @@ Handles documents of any size using section-by-section generation (no context ov
     def __init__(self):
         super().__init__()
         self.home = Path.home()
-    
-        def run(self, **kwargs) -> str:
-    
-            pass
-    
-    
+
+    def run(self, **kwargs) -> str:
         task = kwargs.get('task', '').strip()
         if not task:
             return "Error: No task provided."
@@ -195,7 +188,6 @@ Handles documents of any size using section-by-section generation (no context ov
         Uses LLM to analyze task and break it into sections.
         """
         
-        model_name = self._get_model_name()
         
         prompt = f"""You are a document planning expert. Analyze this task and create a structured plan.
 
@@ -270,7 +262,7 @@ Language: Match the document type (German for German contracts, etc.)."""
             if content:
                 return content.strip()
             else:
-                return f"[ERROR generating section: No response from LLM]"
+                return "[ERROR generating section: No response from LLM]"
                 
         except Exception as e:
             return f"[ERROR generating section: {e}]"
@@ -329,7 +321,6 @@ Language: Match the document type (German for German contracts, etc.)."""
         """Save as Word document (.docx)."""
         try:
             from docx import Document
-            from docx.shared import Pt, Inches
             
             doc = Document()
             
@@ -399,10 +390,4 @@ Language: Match the document type (German for German contracts, etc.)."""
 
 ✅ Document generation completed successfully!"""
     
-    def run(self, **kwargs) -> str:
-        """
-        Main entry point for the Document Agent.
-        This agent is usually called as a sub-process, so this method is a placeholder.
-        The actual logic is in the __init__ or specific methods called by the sub-agent runner.
-        """
-        return "Document Agent initialized. Use specific methods to generate documents."
+

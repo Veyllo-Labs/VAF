@@ -81,6 +81,7 @@ class APIBackendManager:
         """
         self.provider = provider
         self.config = Config.load()
+        self.session_usage = {"input_tokens": 0, "output_tokens": 0}
         
         if provider not in self.PROVIDER_CONFIGS:
             raise ValueError(f"Unsupported provider: {provider}. Supported: {list(self.PROVIDER_CONFIGS.keys())}")
@@ -117,6 +118,9 @@ class APIBackendManager:
             Text chunks from the API response
         """
         if not model:
+            model = self.config.get(f"api_model_{self.provider}", self.provider_config["default_model"])
+        elif self.provider != "local" and ".gguf" in model.lower():
+            UI.warning(f"Model '{model}' looks like a local model and cannot be used with '{self.provider}' provider. Falling back to default.")
             model = self.config.get(f"api_model_{self.provider}", self.provider_config["default_model"])
         
         # Route to provider-specific implementation

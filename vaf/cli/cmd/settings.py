@@ -76,13 +76,29 @@ def search_models_menu():
 
             choices.append(("Cancel", None))
 
-            q = [inquirer.List('model', message="Select a model to download", choices=choices)]
-            answers = inquirer.prompt(q)
+            UI.print("\n[bold]Select a model to download:[/bold]")
+            for i, (label, value) in enumerate(choices, 1):
+                UI.print(f"  [{i}] {label}")
             
-            if not answers or not answers['model']:
+            try:
+                choice_str = UI.console.input("\n[bold cyan]Enter number: [/bold cyan]")
+                if not choice_str.strip():
+                    continue
+                choice_idx = int(choice_str) - 1
+                if 0 <= choice_idx < len(choices):
+                    selected_model = choices[choice_idx][1]
+                    if selected_model is None: # Cancel
+                        continue
+                else:
+                    UI.error("Invalid selection.")
+                    time.sleep(1)
+                    continue
+            except (ValueError, IndexError):
+                UI.error("Invalid selection.")
+                time.sleep(1)
                 continue
-                
-            download_model_flow(answers['model'])
+
+            download_model_flow(selected_model)
             
         except Exception as e:
             UI.error(f"Search failed: {e}")

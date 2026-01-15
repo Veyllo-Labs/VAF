@@ -150,19 +150,19 @@ class Agent:
         from vaf.core.system_prompt import SystemPromptManager
         
         # Extract model name for identity
-        model_display_name = "VQ-1"
+        self.model_display_name = "VQ-1"
         if hasattr(self, 'filename'):
             fname = self.filename.lower()
-            if "gemma" in fname: model_display_name = "Gemma"
-            elif "llama" in fname: model_display_name = "Llama"
-            elif "mistral" in fname: model_display_name = "Mistral"
-            elif "phi" in fname: model_display_name = "Phi"
-            elif "qwen" in fname: model_display_name = "Qwen"
-            elif "deepseek" in fname: model_display_name = "DeepSeek"
+            if "gemma" in fname: self.model_display_name = "Gemma"
+            elif "llama" in fname: self.model_display_name = "Llama"
+            elif "mistral" in fname: self.model_display_name = "Mistral"
+            elif "phi" in fname: self.model_display_name = "Phi"
+            elif "qwen" in fname: self.model_display_name = "Qwen"
+            elif "deepseek" in fname: self.model_display_name = "DeepSeek"
         
         # We need tools to init prompt manager, but tools are loaded later.
         # So we init it here with empty dict and update it after tools load.
-        self.prompt_manager = SystemPromptManager({}, model_name=model_display_name) 
+        self.prompt_manager = SystemPromptManager({}, model_name=self.model_display_name) 
 
         # Session tracking for server shutdown management
         self._session_id = None
@@ -1220,7 +1220,7 @@ class Agent:
 
     def init_chat(self):
         # Initialize Prompt Manager
-        self.prompt_manager = SystemPromptManager(self.tools)
+        self.prompt_manager = SystemPromptManager(self.tools, model_name=self.model_display_name)
         
         # Build initial prompt (Core + Base Rules)
         # We pass self.filename to determine identity (VQ-1 vs Generic)

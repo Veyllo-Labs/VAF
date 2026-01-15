@@ -1546,12 +1546,9 @@ Do NOT plan or describe - just call this tool with the task."""
         project_name = re.sub(invalid_chars, '_', project_name)
         project_name = project_name.strip('. ')  # Remove leading/trailing dots and spaces
         
-        # Get base directory - OS-independent using os.path
-        home = os.path.expanduser("~")
-        if platform.system() == "Windows" or platform.system() == "Darwin":
-            docs_dir = os.path.join(home, "Documents")
-        else:  # Linux and others
-            docs_dir = home
+        # Get base directory - OS-independent using Platform class
+        from vaf.core.platform import Platform
+        docs_dir = Platform.documents_dir()
         
         projects_root = os.path.join(docs_dir, "VAF_Projects")
         os.makedirs(projects_root, exist_ok=True)
@@ -4197,6 +4194,7 @@ All files must be saved inside this directory.
                 is_effectively_empty = len(clean_content) < 5
                 
                 if is_effectively_empty:
+                    tui.append_stream("[WARN] Empty response detected. Applying snapshot and retry...")
                     # Increment context-specific empty counter
                     if is_main_context:
                         main_empty_counter += 1

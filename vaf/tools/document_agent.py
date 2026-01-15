@@ -179,7 +179,15 @@ Handles documents of any size using section-by-section generation (no context ov
         filename = plan.get('filename', self._generate_filename(plan['title'], output_format))
         
         file_path = self._save_document(final_content, filename, output_format, plan['document_type'])
-        
+
+        # Auto-open the folder containing the document
+        try:
+            from vaf.core.platform import Platform
+            Platform.open_path(file_path.parent)
+            UI.event("Document Agent", f"Opened folder: {file_path.parent}", style="dim")
+        except Exception as e:
+            UI.warning(f"Could not open folder: {e}")
+            
         return self._format_success_message(file_path, plan, len(final_content))
     
     def _create_document_plan(self, task: str) -> Optional[Dict]:

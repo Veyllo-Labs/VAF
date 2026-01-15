@@ -3471,6 +3471,7 @@ class Agent:
             # CRITICAL: At this point, the stream is COMPLETE (finish_reason="stop" equivalent)
             # We can immediately check for tool-intent without waiting, as the model has finished generating
             if (not full_response or is_effectively_empty):
+                UI.event("System", "Empty response detected. Applying snapshot and retry...", style="warning")
                 # CRITICAL: Check if agent mentioned a tool name (but didn't actually call it yet)
                 # Tool names are language-independent - they're always the same regardless of thinking language
                 # IMPORTANT: No time-based waiting needed - stream is already complete, so we can check immediately

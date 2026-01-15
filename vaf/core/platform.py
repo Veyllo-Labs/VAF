@@ -414,10 +414,11 @@ class Platform:
                 
             elif Platform.is_macos():
                 # macOS: Use osascript to open Terminal.app
+                escaped_command = command.replace('"', '\\"')
                 script = f'''
                 tell application "Terminal"
                     activate
-                    do script "{command.replace('"', '\\"')}"
+                    do script "{escaped_command}"
                 end tell
                 '''
                 subprocess.Popen(['osascript', '-e', script])

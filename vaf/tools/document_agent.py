@@ -400,3 +400,9 @@ Language: Match the document type (German for German contracts, etc.)."""
 ✅ Document generation completed successfully!"""
     
     def run(self, **kwargs) -> str:
+        """
+        Main entry point for the Document Agent.
+        This agent is usually called as a sub-process, so this method is a placeholder.
+        The actual logic is in the __init__ or specific methods called by the sub-agent runner.
+        """
+        return "Document Agent initialized. Use specific methods to generate documents."

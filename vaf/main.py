@@ -14,6 +14,7 @@ def bootstrap():
         "prompt_toolkit": "prompt_toolkit",
         "colorama": "colorama",
         "shellingham": "shellingham",
+        "psutil": "psutil",
         # Networking & Web
         "requests": "requests",
         "beautifulsoup4": "bs4",           # pip name != import name
@@ -707,8 +708,9 @@ def callback(
     """VAF - Veyllo Agentic Framework"""
     if version:
         from vaf.cli.ui import UI
+        from vaf import __version__
         UI.print("[cyan bold]VAF[/cyan bold] - Veyllo Agentic Framework")
-        UI.print("Version: [green]0.2.0[/green]")
+        UI.print(f"Version: [green]{__version__}[/green]")
         UI.print("https://github.com/Veyllo-Labs/Veyllo-App")
         raise typer.Exit()
 

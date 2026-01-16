@@ -16,9 +16,19 @@ if requirements_file.exists():
     with open(requirements_file, "r", encoding="utf-8") as f:
         requirements = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
+# Read version from vaf/version.py to avoid importing the package
+version_dict = {}
+version_file = Path(__file__).parent / "vaf" / "version.py"
+if version_file.exists():
+    with open(version_file, "r", encoding="utf-8") as f:
+        exec(f.read(), version_dict)
+    version = version_dict["__version__"]
+else:
+    version = "0.0.0"
+
 setup(
     name="vaf",
-    version="0.2.0",
+    version=version,
     description="VAF - Veyllo Agentic Framework: Local AI tool for developers",
     long_description=long_description,
     long_description_content_type="text/markdown",

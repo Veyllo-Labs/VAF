@@ -447,7 +447,7 @@ Sub-agents run asynchronously - results arrive later
         # Short summary for prompt (full docs are in tool definitions)
         return f"""
 ## Available Tools
-You have access to {len(tool_names)} tools: {', '.join(tool_names[:10])}{'...' if len(tool_names) > 10 else ''}
+You have access to {len(tool_names)} tools: {', '.join(sorted(tool_names))}
 
 Use tools proactively to accomplish tasks. Don't ask for permission - just use them when appropriate.
 

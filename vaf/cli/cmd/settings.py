@@ -959,7 +959,12 @@ $;+xxxx+++xxxxxxxx+++xxxxx;;$
     UI.print()
     
     UI.console.print("[bold white]Veyllo Agent Framework (VAF)[/bold white]", justify="center")
-    UI.console.print("[dim]Version 0.2.0[/dim]\n", justify="center")
+    try:
+        from vaf import __version__
+        version = __version__
+    except ImportError:
+        version = "0.0.0"
+    UI.console.print(f"[dim]Version {version}[/dim]\n", justify="center")
     
     UI.console.print("[bold magenta]Created by Mert Can Elsner[/bold magenta]", justify="center")
     UI.console.print("[cyan]Veyllo Labs[/cyan]\n", justify="center")
@@ -976,17 +981,14 @@ $;+xxxx+++xxxxxxxx+++xxxxx;;$
     UI.print()
     
     panel_text = (
-        "[bold]MIT License[/bold]\n\n"
+        "[bold]MIT License (Modified with Commons Clause v1.0)[/bold]\n\n"
         "Copyright (c) 2025 Mert Can Elsner / Veyllo Labs\n\n"
-        "Permission is hereby granted, free of charge, to any person obtaining a copy "
-        "of this software and associated documentation files (the \"Software\"), to deal "
-        "in the Software without restriction, including without limitation the rights "
-        "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell "
-        "copies of the Software, and to permit persons to whom the Software is "
-        "furnished to do so, subject to the following conditions:\n\n"
-        "[bold yellow]The above copyright notice and this permission notice shall be included in all "
-        "copies or substantial portions of the Software.[/bold yellow]\n\n"
-        "See explicit [bold]LICENSE[/bold] file for full legal text."
+        "This software is source-available but carries specific restrictions on:\n"
+        "- Selling VAF as a standalone product.\n"
+        "- Offering VAF as a hosted cloud service.\n\n"
+        "[bold green]✅ You CAN:[/bold green] Use for any purpose (personal/commercial), modify code, distribute copies, create/sell custom Workflows/plugins.\n\n"
+        "[bold red]❌ You CANNOT:[/bold red] Sell VAF itself or offer it as SaaS.\n\n"
+        "See [bold]README.md[/bold] and [bold]LICENSE[/bold] for full legal text."
     )
     
     from rich.panel import Panel

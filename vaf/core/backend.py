@@ -370,7 +370,36 @@ class ServerManager:
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     zip_ref.extractall(self.bin_dir)
             
+            # Cleanup
             os.remove(zip_path)
+            
+            # Post-Extraction: Check for nested directory (common in GitHub releases)
+            # If server_path doesn't exist, search for it in subfolders
+            if not os.path.exists(self.server_path):
+                found_path = None
+                for root, dirs, files in os.walk(self.bin_dir):
+                    if self.server_exe in files:
+                        found_path = os.path.join(root, self.server_exe)
+                        break
+                
+                if found_path and found_path != self.server_path:
+                    UI.event("System", f"Found backend in subfolder, moving files...", style="dim")
+                    parent_dir = os.path.dirname(found_path)
+                    
+                    # Move all files from subfolder to bin_dir
+                    for item in os.listdir(parent_dir):
+                        src = os.path.join(parent_dir, item)
+                        dst = os.path.join(self.bin_dir, item)
+                        if os.path.exists(dst):
+                            if os.path.isdir(dst): shutil.rmtree(dst)
+                            else: os.remove(dst)
+                        shutil.move(src, dst)
+                    
+                    # Remove the now empty subfolder
+                    try:
+                        os.rmdir(parent_dir)
+                    except:
+                        pass # Might not be empty if hidden files exist
             
             if self.system != "Windows":
                  os.chmod(self.server_path, 0o755)
@@ -504,7 +533,7 @@ class ServerManager:
                 mode_msg = "CPU Sequential (1 Slot - RAM Limited)"
             
         UI.event("System", f"Config: {mode_msg}", style="dim")
-        if gpu:
+        if gpu and gpu.vram_mb > 0:
             UI.event("System", f"VRAM: {vram_gb:.1f}GB | Est. 2-Slot Need: {cost_2_slots_vram:.1f}GB", style="dim")
         else:
             UI.event("System", f"RAM: {total_ram_gb:.1f}GB | Est. 2-Slot Need: {cost_2_slots_ram:.1f}GB", style="dim")

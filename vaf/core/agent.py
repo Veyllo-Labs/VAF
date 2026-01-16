@@ -172,8 +172,8 @@ class Agent:
         self.tools = {}
         self._load_tools()
         # Update Prompt Manager with loaded tools
-        self.prompt_manager.tools = self.tools
-        
+        self.prompt_manager.tools = list(self.tools.values())
+                
         # Register Cleanup Handler (Cross-Platform)
         # WICHTIG: Nur _atexit_cleanup registrieren, nicht shutdown direkt
         # shutdown() wird von Signal-Handlern aufgerufen
@@ -1146,9 +1146,10 @@ class Agent:
         py_ver = sys.version_info
         is_py313 = py_ver.major == 3 and py_ver.minor == 13
         
-        # If explicitly requested or Py3.13 detected, try Server Mode first
-        if is_py313 or self.config.get("force_server", False):
-            UI.event("System", f"Initializing Standalone Server (Py3.13 / GPU Mode)...", style="warning")
+        # If explicitly requested, Py3.13 detected, OR on macOS (use standalone binary to avoid cmake/build issues)
+        is_mac = platform.system() == "Darwin"
+        if is_py313 or is_mac or self.config.get("force_server", False):
+            UI.event("System", f"Initializing Standalone Server (Py3.13 / Mac / GPU Mode)...", style="warning")
             self.server = ServerManager()
             if self.server.start_server(self.model_path, n_gpu_layers=n_gpu, n_ctx=n_ctx):
                 self.use_server = True
@@ -1243,8 +1244,8 @@ class Agent:
 
     def init_chat(self):
         # Initialize Prompt Manager
-        self.prompt_manager = SystemPromptManager(self.tools, model_name=self.model_display_name)
-        
+        self.prompt_manager = SystemPromptManager(list(self.tools.values()), model_name=self.model_display_name)
+                
         # Build initial prompt (Core + Base Rules)
         # We pass self.filename to determine identity (VQ-1 vs Generic)
         system_prompt = self.prompt_manager.build_prompt(self.filename)

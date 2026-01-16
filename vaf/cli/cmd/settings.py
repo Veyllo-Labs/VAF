@@ -836,11 +836,14 @@ def voice_settings_menu():
         stt_enabled = bool(Config.get("speech_stt_enabled", False))
         wake_word_enabled = bool(Config.get("stt_wake_word_enabled", False))
         current_wake_word = Config.get("stt_wake_word", "hey_jarvis")
+        tts_engine = Config.get("speech_tts_engine", "piper")  # "piper" or "system"
 
-        UI.panel(f"STT: {'ON' if stt_enabled else 'OFF'} | Wake Word: {'ON' if wake_word_enabled else 'OFF'} ({current_wake_word})",
+        UI.panel(f"STT: {'ON' if stt_enabled else 'OFF'} | Wake Word: {'ON' if wake_word_enabled else 'OFF'} ({current_wake_word}) | TTS: {tts_engine.upper()}",
                  title="🎤 Voice Settings (100% Local & Free)", style="highlight")
 
         choices = [
+            (f"🔊 TTS Engine: {tts_engine.upper()} ({'Neural' if tts_engine == 'piper' else 'Native'})", 'tts_engine'),
+            ("─────────────────", None),
             (f"Speech-to-Text (STT) [{'ON' if stt_enabled else 'OFF'}]", 'toggle_stt'),
             ("Select Microphone", 'mic'),
             ("Select Input Language", 'lang'),
@@ -868,7 +871,15 @@ def voice_settings_menu():
             
         action = answers['action']
         
-        if action == 'toggle_stt':
+        if action == 'tts_engine':
+            # Toggle between piper and system
+            new_engine = "system" if tts_engine == "piper" else "piper"
+            Config.set("speech_tts_engine", new_engine)
+            engine_name = "Neural (Piper)" if new_engine == "piper" else "Native (System)"
+            UI.event("Settings", f"TTS Engine set to: {engine_name}", style="success")
+            time.sleep(1.0)
+        
+        elif action == 'toggle_stt':
             new_val = not stt_enabled
             Config.set("speech_stt_enabled", new_val)
             UI.event("Settings", f"STT {'enabled' if new_val else 'disabled'}", style="success")

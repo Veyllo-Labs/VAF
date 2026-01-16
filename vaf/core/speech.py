@@ -480,8 +480,11 @@ $player.Close()
                 if self._speech_generation != current_gen:
                     return
 
-                # 1. Try Piper (High Quality)
-                if self._check_piper():
+                # Check user's preferred TTS engine
+                preferred_engine = self.config.get("speech_tts_engine", "piper")
+                
+                # 1. Try Piper (High Quality) - only if user prefers it
+                if preferred_engine == "piper" and self._check_piper():
                     # Attempt to get voice for requested language
                     model_path = self._ensure_voice_model(lang)
                     
@@ -515,17 +518,11 @@ $player.Close()
                                     os.remove(wav_path) 
                                 except:
                                     pass
-                                
-                                # If returncode was non-zero, log it but still consider success
-                                if proc.returncode != 0:
-                                    UI.event("TTS", f"Piper warning: exit code {proc.returncode} but audio generated", style="dim")
                                 return # Success!
-                            else:
-                                # Piper failed - log why
-                                size = os.path.getsize(wav_path) if os.path.exists(wav_path) else 0
-                                UI.event("TTS", f"Piper failed (returncode={proc.returncode}, wav_size={size}B)", style="yellow")
-                        except Exception as e:
-                            UI.event("TTS", f"Piper error: {e}", style="yellow")
+                            # else: Piper failed, silently fall through to system voice
+                        except Exception:
+                            # Piper error, silently fall through to system voice
+                            pass
 
                 # 2. Fallback: pyttsx3 (Robotic but reliable)
                 if HAS_TTS:

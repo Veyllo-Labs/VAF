@@ -596,7 +596,11 @@ $player.Close()
 
         # Determine language
         if not lang:
-            lang = self.config.get("speech_language", "en-US")
+            # CRITICAL: Reload config to get latest language setting
+            # (user may have changed it in settings after SpeechManager was initialized)
+            from vaf.core.config import Config
+            fresh_config = Config.load()
+            lang = fresh_config.get("speech_language", "en-US")
 
         # ... (Locale mapping same as before) ...
         locale_map = {

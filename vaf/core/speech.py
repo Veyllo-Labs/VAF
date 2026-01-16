@@ -168,10 +168,28 @@ class SpeechManager:
             elif "armv7" in arch: asset = "piper_linux_armv7l.tar.gz"   # Pi 32
             else: raise Exception(f"Linux arch {arch} not supported")
         elif system == "darwin":
-            if "arm64" in arch: asset = "piper_macos_aarch64.tar.gz" # M1/M2
-            else: asset = "piper_macos_x64.tar.gz" # Intel
+            # macOS: Robust architecture detection
+            # platform.machine() can return x86_64 even on M1/M2 if Python runs under Rosetta 2
+            # Use sysctl to get the REAL hardware architecture
+            is_arm = False
+            try:
+                import subprocess
+                result = subprocess.run(['sysctl', '-n', 'hw.optional.arm64'], 
+                                      capture_output=True, text=True, timeout=2)
+                is_arm = result.returncode == 0 and result.stdout.strip() == '1'
+            except:
+                # Fallback: Check platform.machine()
+                is_arm = "arm64" in arch
+            
+            if is_arm:
+                asset = "piper_macos_aarch64.tar.gz"  # M1/M2/M3
+                UI.event("System", "Detected Apple Silicon (ARM64) - downloading ARM binary", style="dim")
+            else:
+                asset = "piper_macos_x64.tar.gz"  # Intel
+                UI.event("System", "Detected Intel Mac (x86_64) - downloading x64 binary", style="dim")
         else:
             raise Exception(f"OS {system} not supported")
+
 
         url = f"{base_url}/{asset}"
         temp_zip = self.bin_dir / asset
@@ -521,16 +539,39 @@ $player.Close()
                     try:
                         engine = pyttsx3.init()
                         engine.setProperty('rate', 160)
-                        # Switch language logic for SAPI5
-                        if lang != "auto":
-                            voices = engine.getProperty('voices')
-                            target = None
+                        
+                        # Voice selection - platform-specific logic
+                        voices = engine.getProperty('voices')
+                        target = None
+                        
+                        # macOS: Prefer high-quality Apple voices
+                        if platform.system().lower() == "darwin":
+                            # Best voices on macOS (in order of preference)
+                            if lang.startswith("de"):
+                                # German: Anna (compact, high quality) > others
+                                preferred = ["anna", "compact.de", "german"]
+                            else:
+                                # English: Samantha (compact, high quality) > Siri > Alex
+                                preferred = ["samantha", "compact.en-us", "siri", "alex", "english"]
+                            
+                            # Try to find preferred voice
+                            for pref in preferred:
+                                for v in voices:
+                                    if pref in v.name.lower() or pref in str(v.id).lower():
+                                        target = v.id
+                                        break
+                                if target:
+                                    break
+                        else:
+                            # Windows/Linux: Use existing logic
                             search = ["german", "de_DE"] if lang.startswith("de") else ["english", "en_US"]
                             for v in voices:
                                 if any(s in v.name.lower() or s in str(v.id).lower() for s in search):
                                     target = v.id
                                     break
-                            if target: engine.setProperty('voice', target)
+                        
+                        if target:
+                            engine.setProperty('voice', target)
                         
                         engine.say(clean_text)
                         engine.runAndWait()

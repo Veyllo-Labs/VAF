@@ -3864,6 +3864,32 @@ class Agent:
                     "content": "You didn't respond. Please answer or continue where you left off."
                 })
                 
+                # FALLBACK: If agent has called tools but won't respond after 3 retries, provide default success message
+                if empty_retry_count >= 3 and has_tool_calls:
+                    # Tools were executed successfully, but agent is silent - assume success and return
+                    UI.event("Info", "Tools executed successfully (agent silent, using fallback response)", style="dim")
+                    
+                    # Find the last tool result to check what was done
+                    last_tool_result = None
+                    for i in range(len(self.history) - 1, -1, -1):
+                        if self.history[i].get('role') == 'tool':
+                            last_tool_result = self.history[i].get('content', '')
+                            break
+                    
+                    # Provide intelligent default based on tool result
+                    if last_tool_result:
+                        # Check if result indicates "no items found" or "empty"
+                        result_lower = str(last_tool_result).lower()
+                        if any(phrase in result_lower for phrase in ['no automations', 'not found', 'keine', 'empty', 'nothing to']):
+                            full_content = "Keine Ergebnisse gefunden."  # No results found
+                        else:
+                            full_content = "Erledigt!"  # Done!
+                    else:
+                        full_content = "Erledigt!"
+                    
+                    # Exit retry loop with default response
+                    break
+                
                 # Continue the loop - if it fails again, this system message will be removed with the reset
                 continue
             

@@ -1092,7 +1092,12 @@ Use this when user wants to remove an automation but might want to restore it la
             task = manager.get(task_id)
             
             if not task:
-                return f"Error: Automation with ID '{task_id}' not found."
+                # IDEMPOTENT: If automation doesn't exist, it's already deleted (success)
+                return f"""✅ **Automation Already Deleted**
+
+The automation with ID '{task_id}' does not exist (already deleted or never existed).
+
+**Status:** Task successfully removed (idempotent operation)."""
             
             # Move to trash
             success = manager.move_to_trash(task_id)

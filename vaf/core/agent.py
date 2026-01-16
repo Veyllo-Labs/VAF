@@ -1173,13 +1173,36 @@ class Agent:
 
         UI.event("System", f"Loading Library: {self.filename}...", style="dim")
         
+        # Redirect stderr to suppress ggml_metal_init logs on Mac
+        
+        # Context manager to suppress stderr
+        class StderrSuppressor:
+            def __enter__(self):
+                self.old_stderr = sys.stderr
+                self.devnull = open(os.devnull, 'w')
+                sys.stderr = self.devnull
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                sys.stderr = self.old_stderr
+                self.devnull.close()
+
         try:
-            self.llm = Llama(
-                model_path=self.model_path,
-                n_gpu_layers=n_gpu, 
-                n_ctx=n_ctx,
-                verbose=self.verbose
-            )
+            # Only suppress if verbose is False (to allow debugging if needed)
+            if not self.verbose:
+                with StderrSuppressor():
+                    self.llm = Llama(
+                        model_path=self.model_path,
+                        n_gpu_layers=n_gpu, 
+                        n_ctx=n_ctx,
+                        verbose=self.verbose
+                    )
+            else:
+                self.llm = Llama(
+                    model_path=self.model_path,
+                    n_gpu_layers=n_gpu, 
+                    n_ctx=n_ctx,
+                    verbose=self.verbose
+                )
+                
             UI.event("System", "Model Loaded", style="success")
         except Exception as e:
             UI.error(f"Init failed: {e}")
@@ -1455,14 +1478,23 @@ class Agent:
         Returns:
             True if mismatch detected and correction requested, False otherwise.
         """
-        # ... (rest of implementation)
         
         # Determine language (simplified check for common cases)
         # Using langid for robust detection
         try:
             import langid
+            import re
+            
             user_lang, _ = langid.classify(user_input)
-            response_lang, _ = langid.classify(assistant_response)
+            
+            # CRITICAL: Remove <think> blocks from response before classifying!
+            # Otherwise, the English thinking process triggers false "Language Mismatch" on German responses.
+            clean_response = re.sub(r'<think>.*?</think>', '', assistant_response, flags=re.DOTALL).strip()
+            if not clean_response:
+                 # Fallback if response was ONLY thinking (should not happen usually)
+                 clean_response = assistant_response
+                 
+            response_lang, _ = langid.classify(clean_response)
         except ImportError:
             # Fallback if langid missing
             return False
@@ -1683,11 +1715,26 @@ class Agent:
             usage = self.api_backend.session_usage
             return usage["input_tokens"], usage["output_tokens"]
         
-        # Simple approximation if server mode (1 char ~= 0.3 tokens)
+        # Simple approximation if server mode (1 char ~= 0.3-0.4 tokens + Tool Overhead)
         if self.use_server:
             # Naive estimation without tokenizer
             text = "".join([str(m.get("content", "")) for m in self.history if m.get("content")])
-            return int(len(text) * 0.4), self.config.get("n_ctx", 8192)
+            
+            # Base text tokens
+            estimated = int(len(text) * 0.45) # Sligthly increased factor for safety
+            
+            # Add message framing overhead (e.g. <|im_start|>...<|im_end|>)
+            estimated += len(self.history) * 15
+            
+            # CRITICAL: Add Tool Definition Overhead
+            # Tools are sent to the LLM and consume context, but aren't in history
+            if hasattr(self, 'tools') and self.tools:
+                # Estimate ~250 tokens per tool (schema + description)
+                # This fixes the "Requested tokens exceed context" error where
+                # history is small (4k) but tools add hidden 4k tokens.
+                estimated += len(self.tools) * 250
+            
+            return estimated, self.config.get("n_ctx", 8192)
             
         if not self.llm: return 0, 8192
         
@@ -1845,13 +1892,25 @@ class Agent:
             max_tokens = self.config.get("n_ctx", 8192)
             self._context_manager = ContextManager(max_tokens=max_tokens)
         
-        return self._context_manager.get_status(self.history)
+        # CRITICAL: Use Agent's get_token_usage() which includes Tool overhead
+        # instead of ContextManager's estimate which only counts history text
+        tokens, max_tokens = self.get_token_usage()
+        
+        # Get other status info from context manager
+        cm_status = self._context_manager.get_status(self.history)
+        
+        # Override token count with accurate value
+        cm_status['tokens'] = tokens
+        cm_status['max_tokens'] = max_tokens
+        cm_status['usage_percent'] = tokens / max_tokens if max_tokens > 0 else 0
+        
+        return cm_status
 
     def analyze_intent(self, user_input):
-        """
+        '''
         Determines the optimal temperature (0.2 - 0.9) for the user's request.
         Uses a quick, lightweight inference.
-        """
+        '''
         try:
             prompt = (
                 f"You are a meta-cognitive strategist. Your ONLY job is to decide the creativity level (Temperature) for the Main Agent.\n"
@@ -2753,14 +2812,35 @@ class Agent:
             
             elif self.use_server:
                 # Proactive Context Management: Compress before request to prevent overflow
-                # Check token usage and compress if > 85% of limit
+                # CRITICAL: Calculate threshold dynamically - Tools consume context but can't be compressed!
                 current_tokens, max_tokens = self.get_token_usage()
-                if current_tokens > int(max_tokens * 0.85):  # 85% threshold (e.g., > 6963 of 8192)
-                    UI.event("Context", f"Proactive compression: {current_tokens}/{max_tokens} tokens ({current_tokens/max_tokens:.0%})", style="info")
-                    self.manage_context()
+                
+                # Reserve space: Tool overhead + Response buffer
+                if hasattr(self, 'tools') and self.tools:
+                    tool_overhead_estimate = len(self.tools) * 250
+                    response_buffer = 1000  # Reserve for model's response
+                    # Safe limit = What's left for history after tools + response
+                    safe_history_limit = max_tokens - tool_overhead_estimate - response_buffer
+                    
+                    # If tools are heavy, be much more aggressive with history compression
+                    if current_tokens > safe_history_limit:
+                        UI.event("Context", f"Proactive compression (tools active): {current_tokens}/{max_tokens} tokens", style="warning")
+                        self.manage_context()
+                        # Double-check after compression
+                        current_tokens, _ = self.get_token_usage()
+                        if current_tokens > safe_history_limit:
+                            # Still too big - aggressive pruning needed
+                            UI.event("Context", "Standard compression insufficient. Pruning aggressively...", style="warning")
+                            # Keep only system + last 4 messages
+                            if len(self.history) > 5:
+                                system_msg = [self.history[0]] if self.history and self.history[0].get("role") == "system" else []
+                                self.history = system_msg + self.history[-4:]
+                                UI.event("Context", f"Reduced to {len(self.history)} messages", style="info")
                 else:
-                    # Still check normal threshold
-                    self.manage_context()
+                    # No tools - use normal 85% threshold
+                    if current_tokens > int(max_tokens * 0.85):
+                        UI.event("Context", f"Proactive compression: {current_tokens}/{max_tokens} tokens", style="info")
+                        self.manage_context()
                 
                 # Retry loop for 503 (Model Loading), 500 (Context Overflow), and 400 (Context Size Error)
                 response = None

@@ -489,15 +489,25 @@ $player.Close()
                             )
                             proc.communicate(input=clean_text.encode('utf-8'))
                             
-                            if proc.returncode == 0 and os.path.exists(wav_path):
+                            # Check if WAV file was generated (even if Piper crashed)
+                            # Sometimes Piper returns non-zero but still produces valid audio
+                            if os.path.exists(wav_path) and os.path.getsize(wav_path) > 1000:  # At least 1KB
                                 self._play_audio(wav_path)
                                 try:
                                     os.remove(wav_path) 
                                 except:
                                     pass
+                                
+                                # If returncode was non-zero, log it but still consider success
+                                if proc.returncode != 0:
+                                    UI.event("TTS", f"Piper warning: exit code {proc.returncode} but audio generated", style="dim")
                                 return # Success!
+                            else:
+                                # Piper failed - log why
+                                size = os.path.getsize(wav_path) if os.path.exists(wav_path) else 0
+                                UI.event("TTS", f"Piper failed (returncode={proc.returncode}, wav_size={size}B)", style="yellow")
                         except Exception as e:
-                            pass
+                            UI.event("TTS", f"Piper error: {e}", style="yellow")
 
                 # 2. Fallback: pyttsx3 (Robotic but reliable)
                 if HAS_TTS:
@@ -563,6 +573,9 @@ $player.Close()
         try:
             import math
             import struct
+            
+            # Show Language explicitly in UI
+            UI.event("Speech", f"Listening ({locale})...", style="dim")
             
             def _calculate_rms(data):
                 """Calculate RMS amplitude for 16-bit PCM data."""

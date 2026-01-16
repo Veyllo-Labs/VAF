@@ -738,6 +738,57 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
         else:
             tui.event("System", "API Backend ready - no warmup needed", style="dim")
         
+        # ═══════════════════════════════════════════════════════════════
+        # VOICE RESOURCE PRELOADING - Download/Init TTS/STT/WakeWord
+        # ═══════════════════════════════════════════════════════════════
+        # If TTS/STT/WakeWord are enabled, preload their resources NOW
+        # (instead of lazy-loading mid-chat, which is disruptive)
+        
+        if agent.config.get("speech_tts_enabled", False):
+            try:
+                tui.event("Speech", "Preloading TTS resources...", style="dim")
+                from vaf.core.speech import get_speech_manager
+                sm = get_speech_manager()
+                
+                # Ensure Piper binary is installed
+                sm._check_piper()
+                
+                # Download voice model for configured language
+                lang = agent.config.get("speech_language", "en-US")[:2]  # Get language code (de, en, etc.)
+                sm._ensure_voice_model(lang)
+                
+                tui.event("Speech", "TTS resources ready", style="success")
+            except Exception as e:
+                tui.warning(f"TTS preload failed: {e}")
+        
+        if agent.config.get("speech_stt_enabled", False):
+            try:
+                tui.event("Speech", "Checking STT microphone...", style="dim")
+                from vaf.core.speech import get_speech_manager
+                sm = get_speech_manager()
+                
+                # Verify microphone is accessible (triggers initialization)
+                if sm.stt_mic:
+                    tui.event("Speech", "STT microphone ready", style="success")
+                else:
+                    tui.warning("STT enabled but no microphone detected")
+            except Exception as e:
+                tui.warning(f"STT check failed: {e}")
+        
+        if agent.config.get("stt_wake_word_enabled", False):
+            try:
+                tui.event("WakeWord", "Preloading wake word models...", style="dim")
+                from vaf.core.wake_word import WakeWordManager
+                ww = WakeWordManager.get_instance()
+                
+                # Trigger model loading by checking availability
+                if ww.is_available():
+                    tui.event("WakeWord", "Wake word models ready", style="success")
+                else:
+                    tui.warning("Wake word enabled but dependencies missing")
+            except Exception as e:
+                tui.warning(f"Wake word preload failed: {e}")
+        
     except Exception as e:
         tui.error(f"Startup failed: {e}")
         sys.exit(1)
@@ -1461,6 +1512,11 @@ def _process_agent_message(agent, user_input: str, tui, session):
     except ImportError:
         CodingAgentTool = None
     
+    # State for styling <think> blocks
+    think_state = {"active": False}
+    # State for filtering "Resposta" artifact at start
+    start_filter = {"buffer": "", "done": False}
+    
     def stream_callback(text):
         response_parts.append(text)
         
@@ -1469,7 +1525,71 @@ def _process_agent_message(agent, user_input: str, tui, session):
         if CodingAgentTool and CodingAgentTool._active_instance is not None:
             return
             
-        tui.console.print(text, end="", markup=True, style=f"bold {tui.primary}")
+        remaining_text = text
+        
+        # START FILTER: Handle "Resposta" artifact at the very beginning
+        # The model sometimes outputs "Resposta" as the first word. User wants it gray/hidden.
+        if not start_filter["done"]:
+            start_filter["buffer"] += text
+            buf = start_filter["buffer"]
+            target = "resposta" 
+            
+            # Use a slightly loose check (ignore case)
+            if len(buf) >= len(target):
+                if buf[:len(target)].lower() == target:
+                     # Match! Print "Resposta" part as DIM
+                     tui.console.print(buf[:len(target)], end="", markup=True, style="dim")
+                     # Process rest normally
+                     remaining_text = buf[len(target):]
+                     start_filter["done"] = True
+                else:
+                     # Mismatch (e.g. "Hello") - flush buffer
+                     remaining_text = buf
+                     start_filter["done"] = True
+            elif target.startswith(buf.strip().lower()) and len(buf) < 20: 
+                # Prefix match (e.g. "Res"), wait for more. Limit length to avoid infinite buffering.
+                return
+            else:
+                # Mismatch (e.g. "W") - flush
+                remaining_text = buf
+                start_filter["done"] = True
+        
+        # Parse <think> tags for styling
+        current_text = remaining_text
+        while current_text:
+            if not think_state["active"]:
+                # Normal mode: search for start of thinking
+                idx = current_text.find("<think>")
+                if idx != -1:
+                    # Found start tag - print prior part normally
+                    if idx > 0:
+                        tui.console.print(current_text[:idx], end="", markup=True, style=f"bold {tui.primary}")
+                    
+                    # Switch to thinking mode (print tag HIDDEN)
+                    # tui.console.print("<think>", end="", markup=True, style="dim")
+                    think_state["active"] = True
+                    current_text = current_text[idx+7:] # +7 len of <think>
+                else:
+                    # No tag, print all normally
+                    tui.console.print(current_text, end="", markup=True, style=f"bold {tui.primary}")
+                    current_text = ""
+            else:
+                # Thinking mode: search for end of thinking
+                idx = current_text.find("</think>")
+                if idx != -1:
+                    # Found end tag - print prior part dim
+                    tui.console.print(current_text[:idx], end="", markup=True, style="dim")
+                    
+                    # Print end tag also HIDDEN
+                    # tui.console.print("</think>", end="", markup=True, style="dim")
+                    
+                    # Switch back to normal mode
+                    think_state["active"] = False
+                    current_text = current_text[idx+8:] # +8 len of </think>
+                else:
+                    # No end tag, print all dim
+                    tui.console.print(current_text, end="", markup=True, style="dim")
+                    current_text = ""
     
     try:
         with tui.spinner("Thinking..."):

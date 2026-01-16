@@ -819,19 +819,23 @@ def subagent_provider_menu():
 
 def voice_settings_menu():
     """Configure Voice / STT / Wake Word settings."""
+    
+    # Show loading event because openwakeword import can be slow (Model/ONNX init)
+    UI.event("Loading", "Initializing voice modules...", style="dim")
+    
+    # Check openWakeWord availability ONCE (outside loop)
+    try:
+        import openwakeword
+        has_wake_word = True
+    except ImportError:
+        has_wake_word = False
+
     while True:
         UI.clear()
         
         stt_enabled = bool(Config.get("speech_stt_enabled", False))
         wake_word_enabled = bool(Config.get("stt_wake_word_enabled", False))
         current_wake_word = Config.get("stt_wake_word", "hey_jarvis")
-
-        # Check openWakeWord availability
-        try:
-            import openwakeword
-            has_wake_word = True
-        except ImportError:
-            has_wake_word = False
 
         UI.panel(f"STT: {'ON' if stt_enabled else 'OFF'} | Wake Word: {'ON' if wake_word_enabled else 'OFF'} ({current_wake_word})",
                  title="🎤 Voice Settings (100% Local & Free)", style="highlight")

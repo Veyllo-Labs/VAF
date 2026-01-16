@@ -32,8 +32,8 @@ def bootstrap():
         "pyttsx3": "pyttsx3",
         "SpeechRecognition": "speech_recognition",
         "pyaudio": "pyaudio",
-        "openwakeword": "openwakeword",
-        "onnxruntime": "onnxruntime",
+        # "openwakeword": "openwakeword", # Optional/Unstable on Mac
+        # "onnxruntime": "onnxruntime",   # Optional/Unstable on Mac
         # Document Processing (PDF, Word, Excel, PowerPoint)
         "PyPDF2": "PyPDF2",
         "python-docx": "docx",             # pip name != import name

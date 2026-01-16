@@ -39,12 +39,17 @@ pip install -e .
 ### 2. Platform-Specific Setup
 
 **🐧 Linux & 🍎 macOS:**
-The `vaf` command should be available immediately. If not found:
-1.  Check if `~/.local/bin` is in your PATH.
-2.  Add it permanently:
+1.  **Run the automated setup:**
     ```bash
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc  # or ~/.zshrc
-    source ~/.bashrc  # or ~/.zshrc
+    ./scripts/setup_mac.sh
+    ```
+    *(This installs dependencies, creates a virtual environment, and adds a `vaf` shortcut).*
+
+2.  **Restart your terminal** (or run `source ~/.zshrc`).
+
+3.  **Start VAF:**
+    ```bash
+    vaf
     ```
 3.  *Alternative:* Install system-wide with `sudo pip install -e .`
 

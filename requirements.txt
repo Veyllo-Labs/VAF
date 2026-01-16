@@ -32,8 +32,8 @@ pyttsx3>=2.90
 SpeechRecognition>=3.10.0
 pyaudio>=0.2.14
 # openai-whisper>=20231117  # Recommended for high-quality offline STT (DE, TR, CN...)
-openwakeword>=0.6.0  # Wake Word Detection (100% local & free)
-onnxruntime>=1.16.0  # Required for openWakeWord inference
+# openwakeword>=0.6.0  # Wake Word Detection (100% local & free) - DISABLED on Mac due to install issues
+# onnxruntime>=1.16.0  # Required for openWakeWord inference
 
 # Code Quality & Linting
 ruff>=0.1.0  # Fast Python linter and formatter

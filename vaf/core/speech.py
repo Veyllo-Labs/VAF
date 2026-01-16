@@ -524,8 +524,28 @@ $player.Close()
                             # Piper error, silently fall through to system voice
                             pass
 
-                # 2. Fallback: pyttsx3 (Robotic but reliable)
-                if HAS_TTS:
+                # 2. Fallback: pyttsx3 (Robotic but reliable) - OR 'say' on macOS
+                # macOS: pyttsx3 is unstable on background threads (NSSpeechSynthesizer requires main loop)
+                # So we use the native 'say' command which is robust and thread-safe.
+                if platform.system().lower() == "darwin":
+                    try:
+                        voice_arg = []
+                        # Map lang to voice (basic mapping)
+                        # German: 'Anna' (standard), 'Markus'
+                        # English: 'Samantha' (standard), 'Alex'
+                        if lang.startswith("de"):
+                            voice_arg = ["-v", "Anna"]
+                        elif lang.startswith("en"):
+                            # Default is usually good, but we can enforce one
+                            pass 
+                            
+                        cmd = ["say"] + voice_arg + [clean_text]
+                        subprocess.run(cmd, check=True)
+                    except Exception as e:
+                        # If 'say' fails, we are really out of options
+                        pass
+                
+                elif HAS_TTS:
                     try:
                         import pythoncom
                         pythoncom.CoInitialize()

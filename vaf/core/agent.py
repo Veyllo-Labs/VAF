@@ -124,6 +124,8 @@ class Agent:
                 pass
         
         self.history = []
+        self._tokenizer_instance = None
+        self._active_tools = None
 
         # Trust gating state (session-only)
         self._allow_once_tools = set()
@@ -210,6 +212,37 @@ class Agent:
         
         # Flag to prevent multiple shutdown calls
         self._shutdown_called = False
+
+    def _get_tokenizer(self):
+        """
+        Initializes and returns a lightweight Llama instance for tokenization.
+        Caches the instance to avoid re-initialization.
+        """
+        if self._tokenizer_instance:
+            return self._tokenizer_instance
+
+        from llama_cpp import Llama
+        from vaf.cli.ui import UI
+        
+        # Ensure model file exists before trying to load it for tokenization
+        self.ensure_model_exists()
+
+        try:
+            # Initialize with minimal settings for tokenization only
+            # No GPU layers, minimal context, no verbose logging
+            # This should only load the vocabulary and not the full model weights into VRAM.
+            UI.event("System", "Initializing tokenizer...", style="dim")
+            self._tokenizer_instance = Llama(
+                model_path=self.model_path,
+                n_gpu_layers=0,
+                n_ctx=1, # We only need the tokenizer, not context
+                verbose=False
+            )
+            return self._tokenizer_instance
+        except Exception as e:
+            UI.error(f"Could not initialize tokenizer: {e}")
+            return None
+
 
     def _speak(self, text: str):
         """Helper to speak response via SpeechManager."""
@@ -1486,7 +1519,7 @@ class Agent:
             import langid
             import re
             
-            user_lang, _ = langid.classify(user_input)
+            user_lang = self._detect_user_language(user_input)
             
             # CRITICAL: Remove <think> blocks from response before classifying!
             # Otherwise, the English thinking process triggers false "Language Mismatch" on German responses.
@@ -1709,47 +1742,51 @@ class Agent:
         self.history[0]["content"] = content
 
     def get_token_usage(self):
-        """Calculates current token usage from history."""
-        # API Backend: Return token usage (Input, Output)
+        """
+        Calculates a precise token usage by using the model's tokenizer.
+        This includes the chat history and the schemas of all active tools.
+        """
+        # API Backend: Return real token usage from API
         if self.api_backend:
-            # Return real token usage from API
             usage = self.api_backend.session_usage
-            return usage["input_tokens"], usage["output_tokens"]
+            return usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+
+        tokenizer = self._get_tokenizer()
+        if not tokenizer:
+            # Fallback to a very rough estimation if tokenizer fails
+            return len(json.dumps(self.history)) // 2, self.config.get("n_ctx", 8192)
+
+        total_tokens = 0
         
-        # Simple approximation if server mode (1 char ~= 0.3-0.4 tokens + Tool Overhead)
-        if self.use_server:
-            # Naive estimation without tokenizer
-            text = "".join([str(m.get("content", "")) for m in self.history if m.get("content")])
-            
-            # Base text tokens
-            estimated = int(len(text) * 0.45) # Sligthly increased factor for safety
-            
-            # Add message framing overhead (e.g. <|im_start|>...<|im_end|>)
-            estimated += len(self.history) * 15
-            
-            # CRITICAL: Add Tool Definition Overhead
-            # Tools are sent to the LLM and consume context, but aren't in history
-            if hasattr(self, 'tools') and self.tools:
-                # Estimate ~250 tokens per tool (schema + description)
-                # This fixes the "Requested tokens exceed context" error where
-                # history is small (4k) but tools add hidden 4k tokens.
-                estimated += len(self.tools) * 250
-            
-            return estimated, self.config.get("n_ctx", 8192)
-            
-        if not self.llm: return 0, 8192
-        
-        try:
-            total_tokens = 0
-            for msg in self.history:
-                content = msg.get("content", "")
-                if content:
-                    tokens = self.llm.tokenize(content.encode("utf-8"), special=False)
-                    total_tokens += len(tokens)
-            total_tokens += 100 
-            return total_tokens, self.config.get("n_ctx", 8192)
-        except:
-            return 0, 8192
+        # 1. Tokenize chat history
+        # The llama.cpp server/library adds special tokens for roles, so we
+        # convert our history to a string that mimics the input format.
+        for msg in self.history:
+            # Roughly role + content
+            content = str(msg.get("content", ""))
+            role = str(msg.get("role", ""))
+            # Add a few tokens per message for role and formatting
+            total_tokens += len(tokenizer.tokenize(content.encode("utf-8", errors="ignore")))
+            total_tokens += len(tokenizer.tokenize(role.encode("utf-8", errors="ignore")))
+            total_tokens += 5 # Overhead for message structure
+
+        # 2. Tokenize tool schemas
+        # This is the "hidden" context cost.
+        if hasattr(self, 'TOOLS') and self.TOOLS:
+            # self.TOOLS is a property that returns the list of schema dicts
+            tool_schemas = self.TOOLS
+            # Convert the schema to a JSON string to tokenize it
+            try:
+                schema_str = json.dumps(tool_schemas)
+                total_tokens += len(tokenizer.tokenize(schema_str.encode("utf-8", errors="ignore")))
+            except Exception:
+                # Fallback if json serialization fails
+                total_tokens += len(self.tools) * 200 # A smaller, safer estimate
+
+        # 3. Add a small safety buffer
+        total_tokens += 100
+
+        return total_tokens, self.config.get("n_ctx", 8192)
 
     def _generate_summary(self, messages: list) -> str:
         """
@@ -2594,6 +2631,67 @@ class Agent:
                     "Available workflows:" in msg.get("content", ""))
         ]
     
+    def _route_tools(self, user_input: str) -> List[str]:
+        """
+        Uses a preliminary LLM call to select the most relevant tools for a given user input.
+        This helps to reduce the number of tool schemas loaded into the main context.
+        """
+        if not self.tools:
+            return []
+
+        # 1. Create a simplified list of tools (name and description only)
+        tool_info = []
+        for name, tool_instance in self.tools.items():
+            description = getattr(tool_instance, 'description', 'No description available.')
+            tool_info.append(f"- {name}: {description}")
+        
+        tool_list_str = "\n".join(tool_info)
+
+        # 2. Build the prompt for the router
+        prompt = (
+            f"You are a tool router. Your only job is to select the most relevant tools for the user's request from the following list.\n"
+            f"Respond with a comma-separated list of tool names only. Do not add any explanation.\n\n"
+            f"Available Tools:\n{tool_list_str}\n\n"
+            f"User Request: \"{user_input}\"\n\n"
+            f"Relevant Tools (comma-separated):"
+        )
+
+        # 3. Make a lightweight LLM call
+        messages = [{"role": "user", "content": prompt}]
+        selected_tools_str = ""
+        try:
+            if self.use_server:
+                payload = {
+                    "messages": messages, 
+                    "max_tokens": 100, 
+                    "temperature": 0.1,
+                    "stream": False
+                }
+                res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=20).json()
+                selected_tools_str = res['choices'][0]['message']['content']
+            elif self.llm:
+                 output = self.llm.create_chat_completion(
+                     messages=messages,
+                     max_tokens=100,
+                     temperature=0.1
+                 )
+                 selected_tools_str = output['choices'][0]['message']['content']
+        except Exception as e:
+            # Fallback in case of router failure: return all tools
+            return list(self.tools.keys())
+
+        # 4. Parse the response
+        if not selected_tools_str:
+            return []
+            
+        # Clean up the response and extract tool names
+        tool_names = [name.strip() for name in selected_tools_str.split(',') if name.strip()]
+        
+        # Filter to only include tools that actually exist
+        valid_tools = [name for name in tool_names if name in self.tools]
+        
+        return valid_tools
+
     def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False, disable_workflows=False, disable_tools=False):
         from vaf.cli.ui import UI
         
@@ -2694,7 +2792,19 @@ class Agent:
             # No workflow match or workflow failed - continue with LLM agent
         
         # Snapshot history (before adding user input if not skipped)
-        history_snapshot_len = len(self.history)
+        history_snapshot_len = len(self.history) - 1 if not skip_input else len(self.history)
+
+        # Dynamic Tool Selection
+        # Only route tools on a new, non-empty input
+        if not auto_retry and not skip_input and user_input:
+            self._active_tools = self._route_tools(user_input)
+            if self._active_tools:
+                UI.event("System", f"Tool Router selected: {', '.join(self._active_tools)}", style="dim")
+        else:
+            # On retries or for internal steps, use all tools
+            self._active_tools = None
+
+
         
         # Always add user input if provided, even if skip_input=True (which skips analysis/overhead)
         if user_input:
@@ -2734,7 +2844,7 @@ class Agent:
         empty_retry_count = 0
         current_temp = target_temp
         
-        # Initialize response variables before loop to avoid UnboundLocalError
+        # Main chat loop with retries for empty responses
         full_response = ""
         full_content = ""
         full_reasoning = ""
@@ -3905,8 +4015,9 @@ class Agent:
                     # Mismatch detected! The warning is already in history (as system msg).
                     # Now we must REMOVE the bad response and RETRY immediately.
                     
-                    # 1. Remove the bad response (it was just added)
-                    self.history.pop()  # Removes the assistant message
+                    # 1. Remove the bad response, keep the system warning for the retry.
+                    # The history is [..., assistant_response, system_warning], so we remove the item at -2.
+                    del self.history[-2]
                     
                     # 2. Treat as a retry (reuses logic for patience/backoff if needed)
                     empty_retry_count += 1
@@ -4348,8 +4459,15 @@ class Agent:
         schema = []
         n_ctx = self.config.get("n_ctx", 8192)
         is_small_context = n_ctx < 8000
-        
-        for name, tool in self.tools.items():
+
+        # Use active tools if available, otherwise all tools
+        tools_to_use = self._active_tools if self._active_tools is not None else self.tools.keys()
+
+        for name in tools_to_use:
+            if name not in self.tools:
+                continue
+            tool = self.tools[name]
+            
             description = tool.description
             
             # Context Optimization: Truncate descriptions for small contexts

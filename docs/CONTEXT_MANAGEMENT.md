@@ -148,8 +148,10 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │  📊 TOKEN TRACKING                                  │    │
-│  │  ├─ Estimate: ~4 chars/token (text)                 │    │
-│  │  ├─ Estimate: ~3.5 chars/token (code)               │    │
+│  │  ├─ Text: ~4 chars/token                            │    │
+│  │  ├─ Code: ~3.5 chars/token                          │    │
+│  │  ├─ Tools: DYNAMIC CALCULATION (Realtime)           │    │
+│  │  │  └─ Calculates exact overhead of active tools    │    │
 │  │  └─ 10% safety margin for special tokens            │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                          │                                  │

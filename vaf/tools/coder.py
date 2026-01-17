@@ -1482,14 +1482,14 @@ class CodingAgentTool(BaseTool):
     _instance_lock = threading.Lock()
     _active_instance = None  # Track active CoderTUI instance
     
-    description = """Autonomous code generation Sub-Agent. USE THIS FOR:
-- Creating websites (HTML, CSS, JavaScript)
-- Building web applications
-- Writing Python scripts
-- Any coding/programming task
-
-Creates complete, working files in a project directory. 
-Do NOT plan or describe - just call this tool with the task."""
+    description = """Autonomous code generation Sub-Agent. 
+    **PRIMARY TOOL for:**
+    - **Coding:** "Write code", "Fix bug", "Refactor", "Create script"
+    - **Web:** "Create website", "Build app", "HTML/CSS/JS"
+    - **Languages:** Python, JavaScript, Java, C++, etc.
+    
+    Creates complete, working files in a project directory. 
+    Do NOT plan or describe - just call this tool with the task."""
 
     parameters = {
         "type": "object",

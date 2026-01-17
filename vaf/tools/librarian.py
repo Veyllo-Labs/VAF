@@ -37,13 +37,14 @@ class LibrarianTool(BaseTool):
     """
     
     name = "librarian_agent"
-    description = """A specialized Sub-Agent for Information Retrieval and System Information.
-Use for: 
-- File operations: 'How many files...', 'List files in...', 'Find file...', 'Read file...'
-- System information: 'How many storage devices...', 'What drives are available...', 'Disk space...'
-- Storage devices: Counts HDD, SSD, USB drives and shows their capacity
-- Folder sizes: 'How big is folder X', 'Check disk usage of directory', 'Largest files in...'
-Fast and context-efficient. Has access to storage device information (HDD, SSD, USB drives)."""
+    description = """A specialized Sub-Agent for File System, Storage & Information Retrieval.
+    **PRIMARY TOOL for:**
+    - **Folder Sizes:** "How big is Downloads?", "Check folder size", "Disk usage analysis"
+    - **Storage Info:** "Disk space", "Free space", "List drives", "Storage capacity"
+    - **File Ops:** "List files", "Find file", "Read file", "Count files"
+    - **System Info:** "How many drives", "Hardware info"
+    
+    Use this agent for ANY file system or storage query. Do not say "I can't access files" - delegate to this agent!"""
     
     parameters = {
         "type": "object",

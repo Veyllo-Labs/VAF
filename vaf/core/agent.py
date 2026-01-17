@@ -2639,6 +2639,64 @@ class Agent:
         if not self.tools:
             return []
 
+        # 0. Heuristic Pre-Selection (Force critical tools based on keywords)
+        # This fixes cases where the small router LLM misses obvious intent
+        forced_tools = set()
+        u_lower = user_input.lower()
+        
+        # Librarian / Filesystem Heuristics
+        if any(kw in u_lower for kw in [
+            "folder size", "disk usage", "how big", "storage", "space", 
+            "wie voll", "speicher", "größe", "dateien", "files", "ordner", 
+            "directory", "list", "tree", "read", "write", "find", "search file"
+        ]):
+            if "librarian_agent" in self.tools:
+                forced_tools.add("librarian_agent")
+                
+        # Automation Heuristics
+        if any(kw in u_lower for kw in [
+            "automate", "schedule", "daily", "weekly", "every day", 
+            "automatisier", "plane", "täglich", "wöchentlich", "jeden tag"
+        ]):
+            if "create_automation" in self.tools:
+                forced_tools.add("create_automation")
+        
+        # Coding Heuristics (Crucial for developer tasks)
+        if any(kw in u_lower for kw in [
+            "code", "script", "program", "app", "website", "webseite", "html", 
+            "css", "javascript", "python", "fix", "bug", "refactor", "implement",
+            "write", "create file", "function", "class", "api"
+        ]):
+            if "coding_agent" in self.tools:
+                forced_tools.add("coding_agent")
+            # Always enable git for coding tasks as they often go together
+            if "git_status" in self.tools:
+                 forced_tools.add("git_status")
+                 forced_tools.add("git_add_commit")
+        
+        # Git Heuristics
+        if any(kw in u_lower for kw in ["git", "commit", "push", "pull", "repo", "branch"]):
+            if "git_status" in self.tools:
+                forced_tools.add("git_status")
+                forced_tools.add("git_add_commit")
+                forced_tools.add("git_log")
+        
+        # Research Heuristics (Deep research vs Web Search)
+        if any(kw in u_lower for kw in ["research", "recherche", "analyse", "report", "comprehensive", "umfassend", "deep"]):
+             if "research_agent" in self.tools:
+                 forced_tools.add("research_agent")
+             # Always add web_search as backup/complement
+             if "web_search" in self.tools:
+                 forced_tools.add("web_search")
+
+        # Web Search Heuristics (Always good to have)
+        if any(kw in u_lower for kw in [
+            "search", "find", "google", "look up", "news", "weather", 
+            "wetter", "nachrichten", "suche", "wer ist", "who is", "what is"
+        ]):
+             if "web_search" in self.tools:
+                 forced_tools.add("web_search")
+
         # 1. Create a simplified list of tools (name and description only)
         tool_info = []
         for name, tool_instance in self.tools.items():
@@ -2682,13 +2740,17 @@ class Agent:
 
         # 4. Parse the response
         if not selected_tools_str:
-            return []
+            # If router fails but we have heuristics, return those plus defaults
+            return list(forced_tools) if forced_tools else []
             
         # Clean up the response and extract tool names
         tool_names = [name.strip() for name in selected_tools_str.split(',') if name.strip()]
         
+        # Combine LLM selection with forced tools
+        combined_tools = set(tool_names) | forced_tools
+        
         # Filter to only include tools that actually exist
-        valid_tools = [name for name in tool_names if name in self.tools]
+        valid_tools = [name for name in combined_tools if name in self.tools]
         
         return valid_tools
 

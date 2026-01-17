@@ -2928,7 +2928,29 @@ class Agent:
                 
                 # Reserve space: Tool overhead + Response buffer
                 if hasattr(self, 'tools') and self.tools:
-                    tool_overhead_estimate = len(self.tools) * 250
+                    # Calculate actual tool overhead dynamically
+                    tool_overhead_estimate = 0
+                    
+                    # 1. Base overhead for system prompt instructions about tools (~200 tokens)
+                    tool_overhead_estimate += 200
+                    
+                    # 2. Iterate over active tools (if router is active) or all tools
+                    # Note: We can't access self.TOOLS directly here efficiently as it rebuilds list
+                    # So we use a rough heuristic on self.tools
+                    tools_to_check = self._active_tools if getattr(self, '_active_tools', None) else self.tools.keys()
+                    
+                    for name in tools_to_check:
+                         if name in self.tools:
+                             tool = self.tools[name]
+                             # Estimate tokens: ~3.5 chars per token for JSON schema
+                             # Description + Name + Parameters
+                             desc_len = len(tool.description) if tool.description else 0
+                             param_len = len(json.dumps(tool.parameters)) if hasattr(tool, 'parameters') else 20
+                             
+                             # Approx tokens
+                             tool_tokens = (desc_len + param_len + 50) // 3
+                             tool_overhead_estimate += tool_tokens
+
                     response_buffer = 1000  # Reserve for model's response
                     # Safe limit = What's left for history after tools + response
                     safe_history_limit = max_tokens - tool_overhead_estimate - response_buffer

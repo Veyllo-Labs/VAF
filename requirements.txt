@@ -49,4 +49,9 @@ python-pptx>=0.6.21  # PowerPoint reading
 # Git: Required for version control in coding projects
 # - Windows: https://git-scm.com/download/win or `winget install Git.Git`
 # - macOS: `brew install git` or `xcode-select --install`
-# - Linux: `sudo apt-get install git` (Debian/Ubuntu) or equivalent for your distribution
+# Linux: `sudo apt-get install git` (Debian/Ubuntu) or equivalent for your distribution
+
+
+# Testing
+pytest>=7.0.0
+pytest-mock>=3.10.0

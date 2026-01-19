@@ -1008,6 +1008,24 @@ class Agent:
         if task.status == "completed":
             UI.success(f"✓ Sub-Agent [{task.task_id}] delivered result!")
             
+            # Check for empty result to prevent hallucination
+            result_content = (task.result or "").strip()
+            # Remove <think> blocks for emptiness check
+            clean_result = re.sub(r'<think>.*?</think>', '', result_content, flags=re.DOTALL).strip()
+            
+            is_empty = not clean_result or len(clean_result) < 5
+            
+            if is_empty:
+                UI.event("Warning", f"Sub-Agent [{task.task_id}] returned no usable data.", style="yellow")
+                task_result_msg = (
+                    f"**FINAL RESULT (Task is DONE):**\n"
+                    f"[!] WARNING: The sub-agent returned an EMPTY result or only internal reasoning.\n"
+                    f"There is NO DATA in the report. Do NOT hallucinate contents.\n"
+                    f"Inform the user that the sub-agent task completed but provided no information."
+                )
+            else:
+                task_result_msg = f"**FINAL RESULT (Task is DONE):**\n{task.result}"
+
             # Extract file paths from result (research reports, generated documents, etc.)
             file_paths = re.findall(
                 r'(?:Saved to|Output|File|Path|Ausgabe|Datei):\s*([^\n]+\.(?:html?|pdf|docx?|txt|md|json|csv|xlsx?))',
@@ -1035,7 +1053,7 @@ class Agent:
                     f"📬 **Sub-Agent Task COMPLETED / TERMINATED** [Task: {task.task_id}]\n"
                     f"Agent: {task.agent_type}\n"
                     f"Original Task: {task.task_description[:200]}\n\n"
-                    f"**FINAL RESULT (Task is DONE):**\n{task.result}"
+                    f"{task_result_msg}"
                     f"{file_hint}\n\n"
                     f"IMPORTANT: This task is completely finished. The agent is NO LONGER working on it.\n"
                     f"Analyze the result above and answer the user."
@@ -2640,10 +2658,14 @@ class Agent:
             return []
 
         # 0. Heuristic Pre-Selection (Force critical tools based on keywords)
-        # This fixes cases where the small router LLM misses obvious intent
+        # DISABLED: User prefers full LLM-based routing.
+        # Keeping forced_tools empty means we rely 100% on the router LLM.
         forced_tools = set()
         u_lower = user_input.lower()
         
+        # NOTE: Heuristics below are disabled.
+        # If we ever need them back as a safety net, we can uncomment them.
+        """
         # Librarian / Filesystem Heuristics
         if any(kw in u_lower for kw in [
             "folder size", "disk usage", "how big", "storage", "space", 
@@ -2690,12 +2712,17 @@ class Agent:
                  forced_tools.add("web_search")
 
         # Web Search Heuristics (Always good to have)
+        # Expanded with more natural language query indicators
         if any(kw in u_lower for kw in [
             "search", "find", "google", "look up", "news", "weather", 
-            "wetter", "nachrichten", "suche", "wer ist", "who is", "what is"
+            "wetter", "nachrichten", "suche", "wer ist", "who is", "what is",
+            "wer oder was", "who or what", "tell me about", "explain", "erkläre",
+            "info", "information", "definition", "meaning", "bedeutung",
+            "wie funktioniert", "how does", "what are", "was sind"
         ]):
              if "web_search" in self.tools:
                  forced_tools.add("web_search")
+        """
 
         # 1. Create a simplified list of tools (name and description only)
         tool_info = []
@@ -2707,7 +2734,9 @@ class Agent:
 
         # 2. Build the prompt for the router
         prompt = (
-            f"You are a tool router. Your only job is to select the most relevant tools for the user's request from the following list.\n"
+            f"You are an intelligent Tool Router. Your task is to select the correct tools for the user's request.\n"
+            f"IMPORTANT: The user may write in ANY language (English, German, Turkish, Chinese, etc.). "
+            f"You must analyze the INTENT and map it to the available tools.\n"
             f"Respond with a comma-separated list of tool names only. Do not add any explanation.\n\n"
             f"Available Tools:\n{tool_list_str}\n\n"
             f"User Request: \"{user_input}\"\n\n"
@@ -2718,10 +2747,11 @@ class Agent:
         messages = [{"role": "user", "content": prompt}]
         selected_tools_str = ""
         try:
+            from vaf.cli.ui import UI
             if self.use_server:
                 payload = {
                     "messages": messages, 
-                    "max_tokens": 100, 
+                    "max_tokens": 500, 
                     "temperature": 0.1,
                     "stream": False
                 }
@@ -2730,21 +2760,47 @@ class Agent:
             elif self.llm:
                  output = self.llm.create_chat_completion(
                      messages=messages,
-                     max_tokens=100,
+                     max_tokens=500,
                      temperature=0.1
                  )
                  selected_tools_str = output['choices'][0]['message']['content']
+            elif self.api_backend:
+                output = self.api_backend.create_chat_completion(
+                    messages=messages,
+                    max_tokens=500,
+                    temperature=0.1
+                )
+                selected_tools_str = output['choices'][0]['message']['content']
+            else:
+                UI.event("Router Debug", "No backend available for routing", style="yellow")
         except Exception as e:
             # Fallback in case of router failure: return all tools
+            from vaf.cli.ui import UI
+            UI.event("Router Debug", f"LLM Call Failed: {e}", style="red")
             return list(self.tools.keys())
 
         # 4. Parse the response
         if not selected_tools_str:
             # If router fails but we have heuristics, return those plus defaults
+            if forced_tools:
+                from vaf.cli.ui import UI
+                UI.event("Router", f"Script-based selection: {', '.join(forced_tools)}", style="dim")
             return list(forced_tools) if forced_tools else []
             
         # Clean up the response and extract tool names
-        tool_names = [name.strip() for name in selected_tools_str.split(',') if name.strip()]
+        # Some models prepend "Answer:" or "Selected Tools:" - we need to strip that
+        import re
+        clean_str = re.sub(r'^(answer|result|selected|tools|relevant|output):\s*', '', selected_tools_str, flags=re.IGNORECASE).strip()
+        tool_names = [name.strip() for name in clean_str.split(',') if name.strip()]
+        
+        # Combined logging for transparency
+        from vaf.cli.ui import UI
+        if forced_tools:
+            UI.event("Router", f"Script-based: {', '.join(forced_tools)}", style="dim")
+        if tool_names:
+            UI.event("Router", f"LLM-based: {', '.join(tool_names)}", style="dim")
+        elif not forced_tools:
+            UI.event("Router", "No tools selected", style="dim")
         
         # Combine LLM selection with forced tools
         combined_tools = set(tool_names) | forced_tools
@@ -2853,25 +2909,23 @@ class Agent:
                 return workflow_result
             # No workflow match or workflow failed - continue with LLM agent
         
-        # Snapshot history (before adding user input if not skipped)
-        history_snapshot_len = len(self.history) - 1 if not skip_input else len(self.history)
-
-        # Dynamic Tool Selection
-        # Only route tools on a new, non-empty input
-        if not auto_retry and not skip_input and user_input:
-            self._active_tools = self._route_tools(user_input)
-            if self._active_tools:
-                UI.event("System", f"Tool Router selected: {', '.join(self._active_tools)}", style="dim")
-        else:
-            # On retries or for internal steps, use all tools
-            self._active_tools = None
-
-
-        
         # Always add user input if provided, even if skip_input=True (which skips analysis/overhead)
         if user_input:
             self.history.append({"role": "user", "content": user_input})
         
+        # Snapshot history AFTER adding user input. 
+        # This index points to the user message we just added.
+        # Everything BEFORE and INCLUDING this index is our "safe" context.
+        history_snapshot_len = len(self.history) - 1
+
+        # Dynamic Tool Selection (Tool Router)
+        # Only route tools on a new, non-empty input
+        if not auto_retry and not skip_input and user_input:
+            self._active_tools = self._route_tools(user_input)
+        else:
+            # On retries or for internal steps, use all tools
+            self._active_tools = None
+
         if not skip_input and user_input:
             # 0.5. Context Management AGAIN - AFTER adding user input (in case it pushed us over limit)
             self.manage_context()
@@ -3772,102 +3826,10 @@ class Agent:
             # IMPORTANT: This removes assistant messages that have NO final answer (even if they have reasoning)
             # CRITICAL: At this point, the stream is COMPLETE (finish_reason="stop" equivalent)
             # We can immediately check for tool-intent without waiting, as the model has finished generating
+            # Empty Response Handler: Remove responses without final answer and restart from snapshot
+            # NO RETRY LIMITS - will loop until we get a response
             if (not full_response or is_effectively_empty):
                 UI.event("System", "Empty response detected. Applying snapshot and retry...", style="warning")
-                # CRITICAL: Check if agent mentioned a tool name (but didn't actually call it yet)
-                # Tool names are language-independent - they're always the same regardless of thinking language
-                # IMPORTANT: No time-based waiting needed - stream is already complete, so we can check immediately
-                
-                # For tool-intent detection, use is_truly_empty (checked BEFORE cleaning)
-                # This prevents false positives when agent has long thinking text
-                if is_truly_empty:
-                    # Get available tool names dynamically (supports user-added tools)
-                    available_tool_names = list(self.tools.keys()) if self.tools else []
-                    
-                    # Check if any tool name appears in the response (case-insensitive)
-                    lower_response = (full_response or "").lower()
-                    mentioned_tools = [tool_name for tool_name in available_tool_names if tool_name.lower() in lower_response]
-                    
-                    # CRITICAL: Only reset if BOTH conditions are met:
-                    # 1. Response is truly empty (< 3 chars) - checked BEFORE cleaning
-                    # 2. Tool was mentioned but not called
-                    # This is language-independent - we only check if response is empty, not what language it's in
-                    if mentioned_tools and not tool_calls_detected:
-                        tool_hint = mentioned_tools[0]
-                        UI.event("Insight", f"Detected intent: '{tool_hint}' (resetting to activate)", style="dim")
-                        
-                        # Find if we have tool calls in history (after snapshot)
-                    has_tool_calls = False
-                    last_tool_idx = None
-                    for i in range(history_snapshot_len, len(self.history)):
-                        msg = self.history[i]
-                        if msg.get('role') == 'tool':
-                            has_tool_calls = True
-                            last_tool_idx = i
-                    
-                    # Reset to appropriate snapshot
-                    if has_tool_calls and last_tool_idx is not None:
-                        # Keep everything up to and including the tool result
-                        self.history = self.history[:last_tool_idx + 1]
-                        UI.event("Debug", f"Reset to tool call snapshot (after tool result)", style="dim")
-                    else:
-                        # No tool calls - check if there's thinking DIRECTLY after user prompt
-                        # The user prompt is at history_snapshot_len (if skip_input) or history_snapshot_len (if not skip_input, user was added there)
-                        # We want to find the FIRST assistant message with content right after the user prompt
-                        
-                        # User prompt position: if skip_input, no user was added, so it's before snapshot
-                        # If not skip_input, user was added at history_snapshot_len
-                        user_prompt_idx = history_snapshot_len
-                        if skip_input:
-                            # No user input was added, so user prompt is before snapshot
-                            # Find the last user message before snapshot
-                            for i in range(history_snapshot_len - 1, -1, -1):
-                                if self.history[i].get('role') == 'user':
-                                    user_prompt_idx = i
-                                    break
-                        
-                        # Check if there's an assistant message with content directly after user prompt
-                        first_assistant_after_user = None
-                        first_assistant_idx = None
-                        
-                        # Look at messages right after user prompt (within next 2 messages)
-                        for i in range(user_prompt_idx + 1, min(user_prompt_idx + 3, len(self.history))):
-                            msg = self.history[i]
-                            if msg.get('role') == 'assistant' and msg.get('content'):
-                                content = str(msg.get('content', ''))
-                                # Keep if it has substantial content (thinking/reasoning)
-                                if len(content.strip()) > 20:
-                                    first_assistant_after_user = content
-                                    first_assistant_idx = i
-                                    break  # Only take the FIRST one directly after user prompt
-                        
-                        if first_assistant_after_user and first_assistant_idx is not None:
-                            # Keep user prompt + first thinking - this becomes the new snapshot
-                            self.history = self.history[:first_assistant_idx + 1]
-                            UI.event("Debug", f"Reset to thinking snapshot (user prompt + {len(first_assistant_after_user)} chars of first thinking)", style="dim")
-                        else:
-                            # No thinking found - reset to user prompt snapshot (as before)
-                            if skip_input:
-                                # No user was added, so just reset to snapshot
-                                self.history = self.history[:history_snapshot_len]
-                            else:
-                                # User was added, so keep it
-                                self.history = self.history[:history_snapshot_len + 1]  # +1 for user message
-                            UI.event("Debug", f"Reset to user prompt snapshot", style="dim")
-                    
-                    # Add a brief system prompt (will work better now because first thinking is preserved)
-                    self.history.append({
-                        "role": "system",
-                        "content": "You didn't respond. Please answer or continue where you left off."
-                    })
-                    
-                    # Continue the loop - if it fails again, this system message will be removed with the reset
-                    continue
-                
-                # No tool mentioned - truly empty response
-                
-                # Check retry limit - but DO NOT BREAK (infinite patience)
-                empty_retry_count += 1
                 
                 # ═══════════════════════════════════════════════════════════════
                 # PROACTIVE CONTEXT CLEARING (User Request: "1 verschen" -> 15 attempts)
@@ -3879,62 +3841,13 @@ class Agent:
                     UI.event("System", f"Early Warning ({empty_retry_count}) - Aggressive Context Clearing...", style="dim")
                     
                     # Preservation Strategy:
-                    # 1. System Prompt (Index 0)
-                    # 2. Snapshot (User Prompt + First Thinking) - controlled by history_snapshot_len
-                    # 3. Last Message (System prompt injected at end of loop)
-                    
-                    # We want to clear the "middle" where the mess accumulates
+                    # Keep System Prompt + Snapshot (User Prompt)
                     if len(self.history) > history_snapshot_len + 2:
-                        # Keep System Prompt + Snapshot (User Prompt)
-                        # history_snapshot_len points to where the NEW content started for this turn
-                        # We want to keep everything UP TO that snapshot point
-                        kept_history = self.history[:history_snapshot_len]
-                        
-                        # Add user input if it was added this turn (it's usually at history_snapshot_len)
-                        if len(self.history) > history_snapshot_len:
-                             kept_history.append(self.history[history_snapshot_len])
-                        
-                        # Force update
+                        kept_history = self.history[:history_snapshot_len + 1]
                         self.history = kept_history
                         
                         # Calculate tokens after (estimate)
                         tokens_after, _ = self.get_token_usage()
-                        
-                        UI.event("Context", f"Cleared: {tokens_before} -> {tokens_after} Tokens | Snapshot preserved", style="dim")
-                    else:
-                         UI.event("Context", "History already minimal - skipping clear.", style="dim")
-                
-                # ═══════════════════════════════════════════════════════════════
-                # PROACTIVE CONTEXT CLEARING (User Request: "1 verschen" -> 15 attempts)
-                # ═══════════════════════════════════════════════════════════════
-                if empty_retry_count == 15:
-                    # Calculate tokens before
-                    tokens_before, _ = self.get_token_usage()
-                    
-                    UI.event("System", f"Early Warning ({empty_retry_count}) - Aggressive Context Clearing...", style="dim")
-                    
-                    # Preservation Strategy:
-                    # 1. System Prompt (Index 0)
-                    # 2. Snapshot (User Prompt + First Thinking) - controlled by history_snapshot_len
-                    # 3. Last Message (System prompt injected at end of loop)
-                    
-                    # We want to clear the "middle" where the mess accumulates
-                    if len(self.history) > history_snapshot_len + 2:
-                        # Keep System Prompt + Snapshot (User Prompt)
-                        # history_snapshot_len points to where the NEW content started for this turn
-                        # We want to keep everything UP TO that snapshot point
-                        kept_history = self.history[:history_snapshot_len]
-                        
-                        # Add user input if it was added this turn (it's usually at history_snapshot_len)
-                        if len(self.history) > history_snapshot_len:
-                             kept_history.append(self.history[history_snapshot_len])
-                        
-                        # Force update
-                        self.history = kept_history
-                        
-                        # Calculate tokens after (estimate)
-                        tokens_after, _ = self.get_token_usage()
-                        
                         UI.event("Context", f"Cleared: {tokens_before} -> {tokens_after} Tokens | Snapshot preserved", style="dim")
                     else:
                          UI.event("Context", "History already minimal - skipping clear.", style="dim")
@@ -3942,151 +3855,41 @@ class Agent:
                 # ═══════════════════════════════════════════════════════════════
                 # CONTEXT OVERFLOW DETECTION (Fix for Issue #VAF-CTX-001)
                 # ═══════════════════════════════════════════════════════════════
-                # If retry count exceeds 50 attempts, assume context overflow
-                # LLM cannot generate response because context is too full
                 MAX_RETRIES_BEFORE_EMERGENCY = 50
-                
-                # Extended limits to allow for auto-clearing at 50
                 HARD_LIMIT = 70
                 
                 if empty_retry_count == MAX_RETRIES_BEFORE_EMERGENCY:
                     UI.event("System", f"High retry count ({empty_retry_count}) - Triggering Emergency Context Clearing", style="bold yellow")
-                    # Force context management to reduce tokens
                     self.manage_context()
-                    # Continue the loop to retry generation with reduced context
                 
                 elif empty_retry_count >= HARD_LIMIT:
                     UI.event("Emergency", f"Context overflow detected after {empty_retry_count} retries - emergency fallback!", style="warning")
-                    
-                    # Emergency fallback: Provide a SHORT summary instead of full response
-                    emergency_summary = "⚠️ **Context Overflow Detected**\n\n"
-                    emergency_summary += "The conversation has become too long for me to process effectively. "
-                    emergency_summary += "I've attempted to respond multiple times but cannot generate a complete answer.\n\n"
-                    
-                    # Extract key info from recent context (last 3 tool results)
-                    recent_tool_results = []
-                    for i in range(len(self.history) - 1, max(0, len(self.history) - 20), -1):
-                        msg = self.history[i]
-                        if msg.get('role') == 'tool' and len(recent_tool_results) < 3:
-                            tool_name = msg.get('name', 'unknown')
-                            content = str(msg.get('content', ''))[:200]  # First 200 chars only
-                            recent_tool_results.append(f"- **{tool_name}**: {content}...")
-                    
-                    if recent_tool_results:
-                        emergency_summary += "**Recent tool results:**\n" + "\n".join(recent_tool_results) + "\n\n"
-                    
-                    emergency_summary += "**Suggestion:** Start a new conversation or ask me to focus on a specific aspect."
-                    
-                    # Return emergency response and break the loop
+                    emergency_summary = "⚠️ **Context Overflow Detected**\n\nThe conversation is too long. Please start a new session."
                     if stream_callback:
                         stream_callback(emergency_summary)
                     return emergency_summary
+
+                # Reset to user prompt snapshot
+                self.history = self.history[:history_snapshot_len + 1]
+                UI.event("Debug", f"Reset to user prompt snapshot (preserving query)", style="dim")
+                
+                # Add a brief system prompt to nudge the model
+                self.history.append({
+                    "role": "system",
+                    "content": "You didn't provide a final answer. Please provide a clear response or call the necessary tools."
+                })
                 
                 # Dynamic Temperature Sweep to break loops
-                # Oscillate around target_temp: -0.1, +0.1, -0.2, +0.2, ...
+                empty_retry_count += 1
                 delta = ((empty_retry_count + 1) // 2) * 0.1
                 direction = -1 if empty_retry_count % 2 == 1 else 1
                 current_temp = target_temp + (delta * direction)
-                # Clamp between 0.1 and 0.9
                 current_temp = max(0.1, min(0.9, current_temp))
                 
                 UI.event("Adaptive", f"Tuning creativity: {current_temp:.1f} (attempt {empty_retry_count})", style="info")
                 
-                if empty_retry_count >= 10:
-                    # Only warn after many retries, but keep trying
-                    UI.event("Warning", f"High retry count ({empty_retry_count}) for empty response", style="dim")
-                
-                # Find if we have tool calls in history (after snapshot)
-                has_tool_calls = False
-                last_tool_idx = None
-                for i in range(history_snapshot_len, len(self.history)):
-                    msg = self.history[i]
-                    if msg.get('role') == 'tool':
-                        has_tool_calls = True
-                        last_tool_idx = i
-                
-                # Reset to appropriate snapshot
-                if has_tool_calls and last_tool_idx is not None:
-                    # Keep everything up to and including the tool result
-                    reset_idx = last_tool_idx + 1
-                    self.history = self.history[:reset_idx]
-                    UI.event("Self-Fix", f"Agent silent - auto-correcting context (snapshot {reset_idx})", style="dim")
-                else:
-                    # No tool calls - check if there's thinking DIRECTLY after user prompt
-                    user_prompt_idx = history_snapshot_len
-                    if skip_input:
-                        # No user input was added, so user prompt is before snapshot
-                        # Find the last user message before snapshot
-                        for i in range(history_snapshot_len - 1, -1, -1):
-                            if self.history[i].get('role') == 'user':
-                                user_prompt_idx = i
-                                break
-                    
-                    # Check if there's an assistant message with content directly after user prompt
-                    first_assistant_after_user = None
-                    first_assistant_idx = None
-                    
-                    # Look at messages right after user prompt (within next 2 messages)
-                    for i in range(user_prompt_idx + 1, min(user_prompt_idx + 3, len(self.history))):
-                        msg = self.history[i]
-                        if msg.get('role') == 'assistant' and msg.get('content'):
-                            content = str(msg.get('content', ''))
-                            # Keep if it has substantial content (thinking/reasoning)
-                            if len(content.strip()) > 20:
-                                first_assistant_after_user = content
-                                first_assistant_idx = i
-                                break  # Only take the FIRST one directly after user prompt
-                    
-                    reset_idx = history_snapshot_len
-                    
-                    if first_assistant_after_user and first_assistant_idx is not None:
-                        # Keep user prompt + first thinking - this becomes the new snapshot
-                        reset_idx = first_assistant_idx + 1
-                        UI.event("Self-Fix", "Agent silent - preserving thought trace", style="dim")
-                    else:
-                        # No thinking found - reset to user prompt snapshot (as before)
-                        if skip_input:
-                            reset_idx = history_snapshot_len
-                        else:
-                            reset_idx = history_snapshot_len + 1  # +1 for user message
-                        UI.event("Self-Fix", "Agent silent - auto-correcting context", style="dim")
-                    
-                    self.history = self.history[:reset_idx]
-                
-                # Add a brief system prompt (will work better now because first thinking is preserved)
-                self.history.append({
-                    "role": "system",
-                    "content": "You didn't respond. Please answer or continue where you left off."
-                })
-                
-                # FALLBACK: If agent has called tools but won't respond after 3 retries, provide default success message
-                if empty_retry_count >= 3 and has_tool_calls:
-                    # Tools were executed successfully, but agent is silent - assume success and return
-                    UI.event("Info", "Tools executed successfully (agent silent, using fallback response)", style="dim")
-                    
-                    # Find the last tool result to check what was done
-                    last_tool_result = None
-                    for i in range(len(self.history) - 1, -1, -1):
-                        if self.history[i].get('role') == 'tool':
-                            last_tool_result = self.history[i].get('content', '')
-                            break
-                    
-                    # Provide intelligent default based on tool result
-                    if last_tool_result:
-                        # Check if result indicates "no items found" or "empty"
-                        result_lower = str(last_tool_result).lower()
-                        if any(phrase in result_lower for phrase in ['no automations', 'not found', 'keine', 'empty', 'nothing to']):
-                            full_content = "Keine Ergebnisse gefunden."  # No results found
-                        else:
-                            full_content = "Erledigt!"  # Done!
-                    else:
-                        full_content = "Erledigt!"
-                    
-                    # Exit retry loop with default response
-                    break
-                
-                # Continue the loop - if it fails again, this system message will be removed with the reset
                 continue
+
             
             # Clean History: Store ONLY the final content (Answer), discarding the reasoning trace.
             history_content = full_content if full_content else full_response

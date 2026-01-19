@@ -451,7 +451,7 @@ AFTER: 12 messages, 2,000 tokens
 
 **Example Context Usage (New):**
 ```
-Tokens: ████░░░░░░░░░░░░░░░░░░░░░░░░░░░ 12% (1,000/8,192)
+Tokens: ●○○○○○○○○○ 12% (1,000/8,192)
          ↑ Dynamic Prompt (~800) + First Message (~200)
 ```
 

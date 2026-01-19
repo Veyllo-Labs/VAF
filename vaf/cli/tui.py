@@ -827,10 +827,10 @@ O))         O))       O))))))))
         else:
             color = self.theme["error"]
         
-        # Create bar
-        bar_width = 30
+        # Create bar (10 circles)
+        bar_width = 10
         filled = int((percent / 100) * bar_width)
-        bar = "█" * filled + "░" * (bar_width - filled)
+        bar = "●" * filled + "○" * (bar_width - filled)
         
         self.console.print(
             f"[{self.muted}]{label}:[/{self.muted}] "

@@ -250,12 +250,12 @@ class ResearchTUI:
         if cb:
             cb()
 
-    def _progress_bar(self, current: int, total: int, width: int = 28) -> str:
+    def _progress_bar(self, current: int, total: int, width: int = 10) -> str:
         if total <= 0:
-            return "░" * width
+            return "○" * width
         pct = max(0.0, min(1.0, current / total))
         filled = int(pct * width)
-        return ("█" * filled) + ("░" * (width - filled))
+        return ("●" * filled) + ("○" * (width - filled))
 
     def render(self) -> Group:
         with self._lock:

@@ -876,6 +876,15 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
         try:
             # Note: Sub-agent status now shown in live toolbar (updates every second)
             
+            # Show token usage (or message count for API)
+            used, total = agent.get_token_usage()
+            if agent.api_backend:
+                # For API: show as In[X] Out[Y]
+                tui.console.print(f"[dim]Tokens: In: {used:,} | Out: {total:,}[/dim]", justify="right")
+            else:
+                # For local: show as token progress bar
+                tui.progress_bar(used, total, label="Tokens")
+
             # 0. Check for Wake Word Trigger (Early Check - before input box)
             if wake_word_detected_flag.is_set():
                 # DEBUG: Log early detection
@@ -1267,7 +1276,7 @@ Tab             - Autocomplete
                 elif cmd == "context":
                     # Show context status
                     status = agent.get_context_status()
-                    usage_bar = "█" * int(status['usage_percent'] * 20) + "░" * (20 - int(status['usage_percent'] * 20))
+                    usage_bar = "●" * int(status['usage_percent'] * 10) + "○" * (10 - int(status['usage_percent'] * 10))
                     tui.panel(f"""
 **Context Status:**
 
@@ -1633,15 +1642,6 @@ def _process_agent_message(agent, user_input: str, tui, session):
         full_response = "".join(response_parts)
         session.add_message("assistant", full_response)
         
-        # Show token usage (or message count for API)
-        used, total = agent.get_token_usage()
-        if agent.api_backend:
-            # For API: show as In[X] Out[Y]
-            tui.console.print(f"[dim]Tokens: In: {used:,} | Out: {total:,}[/dim]", justify="right")
-        else:
-            # For local: show as token progress bar
-            tui.progress_bar(used, total, label="Tokens")
-        
     except Exception as e:
         tui.error(f"Agent error: {e}")
 
@@ -1717,6 +1717,15 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
     # Interactive Loop
     while True:
         try:
+            # Show token usage (or message count for API)
+            used, total = agent.get_token_usage()
+            if agent.api_backend:
+                # For API: show as In[X] Out[Y]
+                UI.console.print(f"[dim]                      Tokens: In: {used:,} | Out: {total:,}[/dim]", justify="right")
+            else:
+                # For local: show as token progress bar
+                UI.print_usage_bar(used, total)
+                
             UI.print()
             user_input = UI.prompt("vaf> ")
         except KeyboardInterrupt:

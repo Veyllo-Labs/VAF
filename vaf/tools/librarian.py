@@ -575,6 +575,10 @@ Remove duplicates and ensure smooth flow.
             "dokumen": ["documents", "dokumente"],
             "dok": ["documents", "dokumente"],
             "down": ["downloads", "herunterladen"],
+            "donw": ["downloads", "herunterladen"],
+            "donwlodas": ["downloads", "herunterladen"],
+            "doemlods": ["downloads", "herunterladen"],
+            "dl": ["downloads", "herunterladen"],
             "desk": ["desktop", "arbeitsplatz"],
         }
         

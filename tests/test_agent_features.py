@@ -1,6 +1,12 @@
 import pytest
 import json
+import sys
 from unittest.mock import MagicMock, patch
+
+# Mock llama_cpp module BEFORE importing Agent
+mock_llama_mod = MagicMock()
+sys.modules["llama_cpp"] = mock_llama_mod
+
 from vaf.core.agent import Agent
 
 # Mock the Llama class to avoid dependency on a real model file
@@ -39,7 +45,6 @@ def mock_agent():
     """Fixture to create an Agent instance with mocks."""
     # Mock config and other dependencies
     with patch('vaf.core.agent.Agent.ensure_model_exists'), \
-         patch('llama_cpp.Llama', new=MockLlama), \
          patch('vaf.core.config.Config.load') as mock_config_load, \
          patch('vaf.core.agent.Agent._load_tools') as mock_load_tools:
         

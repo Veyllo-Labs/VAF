@@ -39,6 +39,8 @@ jobs:
       if: runner.os == 'macOS'
       run: |
         brew install portaudio
+        echo "LDFLAGS=-L$(brew --prefix portaudio)/lib" >> $GITHUB_ENV
+        echo "CFLAGS=-I$(brew --prefix portaudio)/include" >> $GITHUB_ENV
 
     - name: Install dependencies
       run: |

@@ -27,6 +27,8 @@ from prompt_toolkit.keys import Keys
 from prompt_toolkit.formatted_text import HTML, FormattedText
 from prompt_toolkit.layout import Layout as PTLayout, HSplit, Window, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.input import create_input
+from prompt_toolkit.output import create_output
 from pathlib import Path
 
 from vaf.cli.autosuggest import create_autosuggest, CombinedAutoSuggest
@@ -447,7 +449,15 @@ O))         O))       O))))))))
                 'status-bar': f'{self.muted}',  # Dim text for status
             })
             
+            # Create fresh input/output to avoid "No Windows console found" errors
+            # This forces prompt_toolkit to re-acquire handles, essential after
+            # external libraries (like inquirer) might have messed with them.
+            pt_input = create_input()
+            pt_output = create_output()
+
             session = PromptSession(
+                input=pt_input,
+                output=pt_output,
                 history=FileHistory(str(self.history_file)),
                 auto_suggest=self.autosuggest,  # Smart inline suggestions
                 completer=VAFCompleter(self),
@@ -455,8 +465,7 @@ O))         O))       O))))))))
                 key_bindings=kb,
                 complete_while_typing=True,
                 multiline=multiline,
-            )
-            
+            )            
             # Print the input box header
             self._print_input_header(prompt)
             
@@ -525,9 +534,18 @@ O))         O))       O))))))))
                     rprompt=_get_live_toolbar,  # Live status on right side of input
                     refresh_interval=0.5,  # Refresh faster for responsiveness
                 )
+            except Exception as e:
+                # Fallback for environments without proper console support (e.g. IDEs, pipes)
+                if "No Windows console found" in str(e) or "Inappropriate ioctl" in str(e):
+                    self.console.print(f"[{self.muted}]Console not fully supported, falling back to standard input...[/{self.muted}]")
+                    print(f"> {prompt}: ", end="", flush=True)
+                    result = input()
+                else:
+                    raise e
             finally:
                 # Stop monitoring thread
                 exit_flag.set()
+                monitor_thread.join(timeout=1.0)
                 self._current_session = None
             
             # Check if auto-exit was triggered

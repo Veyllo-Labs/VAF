@@ -735,6 +735,10 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
         if not agent.api_backend:
             tui.event("System", "Warming up model...", style="dim")
             _warmup_model(tui)
+            
+            # Force tokenizer initialization here so the log message appears during boot
+            # instead of during the first user interaction.
+            agent.get_token_usage()
         else:
             tui.event("System", "API Backend ready - no warmup needed", style="dim")
         
@@ -872,18 +876,25 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
             tui.warning(f"Wake Word setup failed: {e}")
 
     # Interactive loop
+    console_broken = False
     while True:
         try:
             # Note: Sub-agent status now shown in live toolbar (updates every second)
             
             # Show token usage (or message count for API)
-            used, total = agent.get_token_usage()
-            if agent.api_backend:
-                # For API: show as In[X] Out[Y]
-                tui.console.print(f"[dim]Tokens: In: {used:,} | Out: {total:,}[/dim]", justify="right")
-            else:
-                # For local: show as token progress bar
-                tui.progress_bar(used, total, label="Tokens")
+            try:
+                used, total = agent.get_token_usage()
+                if agent.api_backend:
+                    tui.console.print(f"[dim]Tokens: In: {used:,} | Out: {total:,}[/dim]", justify="right")
+                else:
+                    tui.progress_bar(used, total, label="Tokens")
+                
+                # CRITICAL: Flush output before handing over control to prompt_toolkit
+                # This prevents buffer conflicts on Windows
+                import sys
+                sys.stdout.flush()
+            except Exception:
+                pass # Ignore rendering errors in status bar
 
             # 0. Check for Wake Word Trigger (Early Check - before input box)
             if wake_word_detected_flag.is_set():
@@ -974,13 +985,38 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                 tui.console.print()
 
             # Show input prompt for user
-            user_input = tui.input_box(
-                prompt="Message",
-                placeholder="Type your message... (@ for files, / for commands, L + Enter for voice)",
-                check_for_auto_exit=True,  # Enable auto-exit when sub-agent results are ready
-                wake_word_event=wake_word_detected_flag
-            )
+            if console_broken:
+                try:
+                    tui.console.print("\n[dim]> (Standard Input Mode)[/dim]")
+                    user_input = input("Message: ")
+                except EOFError:
+                    break
+            else:
+                try:
+                    user_input = tui.input_box(
+                        prompt="Message",
+                        placeholder="Type your message... (@ for files, / for commands, L + Enter for voice)",
+                        check_for_auto_exit=True,  # Enable auto-exit when sub-agent results are ready
+                        wake_word_event=wake_word_detected_flag
+                    )
+                except Exception as e:
+                    # Catch TUI errors (like NoConsoleScreenBufferError) and switch to fallback
+                    tui.error(f"Console interaction failed: {e}")
+                    tui.warning("Switching to standard input mode (no auto-complete/history)")
+                    console_broken = True
+                    try:
+                        user_input = input("Message: ")
+                    except EOFError:
+                        break
             
+            # CRITICAL: Stop TTS immediately upon any user input (Interruption)
+            # This allows the user to "barge in" and stop the agent from speaking
+            try:
+                from vaf.core.speech import get_speech_manager
+                get_speech_manager().stop()
+            except Exception:
+                pass
+
             # Handle Wake Word Trigger (Auto-Exit from Input Box)
             if user_input == "__WAKE_WORD_TRIGGERED__":
                 wake_word_detected_flag.clear()
@@ -1077,6 +1113,14 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
             if user_input.lower() in ("s", "settings"):
                 from vaf.cli.cmd import settings
                 settings.main_menu(agent=agent)
+                
+                # CRITICAL FIX: Restore original stdout handles
+                # Libraries like 'inquirer' (via colorama) wrap stdout, confusing prompt_toolkit.
+                # We must reset to the raw stream to ensure Win32 APIs work.
+                import sys
+                if hasattr(sys, '__stdout__'):
+                    sys.stdout = sys.__stdout__
+                
                 tui.clear()
                 tui.logo_minimal()
                 
@@ -1091,6 +1135,10 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
             if user_input.lower() in ("c", "model"):
                 from vaf.cli.cmd import settings
                 settings.select_model_menu()
+                
+                # Re-initialize TUI to fix console state after inquirer usage
+                tui = TUI(theme)
+                
                 tui.clear()
                 tui.logo_minimal()
                 
@@ -1453,6 +1501,7 @@ Created: {current_session.created_at}
         except Exception as e:
             tui.error(f"Error in interaction loop: {e}")
             import traceback
+            from datetime import datetime
             # Save traceback to log for debugging (use absolute path)
             try:
                 # Ensure logs directory exists first

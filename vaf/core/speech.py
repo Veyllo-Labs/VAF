@@ -555,6 +555,7 @@ $player.Close()
                     self._is_speaking = True
                     try:
                         engine = pyttsx3.init()
+                        self.tts_engine = engine  # Store reference for stop()
                         engine.setProperty('rate', 160)
                         
                         # Voice selection - platform-specific logic

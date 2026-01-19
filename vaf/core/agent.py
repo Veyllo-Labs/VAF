@@ -1420,7 +1420,8 @@ class Agent:
 
             # Use langid for detection. It is generally robust even for short phrases.
             # We relax the length constraint to > 3 chars to catch "Was ist das" etc.
-            if len(t) >= 3 and any(ch.isalpha() for ch in t):
+            # UPDATE: Increased to 12 chars to avoid false positives on short typos like "sciher ?"
+            if len(t) >= 12 and any(ch.isalpha() for ch in t):
                 code, score = langid.classify(t)
                 code = (code or "").strip().lower()
                 
@@ -3042,54 +3043,25 @@ class Agent:
                 # CRITICAL: Calculate threshold dynamically - Tools consume context but can't be compressed!
                 current_tokens, max_tokens = self.get_token_usage()
                 
-                # Reserve space: Tool overhead + Response buffer
-                if hasattr(self, 'tools') and self.tools:
-                    # Calculate actual tool overhead dynamically
-                    tool_overhead_estimate = 0
+                # Reserve space for response (1500 tokens)
+                # current_tokens already includes tool definitions + history from get_token_usage()
+                response_buffer = 1500
+                safe_limit = max_tokens - response_buffer
+                
+                if current_tokens > safe_limit:
+                    UI.event("Context", f"Proactive compression: {current_tokens}/{max_tokens} tokens", style="warning")
+                    self.manage_context()
                     
-                    # 1. Base overhead for system prompt instructions about tools (~200 tokens)
-                    tool_overhead_estimate += 200
-                    
-                    # 2. Iterate over active tools (if router is active) or all tools
-                    # Note: We can't access self.TOOLS directly here efficiently as it rebuilds list
-                    # So we use a rough heuristic on self.tools
-                    tools_to_check = self._active_tools if getattr(self, '_active_tools', None) else self.tools.keys()
-                    
-                    for name in tools_to_check:
-                         if name in self.tools:
-                             tool = self.tools[name]
-                             # Estimate tokens: ~3.5 chars per token for JSON schema
-                             # Description + Name + Parameters
-                             desc_len = len(tool.description) if tool.description else 0
-                             param_len = len(json.dumps(tool.parameters)) if hasattr(tool, 'parameters') else 20
-                             
-                             # Approx tokens
-                             tool_tokens = (desc_len + param_len + 50) // 3
-                             tool_overhead_estimate += tool_tokens
-
-                    response_buffer = 1000  # Reserve for model's response
-                    # Safe limit = What's left for history after tools + response
-                    safe_history_limit = max_tokens - tool_overhead_estimate - response_buffer
-                    
-                    # If tools are heavy, be much more aggressive with history compression
-                    if current_tokens > safe_history_limit:
-                        UI.event("Context", f"Proactive compression (tools active): {current_tokens}/{max_tokens} tokens", style="warning")
-                        self.manage_context()
-                        # Double-check after compression
-                        current_tokens, _ = self.get_token_usage()
-                        if current_tokens > safe_history_limit:
-                            # Still too big - aggressive pruning needed
-                            UI.event("Context", "Standard compression insufficient. Pruning aggressively...", style="warning")
-                            # Keep only system + last 4 messages
-                            if len(self.history) > 5:
-                                system_msg = [self.history[0]] if self.history and self.history[0].get("role") == "system" else []
-                                self.history = system_msg + self.history[-4:]
-                                UI.event("Context", f"Reduced to {len(self.history)} messages", style="info")
-                else:
-                    # No tools - use normal 85% threshold
-                    if current_tokens > int(max_tokens * 0.85):
-                        UI.event("Context", f"Proactive compression: {current_tokens}/{max_tokens} tokens", style="info")
-                        self.manage_context()
+                    # Double-check after compression
+                    current_tokens, _ = self.get_token_usage()
+                    if current_tokens > safe_limit:
+                        # Still too big - aggressive pruning needed
+                        UI.event("Context", "Standard compression insufficient. Pruning aggressively...", style="warning")
+                        # Keep only system + last 4 messages
+                        if len(self.history) > 5:
+                            system_msg = [self.history[0]] if self.history and self.history[0].get("role") == "system" else []
+                            self.history = system_msg + self.history[-4:]
+                            UI.event("Context", f"Reduced to {len(self.history)} messages", style="info")
                 
                 # Retry loop for 503 (Model Loading), 500 (Context Overflow), and 400 (Context Size Error)
                 response = None

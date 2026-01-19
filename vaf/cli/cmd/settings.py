@@ -818,7 +818,7 @@ def subagent_provider_menu():
 
 
 def voice_settings_menu():
-    """Configure Voice / STT / Wake Word settings."""
+    """Configure TTS / STT / Wake Word settings."""
     
     # Show loading event because openwakeword import can be slow (Model/ONNX init)
     UI.event("Loading", "Initializing voice modules...", style="dim")
@@ -834,15 +834,17 @@ def voice_settings_menu():
         UI.clear()
         
         stt_enabled = bool(Config.get("speech_stt_enabled", False))
+        tts_enabled = bool(Config.get("speech_tts_enabled", False))
         wake_word_enabled = bool(Config.get("stt_wake_word_enabled", False))
         current_wake_word = Config.get("stt_wake_word", "hey_jarvis")
         tts_engine = Config.get("speech_tts_engine", "piper")  # "piper" or "system"
 
-        UI.panel(f"STT: {'ON' if stt_enabled else 'OFF'} | Wake Word: {'ON' if wake_word_enabled else 'OFF'} ({current_wake_word}) | TTS: {tts_engine.upper()}",
-                 title="🎤 Voice Settings (100% Local & Free)", style="highlight")
+        UI.panel(f"TTS: {'ON' if tts_enabled else 'OFF'} | STT: {'ON' if stt_enabled else 'OFF'} | Wake Word: {'ON' if wake_word_enabled else 'OFF'} ({current_wake_word})",
+                 title="🎤 TTS / STT / Wake Word Settings", style="highlight")
 
         choices = [
-            (f"🔊 TTS Engine: {tts_engine.upper()} ({'Neural' if tts_engine == 'piper' else 'Native'})", 'tts_engine'),
+            (f"Speech Output (TTS) [{'ON' if tts_enabled else 'OFF'}]", 'toggle_tts'),
+            (f"TTS Engine: {tts_engine.upper()} ({'Neural' if tts_engine == 'piper' else 'Native'})", 'tts_engine'),
             ("─────────────────", None),
             (f"Speech-to-Text (STT) [{'ON' if stt_enabled else 'OFF'}]", 'toggle_stt'),
             ("Select Microphone", 'mic'),
@@ -863,7 +865,7 @@ def voice_settings_menu():
             ("Back", "back")
         ])
         
-        questions = [inquirer.List('action', message="Voice Options", choices=choices)]
+        questions = [inquirer.List('action', message="TTS / STT / Wake Word Settings", choices=choices)]
         answers = inquirer.prompt(questions)
         
         if not answers or answers['action'] == 'back':
@@ -871,7 +873,12 @@ def voice_settings_menu():
             
         action = answers['action']
         
-        if action == 'tts_engine':
+        if action == 'toggle_tts':
+            new_val = not tts_enabled
+            Config.set("speech_tts_enabled", new_val)
+            UI.event("Settings", f"TTS {'enabled' if new_val else 'disabled'}", style="success")
+
+        elif action == 'tts_engine':
             # Toggle between piper and system
             new_engine = "system" if tts_engine == "piper" else "piper"
             Config.set("speech_tts_engine", new_engine)
@@ -1038,7 +1045,7 @@ def main_menu(agent=None):
         tts_enabled = bool(Config.get("speech_tts_enabled", False))
         tts_label = f"🔊 Speech Output (TTS) [{'ON' if tts_enabled else 'OFF'}]"
 
-        voice_label = "🎤 Voice / STT / Wake Word Settings"
+        voice_label = "🎤 TTS / STT / Wake Word Settings"
         
         # Get automation count
         try:
@@ -1092,7 +1099,6 @@ def main_menu(agent=None):
             (outputs_label, 'ux_outputs'),
             (terminals_label, 'separate_terminals'),
             (timeout_label, 'subagent_timeout'),
-            (tts_label, 'speech_tts'),
             (voice_label, 'voice_menu'),
         ])
             

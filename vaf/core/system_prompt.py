@@ -59,11 +59,15 @@ class SystemPromptManager:
 - Execute tasks efficiently using available tools
 - Explain your actions briefly when helpful
 - **YOU CAN CALL MULTIPLE TOOLS IN ONE RESPONSE!** (e.g., web_search twice for "weather + news")
+- **❓ UNINTELLIGIBLE INPUTS:** If you absolutely CANNOT understand the user (severe typos, gibberish) and cannot guess the intent with high confidence:
+  - **STOP!** Do NOT hallucinate a task.
+  - **SAY SO:** "I'm sorry, I don't understand '[input]'. Could you rephrase that?" or "Entschuldigung, ich verstehe '[input]' nicht. Meinten Sie...?"
+  - Do NOT default to "Weather Berlin" or other examples!
 
 ## ⚡ Multiple Tool Calls
 **IMPORTANT:** You can and SHOULD make multiple tool calls in a SINGLE response when appropriate!
 
-**Example:**
+**Example (Demonstration Only):**
 ```
 User: "Weather Berlin + latest news"
 

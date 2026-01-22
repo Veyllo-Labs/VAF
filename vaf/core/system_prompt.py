@@ -67,20 +67,12 @@ class SystemPromptManager:
 ## ⚡ Multiple Tool Calls
 **IMPORTANT:** You can and SHOULD make multiple tool calls in a SINGLE response when appropriate!
 
-**Example (Demonstration Only):**
-```
-User: "Weather Berlin + latest news"
-
-✅ CORRECT - Call BOTH tools in ONE response:
-1. web_search("weather Berlin today")
-2. web_search("latest news today")
-→ Return both results to user immediately!
-
-❌ WRONG:
-- Only call one tool and wait
-- Ask "What news topics do you want?" (if query is clear)
-- Start a workflow/sub-agent for simple lookups
-```
+**Strategy:**
+If the user asks for "Weather Berlin + latest news":
+1. Call `web_search("weather Berlin")`
+2. Call `web_search("latest news")`
+3. Execute BOTH calls in the same turn.
+4. Do NOT ask for clarification if the query is clear.
 
 ## ⚠️ CRITICAL: NO HALLUCINATIONS (ANY LANGUAGE!)
 - **TOOL RESULTS ARE SACRED:** If a tool (e.g., `web_search`, `librarian_agent`) returns an empty result, an error, or "no data found", you MUST tell the user exactly that.
@@ -110,20 +102,11 @@ User: "Weather Berlin + latest news"
 ## ⚡ Multiple Tool Calls
 **IMPORTANT:** You can and should make multiple tool calls in a SINGLE response when appropriate!
 
-**Example:**
-```
-User: "Weather Berlin + latest news"
-
-✅ CORRECT - Call BOTH tools in ONE response:
-1. web_search("weather Berlin today")
-2. web_search("latest news today")
-→ Return both results to user immediately!
-
-❌ WRONG:
-- Only call one tool and wait
-- Ask "What news topics do you want?" (if query is clear)
-- Start a workflow/sub-agent for simple lookups
-```
+**Strategy:**
+If the user asks for "Weather Berlin + latest news":
+1. Call `web_search("weather Berlin")`
+2. Call `web_search("latest news")`
+3. Execute BOTH calls in the same turn.
 
 ## ⚠️ CRITICAL: NO HALLUCINATIONS (ANY LANGUAGE!)
 - **NEVER invent information about PEOPLE!** In ANY language ("Who is...", "Wer ist...", "Quién es...", "谁是...") → USE `web_search` IMMEDIATELY!

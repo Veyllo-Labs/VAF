@@ -77,6 +77,7 @@ class ContextManager:
         
         # Archive for restoration
         self.archive: List[ContextSnapshot] = []
+        self.created_archives: List[Path] = []  # Track created files for cleanup
         self.ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -442,7 +443,7 @@ class ContextManager:
             self.archive.pop(0)
         
         # Also save to disk
-        archive_file = self.ARCHIVE_DIR / f"context_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        archive_file = self.ARCHIVE_DIR / f"context_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hashlib.md5(str(datetime.now()).encode()).hexdigest()[:6]}.json"
         try:
             with open(archive_file, 'w', encoding='utf-8') as f:
                 json.dump({
@@ -452,9 +453,20 @@ class ContextManager:
                     "state": {k: v for k, v in self.state.__dict__.items() if k != 'code_snippets'},
                     "token_count": snapshot.token_count
                 }, f, indent=2, ensure_ascii=False)
+            self.created_archives.append(archive_file)
         except Exception:
             pass  # Silent fail for disk archive
     
+    def cleanup(self):
+        """Cleanup temporary archive files created during this session."""
+        for file_path in self.created_archives:
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+            except Exception:
+                pass
+        self.created_archives = []
+
     def restore_latest(self) -> Optional[List[Dict]]:
         """Restore the most recent archived history."""
         if self.archive:

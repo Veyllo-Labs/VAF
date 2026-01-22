@@ -19,6 +19,7 @@ from vaf.tools.base import BaseTool
 from vaf.cli.ui import UI, AnimatedHeader
 from vaf.tools.filesystem import ReadFileTool, ListFilesTool, TreeTool, FinderTool, WriteFileTool, FolderSizeTool
 from vaf.tools.python_sandbox import PythonSandboxTool
+from vaf.core.fs_map import CachedFilesystemMap
 
 # Try to import psutil for better disk info (optional)
 try:
@@ -103,7 +104,39 @@ class LibrarianTool(BaseTool):
         # Always add home and ~
         self.folder_aliases["home"] = self.home
         self.folder_aliases["~"] = self.home
+        
+        # Filesystem Map
+        self.fs_map = CachedFilesystemMap()
+        self.map_cache = None
+        self.last_scan = None
     
+    def get_system_prompt_addition(self) -> str:
+        """Adds the filesystem map to the system prompt."""
+        if self.should_refresh_map():
+            UI.event("Librarian", "Scanning filesystem map...", style="dim")
+            self.map_cache = self.fs_map.build_map(depth=1)
+            self.last_scan = time.time()
+        
+        return f"""
+## FILESYSTEM CONTEXT (Smart Map)
+
+You have access to this filesystem map for fast navigation:
+
+{self.fs_map.format_summary()}
+
+**IMPORTANT RULES:**
+- When asked "how many documents/images/files?", check the map FIRST.
+- Default to standard locations (Documents for docs, Pictures for images).
+- Only use file_search/find_files tool if the map doesn't have the answer.
+- If user asks about a specific file type, check the 'Common' types in the map first.
+"""
+
+    def should_refresh_map(self) -> bool:
+        """Refresh map every 5 minutes or if not yet scanned."""
+        if not self.last_scan:
+            return True
+        return (time.time() - self.last_scan) > 300  # 5 min
+
     def run(self, **kwargs) -> str:
         task = kwargs.get('task', '').strip()
         if not task:
@@ -333,6 +366,19 @@ Remove duplicates and ensure smooth flow.
 
             # If we couldn't parse, force LLM slow-path instead of filesystem
             return None
+        
+        # ─────────────────────────────────────────────────────────────────────
+        # SMART FILESYSTEM MAP QUERY (Ultra-Fast Path)
+        # ─────────────────────────────────────────────────────────────────────
+        # Check if we can answer from the cached map directly
+        if self.should_refresh_map():
+             self.fs_map.build_map(depth=1)
+             self.last_scan = time.time()
+             
+        map_answer = self.fs_map.query_fast(task)
+        if map_answer:
+             return f"### Filesystem Map Answer\n\n{map_answer}"
+
         # Normalize common mojibake sequences seen in some Windows consoles (e.g., "groÃŸ" instead of "groß")
         task_norm = (
             task_lower
@@ -1600,6 +1646,9 @@ Remove duplicates and ensure smooth flow.
         # Get disk/storage information
         disk_info = self._get_disk_info()
         
+        # Get filesystem map
+        fs_map_context = self.get_system_prompt_addition()
+        
         # System prompt
         system_prompt = f"""You are the Librarian, a file/info retrieval specialist.
 User's Home: '{self.home}'
@@ -1642,6 +1691,8 @@ Common paths:
 - Downloads: {self.folder_aliases.get('downloads', 'N/A')}
 - Desktop: {self.folder_aliases.get('desktop', 'N/A')}
 - Documents: {self.folder_aliases.get('documents', 'N/A')}
+
+{fs_map_context}
 
 {disk_info}"""
 

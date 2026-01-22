@@ -212,6 +212,10 @@ class Agent:
         
         # Flag to prevent multiple shutdown calls
         self._shutdown_called = False
+        
+        # False Promise Detection State
+        self._false_promise_retries = 0
+        self._max_false_promise_retries = 20
 
     def _get_tokenizer(self):
         """
@@ -770,6 +774,15 @@ class Agent:
         try:
             from vaf.core.speech import get_speech_manager
             get_speech_manager().stop()
+        except:
+            pass
+
+        # Cleanup Context Archives (Temporary)
+        try:
+            if hasattr(self, 'context_manager'):
+                self.context_manager.cleanup()
+            elif hasattr(self, '_context_manager'):
+                self._context_manager.cleanup()
         except:
             pass
         
@@ -2652,47 +2665,42 @@ class Agent:
     
     def _route_tools(self, user_input: str) -> List[str]:
         """
-        Uses a preliminary LLM call to select the most relevant tools for a given user input.
-        This helps to reduce the number of tool schemas loaded into the main context.
+        Dynamically selects relevant tools based on user input AND context.
+        Uses a lightweight LLM call to classify intent.
         """
         if not self.tools:
             return []
-
-        # 0. Heuristic Pre-Selection (Force critical tools based on keywords)
-        # DISABLED: User prefers full LLM-based routing.
-        # Keeping forced_tools empty means we rely 100% on the router LLM.
-        forced_tools = set()
+            
         u_lower = user_input.lower()
+        forced_tools = set()
         
-        # NOTE: Heuristics below are disabled.
-        # If we ever need them back as a safety net, we can uncomment them.
-        """
-        # Librarian / Filesystem Heuristics
-        if any(kw in u_lower for kw in [
-            "folder size", "disk usage", "how big", "storage", "space", 
-            "wie voll", "speicher", "größe", "dateien", "files", "ordner", 
-            "directory", "list", "tree", "read", "write", "find", "search file"
-        ]):
-            if "librarian_agent" in self.tools:
-                forced_tools.add("librarian_agent")
-                
-        # Automation Heuristics
-        if any(kw in u_lower for kw in [
-            "automate", "schedule", "daily", "weekly", "every day", 
-            "automatisier", "plane", "täglich", "wöchentlich", "jeden tag"
-        ]):
-            if "create_automation" in self.tools:
-                forced_tools.add("create_automation")
+        # 0. Context Awareness (Intent)
+        context_str = ""
+        if hasattr(self, 'context_manager'):
+            intent = self.context_manager.intent
+            if intent.primary_goal:
+                context_str = f"Current Goal: {intent.primary_goal}\n"
+            if intent.sub_goals:
+                context_str += f"Recent Topics: {', '.join(intent.sub_goals)}\n"
         
-        # Coding Heuristics (Crucial for developer tasks)
+        # Add Last Assistant Message (Immediate Context)
+        if len(self.history) >= 2:
+            last_msg = self.history[-2]
+            if last_msg.get('role') == 'assistant':
+                content = str(last_msg.get('content', ''))[:300].replace('\n', ' ')
+                context_str += f"Last Assistant Message: \"{content}\"\n"
+        
+        # Heuristic checks (Fast Path)
+        if "weather" in u_lower or "wetter" in u_lower:
+             if "web_search" in self.tools: forced_tools.add("web_search")
+        
+        # Coding Heuristics
         if any(kw in u_lower for kw in [
-            "code", "script", "program", "app", "website", "webseite", "html", 
-            "css", "javascript", "python", "fix", "bug", "refactor", "implement",
-            "write", "create file", "function", "class", "api"
+            "code", "function", "class", "script", "program", "debug", "fix", 
+            "python", "javascript", "refactor", "implement"
         ]):
             if "coding_agent" in self.tools:
                 forced_tools.add("coding_agent")
-            # Always enable git for coding tasks as they often go together
             if "git_status" in self.tools:
                  forced_tools.add("git_status")
                  forced_tools.add("git_add_commit")
@@ -2704,16 +2712,14 @@ class Agent:
                 forced_tools.add("git_add_commit")
                 forced_tools.add("git_log")
         
-        # Research Heuristics (Deep research vs Web Search)
+        # Research Heuristics
         if any(kw in u_lower for kw in ["research", "recherche", "analyse", "report", "comprehensive", "umfassend", "deep"]):
              if "research_agent" in self.tools:
                  forced_tools.add("research_agent")
-             # Always add web_search as backup/complement
              if "web_search" in self.tools:
                  forced_tools.add("web_search")
 
-        # Web Search Heuristics (Always good to have)
-        # Expanded with more natural language query indicators
+        # Web Search Heuristics
         if any(kw in u_lower for kw in [
             "search", "find", "google", "look up", "news", "weather", 
             "wetter", "nachrichten", "suche", "wer ist", "who is", "what is",
@@ -2723,9 +2729,8 @@ class Agent:
         ]):
              if "web_search" in self.tools:
                  forced_tools.add("web_search")
-        """
 
-        # 1. Create a simplified list of tools (name and description only)
+        # 1. Create a simplified list of tools
         tool_info = []
         for name, tool_instance in self.tools.items():
             description = getattr(tool_instance, 'description', 'No description available.')
@@ -2733,13 +2738,14 @@ class Agent:
         
         tool_list_str = "\n".join(tool_info)
 
-        # 2. Build the prompt for the router
+        # 2. Build the prompt for the router WITH CONTEXT
         prompt = (
             f"You are an intelligent Tool Router. Your task is to select the correct tools for the user's request.\n"
-            f"IMPORTANT: The user may write in ANY language (English, German, Turkish, Chinese, etc.). "
-            f"You must analyze the INTENT and map it to the available tools.\n"
+            f"IMPORTANT: The user may write in ANY language. Analyze the INTENT and map it to the available tools.\n"
+            f"Consider the CONTEXT of the conversation (previous goals).\n"
             f"Respond with a comma-separated list of tool names only. Do not add any explanation.\n\n"
             f"Available Tools:\n{tool_list_str}\n\n"
+            f"{context_str}"
             f"User Request: \"{user_input}\"\n\n"
             f"Relevant Tools (comma-separated):"
         )
@@ -2749,52 +2755,52 @@ class Agent:
         selected_tools_str = ""
         try:
             from vaf.cli.ui import UI
-            if self.use_server:
-                payload = {
-                    "messages": messages, 
-                    "max_tokens": 500, 
-                    "temperature": 0.1,
-                    "stream": False
-                }
-                res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=20).json()
-                selected_tools_str = res['choices'][0]['message']['content']
-            elif self.llm:
-                 output = self.llm.create_chat_completion(
-                     messages=messages,
-                     max_tokens=500,
-                     temperature=0.1
-                 )
-                 selected_tools_str = output['choices'][0]['message']['content']
-            elif self.api_backend:
-                output = self.api_backend.create_chat_completion(
-                    messages=messages,
-                    max_tokens=500,
-                    temperature=0.1
-                )
-                selected_tools_str = output['choices'][0]['message']['content']
-            else:
-                UI.event("Router Debug", "No backend available for routing", style="yellow")
+            with UI.console.status("[bold cyan] Routing Tools...[/bold cyan]", spinner="dots"):
+                if self.use_server:
+                    payload = {
+                        "messages": messages, 
+                        "max_tokens": 1224, 
+                        "temperature": 0.1,
+                        "stream": False
+                    }
+                    res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=20).json()
+                    selected_tools_str = res['choices'][0]['message']['content']
+                elif self.llm:
+                     output = self.llm.create_chat_completion(
+                         messages=messages,
+                         max_tokens=1224,
+                         temperature=0.1
+                     )
+                     selected_tools_str = output['choices'][0]['message']['content']
+                elif self.api_backend:
+                    output = self.api_backend.create_chat_completion(
+                        messages=messages,
+                        max_tokens=1224,
+                        temperature=0.1
+                    )
+                    selected_tools_str = output['choices'][0]['message']['content']
+                else:
+                    UI.event("Router Debug", "No backend available for routing", style="yellow")
         except Exception as e:
-            # Fallback in case of router failure: return all tools
+            # On error, log it but don't crash. Return [] to trigger safety net.
             from vaf.cli.ui import UI
             UI.event("Router Debug", f"LLM Call Failed: {e}", style="red")
-            return list(self.tools.keys())
+            return []
 
         # 4. Parse the response
         if not selected_tools_str:
-            # If router fails but we have heuristics, return those plus defaults
+            from vaf.cli.ui import UI
             if forced_tools:
-                from vaf.cli.ui import UI
                 UI.event("Router", f"Script-based selection: {', '.join(forced_tools)}", style="dim")
-            return list(forced_tools) if forced_tools else []
+                return list(forced_tools)
+            else:
+                UI.event("Router", "No tools selected (fallback)", style="dim")
+                return [] # Will trigger safety net in chat_step
             
-        # Clean up the response and extract tool names
-        # Some models prepend "Answer:" or "Selected Tools:" - we need to strip that
         import re
         clean_str = re.sub(r'^(answer|result|selected|tools|relevant|output):\s*', '', selected_tools_str, flags=re.IGNORECASE).strip()
         tool_names = [name.strip() for name in clean_str.split(',') if name.strip()]
         
-        # Combined logging for transparency
         from vaf.cli.ui import UI
         if forced_tools:
             UI.event("Router", f"Script-based: {', '.join(forced_tools)}", style="dim")
@@ -2803,10 +2809,7 @@ class Agent:
         elif not forced_tools:
             UI.event("Router", "No tools selected", style="dim")
         
-        # Combine LLM selection with forced tools
         combined_tools = set(tool_names) | forced_tools
-        
-        # Filter to only include tools that actually exist
         valid_tools = [name for name in combined_tools if name in self.tools]
         
         return valid_tools
@@ -2913,6 +2916,11 @@ class Agent:
         # Always add user input if provided, even if skip_input=True (which skips analysis/overhead)
         if user_input:
             self.history.append({"role": "user", "content": user_input})
+            
+            # LIVE CONTEXT UPDATE: Ensure intent is fresh for the router immediately
+            if hasattr(self, 'context_manager'):
+                self.context_manager.update_intent(user_input)
+                self.context_manager.update_state({"role": "user", "content": user_input})
         
         # Snapshot history AFTER adding user input. 
         # This index points to the user message we just added.
@@ -2922,7 +2930,16 @@ class Agent:
         # Dynamic Tool Selection (Tool Router)
         # Only route tools on a new, non-empty input
         if not auto_retry and not skip_input and user_input:
-            self._active_tools = self._route_tools(user_input)
+            selected_tools = self._route_tools(user_input)
+            
+            # SAFETY NET: If router returns empty list, fallback to ALL tools
+            # Otherwise the model gets 0 tools and hallucinates using them.
+            if not selected_tools:
+                from vaf.cli.ui import UI
+                UI.event("Router", "Safety Net: Using ALL tools (Router found none)", style="dim")
+                self._active_tools = None
+            else:
+                self._active_tools = selected_tools
         else:
             # On retries or for internal steps, use all tools
             self._active_tools = None
@@ -3356,6 +3373,40 @@ class Agent:
             # --- Unified Post-Processing ---
             if stream_callback: stream_callback("\n")
             
+            # 0. FALSE PROMISE DETECTION (Anti-Hallucination)
+            # Check if model claimed to use a tool but didn't emit a tool call
+            # Only check if we have content and NO tools
+            if not streaming_tools and full_content.strip():
+                if self._detect_false_tool_promise(full_content, []):
+                    self._false_promise_retries += 1
+                    
+                    if self._false_promise_retries > self._max_false_promise_retries:
+                        UI.event("System", "Max false promise retries reached - skipping validation", style="error")
+                        self._false_promise_retries = 0
+                        # Proceed without blocking
+                    else:
+                        UI.event("System", f"False promise detected (attempt {self._false_promise_retries}) - forcing retry...", style="warning")
+                        
+                        # Add error to history to force correction
+                        self.history.append({
+                            "role": "assistant",
+                            "content": full_content
+                        })
+                        self.history.append({
+                            "role": "system", 
+                            "content": (
+                                "CORRECTION NEEDED: You mentioned using a tool (e.g. 'I am using...', 'Let me search...') "
+                                "but you did NOT execute the tool call.\n"
+                                "Please call the tool using proper function syntax now."
+                            )
+                        })
+                        
+                        # Force retry without user input
+                        continue
+
+            # Reset retry counter if tool calls were made or we passed the check
+            self._false_promise_retries = 0
+
             # 1. Handle Tool Calls
             # ... (Tool logic unchanged) ...
             if streaming_tools:
@@ -3505,6 +3556,34 @@ class Agent:
                                         "function": {"name": item["name"], "arguments": json.dumps(item["arguments"]) if isinstance(item["arguments"], dict) else item["arguments"]}
                                     })
                     except: pass
+
+                # 3. Text Pattern: "1. web_search(...)" or "Answer: web_search(...)"
+                # This catches models (like VQ-1) that hallucinate text formats instead of JSON
+                if not tool_calls_detected:
+                    text_tools = re.findall(r'(?:^|\n)(?:Answer:)?\s*(?:\d+\.\s*)?([a-zA-Z0-9_]+)\s*\((.*?)\)', full_response)
+                    for func_name, args_str in text_tools:
+                        if func_name in self.tools:
+                            # Parse arguments (simple quote extraction)
+                            # web_search("query") -> {"query": "query"}
+                            args = {}
+                            
+                            # Heuristic: try to map single string argument to first parameter
+                            if args_str.strip().startswith('"') or args_str.strip().startswith("'"):
+                                clean_arg = args_str.strip().strip('"\'')
+                                # Get first parameter name from tool definition
+                                tool_def = self.tools[func_name]
+                                params = getattr(tool_def, 'parameters', {}).get('properties', {})
+                                if params:
+                                    first_param = list(params.keys())[0]
+                                    args[first_param] = clean_arg
+                            
+                            # If parsing succeeded, add it
+                            if args:
+                                tool_calls_detected.append({
+                                    "id": f"call_{os.urandom(4).hex()}",
+                                    "type": "function",
+                                    "function": {"name": func_name, "arguments": json.dumps(args)}
+                                })
 
             if tool_calls_detected:
                 content_for_history = full_response if full_response else "Thinking..." 
@@ -3800,9 +3879,30 @@ class Agent:
             # We can immediately check for tool-intent without waiting, as the model has finished generating
             # Empty Response Handler: Remove responses without final answer and restart from snapshot
             # NO RETRY LIMITS - will loop until we get a response
-            if (not full_response or is_effectively_empty):
+            if (not full_response or is_effectively_empty) and not tool_calls_detected:
                 UI.event("System", "Empty response detected. Applying snapshot and retry...", style="warning")
                 
+                # Check for tool results that occurred during this turn (after original snapshot)
+                # If we executed tools but got no final answer, we must PRESERVE the tools!
+                # Otherwise we loop forever: Call Tool -> Empty Ans -> Reset -> Call Tool -> ...
+                
+                # Identify messages added since original snapshot
+                current_len = len(self.history)
+                new_snapshot_len = history_snapshot_len
+                
+                # Check if we have valid tool interactions to keep
+                tools_preserved = 0
+                for i in range(history_snapshot_len + 1, current_len):
+                    msg = self.history[i]
+                    # Keep tool calls (assistant) and tool outputs (tool)
+                    if msg.get('role') == 'tool' or (msg.get('role') == 'assistant' and msg.get('tool_calls')):
+                        new_snapshot_len = i
+                        tools_preserved += 1
+                
+                if tools_preserved > 0:
+                    UI.event("Snapshot", f"Advanced snapshot: Preserved {tools_preserved} tool messages", style="success")
+                    history_snapshot_len = new_snapshot_len
+
                 # ═══════════════════════════════════════════════════════════════
                 # PROACTIVE CONTEXT CLEARING (User Request: "1 verschen" -> 15 attempts)
                 # ═══════════════════════════════════════════════════════════════
@@ -3869,7 +3969,8 @@ class Agent:
             
             # Check for language mismatch: Did the model respond in a different language than the user?
             # This helps catch cases where LANGUAGE_HINT was ignored (e.g., user asks in Turkish, model responds in English)
-            if not skip_input and user_input and history_content:
+            # CRITICAL: Do NOT check if tools were called (tool syntax "web_search" looks English but is valid)
+            if not skip_input and user_input and history_content and not tool_calls_detected:
                 if self._check_language_mismatch(user_input, history_content):
                     # Mismatch detected! The warning is already in history (as system msg).
                     # Now we must REMOVE the bad response and RETRY immediately.
@@ -4254,6 +4355,102 @@ class Agent:
             shutil.move(res_src, res_dst)
             return f"Moved {src} to {dst}"
         except Exception as e: return str(e)
+
+    def _detect_false_tool_promise(self, response_text: str, tool_calls: list) -> bool:
+        """
+        Intelligently detects if the model claimed to use a tool but didn't execute it.
+        Uses a hybrid approach: Structural Analysis (Fast) -> LLM Validator (Accurate).
+        
+        Args:
+            response_text: The model's text response.
+            tool_calls: List of tool calls extracted (if any).
+            
+        Returns:
+            True if a false promise is detected (model lied about using tool).
+        """
+        # 1. Fast Path: If tools were actually called, it's valid.
+        if tool_calls and len(tool_calls) > 0:
+            return False
+            
+        # 2. Structural Analysis (Heuristics)
+        # -----------------------------------
+        # Normalize text
+        text = response_text.strip()
+        
+        # Skip only very short responses (keep long ones as they might contain false promises)
+        if len(text) < 10:
+            return False
+
+        suspicion_score = 0.0
+        import re
+        
+        # Indicator A: Mentions known tool names in code format (e.g. `read_file`)
+        tool_names = list(self.tools.keys())
+        formatted_tool_mentions = 0
+        for tool in tool_names:
+            if f"`{tool}`" in text or f"'{tool}'" in text or f'"{tool}"' in text:
+                formatted_tool_mentions += 1
+        
+        if formatted_tool_mentions > 0:
+            suspicion_score += 0.35
+            
+        # Indicator B: Waiting indicators (Ellipses, "wait", "moment")
+        if re.search(r'\.{3,}|…|⏳|⌛|🔄', text):
+            suspicion_score += 0.35
+            
+        # Indicator C: Ends with action-like statement (before punctuation)
+        if re.search(r'(:|…|\.{3,})\s*$', text):
+            suspicion_score += 0.2
+            
+        # Indicator D: Action keywords (Multilingual)
+        # We check for a few common ones, but rely mostly on structure
+        action_keywords = [
+            "read", "lesen", "search", "suche", "execute", "führe aus",
+            "using", "nutze", "verwende", "opening", "öffne"
+        ]
+        if any(kw in text.lower() for kw in action_keywords):
+            suspicion_score += 0.1
+
+        # 3. Decision Logic
+        # -----------------
+        # Low suspicion: Trust the model (it's just talking)
+        if suspicion_score < 0.4:
+            return False
+            
+        # High suspicion: Verify with LLM (LLM-as-Judge)
+        # This prevents false positives where model explains "You can use `read_file`..."
+        try:
+            # Construct a fast validation prompt
+            validator_prompt = (
+                f"Analyze this AI response. Did the AI CLAIM to use a tool right now, but didn't execute it?\n"
+                f"Response: \"{text}\"\n"
+                f"Tools Executed: None\n\n"
+                f"Rules:\n"
+                f"- FALSE_PROMISE: \"I am using `read_file`...\", \"Let me search...\", \"I'll execute this...\"\n"
+                f"- SAFE: \"You can use `read_file`\", \"I recommend `web_search`\", \"The tool is for...\"\n\n"
+                f"Answer ONLY 'FALSE_PROMISE' or 'SAFE'."
+            )
+            
+            # Fast inference (low tokens, deterministic)
+            messages = [{"role": "user", "content": validator_prompt}]
+            result = ""
+            
+            if self.use_server: # Local Server
+                payload = {"messages": messages, "max_tokens": 5, "temperature": 0.0}
+                res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=5).json()
+                result = res['choices'][0]['message']['content']
+            elif self.api_backend: # API
+                output = self.api_backend.create_chat_completion(messages, max_tokens=5, temperature=0.0)
+                result = output['choices'][0]['message']['content']
+            elif self.llm: # Local Library
+                output = self.llm.create_chat_completion(messages=messages, max_tokens=5, temperature=0.0)
+                result = output['choices'][0]['message']['content']
+                
+            return "FALSE_PROMISE" in result.upper()
+            
+        except Exception:
+            # If validation fails, fallback to heuristic (conservative)
+            return suspicion_score > 0.7
 
     def _prepare_messages(self, messages: List[Dict]) -> List[Dict]:
         """Prepare messages for specific model quirks (e.g. Gemma)."""

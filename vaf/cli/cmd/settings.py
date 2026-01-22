@@ -33,26 +33,43 @@ def search_models_menu():
                 full=True # Get full details like likes, created_at
             )
             
-            # Prioritize exact match if query looks like "user/repo"
+            # Prioritize exact match if query looks like "user/repo" or "user/repo/filename"
             results = list(models)
             exact_match = None
-            if "/" in query:
+            preselected_file = None
+            
+            # Check for direct repo access (User/Repo or User/Repo/File)
+            target_repo = None
+            if query.count("/") >= 2:
+                # Handle "user/repo/filename" format
+                parts = query.split("/")
+                target_repo = f"{parts[0]}/{parts[1]}"
+                preselected_file = "/".join(parts[2:]) # Handle paths with subfolders if needed, though usually just filename
+            elif "/" in query:
+                # Handle "user/repo" format
+                target_repo = query
+            
+            if target_repo:
+                # Check if we already found it in search results
                 for i, m in enumerate(results):
-                    if m.modelId.lower() == query.lower():
+                    if m.modelId.lower() == target_repo.lower():
                         exact_match = results.pop(i)
                         break
                 
-                # If exact match found (or forced fetch needed), put it top
+                # If not found in search, try fetching directly
+                if not exact_match:
+                    try:
+                        # Fetch info without GGUF filter first to check existence
+                        direct = api.model_info(repo_id=target_repo)
+                        # Only include if it actually has GGUF files or we are desperate
+                        if any(f.rfilename.endswith(".gguf") for f in direct.siblings):
+                            exact_match = direct
+                    except Exception:
+                        pass
+                
+                # If we found an exact match (either from search or direct fetch), put it top
                 if exact_match:
                     results.insert(0, exact_match)
-                elif not results:
-                    # Try fetching direct if search failed but it looks like an ID
-                    try:
-                        direct = api.model_info(repo_id=query)
-                        # Check if it has GGUF
-                        if any(f.rfilename.endswith(".gguf") for f in direct.siblings):
-                            results.append(direct)
-                    except: pass
 
             choices = []
             for m in results:
@@ -72,6 +89,7 @@ def search_models_menu():
             
             if not choices:
                 UI.error("No GGUF models found.")
+                UI.console.input("[dim]Press Enter to try again...[/dim]")
                 continue
 
             choices.append(("Cancel", None))
@@ -98,32 +116,121 @@ def search_models_menu():
                 time.sleep(1)
                 continue
 
-            download_model_flow(selected_model)
+            # If user selected the exact match we parsed from input, pass the filename
+            # Otherwise (if they picked a different result), don't force the filename
+            file_to_pass = preselected_file if (target_repo and selected_model == target_repo) else None
+            download_model_flow(selected_model, preselected_filename=file_to_pass)
             
         except Exception as e:
             UI.error(f"Search failed: {e}")
+            UI.console.input("[dim]Press Enter to continue...[/dim]")
 
-def download_model_flow(repo_id: str):
+def download_model_flow(repo_id: str, preselected_filename: str = None):
     try:
         api = HfApi()
-        files = api.list_repo_files(repo_id=repo_id)
-        gguf_files = [f for f in files if f.endswith('.gguf')]
         
-        choices = gguf_files
-        if not choices:
-            UI.error("No .gguf files found in this repo.")
-            return
+        # If filename was already provided in the search query, use it directly
+        if preselected_filename:
+            # Verify file exists in repo to be safe
+            try:
+                # Quick check if file exists (head request or list)
+                # We can just list files and check
+                files = api.list_repo_files(repo_id=repo_id)
+                if preselected_filename in files:
+                    filename = preselected_filename
+                    UI.success(f"Found specified file: {filename}")
+                    # Skip to download
+                else:
+                    UI.warning(f"File '{preselected_filename}' not found in repo. Please select from list.")
+                    preselected_filename = None # Fallback to list
+            except Exception:
+                preselected_filename = None # Fallback
 
-        q = [inquirer.List('file', message="Select quantization file", choices=choices)]
-        answers = inquirer.prompt(q)
-        
-        if not answers: return
+        if not preselected_filename:
+            # Fetch model info with metadata to get file sizes
+            try:
+                model_info = api.model_info(repo_id=repo_id, files_metadata=True)
+                siblings = model_info.siblings
+            except Exception:
+                # Fallback if metadata fetch fails
+                siblings = []
+                files = api.list_repo_files(repo_id=repo_id)
+                for f in files:
+                    # Mock object for compatibility
+                    class MockFile: pass
+                    mf = MockFile()
+                    mf.rfilename = f
+                    mf.size = 0
+                    siblings.append(mf)
 
-        filename = answers['file']
-        
+            gguf_files = [f for f in siblings if f.rfilename.endswith('.gguf')]
+            
+            if not gguf_files:
+                UI.error(f"No GGUF files found in {repo_id}")
+                return
+
+            # Sort by size (ascending)
+            gguf_files.sort(key=lambda x: x.size if hasattr(x, 'size') else 0)
+
+            UI.print(f"\n[bold]Available GGUF files in {repo_id}:[/bold]")
+            
+            choices = []
+            for f in gguf_files:
+                fname = f.rfilename
+                
+                # Format Size
+                size_str = "?"
+                if hasattr(f, 'size') and f.size:
+                    if f.size > 1024**3:
+                        size_str = f"{f.size / (1024**3):.2f} GB"
+                    else:
+                        size_str = f"{f.size / (1024**2):.1f} MB"
+                
+                # Extract Quantization (heuristic)
+                quant = "Unknown"
+                # Common patterns: Q4_K_M, Q8_0, IQ3_XS, f16
+                import re
+                match = re.search(r'(Q\d_[A-Z0-9_]+|IQ\d_[A-Z0-9_]+|f16|bf16)', fname, re.IGNORECASE)
+                if match:
+                    q_tag = match.group(1).upper()
+                    # Map to friendly name
+                    if "Q4" in q_tag: quant = "4-bit"
+                    elif "Q5" in q_tag: quant = "5-bit"
+                    elif "Q6" in q_tag: quant = "6-bit"
+                    elif "Q8" in q_tag: quant = "8-bit"
+                    elif "Q2" in q_tag or "IQ2" in q_tag: quant = "2-bit"
+                    elif "Q3" in q_tag or "IQ3" in q_tag: quant = "3-bit"
+                    elif "F16" in q_tag: quant = "16-bit"
+                    
+                    quant = f"{quant} ({q_tag})"
+                
+                # Create label
+                label = f"{fname:<45} | {size_str:<8} | {quant}"
+                choices.append((label, fname))
+            
+            choices.append(("Cancel", None))
+            
+            # Use inquirer for selection
+            import inquirer
+            q = [
+                inquirer.List('file',
+                    message="Select quantization",
+                    choices=choices,
+                    carousel=True
+                )
+            ]
+            ans = inquirer.prompt(q)
+            if not ans or ans['file'] is None:
+                return
+            
+            filename = ans['file']
+        else:
+            filename = preselected_filename
+
         UI.event("System", f"Downloading {filename}...", style="warning")
         
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        # vaf/cli/cmd/settings.py -> vaf/cli/cmd -> vaf/cli -> vaf -> root
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         models_dir = os.path.join(base_dir, "models")
         
         hf_hub_download(repo_id=repo_id, filename=filename, local_dir=models_dir)

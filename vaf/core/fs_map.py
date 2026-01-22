@@ -193,7 +193,7 @@ class FilesystemMap:
         
         return self.map
     
-    def format_for_llm(self, compact: bool = False) -> str:
+    def format_summary(self, compact: bool = False) -> str:
         """
         Formats the map for LLM consumption (English).
         

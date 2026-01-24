@@ -10,6 +10,8 @@ The SystemPromptManager provides:
 """
 from typing import Dict, List, Any, Optional
 import re
+import os
+from vaf.core.main_persistence import MainPersistenceManager
 
 
 class SystemPromptManager:
@@ -20,18 +22,26 @@ class SystemPromptManager:
     
     DECAY_START = 3  # Modules stay active for 3 turns after trigger
     
-    def __init__(self, tools: List[Any] = None, model_name: str = "VQ-1"):
+    def __init__(self, tools: List[Any] = None, model_name: str = "VQ-1", agent_instance: Any = None):
         """
         Initialize the prompt manager with available tools and model name.
         
         Args:
             tools: List of tool instances available to the agent
             model_name: The name of the underlying AI model
+            agent_instance: Reference to the parent Agent instance (for workspace access)
         """
         self.tools = tools or []
         self.active_modules: Dict[str, int] = {}  # module_name -> remaining_turns
         self.user_language: str = "auto"
         self.model_name = model_name
+        self.agent = agent_instance # Store reference
+        
+        # Initialize Persistence Manager (lazy load in build_prompt if needed, or here)
+        try:
+            self.mpm = MainPersistenceManager(os.getcwd())
+        except Exception:
+            self.mpm = None
         
         # ═══════════════════════════════════════════════════════════════════════
         # CORE IDENTITY PROMPTS
@@ -384,7 +394,19 @@ Sub-agents run asynchronously - results arrive later
         parts.append(f"\n## Current Time\n{time_str}\n")
 
         # ═══════════════════════════════════════════════════════════════════════
-        # 3. ACTIVE MODULES
+        # 3. WORKSPACE CONTEXT (CWD Awareness)
+        # ═══════════════════════════════════════════════════════════════════════
+        if self.agent and hasattr(self.agent, 'workspace'):
+            ws_info = self.agent.workspace.get_context_info()
+            parts.append(f"""
+## 📂 WORKSPACE CONTEXT
+**Current Working Directory:** `{ws_info['cwd']}`
+**Project Root:** `{ws_info['project_root']}`
+**Inside Project:** {'Yes' if ws_info['is_in_project'] else 'No'}
+""")
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # 4. ACTIVE MODULES
         # ═══════════════════════════════════════════════════════════════════════
         active_module_parts = []
         # Sort for stable prompt order
@@ -396,7 +418,17 @@ Sub-agents run asynchronously - results arrive later
             parts.extend(active_module_parts)
         
         # ═══════════════════════════════════════════════════════════════════════
-        # 3. TOOL DOCUMENTATION
+        # 4. PERSISTENT CONTEXT INJECTION (Brain)
+        # ═══════════════════════════════════════════════════════════════════════
+        if self.mpm:
+            try:
+                persistent_context = self.mpm.build_context_injection()
+                parts.append(persistent_context)
+            except Exception:
+                pass
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # 5. TOOL DOCUMENTATION
         # ═══════════════════════════════════════════════════════════════════════
         if self.tools:
             tool_docs = self._build_tool_documentation()

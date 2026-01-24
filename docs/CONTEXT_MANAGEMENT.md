@@ -133,8 +133,6 @@ class SystemPromptManager:
         return prompt
 ```
 
----
-
 ## Context Management
 
 ### Overview
@@ -166,7 +164,7 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  📁 STATE CONTEXT                                   │   │
+│  │  📁 STATE CONTEXT (RAM / Compression)               │   │
 │  │  ├─ Files created/modified/read                     │    │
 │  │  ├─ Errors encountered                              │    │
 │  │  ├─ Tools used                                      │    │
@@ -182,36 +180,49 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Persistent Hybrid Architecture (Agatic vNext)
+
+In addition to the RAM-based context above, VAF now employs a **Persistent Hybrid Architecture** that maintains a "brain on disk". This ensures the Main Agent knows "where it is" and "what it's doing" even after restarts.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              PERSISTENT LAYER (.vaf/main/)                  │
+├─────────────────────────────────────────────────────────────┤
+│  ├─ user_intent.md       (The "North Star")                 │
+│  ├─ team_state.json      (Orchestration Status)             │
+│  └─ working_memory.json  (Scratchpad / Plans)               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Files managed by `MainPersistenceManager`:**
+- **`user_intent.md`**: Stores the original user request. Read-only for sub-agents, updated only by user input. Acts as an "Intent Lock".
+- **`team_state.json`**: Tracks the status of all sub-agents (`running`, `completed`, `needs_clarification`).
+- **`working_memory.json`**: Persists notes and plans across sessions.
+
+### Workspace Awareness
+
+VAF is now **CWD-Aware** (Current Working Directory). It understands the difference between "Scaffolding" (New Project) and "Engineering" (Existing Project).
+
+**`WorkspaceManager` Logic:**
+1. **Detection**: Scans for `.git`, `.vaf`, `package.json`, etc.
+2. **Anchor**: If inside a project, VAF anchors the Coder Agent to the current directory.
+3. **Scaffold**: If the user asks to "create a new project", VAF breaks out to `~/Documents/VAF_Projects/`.
+
+### Intent Locking & Validation
+
+To prevent "Context Drift" (where the agent gets distracted by sub-agent status reports), VAF implements an **Intent Lock**:
+
+1. **Snapshot**: User intent is saved immediately to `user_intent.md`.
+2. **Background Intel**: Sub-agent results are injected as "Background Intelligence", explicitly marked as *supporting data*, not new commands.
+3. **Final Answer Validator**: Before answering, VAF checks:
+   - Is this a "Meta-Response" (e.g., "I have processed the files")?
+   - Does it answer the original question?
+   - **Action**: If it's just meta-talk, the system blocks the output and forces the agent to provide the actual answer.
+
 ### Configuration
 
 - **Default Limit**: 8,192 tokens (configurable via `vaf settings`)
-- **Compression Trigger**: 85% usage (6,963 tokens of 8,192)
-- **Recent Memory**: Last 10 messages kept raw
-- **Archive Location**: `~/.vaf/context_archive/`
 
-### Implementation
-
-See `vaf/core/context.py` for the full implementation.
-
-### Context Protection & Retry Mechanism
-
-To ensure stability during long reasoning chains or network issues, VAF employs a robust retry mechanism with snapshot protection:
-
-1.  **Snapshots**: Before a retry attempt starts, the system records the current history length (`history_snapshot_len`).
-2.  **Automatic Reset**: If a response remains empty or breaks off, the history is **immediately** truncated back to this snapshot.
-3.  **No Error Accumulation**: The "failed" attempt (empty response or fragments) is **not** permanently stored. Each new iteration starts with a "clean" history.
-4.  **System Hint**: A short, invisible system hint is temporarily added (*"You didn't respond, please continue"*) to nudge the model. If this attempt also fails, this hint is removed upon the next reset, ensuring nothing "piles up".
-
-**New: Aggressive Cleanup (Early Warning)**
-At 15 retries, the system triggers an "Early Warning" cleanup:
-- Clears all intermediate history
-- Preserves **only** the original System Prompt and User Snapshot
-- Displays a gray status message: `Cleared: 8192 -> 400 Tokens | Snapshot preserved`
-- Ensures the original request is never lost, even during severe context overflows.
-
----
-
-## Sub-Agents
 
 VAF uses specialized sub-agents for complex tasks. Each sub-agent has its **own isolated context**.
 

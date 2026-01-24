@@ -69,6 +69,11 @@ When a tool returns a massive result (e.g., `read_file` returning 2000 lines of 
 
 The **Context Glue** is a high-density summary block that is dynamically generated and injected into the **System Prompt** on every turn.
 
+**Note on Hybrid Architecture (Agatic vNext):**
+VAF now uses a dual-glue system:
+1.  **Main Agent:** Uses `MainPersistenceManager` to inject **Persistent Glue** from disk (`.vaf/main/user_intent.md`, `.vaf/main/team_state.json`). This survives restarts.
+2.  **Coder Agent:** Uses the **Dynamic RAM Glue** (described below) for high-speed, task-specific state tracking during a coding session.
+
 Even if we delete the last 50 messages, the Agent still "knows" what happened because of this block.
 
 **Example Glue Block (What the LLM sees):**
@@ -78,7 +83,13 @@ Even if we delete the last 50 messages, the Agent still "knows" what happened be
 ║ COMPRESSED CONTEXT STATE (STABLE PROGRESS GLUE)                       ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
-### 📁 PROJECT STATE
+### 🧠 MAIN AGENT PERSISTENCE
+**User Intent:** "Create a portfolio website"
+**Team Status:** 
+🟢 Coder (Running)
+✅ Researcher (Done)
+
+### 📁 PROJECT STATE (Local RAM)
 **Created:** index.html, script.js, styles.css
 **Modified:** styles.css
 **Read:** README.md

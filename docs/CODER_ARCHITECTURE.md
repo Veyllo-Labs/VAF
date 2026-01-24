@@ -36,7 +36,15 @@ Implements a "Mini-IDE" using `rich.live`.
 
 ## 2. `CodingAgentTool` Class Structure
 
+### `_determine_base_dir(task, provided_path)` (The Smart Switch)
+*   **Logic:** Decides whether to work in the current directory or create a new one.
+    1.  **Explcit:** If `provided_path` is set -> Use it.
+    2.  **Edit Mode:** If CWD is a project root (`.git`, `.vaf`, etc.) AND task is NOT "create new" -> **Use CWD**.
+    3.  **Scaffold Mode:** If user intent is "create new", "scaffold" -> Call `_generate_project_directory`.
+    4.  **Fallback:** If unsure, default to creating a safe sandbox in `VAF_Projects`.
+
 ### `_generate_project_directory(task)`
+*   **Role:** Helper for Scaffold Mode (creates new folders).
 *   **Logic:**
     1.  Scans `task` string for keywords ("website", "app", "script").
     2.  Extracts semantic keywords (removing stop words like "the", "create").

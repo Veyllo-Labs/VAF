@@ -20,6 +20,7 @@ import threading
 import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+from dataclasses import asdict
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -38,6 +39,7 @@ from vaf.tools.base import BaseTool
 from vaf.tools.filesystem import WriteFileTool, ReadFileTool, ListFilesTool, MoveFileTool
 from vaf.tools.python_sandbox import PythonSandboxTool
 from vaf.tools.coder_templates import TemplateManager
+from vaf.core.persistence import PersistenceManager, ProjectState, Task
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -982,57 +984,104 @@ class AgenticLoop:
 
 class TaskManager:
     """
-    Manages a TODO list that the agent MUST work through.
-    Prevents chaos/infinite loops by enforcing structure.
+    Manages a persistent TODO list that the agent MUST work through.
+    Uses PersistenceManager (tasks.json) to survive restarts.
     """
     
-    def __init__(self):
-        self.todos: List[Dict] = []
-        self.current_task_idx = 0
-        self.completed: List[str] = []
-        self.phase = "planning"  # planning, executing, verifying, done
+    def __init__(self, base_dir: Optional[str] = None):
+        self.pm: Optional[PersistenceManager] = None
+        self.state: Optional[ProjectState] = None
+        if base_dir:
+            self.initialize(base_dir)
+            
+    def initialize(self, base_dir: str):
+        """Initialize persistence with the project directory."""
+        self.pm = PersistenceManager(base_dir)
+        # Load existing state or create new
+        loaded_state = self.pm.load_state()
+        if loaded_state:
+            self.state = loaded_state
+        else:
+            # Create fresh state (project name from dir name)
+            project_name = os.path.basename(base_dir)
+            self.pm.init_project(project_name)
+            self.state = self.pm.load_state() # Reload to get clean state
     
+    @property
+    def todos(self) -> List[Dict]:
+        """Backward compatibility for todos list."""
+        if not self.state:
+            return []
+        # Convert Task objects to dicts for legacy compatibility
+        # MAP 'title' -> 'task' to fix KeyError in legacy code
+        todos_list = []
+        for t in self.state.tasks:
+            d = asdict(t)
+            d['task'] = t.title # Legacy field name
+            todos_list.append(d)
+        return todos_list
+        
+    @property
+    def current_task_idx(self) -> int:
+        return self.state.current_task_idx if self.state else 0
+        
+    @current_task_idx.setter
+    def current_task_idx(self, value: int):
+        if self.state:
+            self.state.current_task_idx = value
+            if self.pm: self.pm.save_state(self.state)
+
     def set_todos(self, todos: List[str]):
         """Set the TODO list (from agent's planning phase)."""
-        self.todos = [{"task": t, "status": "pending"} for t in todos]
-        self.phase = "executing"
+        if not self.state or not self.pm:
+            return
+            
+        new_tasks = []
+        for i, t_str in enumerate(todos):
+            new_tasks.append(Task(id=i+1, title=t_str, status="pending"))
+            
+        self.state.tasks = new_tasks
+        self.state.current_task_idx = 0
+        self.pm.save_state(self.state)
     
     def get_current_task(self) -> Optional[str]:
         """Get the current task to work on."""
-        if self.current_task_idx >= len(self.todos):
+        if not self.state or self.state.current_task_idx >= len(self.state.tasks):
             return None
-        return self.todos[self.current_task_idx]["task"]
+        return self.state.tasks[self.state.current_task_idx].title
     
     def complete_current_task(self, result: str = "done"):
         """Mark current task as complete and move to next."""
-        if self.current_task_idx < len(self.todos):
-            self.todos[self.current_task_idx]["status"] = "completed"
-            self.todos[self.current_task_idx]["result"] = result
-            self.completed.append(self.todos[self.current_task_idx]["task"])
-            self.current_task_idx += 1
-        
-        if self.current_task_idx >= len(self.todos):
-            self.phase = "verifying"
+        if not self.state or not self.pm:
+            return
+
+        if self.state.current_task_idx < len(self.state.tasks):
+            task = self.state.tasks[self.state.current_task_idx]
+            task.status = "completed"
+            task.result = result
+            task.completed_at = time.time()
+            self.state.current_task_idx += 1
+            self.pm.save_state(self.state)
     
     def get_progress(self) -> str:
         """Get progress string for display."""
-        if not self.todos:
+        if not self.state or not self.state.tasks:
             return "Planning..."
-        done = len([t for t in self.todos if t["status"] == "completed"])
-        return f"Task {done}/{len(self.todos)}"
+        done = len([t for t in self.state.tasks if t.status == "completed"])
+        return f"Task {done}/{len(self.state.tasks)}"
     
     def get_todos_for_prompt(self) -> str:
         """Get formatted TODO list for prompt injection."""
-        if not self.todos:
+        if not self.state or not self.state.tasks:
             return ""
         
         lines = ["## CURRENT TODO LIST:"]
-        for i, todo in enumerate(self.todos):
-            status = "✅" if todo["status"] == "completed" else "⏳" if i == self.current_task_idx else "○"
-            marker = ">>> " if i == self.current_task_idx else "    "
-            lines.append(f"{marker}{status} {i+1}. {todo['task']}")
+        for i, task in enumerate(self.state.tasks):
+            status = "✅" if task.status == "completed" else "⏳" if i == self.state.current_task_idx else "○"
+            marker = ">>> " if i == self.state.current_task_idx else "    "
+            lines.append(f"{marker}{status} {i+1}. {task.title}")
         
-        if self.current_task_idx < len(self.todos):
+        if self.state.current_task_idx < len(self.state.tasks):
             lines.append(f"\n## CURRENT TASK: {self.get_current_task()}")
             lines.append("Complete THIS task, then call `task_done` tool.")
         
@@ -1040,7 +1089,9 @@ class TaskManager:
     
     def is_all_done(self) -> bool:
         """Check if all tasks are completed."""
-        return self.phase == "verifying" or (self.todos and all(t["status"] == "completed" for t in self.todos))
+        if not self.state:
+            return False
+        return self.state.tasks and all(t.status == "completed" for t in self.state.tasks)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1506,6 +1557,38 @@ class CodingAgentTool(BaseTool):
         "required": ["task"]
     }
 
+    def _determine_base_dir(self, task: str, provided_path: str = None) -> str:
+        """
+        Intelligently determine the base directory for the coding task.
+        
+        Logic:
+        1. If path provided -> Use it.
+        2. If CWD is a project root (.git, .vaf, etc.) AND task is NOT "create new project" -> Use CWD.
+        3. Else -> Generate new project folder in VAF_Projects.
+        """
+        # 1. Explicit path
+        if provided_path:
+            return os.path.abspath(os.path.expanduser(provided_path))
+
+        cwd = os.getcwd()
+        
+        # 2. Check if CWD is a project root
+        project_markers = [".git", ".vaf", "package.json", "pyproject.toml", "requirements.txt"]
+        is_project_root = any(os.path.exists(os.path.join(cwd, m)) for m in project_markers)
+        
+        # 3. Detect "Create New" intent
+        task_lower = task.lower()
+        create_keywords = ["create new", "start new", "new project", "generate new", "scaffold"]
+        is_create_intent = any(kw in task_lower for kw in create_keywords)
+        
+        # DECISION:
+        if is_project_root and not is_create_intent:
+            # We are in a project and user didn't explicitly ask for a NEW one -> Stay here!
+            return cwd
+            
+        # Fallback: Create new project folder
+        return self._generate_project_directory(task)
+
     def _generate_project_directory(self, task: str) -> str:
         """Generate a user-friendly project directory name based on task. OS-independent."""
         task_lower = task.lower()
@@ -1891,13 +1974,11 @@ Thumbs.db
             base_dir = tempfile.mkdtemp(prefix="vaf_content_")
             tui.append_stream("Content-only mode: Using temporary directory")
         else:
-            # Normal mode: Create project directory
-            # Only use first 1000 chars for naming to prevent hangs
-            task_snippet = task[:1000]
-            base_dir = self._generate_project_directory(task_snippet)
+            # Normal mode: Determine base directory intelligently
+            base_dir = self._determine_base_dir(task)
             
             os.makedirs(base_dir, exist_ok=True)
-            tui.append_stream(f"New project: {os.path.basename(base_dir)}")
+            tui.append_stream(f"Project directory: {os.path.basename(base_dir)}")
         
         time.sleep(0.05)
         
@@ -1905,6 +1986,9 @@ Thumbs.db
         if not skip_template:
             tui.set_action("Git initialization...")
             self._ensure_git_repo(base_dir)
+            
+        # Initialize Persistence for TaskManager
+        task_mgr.initialize(base_dir)
         
         # Add Git tools with base_dir context (create wrappers that pass base_dir)
         def make_git_tool_wrapper(tool_class, base_dir):
@@ -1926,6 +2010,11 @@ Thumbs.db
             self.local_tools["git_add_commit"] = make_git_tool_wrapper(GitAddCommitTool, base_dir)
             self.local_tools["git_status"] = make_git_tool_wrapper(GitStatusTool, base_dir)
             self.local_tools["git_log"] = make_git_tool_wrapper(GitLogTool, base_dir)
+            
+            # Add Knowledge Tools (wrapped to inject base_dir)
+            from vaf.tools.knowledge import UpdateCodexTool, AddMemoryTool
+            self.local_tools["update_codex"] = make_git_tool_wrapper(UpdateCodexTool, base_dir)
+            self.local_tools["add_memory"] = make_git_tool_wrapper(AddMemoryTool, base_dir)
         
         # ═══════════════════════════════════════════════════════════════════
         # TEMPLATE ANALYSIS - Use LLM with own context BEFORE starting work
@@ -2577,6 +2666,17 @@ The following files were already created from a template:
                 # ═══════════════════════════════════════════════════════════════════
                 # NORMAL MODE: Use Complex Full System Prompt
                 # ═══════════════════════════════════════════════════════════════════
+                
+                # Load persistent context (Ralph-style persistence)
+                codex_content = task_mgr.pm.get_codex() if task_mgr.pm else ""
+                memory_content = task_mgr.pm.get_memory() if task_mgr.pm else ""
+                
+                persistent_context = ""
+                if codex_content:
+                    persistent_context += f"\n## PROJECT CODEX (Patterns & Conventions)\n{codex_content}\n"
+                if memory_content:
+                    persistent_context += f"\n## SESSION MEMORY (Recent Learnings)\n{memory_content}\n"
+
                 # Rebuild system prompt with current state
                 # IMPORTANT: Keep task-context prompts SMALL to avoid n_ctx overflow.
                 # The agent may have more tools available locally, but task execution should
@@ -2588,6 +2688,7 @@ The following files were already created from a template:
 All files must be saved inside this directory.
 {completed_section}
 {fresh_existing_files_info}
+{persistent_context}
 
 ## AVAILABLE TOOLS (task execution)
 - `read_file(path)` - Read file contents
@@ -2595,6 +2696,8 @@ All files must be saved inside this directory.
 - `write_file(path, content)` - Create/modify files with actual code
 - `web_search(query)` - Search web for docs, examples, solutions
 - `task_done(summary)` - Mark task complete and move to next
+- `update_codex(title, content)` - Save important patterns/conventions
+- `add_memory(note)` - Save short-term notes
 
 ## YOUR CURRENT TASK (Task {task_idx + 1})
 **{current_task}**
@@ -2604,6 +2707,7 @@ All files must be saved inside this directory.
 - Use `write_file` to actually create/modify files (do not just describe code)
 - **CRITICAL**: After `web_search`, immediately use the results to call `write_file` - DO NOT just think or plan
 - When finished, call `task_done(summary="...")`
+- If you discover a reusable pattern, use `update_codex` to save it.
 """
 
                 # Build user message for this specific task (ONLY current task, not entire list)
@@ -2846,6 +2950,35 @@ All files must be saved inside this directory.
                                     "max_results": {"type": "integer", "description": "Maximum number of results (default: 5, max: 10)", "default": 5}
                                 },
                                 "required": ["query"]
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "update_codex",
+                            "description": "Save a persistent pattern or convention to the project Codex (Long-term memory).",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {"type": "string", "description": "Short title"},
+                                    "content": {"type": "string", "description": "The pattern/rule content"}
+                                },
+                                "required": ["title", "content"]
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "add_memory",
+                            "description": "Add a note to the session memory (Short-term scratchpad).",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "note": {"type": "string", "description": "The note to add"}
+                                },
+                                "required": ["note"]
                             }
                         }
                     }

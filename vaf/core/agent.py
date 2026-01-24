@@ -134,6 +134,21 @@ class Agent:
         
         # Initialize Context Manager
         from vaf.core.context import ContextManager
+        from vaf.core.main_persistence import MainPersistenceManager
+        from vaf.core.workspace import WorkspaceManager
+        
+        # Initialize Workspace Manager (CWD Awareness)
+        self.workspace = WorkspaceManager()
+        
+        # Initialize Main Persistence (creates .vaf/main/ structure)
+        # Use current working directory for persistence (project-local)
+        try:
+            self.main_persistence = MainPersistenceManager(os.getcwd())
+        except Exception as e:
+            # Fallback if filesystem is read-only or error occurs
+            if self.verbose:
+                print(f"[WARN] Failed to init main persistence: {e}")
+            self.main_persistence = None
         
         # Determine appropriate context limit
         context_limit = self.config.get("n_ctx", 8192)
@@ -164,7 +179,7 @@ class Agent:
         
         # We need tools to init prompt manager, but tools are loaded later.
         # So we init it here with empty dict and update it after tools load.
-        self.prompt_manager = SystemPromptManager({}, model_name=self.model_display_name) 
+        self.prompt_manager = SystemPromptManager({}, model_name=self.model_display_name, agent_instance=self) 
 
         # Session tracking for server shutdown management
         self._session_id = None
@@ -971,6 +986,26 @@ class Agent:
             except Exception as e:
                 pass # Silently ignore broken plugins for stability
         
+        # Manually register Context Tools for Main Agent
+        try:
+            from vaf.tools.context_tools import UpdateIntentTool, UpdateWorkingMemoryTool, RequestClarificationTool
+            
+            # UpdateIntent and UpdateWorkingMemory are for Main Agent
+            self.tools["update_intent"] = UpdateIntentTool()
+            self.tools["update_working_memory"] = UpdateWorkingMemoryTool()
+            
+            # RequestClarification is strictly for Sub-Agents (via coder_only flag),
+            # but we register it here so it's available in the system (even if filtered out later for Main Agent).
+            # Note: The filter loop above relies on 'coder_only' attribute.
+            # Since we manually adding here, we bypass the loop.
+            # BUT: Main Agent should NOT see request_clarification.
+            # We don't add request_clarification to self.tools here for the Main Agent.
+            # It will be loaded by the Coder Agent separately.
+            
+        except Exception as e:
+            if self.verbose:
+                print(f"[WARN] Failed to load context tools: {e}")
+
         # Track active async sub-agent tasks
         self._async_subagent_tasks = {}  # task_id -> {"agent_type": str, "task": str, "started_at": datetime}
 
@@ -1059,17 +1094,17 @@ class Agent:
                     f"- `librarian_agent(file='{cleaned_paths[0]}', task='Summarize this document')` for detailed analysis\n"
                 )
             
-            # Add result to history as if it was a tool response
+            # Add result to history as Background Intel (not a new primary prompt)
             self.history.append({
                 "role": "system",
                 "content": (
-                    f"📬 **Sub-Agent Task COMPLETED / TERMINATED** [Task: {task.task_id}]\n"
-                    f"Agent: {task.agent_type}\n"
-                    f"Original Task: {task.task_description[:200]}\n\n"
-                    f"{task_result_msg}"
-                    f"{file_hint}\n\n"
-                    f"IMPORTANT: This task is completely finished. The agent is NO LONGER working on it.\n"
-                    f"Analyze the result above and answer the user."
+                    f"🧠 **BACKGROUND INTELLIGENCE: Sub-Agent Task Finished**\n"
+                    f"Agent: {task.agent_type} (Task ID: {task.task_id[:8]})\n\n"
+                    f"{task_result_msg}\n"
+                    f"{file_hint}\n"
+                    f"--- END OF SUB-AGENT OUTPUT ---\n\n"
+                    f"⚠️ **INSTRUCTION:** Use the information above to fulfill the **ORIGINAL USER INTENT**.\n"
+                    f"Do NOT just summarize that a task is done. The user wants an answer to their question, not a status report."
                 )
             })
         elif task.status == "failed":
@@ -1098,6 +1133,18 @@ class Agent:
                 )
             })
         
+        # Update Main Persistence (Team State)
+        if hasattr(self, 'main_persistence') and self.main_persistence:
+            try:
+                self.main_persistence.update_subagent_status(
+                    task_id=task.task_id,
+                    agent_type=task.agent_type,
+                    status=task.status,
+                    result_summary=task.result[:500] if task.result else task.error
+                )
+            except Exception:
+                pass
+
         # Remove from tracking and consume from queue
         if task.task_id in self._async_subagent_tasks:
             del self._async_subagent_tasks[task.task_id]
@@ -1308,7 +1355,7 @@ class Agent:
 
     def init_chat(self):
         # Initialize Prompt Manager
-        self.prompt_manager = SystemPromptManager(list(self.tools.values()), model_name=self.model_display_name)
+        self.prompt_manager = SystemPromptManager(list(self.tools.values()), model_name=self.model_display_name, agent_instance=self)
                 
         # Build initial prompt (Core + Base Rules)
         # We pass self.filename to determine identity (VQ-1 vs Generic)
@@ -2814,6 +2861,41 @@ class Agent:
         
         return valid_tools
 
+    def _validate_final_answer(self, draft: str, user_intent: str) -> bool:
+        """
+        Validates if the draft answer is a substantial response or just meta-talk.
+        Returns True if valid, False if it's a 'Meta-Response' (Status only).
+        """
+        if not draft or not user_intent:
+            return True
+            
+        clean_draft = re.sub(r'<[^>]*>', '', draft).strip().lower()
+        
+        # 1. Check for Meta-Patterns (Status reports without content)
+        meta_patterns = [
+            "processing result", "ergebnis verarbeitet", 
+            "sub-agent has finished", "sub-agent hat fertig",
+            "task completed", "aufgabe abgeschlossen",
+            "working on your request", "arbeite an deiner anfrage",
+            "the result is ready", "das ergebnis ist bereit",
+            "i have analyzed the files", "ich habe die dateien analysiert",
+            "here are the results", "hier sind die ergebnisse"
+        ]
+        
+        # If the answer is very short and matches a meta pattern, it's likely invalid
+        is_meta = any(p in clean_draft for p in meta_patterns) and len(clean_draft) < 200
+        
+        # 2. Check for Content-Linkage
+        # Extract key entities from intent (nouns/objects)
+        keywords = [w.lower() for w in re.findall(r'\b\w{4,}\b', user_intent)]
+        keyword_hits = sum(1 for k in keywords if k in clean_draft)
+        
+        # Logic: If it's meta-talk AND has no relation to the user's keywords, it's a drift
+        if is_meta and keyword_hits < 1:
+            return False
+            
+        return True
+
     def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False, disable_workflows=False, disable_tools=False):
         from vaf.cli.ui import UI
         
@@ -2916,6 +2998,14 @@ class Agent:
         # Always add user input if provided, even if skip_input=True (which skips analysis/overhead)
         if user_input:
             self.history.append({"role": "user", "content": user_input})
+            
+            # 🔒 INTENT LOCK: Save the fresh user intent to persistence
+            if hasattr(self, 'main_persistence') and self.main_persistence:
+                try:
+                    # Update the "North Star" for the session
+                    self.main_persistence.update_user_intent(user_input)
+                except Exception:
+                    pass
             
             # LIVE CONTEXT UPDATE: Ensure intent is fresh for the router immediately
             if hasattr(self, 'context_manager'):
@@ -3888,20 +3978,53 @@ class Agent:
                 
                 # Identify messages added since original snapshot
                 current_len = len(self.history)
-                new_snapshot_len = history_snapshot_len
                 
-                # Check if we have valid tool interactions to keep
+                # We need to construct a new history list that preserves critical context
+                # Start with the snapshot (System + User Prompt)
+                new_history = self.history[:history_snapshot_len + 1]
+                
+                # Scan the messages added since snapshot
                 tools_preserved = 0
+                
                 for i in range(history_snapshot_len + 1, current_len):
                     msg = self.history[i]
-                    # Keep tool calls (assistant) and tool outputs (tool)
-                    if msg.get('role') == 'tool' or (msg.get('role') == 'assistant' and msg.get('tool_calls')):
-                        new_snapshot_len = i
+                    role = msg.get('role', '')
+                    content = str(msg.get('content', ''))
+                    
+                    # 1. Keep Tool Calls (Assistant Action)
+                    # Necessary so the following 'tool' message makes sense
+                    if role == 'assistant' and msg.get('tool_calls'):
+                        new_history.append(msg)
+                        continue
+                        
+                    # 2. Keep Tool Results (Persistent Memory)
+                    if role == 'tool':
+                        # Truncate extremely huge outputs to save tokens, but keep generous amount
+                        # (2500 chars is enough for file lists, search snippets, etc.)
+                        if len(content) > 2500:
+                            truncated = content[:2500] + f"\n... [truncated for snapshot, original len: {len(content)}]"
+                            msg_clone = msg.copy()
+                            msg_clone["content"] = truncated
+                            new_history.append(msg_clone)
+                        else:
+                            new_history.append(msg)
                         tools_preserved += 1
+                        continue
+                        
+                    # 3. Drop "Thinking" (Text-only Assistant Messages)
+                    # These led to the empty response loop. We remove them to force a re-think.
+                    pass
                 
                 if tools_preserved > 0:
                     UI.event("Snapshot", f"Advanced snapshot: Preserved {tools_preserved} tool messages", style="success")
-                    history_snapshot_len = new_snapshot_len
+                    # Update history with the filtered list
+                    self.history = new_history
+                    # Advance snapshot pointer so we don't re-process these valid tools
+                    history_snapshot_len = len(self.history) - 1
+                else:
+                    # No tools to preserve, standard reset
+                    self.history = self.history[:history_snapshot_len + 1]
+                    UI.event("Debug", f"Reset to user prompt snapshot (preserving query)", style="dim")
 
                 # ═══════════════════════════════════════════════════════════════
                 # PROACTIVE CONTEXT CLEARING (User Request: "1 verschen" -> 15 attempts)
@@ -3965,6 +4088,31 @@ class Agent:
             
             # Clean History: Store ONLY the final content (Answer), discarding the reasoning trace.
             history_content = full_content if full_content else full_response
+            
+            # 🛡️ FINAL ANSWER VALIDATION (Intent Lock)
+            # Before accepting the answer, check if it's just meta-talk/status drift
+            if not tool_calls_detected and not auto_retry:
+                user_intent = ""
+                if hasattr(self, 'main_persistence') and self.main_persistence:
+                    user_intent = self.main_persistence.get_user_intent()
+                elif user_input:
+                    user_intent = user_input
+                
+                if not self._validate_final_answer(history_content, user_intent):
+                    UI.event("Validation", "Meta-Response detected. Forcing content-focused answer...", style="warning")
+                    self.history.append({
+                        "role": "system", 
+                        "content": (
+                            f"🛑 **STOP!** Your answer is a Meta-Response (Status report).\n"
+                            f"The user doesn't want to know that the sub-agent is finished. "
+                            f"The user wants an actual answer to: \"{user_intent}\"\n"
+                            f"Please provide the ACTUAL information/analysis now."
+                        )
+                    })
+                    # Reset counters and continue to force a real answer
+                    empty_retry_count += 1
+                    continue
+
             self.history.append({"role": "assistant", "content": history_content})
             
             # Check for language mismatch: Did the model respond in a different language than the user?

@@ -4384,9 +4384,7 @@ All files must be saved inside this directory.
                              {
                                  "role": "system",
                                  "content": (
-                                     f"╔═══════════════════════════════════════════════════════════╗\n"
-                                     f"║ CONTEXT RESET - You were stuck in an empty loop          ║\n"
-                                     f"╚═══════════════════════════════════════════════════════════╝\n\n"
+                                     f"### CONTEXT RESET - You were stuck in an empty loop\n\n"
                                      f"{state_glue}\n\n"
                                      f"**YOUR STATUS:**\n{todo_status}\n\n"
                                      f"**FILES CREATED IN THIS CONTEXT:**\n" +

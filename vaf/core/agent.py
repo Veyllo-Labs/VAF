@@ -2081,80 +2081,46 @@ class Agent:
         try:
             from vaf.workflows.templates import WORKFLOW_TEMPLATES, list_templates
             
-            # Get available workflows (NO trigger examples - LLM must think!)
+            # Get available workflows dynamicallly
             available_workflows = list_templates()
-            workflow_list = "\n".join([
-                f"- {w['id']}: {w['description']}"
-                for w in available_workflows
-            ])
+            
+            # Format workflows like tool definitions for the LLM
+            # "ID: Description"
+            workflow_definitions = []
+            for w in available_workflows:
+                workflow_definitions.append(f"- {w['id']}: {w['description']}")
+            workflow_list_str = "\n".join(workflow_definitions)
             
             prompt = (
-                f"You are an intelligent workflow orchestrator. Analyze the request and select the most appropriate workflow.\n\n"
-                f"Available Workflows:\n{workflow_list}\n\n"
-                f"═══════════════════════════════════════════════════════════\n"
-                f"REASONING PROCESS (think step-by-step):\n"
-                f"═══════════════════════════════════════════════════════════\n\n"
-                f"1. INTENT ANALYSIS:\n"
-                f"   - What is the user trying to achieve?\n"
-                f"   - What output type (document/code/data/analysis)?\n\n"
-                f"2. RESEARCH REQUIREMENT:\n"
-                f"   - Does this need current/external information?\n"
-                f"   - Keywords: recherche, research, rechtssicher, legally sound, aktuell, current, basierend auf\n\n"
-                f"3. OUTPUT TYPE:\n"
-                f"   - Legal contract (Vertrag, contract, Arbeitsvertrag, Mietvertrag)?\n"
-                f"   - Technical docs (API, guide, manual, technisch, dokumentation)?\n"
-                f"   - General document (report, letter, bericht, brief)?\n"
-                f"   - Code/implementation?\n"
-                f"   - Website/HTML?\n\n"
-                f"4. COMPLEXITY:\n"
-                f"   - Multi-stage (research → create)?\n"
-                f"   - Scheduled/automated (time mentioned)?\n"
-                f"   - Simple creation?\n"
-                f"   - Simple lookup (no workflow)?\n\n"
-                f"═══════════════════════════════════════════════════════════\n"
-                f"DECISION RULES (prioritized by specificity):\n"
-                f"═══════════════════════════════════════════════════════════\n\n"
-                f"Priority 1 - Scheduled/Automated Tasks:\n"
-                f"  • TIME mentioned (21:07, um 9:00, at 10am, täglich, daily) → create_scheduled_task\n\n"
-                f"Priority 2 - Research + Legal Contracts:\n"
-                f"  • (rechtssicher OR legally sound) + contract/vertrag → legal_contract_research\n"
-                f"  • Contract + (research OR recherche OR current laws) → legal_contract_research\n\n"
-                f"Priority 3 - Research + Technical Docs:\n"
-                f"  • (technical OR technisch) + (research OR recherche) → technical_doc_research\n"
-                f"  • API/guide/manual + research → technical_doc_research\n\n"
-                f"Priority 4 - Research + General Document:\n"
-                f"  • (research OR recherche) + document/guide/report → research_and_document\n"
-                f"  • 'basierend auf recherche' + document → research_and_document\n\n"
-                f"Priority 5 - Research + Code:\n"
-                f"  • (research OR recherche) + (code OR implement) → research_and_code\n\n"
-                f"Priority 6 - Simple Creation (no research):\n"
-                f"  • Website/HTML → create_website\n"
-                f"  • Document without research → create_document\n"
-                f"  • File creation → create_file\n\n"
-                f"Priority 7 - Analysis:\n"
-                f"  • Deep research (10 sources, multi-perspective) → deep_research\n"
-                f"  • Website analysis → analyze_website\n\n"
-                f"🚨 Priority 8 - NO WORKFLOW (Agent handles with direct tools):\n"
-                f"  • Simple lookups (weather, news, facts, 'what is X?') → none\n"
-                f"  • Multiple simple questions ('Weather + News') → none (agent calls web_search 2x!)\n"
-                f"  • Person queries ('Who is X?') → none (agent uses web_search)\n"
-                f"  • File/folder locations → none (agent uses librarian)\n"
-                f"  • Single tool usage → none\n"
-                f"  • Quick status checks → none\n\n"
-                f"🔥 CRITICAL: 'Weather + News' = none (NOT deep_research!)\n"
-                f"🔥 CRITICAL: 'Politics + Finance news' = none (NOT deep_research!)\n\n"
-                f"═══════════════════════════════════════════════════════════\n\n"
-                f"Request: \"{user_input}\"\n\n"
-                f"Think carefully about INTENT, then output ONLY the workflow_id or 'none'."
+                f"You are the Workflow Router. Your goal is to map a user request to the correct pre-defined workflow ID.\n\n"
+                f"AVAILABLE WORKFLOWS:\n"
+                f"{workflow_list_str}\n\n"
+                f"ROUTING INSTRUCTIONS:\n"
+                f"1. Analyze the User Request for INTENT.\n"
+                f"2. Check if a Workflow matches that intent EXACTLY.\n"
+                f"3. Return the `workflow_id` if a strong match exists.\n"
+                f"4. Return `none` if:\n"
+                f"   - The request is a simple lookup (weather, news, facts).\n"
+                f"   - The request is a generic chat or question.\n"
+                f"   - The request is too vague.\n"
+                f"   - You would rather use individual tools (web_search, coding_agent) directly.\n\n"
+                f"EXAMPLES:\n"
+                f"- User: 'Create a website' -> `create_website`\n"
+                f"- User: 'Research AI trends and write a report' -> `research_and_document`\n"
+                f"- User: 'What is the weather?' -> `none` (Too simple)\n"
+                f"- User: 'Who is Elon Musk?' -> `none` (Too simple)\n\n"
+                f"USER REQUEST: \"{user_input}\"\n\n"
+                f"Think step-by-step. Does this complex task fit a workflow?\n"
+                f"Output ONLY the workflow_id or 'none'."
             )
             
-            # Quick Inference with reasoning (temperature 0.2 for consistent logic)
+            # Quick Inference with reasoning (temperature 0.1 for strict logic)
             messages = [{"role": "user", "content": prompt}]
             
             content = ""
             if self.use_server:
                 # Full thinking capacity with 120s timeout
-                payload = {"messages": messages, "max_tokens": 1024, "temperature": 0.2}
+                payload = {"messages": messages, "max_tokens": 1024, "temperature": 0.1}
                 try:
                     res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=120).json()
                     content = res['choices'][0]['message']['content']
@@ -2299,6 +2265,13 @@ class Agent:
                 UI.event("Step 1/2", f"Workflow [Tier 2: No auto-match - Agent deciding]", style="cyan")
                 return None
             
+            # 🔒 INTENT LOCK (Workflow): Save the fresh user intent to persistence
+            if hasattr(self, 'main_persistence') and self.main_persistence:
+                try:
+                    self.main_persistence.update_user_intent(user_input)
+                except Exception:
+                    pass
+
             # Get the matched template
             from vaf.workflows.templates import get_template
             template = get_template(workflow_id)

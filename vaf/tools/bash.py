@@ -121,6 +121,40 @@ IMPORTANT: Long-running commands timeout after 120 seconds."""
         if not work_dir.exists():
             return f"Error: Working directory does not exist: {work_dir}"
         
+        # Try to use Docker Sandbox first
+        try:
+            from vaf.tools.sandbox import DockerSandbox
+            with DockerSandbox() as sandbox:
+                code, out, err = sandbox.execute(command, timeout=timeout, workdir=str(work_dir) if cwd else "/")
+                
+                result_parts = []
+                if warning:
+                    result_parts.append(warning)
+                
+                result_parts.append(f"$ {command}")
+                result_parts.append(f"(in SANDBOX)") # Indicate sandbox usage
+                
+                if out:
+                     if len(out) > 8000: out = out[:8000] + "\n... (truncated)"
+                     result_parts.append(f"\nOutput:\n{out}")
+                
+                if err:
+                     if len(err) > 4000: err = err[:4000] + "\n... (stderr truncated)"
+                     result_parts.append(f"\nStderr:\n{err}")
+                
+                if code == 0:
+                    result_parts.append(f"\n✓ Success (exit code: 0)")
+                else:
+                    result_parts.append(f"\n✗ Failed (exit code: {code})")
+                
+                return "\n".join(result_parts)
+                
+        except (ImportError, RuntimeError) as e:
+            # Fallback to Host Execution if Docker fails/missing
+            warning = f"⚠️  SANDBOX OFFLINE: {e}. Executing on HOST (Less Secure)!"
+            logger.warning(warning)
+            pass
+
         try:
             # Cross-platform shell arguments
             shell_args = {

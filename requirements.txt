@@ -13,6 +13,11 @@ psutil>=5.9.0
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 html2text>=2024.2.26
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+websockets>=12.0
+pydantic>=2.0.0
+discord.py>=2.3.2
 
 # AI/ML
 huggingface_hub[hf_xet]>=0.20.0

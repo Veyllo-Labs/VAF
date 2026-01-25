@@ -43,6 +43,35 @@ class PythonExecTool(BaseTool):
         if not code:
             return "[ERROR] python_exec: missing code"
 
+        # Try to use Docker Sandbox first
+        try:
+            from vaf.tools.sandbox import DockerSandbox
+            import base64
+            
+            with DockerSandbox() as sandbox:
+                # Wrap code to handle I/O correctly inside container
+                # We simply pass it to python3 -c "..."
+                # Escaping quotes for shell is tricky, so we base64 encode the script
+                # and decode it inside the container to avoid syntax errors.
+                
+                b64_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
+                safe_cmd = f"echo {b64_code} | base64 -d | python3"
+                
+                exit_code, out, err = sandbox.execute(safe_cmd, timeout=timeout)
+                
+                if exit_code != 0:
+                     if err: return f"[ERROR] python_exec (SANDBOX exit={exit_code}):\n{err}"
+                     return f"[ERROR] python_exec (SANDBOX exit={exit_code})"
+                
+                res_str = ""
+                if out: res_str += out
+                if err: res_str += f"\n[stderr]\n{err}"
+                return res_str.strip() or "OK"
+
+        except (ImportError, RuntimeError):
+             # Fallback to Host Execution
+             pass
+
         try:
             proc = subprocess.run(
                 [sys.executable, "-c", code],

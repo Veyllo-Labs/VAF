@@ -1,17 +1,20 @@
 # 文 Veyllo Agentic Framework (VAF)
 
 
-```
 O))         O))       O))))))))
  O))       O))))      O))      
   O))     O))  O))    O))      
    O))   O))    O))   O))))))  
     O)) O)) )))) O))  O))      
      O))))        O)) O))      
-      O))          O))O))     (OO ) 
-```
+      O))          O))O))     (OO )
 
 VAF is a comprehensive agent suite designed to transform LLMs like VQ-1 into autonomous powerhouses. It features a modular plug-and-play architecture, allowing you to extend agent capabilities with custom Python workflows. Built for Python 3.10+, VAF offers a terminal UI, cross-platform support (Windows, Linux, macOS), session management, and powerful automation tools.
+
+**New in VAF 2.0:**
+*   **Gateway Architecture:** A persistent control plane for concurrent multi-channel access.
+*   **Docker Sandboxing:** Secure code execution in isolated containers.
+*   **Discord Bridge:** Connect your agent to external platforms seamlessly.
 
 ---
 
@@ -21,6 +24,7 @@ VAF is a comprehensive agent suite designed to transform LLMs like VQ-1 into aut
 - **Python 3.10 or higher**
 - **pip** (Python package installer)
 - **Git** (for cloning the repository)
+- **Docker Desktop** (Optional, but required for Sandboxing and safe code execution)
 
 Dependencies are automatically handled during installation.
 
@@ -77,6 +81,31 @@ vaf run
 
 ---
 
+## 🚀 Advanced Features (Gateway & Bridges)
+
+VAF now supports running as a persistent server (Gateway) to handle multiple inputs simultaneously.
+
+### 1. Start the Gateway
+This enables the WebSocket API and background processing.
+```bash
+python -m vaf.core.gateway
+```
+
+### 2. Connect Discord (Bridge)
+Once the gateway is running, you can connect VAF to Discord.
+```bash
+vaf bridge discord --token "YOUR_DISCORD_BOT_TOKEN"
+```
+
+For more details, see [docs/GATEWAY.md](docs/GATEWAY.md).
+
+### 3. Safe Execution (Sandboxing)
+VAF uses Docker to run risky code. Make sure Docker Desktop is running before using the **Coder** or **Researcher** agents.
+
+See [docs/SANDBOXING.md](docs/SANDBOXING.md).
+
+---
+
 ## ✨ Highlights
 
 - 🎨 **Modern TUI** - Beautiful input box with smart autocomplete and themes
@@ -88,7 +117,7 @@ vaf run
 - 🔄 **Workflows** - Plug-and-play multi-step pipelines (create website, research & code, etc.)
 - 🛠️ **Powerful Tools** - Bash execution, web fetching, parallel operations
 - 🤖 **Sub-Agents** - Specialized agents for coding, research, and file navigation
-- 🚀 **Non-Interactive Mode** - Run one-shot prompts: `vaf prompt "..."` or `vaf run "..."`
+- 🚀 **Non-Interactive Mode** - Run one-shot prompts: `vaf prompt "..."` or `vaf run "..."
 - 🔒 **Local-First & Privacy** - Zero data collection. All intelligence is processed locally on your hardware. Data only leaves your system if you explicitly use cloud APIs, external Workflows, or Tools (e.g., Web Search). Links open in incognito mode by default.
 - 📊 **Live Progress** - Real-time TUI for research and coding tasks
 
@@ -156,20 +185,20 @@ Inline word completion as you type - like Google Search or GitHub Copilot.
 Cross-platform file path completion with quick shortcuts.
 
 ```
-@down        → 📁 Downloads → ~/Downloads
-@desk        → 📁 Desktop → ~/Desktop  
-@doc         → 📁 Documents → ~/Documents
+@down        → 📁 Downloads → ~\/Downloads
+@desk        → 📁 Desktop → ~\/Desktop  
+@doc         → 📁 Documents → ~\/Documents
 @C:\Users\   → Shows Windows paths
-@./src       → Relative paths
+@.\/src       → Relative paths
 ```
 
 **Quick Paths:**
 | Shortcut | Path |
 |----------|------|
 | `~` | Home directory |
-| `desktop` | ~/Desktop |
-| `downloads` | ~/Downloads |
-| `documents` | ~/Documents |
+| `desktop` | ~\/Desktop |
+| `downloads` | ~\/Downloads |
+| `documents` | ~\/Documents |
 | `.` | Current directory |
 | `..` | Parent directory |
 | `c:` | C:\ (Windows) |
@@ -720,6 +749,8 @@ Place your custom workflow files in `~/.vaf/workflows/*.py` - they're automatica
 ```
 vaf/
 ├── core/
+│   ├── gateway.py        # Gateway Server (FastAPI)
+│   ├── protocol.py       # Pydantic Protocol
 │   ├── agent.py          # Main Agent logic
 │   ├── api_backend.py    # Cloud API Provider Integration
 │   ├── backend.py        # Local LLM Server Manager
@@ -740,6 +771,7 @@ vaf/
 │   ├── autosuggest.py    # Smart AutoComplete
 │   └── cmd/
 │       ├── run.py        # Agent Runner
+│       ├── bridge.py     # Bridge Runner (Discord/Slack)
 │       ├── scaffold.py   # Project Templates
 │       ├── generate.py   # Code Generation
 │       ├── automate.py   # Test/Build Automation
@@ -749,6 +781,7 @@ vaf/
 │       ├── subagent.py   # Sub-Agent Runner
 │       └── settings.py   # Settings UI
 ├── tools/
+│   ├── sandbox.py        # Docker Sandbox
 │   ├── base.py           # Plugin Base Class
 │   ├── coder.py          # Coding Sub-Agent
 │   ├── librarian.py      # Librarian Sub-Agent

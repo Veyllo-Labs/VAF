@@ -15,9 +15,11 @@ import re
 import threading
 import time
 import unicodedata
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
+from pathlib import Path
 
 import requests
 import os
@@ -553,12 +555,42 @@ class ResearchAgentTool(BaseTool):
             if in_workflow and not use_live:
                 UI.event("Research", f"Starting research: {topic}", style="dim")
 
+            # 🛡️ CHECKPOINT SETUP
+            checkpoint_dir = Path(".vaf/tmp/research_checkpoints")
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            topic_hash = hashlib.md5(topic.encode()).hexdigest()[:8]
+            sources_checkpoint = checkpoint_dir / f"sources_{topic_hash}.json"
+
             web = WebSearchTool()
             rendered_sections: List[str] = []
             all_sources: List[str] = []
+            
+            # Load existing sources if resuming
+            if sources_checkpoint.exists():
+                try:
+                    all_sources = json.loads(sources_checkpoint.read_text(encoding="utf-8"))
+                except: pass
+
             global_quality_warning = ""  # Collect warnings across all sections
 
             for idx, spec in enumerate(specs, 1):
+                # 🛡️ RESUME CHECK
+                safe_title = re.sub(r'[^a-zA-Z0-9]', '_', spec.title)[:30]
+                section_checkpoint = checkpoint_dir / f"sec_{topic_hash}_{idx:02d}_{safe_title}.html"
+                
+                if section_checkpoint.exists():
+                    tui.log(f"Resume: {spec.title}")
+                    if in_workflow and not use_live:
+                        UI.event("Research", f"[{idx}/{len(specs)}] {spec.title}: (resumed from cache)", style="dim")
+                    try:
+                        section_html = section_checkpoint.read_text(encoding="utf-8")
+                        rendered_sections.append(section_html)
+                        tui.set_section(idx, len(specs), spec.title)
+                        tui.set_word_progress(_visible_word_count(section_html), min_words_target, min_words_ok)
+                        continue # Skip to next section
+                    except:
+                        tui.log(f"Failed to read checkpoint for {spec.title}, re-generating...")
+
                 tui.increment_loop()
                 tui.set_section(idx, len(specs), spec.title)
                 tui.set_word_progress(0, min_words_target, min_words_ok)
@@ -624,6 +656,11 @@ class ResearchAgentTool(BaseTool):
                 for u in sources:
                     if u and u not in all_sources:
                         all_sources.append(u)
+                
+                # 🛡️ SAVE SOURCES CHECKPOINT
+                try:
+                    sources_checkpoint.write_text(json.dumps(all_sources), encoding="utf-8")
+                except: pass
 
                 tui.set_stage("Summarizing")
                 if in_workflow and not use_live:
@@ -705,6 +742,26 @@ class ResearchAgentTool(BaseTool):
                     word_count = _visible_word_count(section_html)
                     tui.set_word_progress(word_count, min_words_target, min_words_ok)
                 rendered_sections.append(section_html)
+                
+                # 🛡️ SAVE SECTION CHECKPOINT
+                try:
+                    section_checkpoint.write_text(section_html, encoding="utf-8")
+                except: pass
+
+            # Assemble and Save
+            tui.set_stage("Finalizing")
+            html = self._assemble_html(topic, rendered_sections, all_sources, lang, global_quality_warning)
+            
+            # --- 🛡️ CLEANUP CHECKPOINTS ---
+            try:
+                for idx, spec in enumerate(specs, 1):
+                    safe_title = re.sub(r'[^a-zA-Z0-9]', '_', spec.title)[:30]
+                    section_checkpoint = checkpoint_dir / f"sec_{topic_hash}_{idx:02d}_{safe_title}.html"
+                    if section_checkpoint.exists(): section_checkpoint.unlink()
+                if sources_checkpoint.exists(): sources_checkpoint.unlink()
+            except: pass
+
+
 
             if out_format == "html_fragment":
                 # Return only fragments (useful for patching missing sections)

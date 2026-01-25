@@ -19,6 +19,11 @@ def bootstrap():
         "requests": "requests",
         "beautifulsoup4": "bs4",           # pip name != import name
         "html2text": "html2text",
+        "fastapi": "fastapi",
+        "uvicorn": "uvicorn",
+        "websockets": "websockets",
+        "pydantic": "pydantic",
+        "discord.py": "discord",
         # AI/ML
         "huggingface_hub": "huggingface_hub",
         "tqdm": "tqdm",  # Progress bars for downloads
@@ -202,7 +207,7 @@ def bootstrap():
 bootstrap()
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, bridge
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -246,6 +251,9 @@ app.add_typer(snapshot_app, name="snapshot", help="Code snapshots and undo")
 
 # Scheduled Automations
 app.add_typer(automation_app, name="automation", help="Time-based task automation")
+
+# Bridges (Discord, Slack, etc.)
+app.add_typer(bridge.app, name="bridge", help="Bridge VAF to external platforms")
 
 # Sub-Agent execution (internal use - for separate terminal windows)
 app.add_typer(subagent.app, name="subagent", help="Run sub-agents in separate terminals")

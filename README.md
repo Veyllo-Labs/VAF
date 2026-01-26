@@ -107,6 +107,7 @@ See [docs/SANDBOXING.md](docs/SANDBOXING.md).
 
 ## ✨ Highlights
 
+- 🌐 **Web UI Dashboard** - Browser-based interface with real-time updates and session management
 - 🎨 **Modern TUI** - Beautiful input box with smart autocomplete and themes
 - ⌨️ **Smart AutoSuggest** - Inline word completion like Google Search
 - 🎭 **12+ Themes** - Dracula, Nord, Tokyo Night, Catppuccin, and more
@@ -123,6 +124,36 @@ See [docs/SANDBOXING.md](docs/SANDBOXING.md).
 ---
 
 ## Features
+
+### 🌐 Web UI Dashboard
+
+Browser-based interface for interacting with VAF. Automatically starts when running `vaf run`.
+
+**Features:**
+- Real-time chat with streaming responses
+- Session management (create, load, delete)
+- Collapsible thinking process display
+- System workflow visualization
+- WebSocket-based communication
+- Auto-opens in browser on startup
+
+**Access:**
+- Frontend: `http://localhost:3000` (auto-detected port)
+- Backend API: `http://localhost:8001`
+
+**Control:**
+```bash
+# Enable Web UI (default)
+vaf run --web
+
+# Disable Web UI
+vaf run --no-web
+
+# Configure in settings
+vaf settings  # Set web_ui_enabled
+```
+
+**Documentation:** See [docs/WEB_UI.md](docs/WEB_UI.md) for architecture details and API reference.
 
 ### 🎨 Python-based TUI
 

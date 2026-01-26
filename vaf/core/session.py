@@ -241,6 +241,16 @@ class SessionManager:
         
         return deleted
     
+    def rename(self, session_id: str, new_name: str) -> bool:
+        """Rename a session."""
+        try:
+            session = self.load(session_id)
+            session.name = new_name
+            self.save(session)
+            return True
+        except FileNotFoundError:
+            return False
+    
     def export(self, session: Session = None, format: str = "markdown") -> str:
         """Export a session to a formatted string."""
         session = session or self._current

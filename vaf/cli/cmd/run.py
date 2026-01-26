@@ -664,6 +664,9 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     ThemeManager.set_theme(theme)
     tui = TUI(theme)
     
+    # Process handle for Web UI
+    npm_process = None
+    
     # Session management
     session_mgr = SessionManager()
     
@@ -862,12 +865,19 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
 
                 # Check for node/npm
                 try:
-                    subprocess.run(["npm", "--version"], capture_output=True, check=True, shell=True)
+                    # Use shutil.which to find npm in PATH (works with nvm)
+                    import shutil
+                    npm_path = shutil.which("npm")
+                    if not npm_path:
+                        raise FileNotFoundError("npm not found in PATH")
+                    
+                    # Verify npm works
+                    subprocess.run([npm_path, "--version"], capture_output=True, check=True)
                     
                     # Install deps if needed
                     if not os.path.exists(os.path.join(web_dir, "node_modules")):
                          console.print("[yellow]WebUI: Installing npm dependencies...[/yellow]")
-                         subprocess.run(["npm", "install"], cwd=web_dir, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                         subprocess.run([npm_path, "install"], cwd=web_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     
                     # FIND FREE PORT (Start at 3000)
                     import socket
@@ -885,13 +895,12 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     console.print(f"[dim]WebUI: Launching Dashboard on Port {port}...[/dim]")
                     
                     # Start Next.js dev server with specific port
-                    cmd = f"npm run dev -- -p {port}"
+                    cmd = [npm_path, "run", "dev", "--", "-p", str(port)]
                     
                     # Start process
-                    proc = subprocess.Popen(
+                    npm_process = subprocess.Popen(
                         cmd, 
                         cwd=web_dir, 
-                        shell=True,
                         stdout=open(log_file, "a"),
                         stderr=subprocess.STDOUT
                     )
@@ -1160,6 +1169,34 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                 except Exception as e:
                                     tui.error(f"Failed to switch session: {e}")
                                 continue # Loop back to prompt
+
+                            elif cmd_type == "RENAME_SESSION":
+                                # Format: __CMD__:RENAME_SESSION:id:new_name
+                                try:
+                                    cmd_parts = str(raw_input).split(":", 3)
+                                    sid = cmd_parts[2]
+                                    new_name = cmd_parts[3]
+                                    if current_session and current_session.id == sid:
+                                        current_session.name = new_name
+                                        # tui.event("WebUI", f"Session renamed to: {new_name}", style="dim")
+                                except: pass
+                                continue
+
+                            elif cmd_type == "RELOAD_CONFIG":
+                                # Reload agent config
+                                try:
+                                    tui.event("System", "Config updated from WebUI", style="dim")
+                                    # We might need to re-init agent or just update its config dict
+                                    # simplest is to just reload the config dict on the agent if exposed
+                                    # But Agent() loads config in __init__.
+                                    # For extensive changes we might need restart, but for simple params:
+                                    from vaf.core.config import Config
+                                    new_cfg = Config.load()
+                                    if hasattr(agent, 'config'):
+                                        agent.config = new_cfg
+                                        # Also re-apply things like voice settings
+                                except: pass
+                                continue
                         
                         # Normal Chat Input
                         user_input = raw_input
@@ -1221,6 +1258,17 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                             tui.event("WebUI", f"Switched to session: {current_session.name}", style="success")
                                         except Exception as e:
                                             tui.error(f"Failed to switch session: {e}")
+                                        wake_word_detected_flag.clear()
+                                        continue
+
+                                    elif cmd_type == "RENAME_SESSION":
+                                        try:
+                                            cmd_parts = str(raw_input).split(":", 3)
+                                            sid = cmd_parts[2]
+                                            new_name = cmd_parts[3]
+                                            if current_session and current_session.id == sid:
+                                                current_session.name = new_name
+                                        except: pass
                                         wake_word_detected_flag.clear()
                                         continue
                                 
@@ -1699,6 +1747,17 @@ Created: {current_session.created_at}
                     # Stop background threads if possible
                     if wake_word_manager:
                         wake_word_manager.stop_listening()
+
+                    # Kill Web UI process before restart (Critically important!)
+                    if npm_process:
+                        try:
+                            npm_process.terminate()
+                            try:
+                                npm_process.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                npm_process.kill()
+                        except:
+                            pass
                         
                     # Restart Process
                     time.sleep(0.5)
@@ -1781,6 +1840,18 @@ Created: {current_session.created_at}
     # Stop wake word listener if still running
     if wake_word_manager and wake_word_manager.is_listening():
         wake_word_manager.stop_listening()
+
+    # Kill Web UI process if running
+    if npm_process:
+        try:
+            # tui.event("System", "Stopping Web Dashboard...", style="dim")
+            npm_process.terminate()
+            try:
+                npm_process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                npm_process.kill()
+        except:
+            pass
 
     agent.shutdown()
     tui.print(f"\n[{tui.muted}]Goodbye![/{tui.muted}]")

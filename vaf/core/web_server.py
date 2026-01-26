@@ -6,6 +6,11 @@ import threading
 from vaf.core.web_interface import get_web_interface
 from vaf.core.session import SessionManager
 import json
+from vaf.core.config import Config
+from pathlib import Path
+import logging
+
+log = logging.getLogger("uvicorn")
 
 app = FastAPI(title="VAF Local Server")
 
@@ -136,6 +141,128 @@ async def websocket_endpoint(websocket: WebSocket):
                         "messages": [],
                         "sessionId": new_sess.id
                     })
+
+                elif type == "rename_session":
+                    sid = cmd.get("id")
+                    new_name = cmd.get("newName")
+                    if sid and new_name:
+                        session_mgr.rename(sid, new_name)
+                        # Notify Main Loop to update in-memory object
+                        manager.input_queue.put(f"__CMD__:RENAME_SESSION:{sid}:{new_name}")
+                        
+                        # Broadcast update
+                        sessions = session_mgr.list(limit=20)
+                        await manager.broadcast({
+                            "type": "session_list", 
+                            "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"]} for s in sessions]
+                        })
+
+                elif type == "get_config":
+                     # Send current config to frontend
+                     cfg = Config.load()
+                     await websocket.send_json({
+                         "type": "config_update",
+                         "config": cfg
+                     })
+
+                elif type == "get_models":
+                    # Scan models directory for .gguf files
+                    # Use absolute path based on project root (parent of 'vaf' package)
+                    # core/web_server.py -> core/ -> vaf/ -> VAF/ -> VAF/models
+                    project_root = Path(__file__).parent.parent.parent
+                    models_dir = project_root / "models"
+                    print(f"[DEBUG] Looking for models in: {models_dir}")
+                    models = []
+                    if models_dir.exists():
+                        models = [f.name for f in models_dir.glob("*.gguf")]
+                        print(f"[DEBUG] Found models: {models}")
+                    else:
+                        print(f"[DEBUG] Models directory not found at {models_dir}")
+                    
+                    await websocket.send_json({
+                        "type": "models_list",
+                        "models": models
+                    })
+
+                elif type == "get_api_models":
+                    # Fetch available models from API providers
+                    provider = cmd.get("provider", "openai")
+                    api_key = cmd.get("api_key", "")
+                    models = []
+                    
+                    try:
+                        if provider == "openai" and api_key:
+                            import httpx
+                            async with httpx.AsyncClient() as client:
+                                resp = await client.get(
+                                    "https://api.openai.com/v1/models",
+                                    headers={"Authorization": f"Bearer {api_key}"},
+                                    timeout=10.0
+                                )
+                                if resp.status_code == 200:
+                                    data = resp.json()
+                                    # Filter to chat models only
+                                    models = sorted([
+                                        m["id"] for m in data.get("data", [])
+                                        if "gpt" in m["id"] or "o1" in m["id"] or "o3" in m["id"]
+                                    ])
+                        elif provider == "anthropic":
+                            # Anthropic doesn't have a public models endpoint, use hardcoded list
+                            models = [
+                                "claude-3-5-sonnet-20241022",
+                                "claude-3-5-haiku-20241022", 
+                                "claude-3-opus-20240229",
+                                "claude-3-sonnet-20240229",
+                                "claude-3-haiku-20240307",
+                            ]
+                        elif provider == "deepseek" and api_key:
+                            import httpx
+                            async with httpx.AsyncClient() as client:
+                                resp = await client.get(
+                                    "https://api.deepseek.com/models",
+                                    headers={"Authorization": f"Bearer {api_key}"},
+                                    timeout=10.0
+                                )
+                                if resp.status_code == 200:
+                                    data = resp.json()
+                                    models = [m["id"] for m in data.get("data", [])]
+                                else:
+                                    models = ["deepseek-chat", "deepseek-coder"]
+                        elif provider == "google":
+                            models = [
+                                "gemini-1.5-pro-latest",
+                                "gemini-1.5-flash-latest",
+                                "gemini-1.0-pro",
+                            ]
+                        elif provider == "openrouter" and api_key:
+                            import httpx
+                            async with httpx.AsyncClient() as client:
+                                resp = await client.get(
+                                    "https://openrouter.ai/api/v1/models",
+                                    headers={"Authorization": f"Bearer {api_key}"},
+                                    timeout=10.0
+                                )
+                                if resp.status_code == 200:
+                                    data = resp.json()
+                                    models = [m["id"] for m in data.get("data", [])][:50]  # Limit
+                    except Exception as e:
+                        log.error(f"Failed to fetch models for {provider}: {e}")
+                    
+                    await websocket.send_json({
+                        "type": "api_models_list",
+                        "provider": provider,
+                        "models": models
+                    })
+
+                elif type == "save_config":
+                    new_config = cmd.get("config")
+                    if new_config:
+                        Config.save(new_config)
+                        manager.input_queue.put("__CMD__:RELOAD_CONFIG")
+                        await websocket.send_json({
+                            "type": "config_saved",
+                            "status": "success"
+                        })
 
                 elif type == "chat":
                     content = cmd.get("content")

@@ -240,7 +240,13 @@ class Agent:
         if self._tokenizer_instance:
             return self._tokenizer_instance
 
-        from llama_cpp import Llama
+        try:
+            from llama_cpp import Llama
+        except ImportError:
+            # llama-cpp-python not installed - this is OK when using server mode
+            # Return None and let caller handle it gracefully
+            return None
+            
         from vaf.cli.ui import UI
         
         # Ensure model file exists before trying to load it for tokenization

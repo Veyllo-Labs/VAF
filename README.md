@@ -134,6 +134,7 @@ Browser-based interface for interacting with VAF. Automatically starts when runn
 - Session management (create, load, delete)
 - Collapsible thinking process display
 - System workflow visualization
+- Inline Tool Execution (tools appear in chat stream)
 - WebSocket-based communication
 - Auto-opens in browser on startup
 

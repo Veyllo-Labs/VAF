@@ -72,7 +72,8 @@ Singleton pattern manager that:
 
 - **Connection Status**: Visual indicator (green/red) in header
 - **Loading States**: Animated dots during agent processing
-- **Workflow Steps**: Real-time display of Router, Workflow, and System events
+- **Workflow Steps**: Real-time display of Router, Workflow, System, and Info events
+- **Inline Tool Status**: Visual cards for running/completed tools directly in the chat stream
 
 ### 4. Message Features
 
@@ -160,9 +161,22 @@ Singleton pattern manager that:
     "timestamp": "ISO timestamp",
     "message": "Log message",
     "level": "info|warning|error",
-    "source": "System|Agent|Router|Step X/Y"
+    "source": "System|Agent|Router|Step X/Y|Info"
   }
 }
+```
+
+```json
+{
+  "type": "tool_update",
+  "subType": "start|end|error",
+  "toolId": "unique-id",
+  "name": "tool_name",
+  "data": "arguments (start) or result (end)",
+  "timestamp": "ISO timestamp",
+  "sessionId": "uuid"
+}
+
 ```
 
 ## Configuration
@@ -238,6 +252,13 @@ The Web UI runs alongside the CLI interface:
 - **User**: Right-aligned, indigo background, rounded corners
 - **Assistant**: Left-aligned, white background with border, includes bot icon
 - **System**: Timeline-style with icons, minimal styling
+- **Tool**: Card-style component showing tool name, arguments, status (running/completed), and result
+
+### Tool Message
+
+- **Status**: Dynamic border color (Blue=Running, Green=Success, Red=Error)
+- **Collapsible**: Details (args/result) are collapsible to save space
+- **Live Updates**: Updates in real-time as tool execution progresses
 
 ### Sidebar
 

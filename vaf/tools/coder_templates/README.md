@@ -1,13 +1,21 @@
 # Coder Agent Templates
 
-This directory contains pre-built templates that the Coding Agent uses to quickly scaffold projects.
+This directory contains pre-built templates that the Coding Agent uses to quickly scaffold projects. Templates are organized by programming language or project type.
 
 ## Structure
 
-- **website_html.html** - HTML template for websites
-- **website_css.css** - CSS template for websites
-- **website_js.js** - JavaScript template for websites
-- **__init__.py** - Template loader and manager
+- **java/**: Templates for Java applications and web servers.
+- **javascript/**: Templates for Node.js applications, Express servers, and React components.
+- **python/**: Templates for CLI tools, local servers, and general scripts.
+- **websites/**: Basic HTML/CSS/JS website templates.
+- **__init__.py**: Template loader and manager.
+
+## Organization
+
+Each subdirectory contains language-specific templates. For example:
+- `python/cli_tool/`: A structured template for a command-line application.
+- `javascript/express_server/`: A boilerplate for an Express.js backend.
+- `websites/basic_website/`: Standard HTML5/CSS3/JS structure.
 
 ## Current Templates
 

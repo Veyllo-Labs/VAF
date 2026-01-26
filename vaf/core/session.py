@@ -250,6 +250,66 @@ class SessionManager:
             return True
         except FileNotFoundError:
             return False
+
+    def cleanup_empty(self, exclude_session_id: str = None) -> int:
+        """
+        Delete sessions that are empty or contain only system/internal messages.
+        Prevents accumulation of 'New Chat' sessions with no user interaction.
+        
+        Args:
+            exclude_session_id: Optional session ID to exclude from cleanup (e.g., current active session)
+        
+        Returns: Number of deleted sessions.
+        """
+        count = 0
+        deleted_ids = []
+        
+        # Iterate over all sessions
+        # We use list() to iterate over a static list while modifying file system
+        try:
+            # Re-implement list logic inline to avoid full object loading overhead if possible,
+            # but we need to inspect content, so use load() safely
+            
+            all_files = list(self.storage_dir.glob("*.json")) + list(self.storage_dir.glob("*.json.gz"))
+            
+            # De-duplicate IDs (handle .json and .gz for same ID)
+            unique_ids = set()
+            for p in all_files:
+                unique_ids.add(p.name.split('.')[0])
+                
+            for sid in unique_ids:
+                # Skip excluded session (e.g., current active session)
+                if exclude_session_id and sid == exclude_session_id:
+                    continue
+                
+                try:
+                    # Load session
+                    session = self.load(sid)
+                    
+                    # Check criteria:
+                    # 1. No messages at all
+                    # 2. Only system messages (role='system')
+                    # 3. Only internal tool messages? (usually linked to user prompt, so role='user' check is enough)
+                    
+                    has_user_interaction = False
+                    for msg in session.messages:
+                        if msg.role == "user":
+                            has_user_interaction = True
+                            break
+                    
+                    if not has_user_interaction:
+                        # Delete it (it's a Lehre-Chat - empty teaching session)
+                        self.delete(sid)
+                        count += 1
+                        deleted_ids.append(sid)
+                        
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            print(f"Cleanup error: {e}")
+            
+        return count
     
     def export(self, session: Session = None, format: str = "markdown") -> str:
         """Export a session to a formatted string."""

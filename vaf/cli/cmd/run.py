@@ -508,6 +508,16 @@ def _warmup_model(tui):
         tui.event("Warning", f"Warmup error: {error}", style="warning")
         return False
 
+def _cleanup_before_exit():
+    """Helper to clean up empty sessions on exit."""
+    try:
+        from vaf.core.session import SessionManager
+        count = SessionManager().cleanup_empty()
+        if count > 0:
+            print(f"\n[VAF] Cleaned up {count} empty session(s).")
+    except:
+        pass
+
 def signal_handler(sig, frame):
     """Handles Ctrl+C to suppress Windows batch prompt and clean up."""
     if global_agent:
@@ -515,6 +525,8 @@ def signal_handler(sig, frame):
            global_agent.shutdown()
         except:
            pass
+    
+    _cleanup_before_exit()
     sys.exit(0)
 
 # Register the signal handler immediately
@@ -614,26 +626,30 @@ def run_prompt(
     if fmt == "stream-json":
         agent.set_event_sink(ndjson_emit)
         ndjson_emit({"type": "start"})
+    
+    try:
+        result_text = agent.chat_step(
+            prompt,
+            stream_callback=(lambda s: ndjson_emit({"type": "text_delta", "text": s})) if fmt == "stream-json" else None,
+        )
 
-    result_text = agent.chat_step(
-        prompt,
-        stream_callback=(lambda s: ndjson_emit({"type": "text_delta", "text": s})) if fmt == "stream-json" else None,
-    )
+        if fmt == "text":
+            if result_text:
+                print(result_text)
+            raise typer.Exit(0)
 
-    if fmt == "text":
-        if result_text:
-            print(result_text)
-        raise typer.Exit(0)
+        if fmt == "json":
+            payload = {"ok": True, "output": result_text or ""}
+            print(json.dumps(payload, ensure_ascii=False))
+            if save_session:
+                s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
+                s.add_message("user", prompt)
+                s.add_message("assistant", result_text or "")
+                mgr.save(s)
+            raise typer.Exit(0)
 
-    if fmt == "json":
-        payload = {"ok": True, "output": result_text or ""}
-        print(json.dumps(payload, ensure_ascii=False))
-        if save_session:
-            s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
-            s.add_message("user", prompt)
-            s.add_message("assistant", result_text or "")
-            mgr.save(s)
-        raise typer.Exit(0)
+    finally:
+        _cleanup_before_exit()
 
     if save_session:
         s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
@@ -692,6 +708,21 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     from vaf.core.subagent_ipc import set_current_session_id, cleanup_other_sessions
     set_current_session_id(current_session.id)
     cleanup_other_sessions()  # Remove active tasks from previous sessions
+    
+    # ═══════════════════════════════════════════════════════════════
+    # LEHRE-CHAT CLEANUP - Delete all old empty sessions
+    # ═══════════════════════════════════════════════════════════════
+    # Clean up empty sessions (Lehre-Chats) from previous runs
+    # This prevents accumulation of teaching sessions in the database
+    # Note: Current session is excluded from cleanup to allow it to exist during runtime
+    try:
+        cleanup_count = session_mgr.cleanup_empty(exclude_session_id=current_session.id)
+        if cleanup_count > 0:
+            tui.event("Cleanup", f"Removed {cleanup_count} empty Lehre-Chat(s) from previous runs", style="dim")
+    except Exception as e:
+        # Don't block startup if cleanup fails
+        tui.event("Warning", f"Cleanup warning: {e}", style="warning")
+
     
     # Initialize agent
     tui.clear()
@@ -1146,56 +1177,69 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                         
                         # Handle System Commands from Web UI
                         if str(raw_input).startswith("__CMD__"):
-                            cmd_parts = str(raw_input).split(":")
-                            cmd_type = cmd_parts[1]
-                            
-                            if cmd_type == "NEW_SESSION":
-                                current_session = session_mgr.new()
-                                session_mgr.save(current_session) # Save immediately so ID is valid
-                                agent.init_chat()
-                                tui.event("WebUI", "Started new session", style="success")
-                                continue # Loop back to prompt
+                            try:
+                                cmd_parts = str(raw_input).strip().split(":")
+                                if len(cmd_parts) < 2:
+                                    continue
+                                    
+                                cmd_type = cmd_parts[1].strip()
                                 
-                            elif cmd_type == "LOAD_SESSION":
-                                sid = cmd_parts[2]
-                                try:
-                                    current_session = session_mgr.load(sid)
-                                    # Restore agent history
+                                if cmd_type == "NEW_SESSION":
+                                    current_session = session_mgr.new()
+                                    session_mgr.save(current_session) # Save immediately so ID is valid
                                     agent.init_chat()
-                                    for msg in current_session.messages:
-                                        if msg.get("role") in ["user", "assistant"]:
-                                            agent.history.append({"role": msg.get("role"), "content": msg.get("content")})
-                                    tui.event("WebUI", f"Switched to session: {current_session.name}", style="success")
-                                except Exception as e:
-                                    tui.error(f"Failed to switch session: {e}")
-                                continue # Loop back to prompt
+                                    tui.event("WebUI", "Started new session", style="success")
+                                    continue # Loop back to prompt
+                                    
+                                elif cmd_type == "LOAD_SESSION":
+                                    sid = cmd_parts[2].strip()
+                                    try:
+                                        current_session = session_mgr.load(sid)
+                                        # Restore agent history
+                                        agent.init_chat()
+                                        for msg in current_session.messages:
+                                            if msg.get("role") in ["user", "assistant"]:
+                                                agent.history.append({"role": msg.get("role"), "content": msg.get("content")})
+                                        tui.event("WebUI", f"Switched to session: {current_session.name}", style="success")
+                                    except Exception as e:
+                                        tui.error(f"Failed to switch session: {e}")
+                                    continue # Loop back to prompt
 
-                            elif cmd_type == "RENAME_SESSION":
-                                # Format: __CMD__:RENAME_SESSION:id:new_name
-                                try:
-                                    cmd_parts = str(raw_input).split(":", 3)
-                                    sid = cmd_parts[2]
-                                    new_name = cmd_parts[3]
-                                    if current_session and current_session.id == sid:
-                                        current_session.name = new_name
-                                        # tui.event("WebUI", f"Session renamed to: {new_name}", style="dim")
-                                except: pass
-                                continue
+                                elif cmd_type == "RENAME_SESSION":
+                                    # Format: __CMD__:RENAME_SESSION:id:new_name
+                                    try:
+                                        cmd_parts = str(raw_input).split(":", 3)
+                                        sid = cmd_parts[2].strip()
+                                        new_name = cmd_parts[3].strip()
+                                        if current_session and current_session.id == sid:
+                                            current_session.name = new_name
+                                            # tui.event("WebUI", f"Session renamed to: {new_name}", style="dim")
+                                    except: pass
+                                    continue
 
-                            elif cmd_type == "RELOAD_CONFIG":
-                                # Reload agent config
-                                try:
-                                    tui.event("System", "Config updated from WebUI", style="dim")
-                                    # We might need to re-init agent or just update its config dict
-                                    # simplest is to just reload the config dict on the agent if exposed
-                                    # But Agent() loads config in __init__.
-                                    # For extensive changes we might need restart, but for simple params:
-                                    from vaf.core.config import Config
-                                    new_cfg = Config.load()
-                                    if hasattr(agent, 'config'):
-                                        agent.config = new_cfg
-                                        # Also re-apply things like voice settings
-                                except: pass
+                                elif cmd_type == "RELOAD_CONFIG":
+                                    # Reload agent config
+                                    try:
+                                        tui.event("System", "Config updated from WebUI", style="dim")
+                                        # We might need to re-init agent or just update its config dict
+                                        # simplest is to just reload the config dict on the agent if exposed
+                                        # But Agent() loads config in __init__.
+                                        # For extensive changes we might need restart, but for simple params:
+                                        from vaf.core.config import Config
+                                        new_cfg = Config.load()
+                                        if hasattr(agent, 'config'):
+                                            agent.config = new_cfg
+                                            # Also re-apply things like voice settings
+                                    except: pass
+                                    continue
+                                
+                                else:
+                                    # Consume unknown commands silently
+                                    tui.warning(f"Ignored unknown command: {cmd_type}")
+                                    continue
+
+                            except Exception as e:
+                                tui.error(f"Command processing error: {e}")
                                 continue
                         
                         # Normal Chat Input
@@ -1236,39 +1280,66 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                 
                                 # Handle System Commands (Copy logic from above)
                                 if str(raw_input).startswith("__CMD__"):
-                                    cmd_parts = str(raw_input).split(":")
-                                    cmd_type = cmd_parts[1]
-                                    
-                                    if cmd_type == "NEW_SESSION":
-                                        current_session = session_mgr.new()
-                                        session_mgr.save(current_session)
-                                        agent.init_chat()
-                                        tui.event("WebUI", "Started new session", style="success")
-                                        wake_word_detected_flag.clear()
-                                        continue
+                                    try:
+                                        cmd_parts = str(raw_input).strip().split(":")
+                                        if len(cmd_parts) < 2:
+                                            continue
+                                            
+                                        cmd_type = cmd_parts[1].strip()
                                         
-                                    elif cmd_type == "LOAD_SESSION":
-                                        sid = cmd_parts[2]
-                                        try:
-                                            current_session = session_mgr.load(sid)
+                                        if cmd_type == "NEW_SESSION":
+                                            current_session = session_mgr.new()
+                                            session_mgr.save(current_session)
                                             agent.init_chat()
-                                            for msg in current_session.messages:
-                                                if msg.get("role") in ["user", "assistant"]:
-                                                    agent.history.append({"role": msg.get("role"), "content": msg.get("content")})
-                                            tui.event("WebUI", f"Switched to session: {current_session.name}", style="success")
-                                        except Exception as e:
-                                            tui.error(f"Failed to switch session: {e}")
-                                        wake_word_detected_flag.clear()
-                                        continue
+                                            tui.event("WebUI", "Started new session", style="success")
+                                            wake_word_detected_flag.clear()
+                                            continue
+                                            
+                                        elif cmd_type == "LOAD_SESSION":
+                                            sid = cmd_parts[2].strip()
+                                            try:
+                                                current_session = session_mgr.load(sid)
+                                                agent.init_chat()
+                                                for msg in current_session.messages:
+                                                    if msg.get("role") in ["user", "assistant"]:
+                                                        agent.history.append({"role": msg.get("role"), "content": msg.get("content")})
+                                                tui.event("WebUI", f"Switched to session: {current_session.name}", style="success")
+                                            except Exception as e:
+                                                tui.error(f"Failed to switch session: {e}")
+                                            wake_word_detected_flag.clear()
+                                            continue
 
-                                    elif cmd_type == "RENAME_SESSION":
-                                        try:
-                                            cmd_parts = str(raw_input).split(":", 3)
-                                            sid = cmd_parts[2]
-                                            new_name = cmd_parts[3]
-                                            if current_session and current_session.id == sid:
-                                                current_session.name = new_name
-                                        except: pass
+                                        elif cmd_type == "RENAME_SESSION":
+                                            try:
+                                                cmd_parts = str(raw_input).split(":", 3)
+                                                sid = cmd_parts[2].strip()
+                                                new_name = cmd_parts[3].strip()
+                                                if current_session and current_session.id == sid:
+                                                    current_session.name = new_name
+                                            except: pass
+                                            wake_word_detected_flag.clear()
+                                            continue
+                                        
+                                        elif cmd_type == "RELOAD_CONFIG":
+                                            # Reload agent config
+                                            try:
+                                                tui.event("System", "Config updated from WebUI", style="dim")
+                                                from vaf.core.config import Config
+                                                new_cfg = Config.load()
+                                                if hasattr(agent, 'config'):
+                                                    agent.config = new_cfg
+                                            except: pass
+                                            wake_word_detected_flag.clear()
+                                            continue
+
+                                        else:
+                                            # Consume unknown commands silently
+                                            tui.warning(f"Ignored unknown command: {cmd_type}")
+                                            wake_word_detected_flag.clear()
+                                            continue
+
+                                    except Exception as e:
+                                        tui.error(f"Command processing error: {e}")
                                         wake_word_detected_flag.clear()
                                         continue
                                 

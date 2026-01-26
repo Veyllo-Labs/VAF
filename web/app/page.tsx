@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings
+    Settings, Mic, MicOff, Check, ChevronRight, Zap
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import SettingsModal from '@/components/SettingsModal';
@@ -117,7 +117,25 @@ export default function VAFDashboard() {
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [apiModels, setApiModels] = useState<Record<string, string[]>>({});
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [tools, setTools] = useState<Array<{ name: string; description: string; category: string }>>([]);
+    const [workflows, setWorkflows] = useState<Array<{ id: string; name: string; description: string; steps: number }>>([]);
+    const [automations, setAutomations] = useState<Array<{ id: string; name: string; description: string; frequency: string; time: string; enabled: boolean }>>([]);
 
+    // File attachment state
+    const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const [isRecording, setIsRecording] = useState(false);
+    const [isProcessingAudio, setIsProcessingAudio] = useState(false);
+    const [sttEnabled, setSttEnabled] = useState(false); // Track STT status
+    const [volume, setVolume] = useState(0);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
+    const audioContextRef = useRef<AudioContext | null>(null);
+    const analyserRef = useRef<AnalyserNode | null>(null);
+    const silenceStartRef = useRef<number | null>(null);
+    const hasSpokenRef = useRef(false);
+    const animationFrameRef = useRef<number | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -145,11 +163,16 @@ export default function VAFDashboard() {
                     if (src.includes('Step') || src.includes('Router') || src.includes('System') || src.includes('Agent')) {
                         const cleanMsg = rawMsg.replace(/^\|\s*/, '');
 
-                        // Strip trailing dots/ellipsis/whitespace for cleaner display
-                        const displayMsg = cleanMsg.replace(/[\.\u2026\s]+$/, '');
+                        // Strip ALL dots, ellipsis, and whitespace from start/end
+                        // Also remove "Thinking" if it stands alone or with dots
+                        let displayMsg = cleanMsg.replace(/^[\.\u2026\s]+|[\.\u2026\s]+$/g, '');
 
-                        // Skip if result is empty (was just dots or empty)
-                        if (!displayMsg) return;
+                        // If message is just "Thinking", ignore it (UI handles this via loading state)
+                        if (displayMsg.toLowerCase() === 'thinking') displayMsg = '';
+
+                        // ROBUST FILTER: If removing all non-alphanumeric chars results in empty string, ignore it.
+                        // This catches "...", ". . .", "___", etc.
+                        if (displayMsg.replace(/[\W_]/g, '').length === 0) return;
 
                         // Set status message for the ghost loader
                         setStatusMessage(`${src}: ${displayMsg}`);
@@ -219,6 +242,49 @@ export default function VAFDashboard() {
                     // Refresh config to confirm save
                     ws?.send(JSON.stringify({ type: 'get_config' }));
                 }
+                else if (data.type === 'models_list') {
+                    setAvailableModels(data.models || []);
+                }
+                else if (data.type === 'api_models') {
+                    setApiModels(prev => ({ ...prev, [data.provider]: data.models }));
+                }
+                else if (data.type === 'tools_list') {
+                    setTools(data.tools || []);
+                }
+                else if (data.type === 'workflows_list') {
+                    setWorkflows(data.workflows || []);
+                }
+                else if (data.type === 'config') {
+                    setConfig(data.config);
+                    setSttEnabled(data.config.stt_enabled === true);
+                    // Extract initial available models if present in config (legacy method)
+                    if (data.config.llm_available_models) {
+                        setAvailableModels(data.config.llm_available_models);
+                    }
+                }
+                else if (data.type === 'automations_list') {
+                    setAutomations(data.automations || []);
+                }
+                else if (data.type === 'stt_result') {
+                    // STT transcription result
+                    const text = data.text || '';
+                    if (text) {
+                        setInput(text);
+                        setIsProcessingAudio(false);
+
+                        // Auto-send after 0.5s for "Enter" effect
+                        setTimeout(() => {
+                            sendMessage(undefined, text);
+                        }, 500);
+                    } else {
+                        setIsProcessingAudio(false);
+                    }
+                }
+                else if (data.type === 'stt_error') {
+                    console.error('STT Error:', data.error);
+                    alert(`Voice Error: ${data.error}`);
+                    setIsProcessingAudio(false);
+                }
             } catch (e) { console.error(e); }
         };
         socket.onclose = () => setStatus('disconnected');
@@ -230,13 +296,179 @@ export default function VAFDashboard() {
         if (scrollRef.current) scrollRef.current.scrollIntoView({ behavior: 'smooth' });
     }, [messages, loading]);
 
-    const sendMessage = (e?: React.FormEvent) => {
+    // Sync sttEnabled state with config changes
+    useEffect(() => {
+        setSttEnabled(config.stt_enabled === true);
+    }, [config]);
+
+    const sendMessage = async (e?: React.FormEvent, overrideText?: string) => {
         e?.preventDefault();
-        if (!input.trim() || !ws) return;
-        setMessages(prev => [...prev, { role: 'user', content: input, timestamp: Date.now() }]);
+        const textToSend = overrideText || input;
+        if ((!textToSend.trim() && attachedFiles.length === 0) || !ws) return;
+
+        // Process attached files
+        let filesData = [];
+        if (attachedFiles.length > 0) {
+            for (const file of attachedFiles) {
+                try {
+                    const base64 = await fileToBase64(file);
+                    filesData.push({
+                        name: file.name,
+                        data: base64,
+                        mimeType: file.type
+                    });
+                } catch (error) {
+                    console.error('Error processing file:', file.name, error);
+                }
+            }
+        }
+
+        setMessages(prev => [...prev, { role: 'user', content: textToSend, timestamp: Date.now() }]);
         setLoading(true);
-        ws.send(JSON.stringify({ type: 'chat', content: input }));
+        ws.send(JSON.stringify({
+            type: 'chat',
+            content: textToSend,
+            files: filesData
+        }));
         setInput('');
+        setAttachedFiles([]); // Clear attached files after sending
+    };
+
+    const fileToBase64 = (file: File): Promise<string> => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = error => reject(error);
+        });
+    };
+
+    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files) {
+            const newFiles = Array.from(e.target.files);
+            setAttachedFiles(prev => [...prev, ...newFiles]);
+        }
+    };
+
+    const removeFile = (index: number) => {
+        setAttachedFiles(prev => prev.filter((_, i) => i !== index));
+    };
+
+    const startRecording = async () => {
+        if (!sttEnabled) {
+            const confirmEnable = confirm("Voice Input is currently disabled. Would you like to open Settings to enable it?");
+            if (confirmEnable) {
+                setIsSettingsOpen(true);
+            }
+            return;
+        }
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+            // Audio Context for VAD (Voice Activity Detection)
+            const audioContext = new AudioContext();
+            audioContextRef.current = audioContext;
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            analyserRef.current = analyser;
+            const source = audioContext.createMediaStreamSource(stream);
+            source.connect(analyser);
+
+            const mediaRecorder = new MediaRecorder(stream);
+            mediaRecorderRef.current = mediaRecorder;
+            audioChunksRef.current = [];
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    audioChunksRef.current.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+
+                // Convert to base64
+                const reader = new FileReader();
+                reader.readAsDataURL(audioBlob);
+                reader.onloadend = () => {
+                    const base64Audio = reader.result as string;
+                    // Send to backend
+                    ws?.send(JSON.stringify({
+                        type: 'process_audio',
+                        audio: base64Audio.split(',')[1] // Remove data:audio/webm;base64, prefix
+                    }));
+                    setIsProcessingAudio(true);
+                };
+
+                // Stop all tracks
+                stream.getTracks().forEach(track => track.stop());
+
+                // Cleanup AudioContext
+                if (audioContextRef.current) {
+                    audioContextRef.current.close().catch(console.error);
+                    audioContextRef.current = null;
+                }
+                if (animationFrameRef.current) {
+                    cancelAnimationFrame(animationFrameRef.current);
+                    animationFrameRef.current = null;
+                }
+                setVolume(0);
+            };
+
+            // VAD Logic setup
+            hasSpokenRef.current = false;
+            silenceStartRef.current = null;
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+            const detectSilence = () => {
+                if (!analyserRef.current) return;
+                analyserRef.current.getByteFrequencyData(dataArray);
+
+                // Calculate average volume
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) {
+                    sum += dataArray[i];
+                }
+                const average = sum / dataArray.length;
+                setVolume(average); // Update UI
+
+                // Thresholds (adjustable)
+                const SPEECH_THRESHOLD = 20;
+                const SILENCE_DURATION = 1500; // 1.5 seconds
+
+                if (average > SPEECH_THRESHOLD) {
+                    hasSpokenRef.current = true;
+                    silenceStartRef.current = null; // Reset silence timer
+                } else {
+                    if (hasSpokenRef.current) {
+                        if (silenceStartRef.current === null) {
+                            silenceStartRef.current = Date.now();
+                        } else if (Date.now() - silenceStartRef.current > SILENCE_DURATION) {
+                            // Auto-Stop
+                            stopRecording();
+                            return; // Exit loop
+                        }
+                    }
+                }
+
+                animationFrameRef.current = requestAnimationFrame(detectSilence);
+            };
+
+            mediaRecorder.start();
+            detectSilence(); // Start VAD loop
+            setIsRecording(true);
+        } catch (error) {
+            console.error('Error accessing microphone:', error);
+            alert('Could not access microphone. Please grant permission.');
+        }
+    };
+
+    const stopRecording = () => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+            mediaRecorderRef.current.stop();
+            setIsRecording(false);
+        }
     };
 
     const startEditing = (s: Session) => {
@@ -350,7 +582,13 @@ export default function VAFDashboard() {
                         </div>
 
                         <div
-                            onClick={() => setIsSettingsOpen(true)}
+                            onClick={() => {
+                                setIsSettingsOpen(true);
+                                // Fetch tools, workflows, and automations when opening settings
+                                ws?.send(JSON.stringify({ type: 'get_tools' }));
+                                ws?.send(JSON.stringify({ type: 'get_workflows' }));
+                                ws?.send(JSON.stringify({ type: 'get_automations' }));
+                            }}
                             className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/settings transition-all justify-start"
                             title="Settings"
                         >
@@ -399,7 +637,7 @@ export default function VAFDashboard() {
                                             )}
 
                                             {/* Show status steps below the active message if streaming */}
-                                            {loading && isBot && i === messages.length - 1 && statusMessage && (
+                                            {loading && isBot && i === messages.length - 1 && statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && (
                                                 <span className="text-[10px] text-gray-400 mt-1 ml-1 animate-in fade-in">{statusMessage}</span>
                                             )}
                                         </div>
@@ -413,11 +651,11 @@ export default function VAFDashboard() {
                                     <div className="w-9 h-9 rounded-xl bg-gray-200 flex items-center justify-center text-gray-400"><Bot size={18} /></div>
                                     <div className="flex flex-col gap-1">
                                         <div className="bg-gray-100 px-4 py-2 rounded-2xl rounded-tl-none w-fit flex gap-1">
-                                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce">.</span>
-                                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75">.</span>
-                                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150">.</span>
+                                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
+                                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
+                                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150"></span>
                                         </div>
-                                        {statusMessage && <span className="text-[10px] text-gray-400 ml-2">{statusMessage}</span>}
+                                        {statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && <span className="text-[10px] text-gray-400 ml-2">{statusMessage}</span>}
                                     </div>
                                 </div>
                             )}
@@ -426,11 +664,64 @@ export default function VAFDashboard() {
                     </div>
 
                     <div className="absolute bottom-0 w-full bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6">
+                        {/* File chips display */}
+                        {attachedFiles.length > 0 && (
+                            <div className="max-w-4xl mx-auto mb-2 flex gap-2 flex-wrap">
+                                {attachedFiles.map((file, index) => (
+                                    <div key={index} className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-1.5 text-sm">
+                                        <span className="text-gray-700">{file.name}</span>
+                                        <button
+                                            type="button"
+                                            onClick={() => removeFile(index)}
+                                            className="text-gray-500 hover:text-red-600 transition-colors"
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                         <form onSubmit={sendMessage} className="max-w-4xl mx-auto flex items-center bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden">
-                            <button type="button" className="p-4 text-gray-400 hover:text-gray-900"><Paperclip size={20} /></button>
+                            <input
+                                type="file"
+                                ref={fileInputRef}
+                                onChange={handleFileSelect}
+                                className="hidden"
+                                multiple
+                                accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => fileInputRef.current?.click()}
+                                className="p-4 text-gray-400 hover:text-gray-900 transition-colors"
+                                title="Attach files"
+                            >
+                                <Paperclip size={20} />
+                            </button>
                             <input type="text" value={input} onChange={e => setInput(e.target.value)} placeholder="Ask anything..." className="flex-1 py-4 bg-transparent border-none focus:ring-0 focus:outline-none text-sm" disabled={loading} />
-                            <button type="submit" disabled={!input.trim() || loading} className="m-2 p-2 bg-gray-900 text-white rounded-xl hover:bg-black disabled:bg-gray-200 transition-all shadow-sm">
-                                <Send size={18} className="mx-2" />
+                            <button
+                                type="button"
+                                onClick={isRecording ? stopRecording : startRecording}
+                                disabled={isProcessingAudio || loading}
+                                className={cn(
+                                    "m-2 p-2 rounded-xl transition-all shadow-sm",
+                                    isRecording ? "bg-red-500 text-white" :
+                                        isProcessingAudio ? "bg-gray-300 text-gray-500" :
+                                            "bg-gray-900 text-white hover:bg-black disabled:bg-gray-200"
+                                )}
+                                style={{
+                                    boxShadow: isRecording ? `0 0 0 ${Math.min(volume / 5, 15)}px rgba(239, 68, 68, 0.4)` : 'none',
+                                    transition: 'box-shadow 0.05s ease-out'
+                                }}
+                                title={isRecording ? "Stop recording (Auto-stop active)" : isProcessingAudio ? "Processing..." : "Voice input"}
+                            >
+                                {isProcessingAudio ? (
+                                    <Loader2 size={18} className="mx-2 animate-spin" />
+                                ) : isRecording ? (
+                                    <MicOff size={18} className="mx-2" />
+                                ) : (
+                                    <Mic size={18} className="mx-2" />
+                                )}
                             </button>
                         </form>
                     </div>
@@ -445,6 +736,9 @@ export default function VAFDashboard() {
                 apiModels={apiModels}
                 onFetchApiModels={fetchApiModels}
                 onRefreshLocalModels={refreshLocalModels}
+                tools={tools}
+                workflows={workflows}
+                automations={automations}
             />
         </main>
     );

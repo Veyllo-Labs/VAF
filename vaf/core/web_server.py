@@ -266,10 +266,185 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 elif type == "chat":
                     content = cmd.get("content")
-                    if content:
+                    files = cmd.get("files", [])  # List of file objects with {name, data, mimeType}
+                    
+                    if content or files:
+                        # Process files if attached
+                        if files:
+                            print(f"[WebUI] Processing {len(files)} attached file(s)...")
+                            file_contents = await process_uploaded_files(files)
+                            if file_contents:
+                                # Append file contents to message (like CLI @filename behavior)
+                                content = content + "\n\n" + file_contents if content else file_contents
+                        
                         manager.input_queue.put(content)
                         # Ack to console
-                        print(f"[WebUI] Received input: {content[:20]}...")
+                        file_info = f" [{len(files)} file(s)]" if files else ""
+                        print(f"[WebUI] Received input{file_info}: {content[:50]}...")
+                
+                elif type == "get_tools":
+                    # Return list of available tools from agent
+                    try:
+                        # Access global agent if available
+                        from vaf.cli.cmd.run import global_agent
+                        if global_agent and hasattr(global_agent, 'tools'):
+                            tools_list = [
+                                {
+                                    "name": name,
+                                    "description": getattr(tool, 'description', 'No description'),
+                                    "category": getattr(tool, 'category', 'general')
+                                }
+                                for name, tool in global_agent.tools.items()
+                            ]
+                            await websocket.send_json({
+                                "type": "tools_list",
+                                "tools": tools_list
+                            })
+                        else:
+                            await websocket.send_json({
+                                "type": "tools_list",
+                                "tools": []
+                            })
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "tools_list",
+                            "tools": [],
+                            "error": str(e)
+                        })
+                
+                elif type == "get_workflows":
+                    # Return list of available workflow templates
+                    try:
+                        from vaf.workflows.templates import list_templates
+                        workflows = list_templates()
+                        await websocket.send_json({
+                            "type": "workflows_list",
+                            "workflows": workflows
+                        })
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "workflows_list",
+                            "workflows": [],
+                            "error": str(e)
+                        })
+                
+                elif type == "get_automations":
+                    # Return list of saved automations
+                    try:
+                        from vaf.core.automation import AutomationManager
+                        mgr = AutomationManager()
+                        tasks = mgr.list()
+                        automations_list = [
+                            {
+                                "id": task.id,
+                                "name": task.name,
+                                "description": task.description,
+                                "frequency": task.frequency,
+                                "time": task.time,
+                                "enabled": task.enabled,
+                                "next_run": task.next_run_iso,
+                                "last_run": task.last_run
+                            }
+                            for task in tasks
+                        ]
+                        await websocket.send_json({
+                            "type": "automations_list",
+                            "automations": automations_list
+                        })
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "automations_list",
+                            "automations": [],
+                            "error": str(e)
+                        })
+                
+                elif type == "process_audio":
+                    # Process audio for STT - OFFLINE ONLY (faster-whisper)
+                    import base64
+                    import tempfile
+                    import os
+                    
+                    print(f"DEBUG: process_audio request received (OFFLINE MODE)") # DEBUG
+                    temp_path = None
+                    try:
+                        audio_b64 = cmd.get("audio")
+                        if not audio_b64:
+                            print("DEBUG: No audio data provided") # DEBUG
+                            await websocket.send_json({
+                                "type": "stt_error",
+                                "error": "No audio data provided"
+                            })
+                            continue
+                        
+                        print(f"DEBUG: Audio data length: {len(audio_b64)}") # DEBUG
+
+                        # Decode base64 audio
+                        audio_data = base64.b64decode(audio_b64)
+                        
+                        # Save to temp file (WebM from browser)
+                        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as temp_audio:
+                            temp_audio.write(audio_data)
+                            temp_path = temp_audio.name
+                        print(f"DEBUG: Saved audio to {temp_path}") # DEBUG
+                        
+                        try:
+                            # Check STT enabled
+                            from vaf.core.speech import SpeechManager
+                            sm = SpeechManager.get_instance()
+                            
+                            if not sm.is_stt_enabled():
+                                print("DEBUG: STT disabled in config") # DEBUG
+                                await websocket.send_json({
+                                    "type": "stt_error",
+                                    "error": "STT is disabled in settings"
+                                })
+                                continue
+                            
+                            # OFFLINE STT: faster-whisper
+                            try:
+                                print("DEBUG: Using faster-whisper (OFFLINE)...") # DEBUG
+                                from faster_whisper import WhisperModel
+                                
+                                # Initialize model (base = good speed/accuracy balance)
+                                print("DEBUG: Initializing WhisperModel (base, offline)...") # DEBUG
+                                model = WhisperModel("base", device="cpu", compute_type="int8")
+                                
+                                # Transcribe
+                                print(f"DEBUG: Transcribing {temp_path}...") # DEBUG
+                                segments, info = model.transcribe(temp_path, beam_size=5)
+                                text = " ".join([segment.text for segment in segments])
+                                print(f"DEBUG: Transcription result: '{text}'") # DEBUG
+                                
+                                await websocket.send_json({
+                                    "type": "stt_result",
+                                    "text": text.strip()
+                                })
+                            except ImportError as ie:
+                                print(f"DEBUG: faster-whisper not installed: {ie}") # DEBUG
+                                await websocket.send_json({
+                                    "type": "stt_error",
+                                    "error": "faster-whisper not installed. Install with: pip install faster-whisper"
+                                })
+                            except Exception as transcribe_error:
+                                print(f"DEBUG: Transcription error: {transcribe_error}") # DEBUG
+                                await websocket.send_json({
+                                    "type": "stt_error",
+                                    "error": f"Transcription failed: {str(transcribe_error)}"
+                                })
+                        finally:
+                            # Clean up temp file
+                            if temp_path and os.path.exists(temp_path):
+                                try:
+                                    os.unlink(temp_path)
+                                except:
+                                    pass
+                            
+                    except Exception as e:
+                        print(f"DEBUG: General Error in process_audio: {e}") # DEBUG
+                        await websocket.send_json({
+                            "type": "stt_error",
+                            "error": str(e)
+                        })
 
             except json.JSONDecodeError:
                 pass
@@ -279,6 +454,78 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         print(f"WebSocket error: {e}")
         manager.disconnect(websocket)
+
+
+async def process_uploaded_files(files: list) -> str:
+    """
+    Process uploaded files and return their text content.
+    Mimics CLI @filename behavior by reading file contents and formatting them.
+    
+    Args:
+        files: List of file objects with {name, data, mimeType}
+        
+    Returns:
+        Formatted string with file contents
+    """
+    import base64
+    import tempfile
+    import os
+    from pathlib import Path
+    
+    if not files:
+        return ""
+    
+    results = []
+    
+    for file_obj in files:
+        try:
+            filename = file_obj.get("name", "unknown")
+            file_data = file_obj.get("data", "")
+            mime_type = file_obj.get("mimeType", "")
+            
+            print(f"[WebUI] Processing file: {filename} ({mime_type})")
+            
+            # Decode base64 data
+            if file_data.startswith("data:"):
+                # Remove data URL prefix (e.g., "data:application/pdf;base64,")
+                file_data = file_data.split(",", 1)[1] if "," in file_data else file_data
+            
+            decoded_data = base64.b64decode(file_data)
+            
+            # Save to temporary file
+            file_ext = Path(filename).suffix or ".txt"
+            with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as temp_file:
+                temp_file.write(decoded_data)
+                temp_path = temp_file.name
+            
+            try:
+                # Use Librarian to read file contents
+                from vaf.tools.librarian import LibrarianTool
+                librarian = LibrarianTool()
+                
+                # Read file using Librarian's _read_file method
+                content = librarian._read_file(Path(temp_path), enable_chunking=True)
+                
+                # Format like CLI does: --- FILE: name ---\nCONTENTS\n----------------
+                formatted = f"\n\n--- FILE: {filename} ---\n{content}\n----------------\n"
+                results.append(formatted)
+                
+                print(f"[WebUI] Successfully processed: {filename}")
+                
+            finally:
+                # Clean up temp file
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+                    
+        except Exception as e:
+            error_msg = f"\n\n--- FILE: {filename} ---\n[ERROR] Failed to process file: {str(e)}\n----------------\n"
+            results.append(error_msg)
+            print(f"[WebUI] Error processing {filename}: {e}")
+    
+    return "".join(results)
+
 
 
 def run_server(host="127.0.0.1", port=8001):

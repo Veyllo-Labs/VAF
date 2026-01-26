@@ -66,6 +66,10 @@ class Config:
         "librarian_max_text_size_kb": 500,     # Max text file size in KB (default: 500)
         "librarian_auto_chunk_large_files": True,  # Auto-chunk large files (default: True)
         "librarian_pdf_max_pages_preview": 50, # Max pages to show in preview (default: 50)
+        
+        # System Settings
+        "web_ui_enabled": True,                # Start Web UI automatically
+        "server_persistence_enabled": False,   # Keep server running after exit
     }
 
     @classmethod

@@ -2789,7 +2789,7 @@ class Agent:
                         "temperature": 0.1,
                         "stream": False
                     }
-                    res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=20).json()
+                    res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=120).json()
                     selected_tools_str = res['choices'][0]['message']['content']
                 elif self.llm:
                      output = self.llm.create_chat_completion(
@@ -4564,7 +4564,7 @@ class Agent:
             
             if self.use_server: # Local Server
                 payload = {"messages": messages, "max_tokens": 5, "temperature": 0.0}
-                res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=5).json()
+                res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=120).json()
                 result = res['choices'][0]['message']['content']
             elif self.api_backend: # API
                 output = self.api_backend.create_chat_completion(messages, max_tokens=5, temperature=0.0)

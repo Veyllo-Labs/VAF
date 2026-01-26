@@ -16,6 +16,9 @@ export interface SettingsModalProps {
     apiModels: Record<string, string[]>;
     onFetchApiModels: (provider: string, apiKey: string) => void;
     onRefreshLocalModels: () => void;
+    tools?: Array<{ name: string; description: string; category: string }>;
+    workflows?: Array<{ id: string; name: string; description: string; steps: number }>;
+    automations?: Array<{ id: string; name: string; description: string; frequency: string; time: string; enabled: boolean }>;
 }
 
 const CATEGORIES = [
@@ -24,6 +27,8 @@ const CATEGORIES = [
     { id: 'voice', label: 'Voice & Speech', icon: Volume2 },
     { id: 'interface', label: 'Interface', icon: Monitor },
     { id: 'advanced', label: 'Advanced', icon: Zap },
+    { id: 'automations', label: 'Automations', icon: Check }, // Placeholder
+    { id: 'about', label: 'About', icon: Globe }, // Using Globe as placeholder for Info
 ];
 
 const PROVIDERS = [
@@ -43,12 +48,16 @@ const WAKE_WORDS = [
     { value: 'computer', label: 'Computer' },
 ];
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], automations = [] }: SettingsModalProps) {
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [activeTab, setActiveTab] = useState('general');
     const [changed, setChanged] = useState(false);
     const [hfQuery, setHfQuery] = useState('');
     const [fetchingProvider, setFetchingProvider] = useState<string | null>(null);
+    const [showToolsModal, setShowToolsModal] = useState(false);
+    const [showWorkflowsModal, setShowWorkflowsModal] = useState(false);
+    const [toolsSearch, setToolsSearch] = useState('');
+    const [workflowsSearch, setWorkflowsSearch] = useState('');
 
     useEffect(() => {
         setLocalConfig(config || {});
@@ -324,6 +333,31 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         />
                                     </div>
                                 </Section>
+
+                                <Section title="Text to Speech">
+                                    <Switch
+                                        label="Enable Voice Output (TTS)"
+                                        description="Agent speaks responses aloud"
+                                        checked={localConfig.speech_tts_enabled || false}
+                                        onChange={(v: boolean) => handleChange('speech_tts_enabled', v)}
+                                    />
+                                    {localConfig.speech_tts_enabled && (
+                                        <div className="mt-4">
+                                            <Select
+                                                label="TTS Engine"
+                                                value={localConfig.speech_tts_engine || 'piper'}
+                                                onChange={(v: string) => handleChange('speech_tts_engine', v)}
+                                                options={[
+                                                    { value: 'piper', label: 'Piper (Neural, High Quality)' },
+                                                    { value: 'system', label: 'System (Native OS Voice)' },
+                                                ]}
+                                            />
+                                            <p className="text-xs text-gray-500 mt-2">
+                                                Piper provides natural-sounding neural voices. System uses your OS's built-in TTS.
+                                            </p>
+                                        </div>
+                                    )}
+                                </Section>
                             </div>
                         )}
 
@@ -384,6 +418,150 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             ]}
                                         />
                                     </div>
+                                    <div className="h-4" />
+                                    <Switch
+                                        label="Sub-Agent Timeout"
+                                        description="Limit execution time for sub-agents"
+                                        checked={localConfig.subagent_timeout_enabled ?? true}
+                                        onChange={(v: boolean) => handleChange('subagent_timeout_enabled', v)}
+                                    />
+                                    {localConfig.subagent_timeout_enabled && (
+                                        <div className="mt-2 pl-4 border-l-2 border-gray-100">
+                                            <Input
+                                                label="Timeout (minutes)"
+                                                value={localConfig.subagent_timeout_minutes || 120}
+                                                onChange={(v: string) => handleChange('subagent_timeout_minutes', parseInt(v))}
+                                                type="number"
+                                            />
+                                        </div>
+                                    )}
+                                </Section>
+
+                                <Section title="System">
+                                    <Switch
+                                        label="Web UI Dashboard"
+                                        description="Start Web UI automatically on launch"
+                                        checked={localConfig.web_ui_enabled ?? true}
+                                        onChange={(v: boolean) => handleChange('web_ui_enabled', v)}
+                                    />
+                                    <div className="h-4" />
+                                    <Switch
+                                        label="Server Persistence"
+                                        description="Keep server running in background after exit"
+                                        checked={localConfig.server_persistence_enabled ?? false}
+                                        onChange={(v: boolean) => handleChange('server_persistence_enabled', v)}
+                                    />
+                                    <div className="h-4" />
+                                    <button
+                                        onClick={() => setShowToolsModal(true)}
+                                        className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-100 transition-colors"
+                                    >
+                                        <div className="flex flex-col items-start">
+                                            <span className="text-sm font-medium text-gray-700">Tools</span>
+                                            <span className="text-xs text-gray-500">{tools.length} tools loaded</span>
+                                        </div>
+                                        <ChevronRight size={16} className="text-gray-400" />
+                                    </button>
+                                    <div className="h-4" />
+                                    <button
+                                        onClick={() => setShowWorkflowsModal(true)}
+                                        className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-100 transition-colors"
+                                    >
+                                        <div className="flex flex-col items-start">
+                                            <span className="text-sm font-medium text-gray-700">Workflows</span>
+                                            <span className="text-xs text-gray-500">{workflows.length} workflows available</span>
+                                        </div>
+                                        <ChevronRight size={16} className="text-gray-400" />
+                                    </button>
+                                </Section>
+                            </div>
+                        )}
+
+                        {activeTab === 'automations' && (
+                            <div className="space-y-6">
+                                {automations.length === 0 ? (
+                                    <div className="flex flex-col items-center justify-center py-12 text-center space-y-4">
+                                        <div className="p-4 bg-gray-50 rounded-full">
+                                            <Zap size={32} className="text-gray-400" />
+                                        </div>
+                                        <div>
+                                            <h3 className="text-lg font-medium text-gray-900">No Automations Yet</h3>
+                                            <p className="text-sm text-gray-500 max-w-xs mx-auto mt-1">
+                                                Create custom workflows and scheduled tasks to automate your daily work.
+                                            </p>
+                                        </div>
+                                        <button className="px-4 py-2 bg-blue-50 text-blue-600 font-medium rounded-lg text-sm hover:bg-blue-100 transition-colors">
+                                            Create New Automation
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <Section title="Scheduled Automations">
+                                        <div className="space-y-3">
+                                            {automations.map((auto, idx) => (
+                                                <div key={idx} className="p-4 bg-white border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
+                                                    <div className="flex items-start justify-between">
+                                                        <div className="flex-1">
+                                                            <div className="flex items-center gap-2">
+                                                                <div className="font-medium text-gray-900">{auto.name}</div>
+                                                                <div className={cn(
+                                                                    "px-2 py-0.5 rounded text-xs font-medium",
+                                                                    auto.enabled ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                                                                )}>
+                                                                    {auto.enabled ? "Active" : "Disabled"}
+                                                                </div>
+                                                            </div>
+                                                            <div className="text-sm text-gray-600 mt-1">{auto.description}</div>
+                                                            <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
+                                                                <div className="flex items-center gap-1">
+                                                                    <span className="font-medium">Frequency:</span>
+                                                                    <span>{auto.frequency}</span>
+                                                                </div>
+                                                                <div className="flex items-center gap-1">
+                                                                    <span className="font-medium">Time:</span>
+                                                                    <span>{auto.time}</span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div className="mt-4">
+                                            <button className="w-full px-4 py-2 bg-blue-50 text-blue-600 font-medium rounded-lg text-sm hover:bg-blue-100 transition-colors">
+                                                Create New Automation
+                                            </button>
+                                        </div>
+                                    </Section>
+                                )}
+                            </div>
+                        )}
+
+                        {activeTab === 'about' && (
+                            <div className="space-y-6">
+                                <div className="text-center py-6">
+                                    <div className="w-16 h-16 bg-gray-900 rounded-2xl mx-auto flex items-center justify-center mb-4 shadow-xl">
+                                        <span className="text-2xl font-bold text-white">V</span>
+                                    </div>
+                                    <h2 className="text-2xl font-bold text-gray-900">VAF</h2>
+                                    <p className="text-gray-500">Veyllo Agent Framework</p>
+                                    <p className="text-xs text-gray-400 mt-1">v2.4.0 (Mac/Metal Optimized)</p>
+                                </div>
+
+                                <Section title="Credits">
+                                    <div className="space-y-3 text-sm text-gray-600">
+                                        <div className="flex justify-between">
+                                            <span>Core Engine</span>
+                                            <span className="font-medium">Python 3.11 + Llama.cpp</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span>Frontend</span>
+                                            <span className="font-medium">Next.js + Tailwind</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span>Developed by</span>
+                                            <span className="font-medium">Veyllo Labs</span>
+                                        </div>
+                                    </div>
                                 </Section>
                             </div>
                         )}
@@ -409,6 +587,124 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     </div>
                 </div>
             </div>
+
+            {/* Tools Modal */}
+            {showToolsModal && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowToolsModal(false)}>
+                    <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+                    <div
+                        className="relative bg-white w-full max-w-2xl max-h-[600px] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="h-16 border-b border-gray-100 flex items-center justify-between px-6 shrink-0">
+                            <h2 className="text-xl font-bold text-gray-800">Available Tools ({tools.length})</h2>
+                            <button onClick={() => setShowToolsModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-4 border-b border-gray-100">
+                            <div className="relative">
+                                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input
+                                    type="text"
+                                    placeholder="Search tools..."
+                                    value={toolsSearch}
+                                    onChange={(e) => setToolsSearch(e.target.value)}
+                                    className="w-full pl-10 pr-4 h-10 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                                />
+                            </div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                            {tools
+                                .filter(tool =>
+                                    toolsSearch === '' ||
+                                    tool.name.toLowerCase().includes(toolsSearch.toLowerCase()) ||
+                                    tool.description.toLowerCase().includes(toolsSearch.toLowerCase())
+                                )
+                                .map((tool, idx) => (
+                                    <div key={idx} className="p-4 bg-gray-50 rounded-lg border border-gray-100 hover:border-gray-200 transition-colors">
+                                        <div className="font-mono text-sm font-medium text-gray-900">{tool.name}</div>
+                                        <div className="text-sm text-gray-600 mt-1">{tool.description}</div>
+                                        {tool.category && (
+                                            <div className="mt-2">
+                                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded">
+                                                    {tool.category}
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            {tools.filter(tool =>
+                                toolsSearch === '' ||
+                                tool.name.toLowerCase().includes(toolsSearch.toLowerCase()) ||
+                                tool.description.toLowerCase().includes(toolsSearch.toLowerCase())
+                            ).length === 0 && (
+                                    <div className="text-center py-12 text-gray-400">
+                                        <p>No tools found matching "{toolsSearch}"</p>
+                                    </div>
+                                )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Workflows Modal */}
+            {showWorkflowsModal && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowWorkflowsModal(false)}>
+                    <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+                    <div
+                        className="relative bg-white w-full max-w-2xl max-h-[600px] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="h-16 border-b border-gray-100 flex items-center justify-between px-6 shrink-0">
+                            <h2 className="text-xl font-bold text-gray-800">Available Workflows ({workflows.length})</h2>
+                            <button onClick={() => setShowWorkflowsModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-4 border-b border-gray-100">
+                            <div className="relative">
+                                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input
+                                    type="text"
+                                    placeholder="Search workflows..."
+                                    value={workflowsSearch}
+                                    onChange={(e) => setWorkflowsSearch(e.target.value)}
+                                    className="w-full pl-10 pr-4 h-10 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                                />
+                            </div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                            {workflows
+                                .filter(wf =>
+                                    workflowsSearch === '' ||
+                                    wf.name.toLowerCase().includes(workflowsSearch.toLowerCase()) ||
+                                    wf.description.toLowerCase().includes(workflowsSearch.toLowerCase())
+                                )
+                                .map((wf, idx) => (
+                                    <div key={idx} className="p-4 bg-gray-50 rounded-lg border border-gray-100 hover:border-gray-200 transition-colors">
+                                        <div className="flex items-center justify-between">
+                                            <div className="font-mono text-sm font-medium text-gray-900">{wf.name}</div>
+                                            <div className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded">
+                                                {wf.steps} steps
+                                            </div>
+                                        </div>
+                                        <div className="text-sm text-gray-600 mt-1">{wf.description}</div>
+                                    </div>
+                                ))}
+                            {workflows.filter(wf =>
+                                workflowsSearch === '' ||
+                                wf.name.toLowerCase().includes(workflowsSearch.toLowerCase()) ||
+                                wf.description.toLowerCase().includes(workflowsSearch.toLowerCase())
+                            ).length === 0 && (
+                                    <div className="text-center py-12 text-gray-400">
+                                        <p>No workflows found matching "{workflowsSearch}"</p>
+                                    </div>
+                                )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

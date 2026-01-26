@@ -1,14 +1,13 @@
 # 文 Veyllo Agentic Framework (VAF)
-
-
+```
 O))         O))       O))))))))
  O))       O))))      O))      
   O))     O))  O))    O))      
    O))   O))    O))   O))))))  
     O)) O)) )))) O))  O))      
      O))))        O)) O))      
-      O))          O))O))     (OO )
-
+      O))          O))O))     (OO ) 
+```
 VAF is a comprehensive agent suite designed to transform LLMs like VQ-1 into autonomous powerhouses. It features a modular plug-and-play architecture, allowing you to extend agent capabilities with custom Python workflows. Built for Python 3.10+, VAF offers a terminal UI, cross-platform support (Windows, Linux, macOS), session management, and powerful automation tools.
 
 **New in VAF 2.0:**

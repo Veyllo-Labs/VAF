@@ -41,14 +41,20 @@ class PythonSandboxTool(BaseTool):
     description = """Execute Python code safely in a sandboxed environment.
 Use for mathematical calculations, data processing, algorithms, and scientific computations.
 The code runs in a restricted environment without file system or network access.
-Returns the result or any output from print statements."""
+
+Available modules: math, random, statistics, decimal, fractions, collections, itertools, 
+functools, operator, re, json, datetime, time, string, textwrap, copy, hashlib, base64, 
+uuid, secrets, heapq, bisect.
+
+Returns the result automatically for expressions (e.g., '1+1' returns '2'), 
+or output from print statements, or the 'result' variable."""
 
     parameters = {
         "type": "object",
         "properties": {
             "code": {
                 "type": "string",
-                "description": "Python code to execute (e.g., 'result = 2 + 2 * 3' or 'import math; print(math.sqrt(16))')"
+                "description": "Python code to execute (e.g., '1 + 1', 'math.sqrt(16)', or 'print(sum(range(10)))')"
             }
         },
         "required": ["code"]
@@ -105,21 +111,32 @@ Returns the result or any output from print statements."""
         import functools
         import operator
         import builtins
+        import time
+        import hashlib
+        import base64
+        import uuid
+        import string
+        import copy
+        import heapq
+        import bisect
+        import secrets
+        import textwrap
         
         # Get all builtins and filter out dangerous ones
         safe_builtins_dict = {}
         for name in dir(builtins):
-            # Skip private attributes and blocked builtins
+            # Skip private attributes (except a few allowed ones)
             if name.startswith('_') and name not in ['__name__', '__doc__', '__package__']:
                 continue
+            # Skip blocked builtins
             if name in self.blocked_builtins:
                 continue
             
             try:
                 attr = getattr(builtins, name)
-                # Only include callables and types, not modules
-                if not isinstance(attr, type(__import__)):
-                    safe_builtins_dict[name] = attr
+                # Include everything except modules (we'll add safe modules separately)
+                # This ensures print, len, range, etc. are all included
+                safe_builtins_dict[name] = attr
             except:
                 pass
         
@@ -141,6 +158,19 @@ Returns the result or any output from print statements."""
             're': re,
             'json': json,
             'datetime': datetime,
+            'string': string,
+            'textwrap': textwrap,
+            # Utilities
+            'time': time,
+            'copy': copy,
+            # Cryptography (safe - no network)
+            'hashlib': hashlib,
+            'base64': base64,
+            'uuid': uuid,
+            'secrets': secrets,
+            # Algorithms
+            'heapq': heapq,
+            'bisect': bisect,
             # Common types (already in builtins, but explicit for clarity)
             'int': int,
             'float': float,
@@ -182,10 +212,28 @@ Returns the result or any output from print statements."""
         stderr_capture = io.StringIO()
         
         try:
+            # Capture stdout/stderr
             with contextlib.redirect_stdout(stdout_capture), \
                  contextlib.redirect_stderr(stderr_capture):
-                # Execute code
-                exec(code, namespace)
+                # Try to evaluate as a single expression first (like IPython/Jupyter)
+                # This allows "1 + 1" to return "2" automatically
+                last_expr_result = None
+                is_expression = False
+                
+                try:
+                    # Compile as 'eval' to check if it's a single expression
+                    compile(code, '<string>', 'eval')
+                    is_expression = True
+                except SyntaxError:
+                    # Not a single expression, will execute as statements
+                    is_expression = False
+                
+                if is_expression:
+                    # Evaluate as expression (both globals and locals set to namespace)
+                    last_expr_result = eval(code, namespace, namespace)
+                else:
+                    # Execute as statements
+                    exec(code, namespace, namespace)
             
             # Get output
             stdout_output = stdout_capture.getvalue()
@@ -195,15 +243,19 @@ Returns the result or any output from print statements."""
             if stderr_output:
                 return f"Error: {stderr_output}"
             
-            # If there's print output, return it
+            # Priority 1: If there's print output, return it
             if stdout_output:
                 return stdout_output.strip()
             
-            # Try to find a result variable
+            # Priority 2: If we evaluated a single expression, return its result
+            if last_expr_result is not None:
+                return str(last_expr_result)
+            
+            # Priority 3: Try to find a result variable
             if 'result' in namespace:
                 return str(namespace['result'])
             
-            # Return success message
+            # Priority 4: Return success message (only for statement-only code with no output)
             return "Code executed successfully. (No output or result variable found. Use 'print()' or assign to 'result' variable.)"
             
         except Exception as e:

@@ -8,12 +8,20 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import SettingsModal from '@/components/SettingsModal';
+import { ToolMessage } from '@/components/ToolMessage';
 
 // Types
 type Message = {
-    role: 'user' | 'assistant' | 'system';
-    content: string;
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content: string; // For tools: this is the result
     timestamp: number;
+    // Extra fields for tools
+    toolId?: string;
+    toolName?: string;
+    toolArgs?: string;
+    toolStatus?: 'running' | 'completed' | 'error';
+    toolStartTime?: number;
+    toolEndTime?: number;
 };
 
 type Session = {
@@ -121,10 +129,14 @@ export default function VAFDashboard() {
     const [tools, setTools] = useState<Array<{ name: string; description: string; category: string }>>([]);
     const [workflows, setWorkflows] = useState<Array<{ id: string; name: string; description: string; steps: number }>>([]);
     const [automations, setAutomations] = useState<Array<{ id: string; name: string; description: string; frequency: string; time: string; enabled: boolean }>>([]);
+    // const [activeTools, setActiveTools] = useState<ToolState[]>([]); // REPLACED BY INLINE MESSAGES
 
     // File attachment state
     const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Stats state
+    const [tokenStats, setTokenStats] = useState<{ used: number; total: number; percent: number; api: boolean } | null>(null);
 
     const [isRecording, setIsRecording] = useState(false);
     const [isProcessingAudio, setIsProcessingAudio] = useState(false);
@@ -156,6 +168,9 @@ export default function VAFDashboard() {
                     const src = data.entry.source || "";
                     const rawMsg = data.entry.message || "";
 
+                    // ACTIVE TOOLS HANDLING via tool_update
+                    // Legacy code removed
+
                     // Skip "Agent Thinking..." as requested
                     if (src === 'Agent' && rawMsg.toLowerCase().includes('thinking')) {
                         return;
@@ -185,6 +200,49 @@ export default function VAFDashboard() {
                             return [...prev, { role: 'system', content: newContent, timestamp: Date.now() }];
                         });
                     }
+                }
+                else if (data.type === 'tool_update') {
+                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+
+                    const { subType, toolId, name, data: eventData, timestamp } = data;
+
+                    setMessages(prev => {
+                        // Check if tool message exists
+                        const existingIdx = prev.findIndex(m => m.toolId === toolId);
+
+                        if (subType === 'start') {
+                            if (existingIdx !== -1) return prev; // Duplicate start
+                            return [...prev, {
+                                role: 'tool',
+                                content: '', // Result empty at start
+                                timestamp: Date.now(),
+                                toolId: toolId,
+                                toolName: name,
+                                toolArgs: eventData, // Arguments passed in data
+                                toolStatus: 'running',
+                                toolStartTime: Date.now()
+                            }];
+                        }
+                        else if (subType === 'end' || subType === 'error') {
+                            if (existingIdx === -1) return prev; // Tool not found (maybe page reload?)
+
+                            const newMessages = [...prev];
+                            newMessages[existingIdx] = {
+                                ...newMessages[existingIdx],
+                                toolStatus: subType === 'error' ? 'error' : 'completed',
+                                content: eventData, // Result passed in data
+                                toolEndTime: Date.now()
+                            };
+                            return newMessages;
+                        }
+                        return prev;
+                    });
+                    // Clear status message when tool runs
+                    setStatusMessage('');
+                }
+                else if (data.type === 'stats') {
+                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+                    setTokenStats(data.stats);
                 }
                 else if (data.type === 'agent_message_update') {
                     // CRITICAL: Only update if this message belongs to the current session!
@@ -640,6 +698,22 @@ export default function VAFDashboard() {
                                     return <SystemStep key={i} message={msg.content} isLoading={loading && isLast} />;
                                 }
 
+                                // Render Tool Messages
+                                if (msg.role === 'tool') {
+                                    return (
+                                        <ToolMessage
+                                            key={i}
+                                            id={msg.toolId || `tool-${i}`}
+                                            name={msg.toolName || 'Unknown Tool'}
+                                            status={msg.toolStatus || 'completed'}
+                                            result={msg.content}
+                                            args={msg.toolArgs}
+                                            startTime={msg.toolStartTime}
+                                            endTime={msg.toolEndTime}
+                                        />
+                                    );
+                                }
+
                                 const { thought, answer } = parseContent(msg.content);
                                 const isBot = msg.role === 'assistant';
 
@@ -683,11 +757,14 @@ export default function VAFDashboard() {
                                     </div>
                                 </div>
                             )}
+
+                            {/* Active Tools Panel Removed (Now Inline) */}
+
                             <div ref={scrollRef} />
                         </div>
                     </div>
 
-                    <div className="absolute bottom-0 w-full bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6">
+                    <div className="absolute bottom-0 w-full bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6 z-40">
                         {/* File chips display */}
                         {attachedFiles.length > 0 && (
                             <div className="max-w-4xl mx-auto mb-2 flex gap-2 flex-wrap">
@@ -705,6 +782,28 @@ export default function VAFDashboard() {
                                 ))}
                             </div>
                         )}
+
+                        {/* Token Stats (TUI Style) */}
+                        {tokenStats && (
+                            <div className="max-w-4xl mx-auto mb-1 flex justify-end">
+                                <span className="text-[10px] sm:text-xs font-mono text-gray-400 opacity-80 select-none">
+                                    {tokenStats.api ? (
+                                        <>Tokens: In: {tokenStats.used.toLocaleString()} | Out: {tokenStats.total.toLocaleString()}</>
+                                    ) : (
+                                        <>
+                                            Tokens:
+                                            <span className="mx-1 tracking-tighter">
+                                                {"●".repeat(Math.round(tokenStats.percent * 10))}
+                                                {"○".repeat(10 - Math.round(tokenStats.percent * 10))}
+                                            </span>
+                                            {Math.round(tokenStats.percent * 100)}%
+                                            ({tokenStats.used.toLocaleString()}/{tokenStats.total.toLocaleString()})
+                                        </>
+                                    )}
+                                </span>
+                            </div>
+                        )}
+
                         <form onSubmit={sendMessage} className="max-w-4xl mx-auto flex items-center bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden">
                             <input
                                 type="file"
@@ -765,6 +864,7 @@ export default function VAFDashboard() {
                     </div>
                 </div>
             </div>
+            {/* Active Tools Panel Moved Inline */}
             <SettingsModal
                 isOpen={isSettingsOpen}
                 onClose={() => setIsSettingsOpen(false)}

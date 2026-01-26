@@ -1053,10 +1053,27 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
             # Show token usage (or message count for API)
             try:
                 used, total = agent.get_token_usage()
+                
+                # Calculate stats for Web UI
+                stats = {
+                    "used": used,
+                    "total": total,
+                    "percent": 0.0,
+                    "api": agent.api_backend
+                }
+                
                 if agent.api_backend:
                     tui.console.print(f"[dim]Tokens: In: {used:,} | Out: {total:,}[/dim]", justify="right")
                 else:
                     tui.progress_bar(used, total, label="Tokens")
+                    if total > 0:
+                        stats["percent"] = min(used / total, 1.0)
+                
+                # Broadcast to Web UI
+                try:
+                    get_web_interface().emit_stats(stats)
+                except Exception:
+                    pass
                 
                 # CRITICAL: Flush output before handing over control to prompt_toolkit
                 # This prevents buffer conflicts on Windows
@@ -2402,6 +2419,15 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
         
         # Show Usage Bar (or message count for API)
         used, total = agent.get_token_usage()
+        
+        # Calculate stats for Web UI
+        stats = {
+            "used": used,
+            "total": total,
+            "percent": 0.0,
+            "api": agent.api_backend
+        }
+        
         if agent.api_backend:
             # For API: show as In[X] Out[Y]
             UI.console.print(f"[dim]                      Tokens: In: {used:,} | Out: {total:,}[/dim]", justify="right")
@@ -2409,6 +2435,14 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
         else:
             # For local: show as token progress bar
             UI.print_usage_bar(used, total)
+            if total > 0:
+                stats["percent"] = min(used / total, 1.0)
+                
+        # Broadcast to Web UI
+        try:
+            get_web_interface().emit_stats(stats)
+        except Exception:
+            pass
 
 def output_stream(text):
     UI.console.print(text, end="", markup=True, style="bold cyan")

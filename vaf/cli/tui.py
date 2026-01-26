@@ -790,23 +790,24 @@ O))         O))       O))))))))
         bar = f"[{color}]│[/{color}]"
         type_str = f"[{self.muted}]{type_name:<10}[/{self.muted}]"
         msg_str = f"[{color}]{message}[/{color}]"
-        
+            
         self.console.print(f"{bar} {type_str} {msg_str}")
+        
+        # Broadcast to Web UI (Centralized)
+        # Filter out "Tool" events to avoid duplication with Tool Cards
+        if type_name != "Tool":
+            try:
+                from vaf.core.web_interface import get_web_interface
+                # Map TUI style to log level
+                level = style if style in ["info", "warning", "error", "success"] else "info"
+                get_web_interface().log(message, level=level, source=type_name)
+            except Exception:
+                pass
     
     def success(self, message: str):
         """Print success message."""
         self.event("✓ Success", message, "success")
     
-        
-        # Also push to Web UI if available
-        try:
-            from vaf.core.web_interface import get_web_interface
-            # Clean category name for display
-            clean_cat = category.replace("|", "").strip()
-            get_web_interface().log(f"{message}", level="info", source=clean_cat)
-        except:
-            pass
-
     def error(self, message: str):
         """Print error message."""
         self.event("✗ Error", message, "error")

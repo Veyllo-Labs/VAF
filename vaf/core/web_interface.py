@@ -28,8 +28,11 @@ class WebInterfaceManager:
             "last_message": None,
             "logs": [],
             "tasks": [],
+            "logs": [],
+            "tasks": [],
             "system_metrics": {}
         }
+        self.last_stats = None
         self.initialized = True
         self.agent_instance = None # Reference to the active Agent
 
@@ -96,6 +99,31 @@ class WebInterfaceManager:
             "type": "agent_message_update", 
             "role": role, 
             "content": content,
+            "sessionId": session_id
+        })
+
+    def emit_tool_update(self, event_type: str, tool_name: str, tool_id: str, data: str = None, session_id: str = None):
+        """
+        Emit a tool execution update.
+        event_type: 'start', 'end', 'error'
+        data: arguments (for start) or result (for end/error)
+        """
+        self.push_update({
+            "type": "tool_update",
+            "subType": event_type,
+            "toolId": tool_id,
+            "name": tool_name,
+            "data": data,
+            "sessionId": session_id,
+            "timestamp": __import__("datetime").datetime.now().isoformat()
+        })
+
+    def emit_stats(self, stats: dict, session_id: str = None):
+        """Emit context/token statistics."""
+        self.last_stats = stats
+        self.push_update({
+            "type": "stats",
+            "stats": stats,
             "sessionId": session_id
         })
 

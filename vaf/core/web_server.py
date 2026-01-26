@@ -28,6 +28,13 @@ manager = get_web_interface()
 session_mgr = SessionManager()
 autosuggest = SmartAutoSuggest()
 
+@app.on_event("startup")
+async def startup_event():
+    # Set the event loop for thread-safe broadcasting
+    loop = asyncio.get_running_loop()
+    manager.set_server_loop(loop)
+    log.info("VAF Web Interface: Event loop registered")
+
 @app.get("/")
 async def root():
     return {"status": "VAF Backend Online", "version": "1.0.0"}
@@ -42,6 +49,13 @@ async def websocket_endpoint(websocket: WebSocket):
             "type": "session_list", 
             "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"]} for s in sessions]
         })
+
+        # Send cached stats if available
+        if manager.last_stats:
+             await websocket.send_json({
+                "type": "stats",
+                "stats": manager.last_stats
+            })
 
         while True:
             # Listen for client commands

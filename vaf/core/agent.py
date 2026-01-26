@@ -2824,7 +2824,18 @@ class Agent:
                 return [] # Will trigger safety net in chat_step
             
         import re
-        clean_str = re.sub(r'^(answer|result|selected|tools|relevant|output):\s*', '', selected_tools_str, flags=re.IGNORECASE).strip()
+        # First, remove any thinking tags (e.g., <think>...</think>)
+        clean_str = re.sub(r'<think>.*?</think>', '', selected_tools_str, flags=re.IGNORECASE | re.DOTALL).strip()
+        
+        # Handle cases where only the closing tag is present (e.g. output started with thinking but start tag was cut)
+        if '</think>' in clean_str.lower():
+             parts = re.split(r'</think>', clean_str, flags=re.IGNORECASE)
+             clean_str = parts[-1].strip()
+        
+        # Cleanup any remaining stray tags
+        clean_str = re.sub(r'</?think>', '', clean_str, flags=re.IGNORECASE).strip()
+        # Then remove common prefixes
+        clean_str = re.sub(r'^(answer|result|selected|tools|relevant|output):\s*', '', clean_str, flags=re.IGNORECASE).strip()
         tool_names = [name.strip() for name in clean_str.split(',') if name.strip()]
         
         from vaf.cli.ui import UI
@@ -3672,6 +3683,13 @@ class Agent:
 
                     UI.event("Tool", f"{function_name}", style="highlight")
                     
+                    # Web UI Event: Tool Start
+                    try:
+                        from vaf.core.web_interface import get_web_interface
+                        # tc['id'] is available here 
+                        get_web_interface().emit_tool_update('start', function_name, tc['id'], data=json.dumps(arguments))
+                    except Exception: pass
+                    
                     # TTS Filler: "Ich suche im Internet..." (context-aware feedback)
                     # Extract query/context for filler
                     filler_query = None
@@ -3731,6 +3749,14 @@ class Agent:
                         result = error_msg
                         # Log error for debugging
                         UI.error(f"Tool {function_name} failed: {e}")
+
+                    # Web UI Event: Tool End
+                    try:
+                        from vaf.core.web_interface import get_web_interface
+                        r_str = str(result) if result else ""
+                        is_err = "error" in r_str.lower() or "failed" in r_str.lower()
+                        get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=r_str)
+                    except Exception: pass
 
                     # Check if this is an async sub-agent task BEFORE adding to history
                     result_str = str(result) if result else ""

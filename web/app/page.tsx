@@ -104,6 +104,7 @@ const SystemStep = ({ message, isLoading }: { message: string, isLoading?: boole
 
 export default function VAFDashboard() {
     const [input, setInput] = useState('');
+    const [suggestion, setSuggestion] = useState('');
     const [messages, setMessages] = useState<Message[]>([]);
     const [status, setStatus] = useState('connecting');
     const [sessions, setSessions] = useState<Session[]>([]);
@@ -285,12 +286,26 @@ export default function VAFDashboard() {
                     alert(`Voice Error: ${data.error}`);
                     setIsProcessingAudio(false);
                 }
+                else if (data.type === 'autosuggest_result') {
+                    setSuggestion(data.suggestion || '');
+                }
             } catch (e) { console.error(e); }
         };
         socket.onclose = () => setStatus('disconnected');
         setWs(socket);
         return () => socket.close();
     }, []);
+
+    useEffect(() => {
+        if (ws && status === 'connected' && input.length >= 2) {
+            const timeoutId = setTimeout(() => {
+                ws.send(JSON.stringify({ type: 'get_autosuggest', text: input }));
+            }, 100);
+            return () => clearTimeout(timeoutId);
+        } else {
+            setSuggestion('');
+        }
+    }, [input, ws, status]);
 
     useEffect(() => {
         if (scrollRef.current) scrollRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -331,6 +346,7 @@ export default function VAFDashboard() {
             files: filesData
         }));
         setInput('');
+        setSuggestion('');
         setAttachedFiles([]); // Clear attached files after sending
     };
 
@@ -352,6 +368,14 @@ export default function VAFDashboard() {
 
     const removeFile = (index: number) => {
         setAttachedFiles(prev => prev.filter((_, i) => i !== index));
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Tab' && suggestion) {
+            e.preventDefault();
+            setInput(input + suggestion);
+            setSuggestion('');
+        }
     };
 
     const startRecording = async () => {
@@ -698,7 +722,21 @@ export default function VAFDashboard() {
                             >
                                 <Paperclip size={20} />
                             </button>
-                            <input type="text" value={input} onChange={e => setInput(e.target.value)} placeholder="Ask anything..." className="flex-1 py-4 bg-transparent border-none focus:ring-0 focus:outline-none text-sm" disabled={loading} />
+                            <div className="flex-1 relative">
+                                <div className="absolute inset-0 py-4 px-1 pointer-events-none text-sm text-gray-400 whitespace-pre">
+                                    <span className="text-transparent">{input}</span>
+                                    {suggestion}
+                                </div>
+                                <input
+                                    type="text"
+                                    value={input}
+                                    onChange={e => setInput(e.target.value)}
+                                    onKeyDown={handleKeyDown}
+                                    placeholder={input ? "" : "Ask anything..."}
+                                    className="w-full py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10"
+                                    disabled={loading}
+                                />
+                            </div>
                             <button
                                 type="button"
                                 onClick={isRecording ? stopRecording : startRecording}

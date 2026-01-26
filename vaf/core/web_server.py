@@ -5,6 +5,7 @@ import uvicorn
 import threading
 from vaf.core.web_interface import get_web_interface
 from vaf.core.session import SessionManager
+from vaf.cli.autosuggest import SmartAutoSuggest
 import json
 from vaf.core.config import Config
 from pathlib import Path
@@ -25,6 +26,7 @@ app.add_middleware(
 
 manager = get_web_interface()
 session_mgr = SessionManager()
+autosuggest = SmartAutoSuggest()
 
 @app.get("/")
 async def root():
@@ -264,11 +266,25 @@ async def websocket_endpoint(websocket: WebSocket):
                             "status": "success"
                         })
 
+                elif type == "get_autosuggest":
+                    text = cmd.get("text", "")
+                    if text:
+                        # Use the internal _get_best_suggestion method
+                        suggestion = autosuggest._get_best_suggestion(text)
+                        await websocket.send_json({
+                            "type": "autosuggest_result",
+                            "suggestion": suggestion
+                        })
+
                 elif type == "chat":
                     content = cmd.get("content")
                     files = cmd.get("files", [])  # List of file objects with {name, data, mimeType}
                     
                     if content or files:
+                        # Learn from user input
+                        if content:
+                            autosuggest.learn(content)
+                        
                         # Process files if attached
                         if files:
                             print(f"[WebUI] Processing {len(files)} attached file(s)...")

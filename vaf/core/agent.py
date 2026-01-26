@@ -181,6 +181,18 @@ class Agent:
         # So we init it here with empty dict and update it after tools load.
         self.prompt_manager = SystemPromptManager({}, model_name=self.model_display_name, agent_instance=self) 
 
+        # Initialize State Registry for session state persistence
+        from vaf.core.session_state import StateRegistry
+        from vaf.core.state_providers.context_state import ContextStateProvider
+        from vaf.core.state_providers.tool_activity_state import ToolActivityStateProvider
+        
+        self.state_registry = StateRegistry()
+        
+        # Register core state providers
+        self.state_registry.register('context', ContextStateProvider(self.context_manager))
+        self.tool_activity = ToolActivityStateProvider(self)
+        self.state_registry.register('tool_activity', self.tool_activity)
+
         # Session tracking for server shutdown management
         self._session_id = None
         self._register_session()
@@ -190,6 +202,9 @@ class Agent:
         self._load_tools()
         # Update Prompt Manager with loaded tools
         self.prompt_manager.tools = list(self.tools.values())
+        
+        # Register state providers for tools that support it
+        self._register_tool_state_providers()
                 
         # Register Cleanup Handler (Cross-Platform)
         # WICHTIG: Nur _atexit_cleanup registrieren, nicht shutdown direkt
@@ -1014,6 +1029,39 @@ class Agent:
 
         # Track active async sub-agent tasks
         self._async_subagent_tasks = {}  # task_id -> {"agent_type": str, "task": str, "started_at": datetime}
+
+    def _register_tool_state_providers(self):
+        """
+        Register state providers for tools that support runtime state persistence.
+        Tools can implement create_state_provider() to opt-in to state persistence.
+        """
+        for tool_name, tool in self.tools.items():
+            try:
+                if hasattr(tool, 'create_state_provider'):
+                    provider = tool.create_state_provider()
+                    if provider:
+                        self.state_registry.register(f'tool_{tool_name}', provider)
+                        if self.verbose:
+                            print(f"[DEBUG] Registered state provider for tool: {tool_name}")
+            except Exception as e:
+                if self.verbose:
+                    print(f"[WARN] Failed to register state provider for {tool_name}: {e}")
+        
+        # Register sandbox state provider specifically if python sandbox exists
+        if 'python' in self.tools:
+            try:
+                from vaf.core.state_providers.sandbox_state import PythonSandboxStateProvider
+                sandbox_tool = self.tools['python']
+                # Only register if tool has a namespace (sandbox capability)
+                if hasattr(sandbox_tool, 'namespace') or hasattr(sandbox_tool, 'sandbox'):
+                    target = getattr(sandbox_tool, 'sandbox', sandbox_tool)
+                    provider = PythonSandboxStateProvider(target)
+                    self.state_registry.register('python_sandbox', provider)
+                    if self.verbose:
+                        print("[DEBUG] Registered Python sandbox state provider")
+            except Exception as e:
+                if self.verbose:
+                    print(f"[WARN] Failed to register Python sandbox state provider: {e}")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # SUB-AGENT IPC METHODS
@@ -2251,6 +2299,7 @@ class Agent:
             except Exception:
                 pass  # Ignore speech errors during thinking
             
+            UI_Class.event("Info", msg_analyzing, style="dim")
             with UI_Class.console.status(f"[bold cyan](O_O)  {msg_analyzing}[/bold cyan]", spinner="dots"):
                 workflow_id = self.analyze_workflow(user_input)
             
@@ -2781,6 +2830,7 @@ class Agent:
         selected_tools_str = ""
         try:
             from vaf.cli.ui import UI
+            UI.event("Info", "Routing Tools...", style="dim")
             with UI.console.status("[bold cyan] Routing Tools...[/bold cyan]", spinner="dots"):
                 if self.use_server:
                     payload = {
@@ -3035,6 +3085,7 @@ class Agent:
         if not auto_retry and not skip_input:
              # Sub-Agent Intent Analysis (can take time)
              from vaf.cli.ui import UI as UI_Class
+             UI_Class.event("Info", "Analyzing Intent...", style="dim")
              with UI_Class.console.status("[bold cyan](O_O)  Step 2/2: Analyzing Intent...[/bold cyan]", spinner="dots"):
                  dynamic_temp = self.analyze_intent(user_input)
              
@@ -3686,8 +3737,9 @@ class Agent:
                     # Web UI Event: Tool Start
                     try:
                         from vaf.core.web_interface import get_web_interface
+                        from vaf.core.subagent_ipc import get_current_session_id
                         # tc['id'] is available here 
-                        get_web_interface().emit_tool_update('start', function_name, tc['id'], data=json.dumps(arguments))
+                        get_web_interface().emit_tool_update('start', function_name, tc['id'], data=json.dumps(arguments), session_id=get_current_session_id())
                     except Exception: pass
                     
                     # TTS Filler: "Ich suche im Internet..." (context-aware feedback)
@@ -3753,9 +3805,10 @@ class Agent:
                     # Web UI Event: Tool End
                     try:
                         from vaf.core.web_interface import get_web_interface
+                        from vaf.core.subagent_ipc import get_current_session_id
                         r_str = str(result) if result else ""
                         is_err = "error" in r_str.lower() or "failed" in r_str.lower()
-                        get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=r_str)
+                        get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=r_str, session_id=get_current_session_id())
                     except Exception: pass
 
                     # Check if this is an async sub-agent task BEFORE adding to history

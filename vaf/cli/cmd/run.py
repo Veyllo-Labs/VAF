@@ -686,6 +686,9 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     # Session management
     session_mgr = SessionManager()
     
+    # Note: After agent is created, we update session_mgr with state_registry
+    # This is done later to enable automatic state sync on save/load
+    
     # Load existing session or create new one
     if session_id:
         try:
@@ -706,6 +709,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     # ═══════════════════════════════════════════════════════════════
     # Set current session ID for sub-agent tracking and clean up stale tasks
     from vaf.core.subagent_ipc import set_current_session_id, cleanup_other_sessions
+
     set_current_session_id(current_session.id)
     cleanup_other_sessions()  # Remove active tasks from previous sessions
     
@@ -760,6 +764,10 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
             get_web_interface().register_agent(agent)
         except Exception:
             pass
+        
+        # Connect agent's state registry to session manager for automatic state sync
+        if hasattr(agent, 'state_registry'):
+            session_mgr.state_registry = agent.state_registry
         
         # Initialize backend (local or API)
         if agent.provider == "local":
@@ -1071,7 +1079,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 
                 # Broadcast to Web UI
                 try:
-                    get_web_interface().emit_stats(stats)
+                    get_web_interface().emit_stats(stats, session_id=current_session.id)
                 except Exception:
                     pass
                 
@@ -1204,6 +1212,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                 if cmd_type == "NEW_SESSION":
                                     current_session = session_mgr.new()
                                     session_mgr.save(current_session) # Save immediately so ID is valid
+                                    set_current_session_id(current_session.id)
                                     agent.init_chat()
                                     tui.event("WebUI", "Started new session", style="success")
                                     continue # Loop back to prompt
@@ -1212,6 +1221,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                     sid = cmd_parts[2].strip()
                                     try:
                                         current_session = session_mgr.load(sid)
+                                        set_current_session_id(current_session.id)
                                         # Restore agent history
                                         agent.init_chat()
                                         for msg in current_session.messages:
@@ -1307,6 +1317,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                         if cmd_type == "NEW_SESSION":
                                             current_session = session_mgr.new()
                                             session_mgr.save(current_session)
+                                            set_current_session_id(current_session.id)
                                             agent.init_chat()
                                             tui.event("WebUI", "Started new session", style="success")
                                             wake_word_detected_flag.clear()
@@ -1316,6 +1327,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                             sid = cmd_parts[2].strip()
                                             try:
                                                 current_session = session_mgr.load(sid)
+                                                set_current_session_id(current_session.id)
                                                 agent.init_chat()
                                                 for msg in current_session.messages:
                                                     if msg.get("role") in ["user", "assistant"]:
@@ -1982,10 +1994,13 @@ def _process_agent_message(agent, user_input: str, tui, session):
     """Process a message through the agent."""
     response_parts = []
     
-    # Update Web Interface
+    # Get session ID for scoped web interface updates
+    session_id = session.id if session else None
+    
+    # Update Web Interface (with session scope)
     web_iface = get_web_interface()
-    web_iface.update_status("thinking")
-    web_iface.log(f"User: {user_input[:50]}...", level="info", source="user")
+    web_iface.update_status("thinking", session_id=session_id)
+    web_iface.log(f"User: {user_input[:50]}...", level="info", source="user", session_id=session_id)
     
     # Delayed import to avoid circular dependencies
     try:
@@ -2171,14 +2186,27 @@ def _process_agent_message(agent, user_input: str, tui, session):
         except Exception:
             pass # Don't crash chat if save fails
         
-        # Update Web Interface
-        web_iface.log("Response complete", level="info", source="system")
-        web_iface.update_status("idle")
+        # Update Web Interface (with session scope)
+        web_iface.log("Response complete", level="info", source="system", session_id=session_id)
+        web_iface.update_status("idle", session_id=session_id)
+        
+        # Emit Token Stats
+        try:
+            used, total = agent.get_token_usage()
+            stats = {
+                "used": used,
+                "total": total,
+                "percent": round((used / total) * 100) if total else 0,
+                "api": bool(getattr(agent, 'api_backend', False))
+            }
+            web_iface.emit_stats(stats, session_id=session_id)
+        except Exception:
+            pass # Ignore stats errors
         
     except Exception as e:
         tui.error(f"Agent error: {e}")
-        get_web_interface().log(f"Agent error: {e}", level="error")
-        get_web_interface().update_status("idle")
+        get_web_interface().log(f"Agent error: {e}", level="error", session_id=session_id)
+        get_web_interface().update_status("idle", session_id=session_id)
 
 
 def _run_classic(message: str, verbose: bool, session_id: str = None):

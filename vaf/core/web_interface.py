@@ -1,12 +1,19 @@
 import asyncio
 import json
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi import WebSocket
 
 import queue
 
 class WebInterfaceManager:
+    """
+    Manages WebSocket connections with session-scoped broadcasting.
+    
+    Each connection can subscribe to a specific session, and updates are only
+    sent to connections subscribed to the relevant session. This prevents
+    cross-contamination between chat windows.
+    """
     _instance = None
     
     def __new__(cls):
@@ -19,6 +26,7 @@ class WebInterfaceManager:
         if self.initialized:
             return
         self.active_connections: List[WebSocket] = []
+        self.connection_sessions: Dict[WebSocket, str] = {}  # ws -> session_id
         self.agent_instance = None
         # Queue for incoming chat messages from Web UI -> Main Loop
         self.input_queue = queue.Queue()
@@ -28,19 +36,23 @@ class WebInterfaceManager:
             "last_message": None,
             "logs": [],
             "tasks": [],
-            "logs": [],
-            "tasks": [],
             "system_metrics": {}
         }
         self.last_stats = None
         self.initialized = True
         self.agent_instance = None # Reference to the active Agent
+        self._server_loop = None
 
     def register_agent(self, agent):
         """Register the active agent instance to allow control from Web UI."""
         self.agent_instance = agent
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CONNECTION MANAGEMENT (Session-Scoped)
+    # ═══════════════════════════════════════════════════════════════════════════
+
     async def connect(self, websocket: WebSocket):
+        """Accept a new WebSocket connection."""
         await websocket.accept()
         self.active_connections.append(websocket)
         # Send initial state
@@ -50,11 +62,30 @@ class WebInterfaceManager:
         }))
 
     def disconnect(self, websocket: WebSocket):
+        """Remove a WebSocket connection and its session subscription."""
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
+        if websocket in self.connection_sessions:
+            del self.connection_sessions[websocket]
+
+    def subscribe_to_session(self, websocket: WebSocket, session_id: str):
+        """
+        Subscribe a connection to receive updates for a specific session.
+        
+        This is called when a client loads or creates a session.
+        """
+        self.connection_sessions[websocket] = session_id
+
+    def get_session_for_connection(self, websocket: WebSocket) -> Optional[str]:
+        """Get the session ID a connection is subscribed to."""
+        return self.connection_sessions.get(websocket)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # BROADCASTING (Session-Scoped)
+    # ═══════════════════════════════════════════════════════════════════════════
 
     async def broadcast(self, message: dict):
-        """Broadcast a message to all connected clients."""
+        """Broadcast a message to all connected clients (global)."""
         disconnected = []
         for connection in self.active_connections:
             try:
@@ -65,15 +96,45 @@ class WebInterfaceManager:
         for conn in disconnected:
             self.disconnect(conn)
 
-    # --- Public API for Agent/TUI to call ---
+    async def broadcast_to_session(self, session_id: str, message: dict):
+        """
+        Broadcast a message only to clients subscribed to a specific session.
+        
+        This prevents cross-contamination between chat windows by ensuring
+        that updates from one session don't appear in another.
+        """
+        message['sessionId'] = session_id  # Ensure sessionId is always present
+        
+        disconnected = []
+        for connection in self.active_connections:
+            conn_session = self.connection_sessions.get(connection)
+            # Send if:
+            # 1. Connection is subscribed to this session, OR
+            # 2. Connection is not subscribed to any session yet (new connection)
+            if conn_session is None or conn_session == session_id:
+                try:
+                    await connection.send_text(json.dumps(message))
+                except Exception:
+                    disconnected.append(connection)
+        
+        for conn in disconnected:
+            self.disconnect(conn)
 
-    def update_status(self, status: str):
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PUBLIC API (for Agent/TUI to call)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def update_status(self, status: str, session_id: str = None):
         """Update agent status (idle, thinking, etc)."""
         self.latest_state["status"] = status
-        self.push_update({"type": "status_update", "status": status})
+        self._push_session_update(session_id, {"type": "status_update", "status": status})
 
-    def log(self, message: str, level: str = "info", source: str = "system"):
-        """Add a log entry."""
+    def log(self, message: str, level: str = "info", source: str = "system", session_id: str = None):
+        """
+        Add a log entry.
+        
+        If session_id is provided, the log is only sent to clients viewing that session.
+        """
         log_entry = {
             "timestamp":  __import__("datetime").datetime.now().isoformat(),
             "message": message,
@@ -85,21 +146,19 @@ class WebInterfaceManager:
         if len(self.latest_state["logs"]) > 1000:
              self.latest_state["logs"].pop(0)
              
-        self.push_update({"type": "new_log", "entry": log_entry})
+        self._push_session_update(session_id, {"type": "new_log", "entry": log_entry})
 
-    def set_tasks(self, tasks: List[Dict]):
+    def set_tasks(self, tasks: List[Dict], session_id: str = None):
         """Update the list of active/pending tasks."""
         self.latest_state["tasks"] = tasks
-        self.push_update({"type": "tasks_update", "tasks": tasks})
+        self._push_session_update(session_id, {"type": "tasks_update", "tasks": tasks})
         
     def emit_agent_message(self, role: str, content: str, session_id: str = None):
         """Emit a message update. Content is the FULL message so far."""
-        # Use push_update to ensure thread-safety from Main Thread to Server Loop
-        self.push_update({
+        self._push_session_update(session_id, {
             "type": "agent_message_update", 
             "role": role, 
-            "content": content,
-            "sessionId": session_id
+            "content": content
         })
 
     def emit_tool_update(self, event_type: str, tool_name: str, tool_id: str, data: str = None, session_id: str = None):
@@ -108,57 +167,54 @@ class WebInterfaceManager:
         event_type: 'start', 'end', 'error'
         data: arguments (for start) or result (for end/error)
         """
-        self.push_update({
+        self._push_session_update(session_id, {
             "type": "tool_update",
             "subType": event_type,
             "toolId": tool_id,
             "name": tool_name,
             "data": data,
-            "sessionId": session_id,
             "timestamp": __import__("datetime").datetime.now().isoformat()
         })
 
     def emit_stats(self, stats: dict, session_id: str = None):
         """Emit context/token statistics."""
         self.last_stats = stats
-        self.push_update({
+        self._push_session_update(session_id, {
             "type": "stats",
-            "stats": stats,
-            "sessionId": session_id
+            "stats": stats
         })
 
-    def _sync_broadcast(self, data):
-        """Helper to run async broadcast from sync context."""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We are in an event loop (e.g. inside FastAPI), create task
-                loop.create_task(self.broadcast(data))
-            else:
-                # We are purely sync, can't easily broadcast to running loop in other thread
-                # This is a limitation, but usually TUI runs in main thread and Server in another.
-                # We need a thread-safe queue or similar if this happens.
-                # For now, we assume the Server thread pulls state or we use a thread-safe wrapper.
-                pass
-        except RuntimeError:
-            # No event loop
-            pass
-            
-    # Thread-safe bridging
-    # Since TUI runs in MainThread and FastAPI in a separate Thread,
-    # we need a way to push updates.
-    # The simplest way is to having the FastAPI loop periodically poll OR
-    # use `run_coroutine_threadsafe` if we have access to the server loop.
-    
-    _server_loop = None
+    # ═══════════════════════════════════════════════════════════════════════════
+    # THREAD-SAFE BRIDGING
+    # ═══════════════════════════════════════════════════════════════════════════
     
     def set_server_loop(self, loop):
+        """Set the asyncio event loop for thread-safe broadcasting."""
         self._server_loop = loop
         
     def push_update(self, data: dict):
-        """Thread-safe push update."""
+        """Thread-safe push update (global broadcast)."""
         if self._server_loop:
             asyncio.run_coroutine_threadsafe(self.broadcast(data), self._server_loop)
+
+    def _push_session_update(self, session_id: Optional[str], data: dict):
+        """
+        Thread-safe push update with session scoping.
+        
+        If session_id is provided, broadcasts only to clients subscribed to that session.
+        Otherwise, falls back to global broadcast.
+        """
+        if session_id:
+            data['sessionId'] = session_id
+            if self._server_loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.broadcast_to_session(session_id, data), 
+                    self._server_loop
+                )
+        else:
+            # Fallback to global broadcast for non-session events
+            self.push_update(data)
+
 
 # Global Accessor
 def get_web_interface():

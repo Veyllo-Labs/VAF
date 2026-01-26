@@ -76,6 +76,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif type == "load_session":
                     sid = cmd.get("id")
                     try:
+                        # Subscribe this connection to the session for scoped updates
+                        manager.subscribe_to_session(websocket, sid)
+                        
                         # Push command to main loop to switch session
                         manager.input_queue.put(f"__CMD__:LOAD_SESSION:{sid}")
                         
@@ -115,10 +118,23 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "timestamp": timestamp
                             })
 
+                        # Check if this session is currently active in the agent
+                        is_active = False
+                        try:
+                            # If agent is working on this session ID right now
+                            # We use internal _session_id which we synced in agent.py
+                            if (manager.agent_instance and 
+                                getattr(manager.agent_instance, '_session_id', None) == sid and
+                                manager.latest_state.get("status") != "idle"):
+                                is_active = True
+                        except: pass
+
                         await websocket.send_json({
                             "type": "history_update",
                             "messages": frontend_messages,
-                            "sessionId": sid
+                            "sessionId": sid,
+                            "isActive": is_active,
+                            "currentStatus": manager.latest_state.get("status", "idle") if is_active else "idle"
                         })
                     except Exception as e:
                         import traceback
@@ -141,7 +157,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     
                     # Create new session object AND SAVE IT IMMEDIATELY (temp, main loop will take over)
                     new_sess = session_mgr.new()
-                    session_mgr.save(new_sess) 
+                    session_mgr.save(new_sess)
+                    
+                    # Subscribe this connection to the new session for scoped updates
+                    manager.subscribe_to_session(websocket, new_sess.id)
                     
                     # Refresh list
                     sessions = session_mgr.list(limit=20)
@@ -187,13 +206,14 @@ async def websocket_endpoint(websocket: WebSocket):
                     # core/web_server.py -> core/ -> vaf/ -> VAF/ -> VAF/models
                     project_root = Path(__file__).parent.parent.parent
                     models_dir = project_root / "models"
-                    print(f"[DEBUG] Looking for models in: {models_dir}")
+                    # print(f"[DEBUG] Looking for models in: {models_dir}")
                     models = []
                     if models_dir.exists():
                         models = [f.name for f in models_dir.glob("*.gguf")]
-                        print(f"[DEBUG] Found models: {models}")
+                        # print(f"[DEBUG] Found models: {models}")
                     else:
-                        print(f"[DEBUG] Models directory not found at {models_dir}")
+                        # print(f"[DEBUG] Models directory not found at {models_dir}")
+                        pass
                     
                     await websocket.send_json({
                         "type": "models_list",

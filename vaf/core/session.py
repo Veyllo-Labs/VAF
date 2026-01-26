@@ -35,7 +35,7 @@ class Message:
 
 @dataclass
 class Session:
-    """A conversation session."""
+    """A conversation session with runtime state persistence."""
     id: str = field(default_factory=lambda: _generate_session_id())
     name: str = ""
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -45,12 +45,47 @@ class Session:
     messages: List[Message] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     
+    # Runtime state persistence (NEW)
+    runtime_state: Dict[str, Any] = field(default_factory=dict)
+    state_version: str = "1.0"
+    
     def add_message(self, role: str, content: str, **kwargs) -> Message:
         """Add a message to the session."""
         msg = Message(role=role, content=content, **kwargs)
         self.messages.append(msg)
         self.updated_at = datetime.now().isoformat()
         return msg
+    
+    def update_runtime_state(self, provider_name: str, state: Dict[str, Any]) -> None:
+        """
+        Update runtime state for a specific provider.
+        
+        Args:
+            provider_name: Name of the state provider (e.g., 'sandbox', 'context')
+            state: State dictionary from the provider
+        """
+        if "providers" not in self.runtime_state:
+            self.runtime_state["providers"] = {}
+        
+        self.runtime_state["providers"][provider_name] = {
+            "state": state,
+            "updated_at": datetime.now().isoformat()
+        }
+        self.updated_at = datetime.now().isoformat()
+    
+    def get_provider_state(self, provider_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get runtime state for a specific provider.
+        
+        Args:
+            provider_name: Name of the state provider
+            
+        Returns:
+            Provider state dictionary or None if not found
+        """
+        providers = self.runtime_state.get("providers", {})
+        provider_data = providers.get(provider_name, {})
+        return provider_data.get("state")
     
     def get_history(self, limit: int = None) -> List[Dict]:
         """Get message history for API calls."""
@@ -67,11 +102,18 @@ class Session:
             "project_path": self.project_path,
             "messages": [m.to_dict() for m in self.messages],
             "metadata": self.metadata,
+            "runtime_state": self.runtime_state,
+            "state_version": self.state_version,
         }
     
     @classmethod
     def from_dict(cls, data: Dict) -> "Session":
         messages = [Message.from_dict(m) for m in data.get("messages", [])]
+        
+        # Automatic migration for old sessions without runtime_state
+        runtime_state = data.get("runtime_state", {})
+        state_version = data.get("state_version", "1.0")
+        
         return cls(
             id=data.get("id", _generate_session_id()),
             name=data.get("name", ""),
@@ -81,6 +123,8 @@ class Session:
             project_path=data.get("project_path", ""),
             messages=messages,
             metadata=data.get("metadata", {}),
+            runtime_state=runtime_state,
+            state_version=state_version,
         )
     
     def summary(self) -> str:
@@ -124,9 +168,9 @@ def _generate_session_id() -> str:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class SessionManager:
-    """Manages session storage and retrieval."""
+    """Manages session storage and retrieval with runtime state support."""
     
-    def __init__(self, storage_dir: str = None):
+    def __init__(self, storage_dir: str = None, state_registry=None):
         if storage_dir:
             self.storage_dir = Path(storage_dir)
         else:
@@ -134,6 +178,7 @@ class SessionManager:
         
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self._current: Optional[Session] = None
+        self.state_registry = state_registry  # Optional StateRegistry for state management
     
     @property
     def current(self) -> Optional[Session]:
@@ -150,11 +195,31 @@ class SessionManager:
         self._current = session
         return session
     
-    def save(self, session: Session = None, compress: bool = False) -> Path:
-        """Save a session to disk."""
+    def save(self, session: Session = None, compress: bool = False, sync_state: bool = True) -> Path:
+        """
+        Save a session to disk.
+        
+        Args:
+            session: Session to save (defaults to current session)
+            compress: Whether to compress with gzip
+            sync_state: Whether to capture state from registry before saving
+            
+        Returns:
+            Path to saved session file
+        """
         session = session or self._current
         if not session:
             raise ValueError("No session to save")
+        
+        # Capture state from registry if available
+        if sync_state and self.state_registry and self.state_registry.is_enabled():
+            try:
+                from vaf.core.session_state import StateSnapshot
+                snapshot = self.state_registry.capture_snapshot()
+                session.runtime_state = snapshot.to_dict()
+            except Exception as e:
+                import logging
+                logging.error(f"Failed to capture state before save: {e}")
         
         # Update timestamp
         session.updated_at = datetime.now().isoformat()
@@ -178,8 +243,17 @@ class SessionManager:
         
         return filepath
     
-    def load(self, session_id: str) -> Session:
-        """Load a session by ID."""
+    def load(self, session_id: str, restore_state: bool = True) -> Session:
+        """
+        Load a session by ID.
+        
+        Args:
+            session_id: ID of session to load
+            restore_state: Whether to restore state to registry after loading
+            
+        Returns:
+            Loaded Session instance
+        """
         # Try both compressed and uncompressed
         for ext in [".json", ".json.gz"]:
             filepath = self.storage_dir / f"{session_id}{ext}"
@@ -193,6 +267,18 @@ class SessionManager:
                 
                 session = Session.from_dict(data)
                 self._current = session
+                
+                # Restore state to registry if available
+                if restore_state and self.state_registry and self.state_registry.is_enabled():
+                    try:
+                        from vaf.core.session_state import StateSnapshot
+                        if session.runtime_state:
+                            snapshot = StateSnapshot.from_dict(session.runtime_state)
+                            self.state_registry.restore_snapshot(snapshot)
+                    except Exception as e:
+                        import logging
+                        logging.error(f"Failed to restore state after load: {e}")
+                
                 return session
         
         raise FileNotFoundError(f"Session not found: {session_id}")

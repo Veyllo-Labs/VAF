@@ -79,8 +79,11 @@ const SystemStep = ({ message, isLoading }: { message: string, isLoading?: boole
     const isSafety = message.includes('Safety');
 
     // Extract clean text
-    const cleanText = message.replace(/^(Router|Step \d+\/\d+|System|Agent)\s*[:\|]?\s*/, '');
-    const source = message.match(/^(Router|Step \d+\/\d+|System|Agent)/)?.[0] || "System";
+    const cleanText = message.replace(/^(Router|Step \d+\/\d+|System|Agent|Info)\s*[:\|]?\s*/, '');
+    const source = message.match(/^(Router|Step \d+\/\d+|System|Agent|Info)/)?.[0] || "System";
+
+    // Ensure we don't show empty steps (fixes lag if empty router logs sent)
+    if (!cleanText.trim()) return null;
 
     return (
         <div className="flex gap-4 w-full animate-in fade-in slide-in-from-left-2 duration-300 my-1">
@@ -153,6 +156,58 @@ export default function VAFDashboard() {
     const scrollRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
+    // Cache State
+    const sessionCache = useRef<Record<string, Message[]>>({});
+    const cacheSaveTimeout = useRef<NodeJS.Timeout | null>(null);
+
+    // Load Cache on Mount
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem('vaf_session_cache_v1');
+            if (saved) {
+                sessionCache.current = JSON.parse(saved);
+            }
+        } catch (e) {
+            console.error("Failed to load session cache", e);
+        }
+    }, []);
+
+    // Save Cache on Update (Debounced)
+    useEffect(() => {
+        if (!currentSessionId) return;
+
+        // Update in-memory cache immediately
+        sessionCache.current[currentSessionId] = messages;
+
+        // Debounce save to disk
+        if (cacheSaveTimeout.current) clearTimeout(cacheSaveTimeout.current);
+        cacheSaveTimeout.current = setTimeout(() => {
+            localStorage.setItem('vaf_session_cache_v1', JSON.stringify(sessionCache.current));
+        }, 1000);
+    }, [messages, currentSessionId]);
+
+    const handleSessionSwitch = (id: string) => {
+        if (currentSessionId === id) return;
+
+        // 1. Save current session state explicitly before switching
+        if (currentSessionId) {
+            sessionCache.current[currentSessionId] = messages;
+        }
+
+        // 2. Optimistic Switch
+        setCurrentSessionId(id);
+        const cached = sessionCache.current[id] || [];
+        setMessages(cached);
+
+        // Assume idle/clean state until server updates us
+        // This prevents "loading" spinner flashes if we have cached content
+        setLoading(false);
+        setStatusMessage('');
+
+        // 3. Request Sync
+        ws?.send(JSON.stringify({ type: 'load_session', id }));
+    };
+
     useEffect(() => {
         if (typeof window === 'undefined') return;
         const socket = new WebSocket('ws://localhost:8001/ws');
@@ -165,6 +220,11 @@ export default function VAFDashboard() {
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === 'new_log') {
+                    // CRITICAL: Filter by session to prevent cross-contamination!
+                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) {
+                        return; // Ignore logs from other sessions
+                    }
+
                     const src = data.entry.source || "";
                     const rawMsg = data.entry.message || "";
 
@@ -176,7 +236,7 @@ export default function VAFDashboard() {
                         return;
                     }
 
-                    if (src.includes('Step') || src.includes('Router') || src.includes('System') || src.includes('Agent')) {
+                    if (src.includes('Step') || src.includes('Router') || src.includes('System') || src.includes('Agent') || src.includes('Info')) {
                         const cleanMsg = rawMsg.replace(/^\|\s*/, '');
 
                         // Strip ALL dots, ellipsis, and whitespace from start/end
@@ -241,6 +301,7 @@ export default function VAFDashboard() {
                     setStatusMessage('');
                 }
                 else if (data.type === 'stats') {
+                    // Update stats if session matches OR if it's a global update (no sessionId)
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
                     setTokenStats(data.stats);
                 }
@@ -282,17 +343,70 @@ export default function VAFDashboard() {
                 }
                 else if (data.type === 'history_update') {
                     setCurrentSessionId(data.sessionId);
-                    // Clear logs from previous session immediately
-                    setMessages(prev => {
-                        // Keep only persistent messages, remove temporary system logs
-                        return data.messages
-                            .filter((m: any) => m.role !== 'system') // Hide raw system prompts
-                            .map((m: any) => ({
-                                role: m.role,
-                                content: m.content,
-                                timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now()
-                            }));
+
+                    // Restore active state
+                    setLoading(!!data.isActive);
+                    setStatusMessage(data.currentStatus && data.isActive ? `Agent: ${data.currentStatus}` : '');
+
+                    // Parse server messages
+                    const serverMsgs = data.messages
+                        .filter((m: any) => m.role !== 'system') // Hide raw system prompts from server (we have better local logs)
+                        .map((m: any) => ({
+                            role: m.role,
+                            content: m.content,
+                            timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
+                            // Preserve minimal fields
+                            toolId: m.toolId,
+                            toolName: m.toolName
+                        }));
+
+                    // MERGE STRATEGY: UNION with Server Priority
+                    // 1. Hydrate Server Messages with Cache details (e.g. Tool args/status)
+                    // 2. Inject Cached Messages that are missing from Server (e.g. System logs, Pending/Streaming Assistant response)
+
+                    const cachedMsgs = sessionCache.current[data.sessionId] || [];
+
+                    const hydratedServerMsgs = serverMsgs.map((srvMsg: Message) => {
+                        if (srvMsg.role === 'tool') {
+                            // Find matching tool in cache by Content
+                            const match = cachedMsgs.find(cm =>
+                                cm.role === 'tool' &&
+                                cm.content === srvMsg.content
+                            );
+                            if (match) {
+                                return { ...srvMsg, ...match }; // Restore rich metadata
+                            }
+                        }
+                        return srvMsg;
                     });
+
+                    // Find Orphans: Messages in Cache but NOT in Server
+                    const orphans = cachedMsgs.filter(cMsg => {
+                        // Always keep System logs (Server never sends them)
+                        if (cMsg.role === 'system') return true;
+
+                        // For User/Assistant/Tool, check if they exist in the Server list
+                        // heuristic: Timestamp proximity (2s) OR Content exact match
+                        // This prevents duplicates while preserving pending checks
+                        const existsInServer = hydratedServerMsgs.some((sMsg: Message) => {
+                            if (sMsg.role !== cMsg.role) return false;
+
+                            // Check exact content match (strongest signal)
+                            if (sMsg.content === cMsg.content) return true;
+
+                            // Check timestamp proximity (for messages created roughly same time)
+                            if (Math.abs(sMsg.timestamp - cMsg.timestamp) < 2000) return true;
+
+                            return false;
+                        });
+
+                        return !existsInServer;
+                    });
+
+                    // Combine and Sort
+                    const finalMsgs = [...hydratedServerMsgs, ...orphans].sort((a, b) => a.timestamp - b.timestamp);
+
+                    setMessages(finalMsgs);
                 }
                 else if (data.type === 'config_update') {
                     setConfig(data.config);
@@ -603,7 +717,7 @@ export default function VAFDashboard() {
                     </div>
                     <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 space-y-1">
                         {sessions.map(s => (
-                            <div key={s.id} onClick={() => ws?.send(JSON.stringify({ type: 'load_session', id: s.id }))}
+                            <div key={s.id} onClick={() => handleSessionSwitch(s.id)}
                                 className={cn("flex items-center gap-3 p-2 pl-3 rounded-lg cursor-pointer group/item relative", currentSessionId === s.id ? 'bg-transparent' : 'hover:bg-gray-100')}>
 
                                 {/* Active Indicator (Dot) */}

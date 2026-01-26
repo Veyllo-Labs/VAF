@@ -798,9 +798,10 @@ O))         O))       O))))))))
         if type_name != "Tool":
             try:
                 from vaf.core.web_interface import get_web_interface
+                from vaf.core.subagent_ipc import get_current_session_id
                 # Map TUI style to log level
                 level = style if style in ["info", "warning", "error", "success"] else "info"
-                get_web_interface().log(message, level=level, source=type_name)
+                get_web_interface().log(message, level=level, source=type_name, session_id=get_current_session_id())
             except Exception:
                 pass
     
@@ -838,11 +839,65 @@ O))         O))       O))))))))
     # ═══════════════════════════════════════════════════════════════════════════
     
     def spinner(self, message: str = "Loading..."):
-        """Create a spinner context manager."""
-        return self.console.status(
-            f"[{self.primary}]{message}[/{self.primary}]",
-            spinner="dots"
-        )
+        """Create a spinner context manager that also updates WebUI status."""
+        
+        # Inner context manager class to handle both Console status and WebUI events
+        class SpinnerContext:
+            def __init__(self, tui, msg):
+                self.tui = tui
+                self.msg = msg
+                # Clean message for WebUI (remove rich markup)
+                import re
+                self.clean_msg = re.sub(r'\[.*?\]', '', msg)
+                self.console_ctx = tui.console.status(
+                    f"[{tui.primary}]{msg}[/{tui.primary}]",
+                    spinner="dots"
+                )
+
+            def __enter__(self):
+                # 1. Start Console Spinner
+                self.console_ctx.__enter__()
+                
+                # 2. Emit "Thinking" status to WebUI
+                try:
+                    from vaf.core.web_interface import get_web_interface
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    
+                    # We send a "log" so it appears in the step list
+                    # AND update status for the ghost loader
+                    get_web_interface().log(
+                        self.clean_msg, 
+                        level="info", 
+                        source="Agent", 
+                        session_id=get_current_session_id()
+                    )
+                    get_web_interface().update_status(
+                        self.clean_msg, 
+                        session_id=get_current_session_id()
+                    )
+                except:
+                    pass
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                # 1. Stop Console Spinner
+                self.console_ctx.__exit__(exc_type, exc_val, exc_tb)
+                
+                # 2. Reset WebUI status (optional, usually next log clears it)
+                # But good practice to clean up if we are done
+                try:
+                    from vaf.core.web_interface import get_web_interface
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    # Only clear if we didn't error
+                    if not exc_type:
+                        get_web_interface().update_status(
+                            "idle", 
+                            session_id=get_current_session_id()
+                        )
+                except:
+                    pass
+
+        return SpinnerContext(self, message)
     
     def progress_bar(self, current: int, total: int, label: str = "Tokens"):
         """Display a progress bar (right-aligned)."""
@@ -1168,9 +1223,10 @@ class UI:
         # BRIDGE TO WEB UI
         try:
             from vaf.core.web_interface import get_web_interface
+            from vaf.core.subagent_ipc import get_current_session_id
             # Clean category name for display
             clean_cat = type_name.replace("|", "").strip()
-            get_web_interface().log(f"{title}", level="info", source=clean_cat)
+            get_web_interface().log(f"{title}", level="info", source=clean_cat, session_id=get_current_session_id())
         except:
             pass
 

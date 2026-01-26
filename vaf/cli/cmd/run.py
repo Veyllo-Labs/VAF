@@ -11,6 +11,8 @@ from rich.console import Console
 from rich.panel import Panel
 from vaf.core.agent import Agent
 from vaf.cli.ui import UI
+from vaf.core.web_server import start_background_server
+from vaf.core.web_interface import get_web_interface
 
 app = typer.Typer()
 console = Console()
@@ -228,8 +230,6 @@ def _resume_paused_workflow(tui, agent, paused_wf, subagent_result: str):
 
 def _format_duration(start_time_str: str, end_time_str: str = None) -> str:
     """Format duration between two ISO timestamps, or from start to now."""
-    from datetime import datetime
-    
     try:
         start = datetime.fromisoformat(start_time_str)
         end = datetime.fromisoformat(end_time_str) if end_time_str else datetime.now()
@@ -527,7 +527,8 @@ def run(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
     classic: bool = typer.Option(False, "--classic", "-c", help="Use classic interface (no TUI)"),
     theme: str = typer.Option(None, "--theme", "-t", help="UI theme"),
-    session: str = typer.Option(None, "--session", "-s", help="Load a previous session by ID")
+    session: str = typer.Option(None, "--session", "-s", help="Load a previous session by ID"),
+    web: bool = typer.Option(True, "--web/--no-web", help="Start Web UI server (default: True)")
 ):
     """
     Start the VAF Agent interaction loop.
@@ -553,7 +554,7 @@ def run(
     
     # Run appropriate interface
     if ui_mode == "modern":
-        _run_modern(message, verbose, theme, session)
+        _run_modern(message, verbose, theme, session, web_enabled=web)
     else:
         _run_classic(message, verbose, session)
 
@@ -572,8 +573,6 @@ def run_prompt(
     It starts a new non-interactive run (but can load/save sessions).
     """
     import json
-    import os
-    import sys
     from vaf.cli.ui import UI
     from vaf.core.session import SessionManager
 
@@ -646,7 +645,7 @@ def run_prompt(
     ndjson_emit({"type": "end"})
 
 
-def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None):
+def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None, web_enabled: bool = True):
     """Run with modern TUI interface."""
     global global_agent
     
@@ -654,6 +653,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
         from vaf.cli.tui import TUI
         from vaf.cli.themes import ThemeManager
         from vaf.core.session import SessionManager
+        from vaf.core.config import Config
     except ImportError as e:
         UI.error(f"Modern TUI not available: {e}")
         UI.info("Falling back to classic interface...")
@@ -677,8 +677,10 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
             tui.error(f"Session not found: {session_id}")
             tui.info("Starting new session...")
             current_session = session_mgr.new()
+            session_mgr.save(current_session) # Initial save
     else:
         current_session = session_mgr.new()
+        session_mgr.save(current_session) # Initial save so it shows in Web UI
     
     # ═══════════════════════════════════════════════════════════════
     # SESSION-BASED SUB-AGENT CLEANUP
@@ -693,6 +695,21 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
     tui.logo()
     tui.event("System", "Initializing VAF...", style="dim")
     
+    # Check Config for Web UI preference (defaults to True)
+    config_web_enabled = Config.get("web_ui_enabled")
+    if config_web_enabled is None:
+        config_web_enabled = True
+    
+    # CLI flag overrides Config only if explicitly disabled via --no-web
+    # In Typer, the default for 'web' is True.
+    # If the user does NOT pass --no-web, 'web' is True.
+    # In that case, we should respect the config.
+    # If the user passes --no-web, 'web' is False. We should disable.
+    
+    # Simple logic: If it's enabled in CLI, respect config. If disabled in CLI, it's disabled.
+    if web_enabled:
+        web_enabled = config_web_enabled
+    
     # ═══════════════════════════════════════════════════════════════
     # GIT CHECK - Must be installed before proceeding
     # ═══════════════════════════════════════════════════════════════
@@ -703,6 +720,12 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
     try:
         agent = Agent(verbose=verbose)
         global_agent = agent
+        
+        # Register Agent with Web Interface for 2-way control
+        try:
+            get_web_interface().register_agent(agent)
+        except Exception:
+            pass
         
         # Initialize backend (local or API)
         if agent.provider == "local":
@@ -779,6 +802,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
             except Exception as e:
                 tui.warning(f"STT check failed: {e}")
         
+        
         if agent.config.get("stt_wake_word_enabled", False):
             try:
                 tui.event("WakeWord", "Preloading wake word models...", style="dim")
@@ -792,7 +816,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                     tui.warning("Wake word enabled but dependencies missing")
             except Exception as e:
                 tui.warning(f"Wake word preload failed: {e}")
-        
+
     except Exception as e:
         tui.error(f"Startup failed: {e}")
         sys.exit(1)
@@ -801,7 +825,113 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
     tui.clear()
     tui.logo()
     tui.newline()
-    
+
+    # WEB UI STARTUP (ROBUST)
+    # ═══════════════════════════════════════════════════════════════
+    if web_enabled:
+        try:
+            # Debug log
+            log_file = os.path.join(os.getcwd(), "logs", "web_debug.log")
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+            with open(log_file, "w") as f:
+                f.write(f"Starting Web UI at {datetime.now()}\n")
+
+            # 1. Start Python Backend (FastAPI + WebSocket)
+            console.print("[dim]WebUI: Starting Backend API (Port 8001)...[/dim]")
+            start_background_server(port=8001)
+            
+            # 2. Check for Next.js frontend and start it
+            # Absolute path to web dir (4 levels up from this file's dir: vaf/cli/cmd/run.py -> vaf/cli/cmd -> vaf/cli -> vaf -> root)
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            web_dir = os.path.join(base_dir, "web")
+            pkg_file = os.path.join(web_dir, "package.json")
+            
+            with open(log_file, "a") as f:
+                f.write(f"Base Dir: {base_dir}\n")
+                f.write(f"Web Dir: {web_dir}\n")
+            
+            if os.path.exists(web_dir) and os.path.exists(pkg_file):
+                # Kill orphan node processes
+                try:
+                    if platform.system() == "Windows":
+                        subprocess.run("taskkill /F /IM node.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    else:
+                        subprocess.run(["pkill", "-f", "node"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except:
+                    pass
+
+                # Check for node/npm
+                try:
+                    subprocess.run(["npm", "--version"], capture_output=True, check=True, shell=True)
+                    
+                    # Install deps if needed
+                    if not os.path.exists(os.path.join(web_dir, "node_modules")):
+                         console.print("[yellow]WebUI: Installing npm dependencies...[/yellow]")
+                         subprocess.run(["npm", "install"], cwd=web_dir, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    
+                    # FIND FREE PORT (Start at 3000)
+                    import socket
+                    def is_port_in_use(port):
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                            return s.connect_ex(('localhost', port)) == 0
+
+                    port = 3000
+                    while is_port_in_use(port):
+                        port += 1
+                    
+                    with open(log_file, "a") as f:
+                        f.write(f"Selected Port: {port}\n")
+
+                    console.print(f"[dim]WebUI: Launching Dashboard on Port {port}...[/dim]")
+                    
+                    # Start Next.js dev server with specific port
+                    cmd = f"npm run dev -- -p {port}"
+                    
+                    # Start process
+                    proc = subprocess.Popen(
+                        cmd, 
+                        cwd=web_dir, 
+                        shell=True,
+                        stdout=open(log_file, "a"),
+                        stderr=subprocess.STDOUT
+                    )
+                    
+                    # WAIT FOR SERVER TO BE READY (max 15s)
+                    dashboard_url = f"http://localhost:{port}"
+                    server_ready = False
+                    for _ in range(30): # 15 seconds (30 * 0.5s)
+                        try:
+                            # Use a short timeout for the request itself
+                            r = requests.get(dashboard_url, timeout=0.5)
+                            if r.status_code == 200:
+                                server_ready = True
+                                break
+                        except:
+                            time.sleep(0.5)
+                    
+                    if server_ready:
+                        console.print(f"[green]WebUI: Dashboard active at {dashboard_url}[/green]")
+                        import webbrowser
+                        webbrowser.open(dashboard_url)
+                    else:
+                        console.print(f"[yellow]WebUI: Dashboard started but not responding yet. Check {dashboard_url}[/yellow]")
+                        import webbrowser
+                        webbrowser.open(dashboard_url)
+                    
+                except (FileNotFoundError, subprocess.CalledProcessError) as e:
+                     with open(log_file, "a") as f:
+                        f.write(f"NPM Error: {e}\n")
+                     console.print("[yellow]WebUI: npm not found. Dashboard disabled.[/yellow]")
+            else:
+                 console.print(f"[dim]WebUI: Dashboard folder not found at {web_dir}[/dim]")
+                 
+        except Exception as e:
+            console.print(f"[red]WebUI Error: {e}[/red]")
+            try:
+                with open("logs/web_error.log", "a") as f:
+                    f.write(f"{datetime.now()}: {str(e)}\n")
+            except: pass
+
     # Handle initial message
     if message:
         tui.message_box(message, role="user")
@@ -854,8 +984,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                     # DEBUG: Log that flag is being set
                     try:
                         with open("C:\\Users\\mert1\\wake_word_debug.log", "a") as f:
-                            import datetime
-                            f.write(f"{datetime.datetime.now()}: Callback: Setting wake_word_detected_flag...\n")
+                            f.write(f"{datetime.now()}: Callback: Setting wake_word_detected_flag...\n")
                     except:
                         pass
 
@@ -891,7 +1020,6 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                 
                 # CRITICAL: Flush output before handing over control to prompt_toolkit
                 # This prevents buffer conflicts on Windows
-                import sys
                 sys.stdout.flush()
             except Exception:
                 pass # Ignore rendering errors in status bar
@@ -901,8 +1029,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                 # DEBUG: Log early detection
                 try:
                     with open("C:\\Users\\mert1\\wake_word_debug.log", "a") as f:
-                        import datetime
-                        f.write(f"{datetime.datetime.now()}: Early check detected wake word! Starting STT...\n")
+                        f.write(f"{datetime.now()}: Early check detected wake word! Starting STT...\n")
                 except:
                     pass
 
@@ -993,12 +1120,116 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                     break
             else:
                 try:
-                    user_input = tui.input_box(
-                        prompt="Message",
-                        placeholder="Type your message... (@ for files, / for commands, L + Enter for voice)",
-                        check_for_auto_exit=True,  # Enable auto-exit when sub-agent results are ready
-                        wake_word_event=wake_word_detected_flag
-                    )
+                    # Check for Web UI Input BEFORE blocking on keyboard
+                    # We need a non-blocking check or a patched input_box that accepts external events
+                    # Since prompt_toolkit is hard to interrupt, we use a simple polling loop here 
+                    # if we are waiting.
+                    
+                    # BUT prompt_toolkit's session.prompt() is blocking.
+                    # We can use the 'wake_word_event' mechanism we already have!
+                    # We can set the event when web input arrives.
+                    
+                    # 1. Check queue immediately
+                    web_queue = get_web_interface().input_queue
+                    
+                    if not web_queue.empty():
+                        raw_input = web_queue.get()
+                        
+                        # Handle System Commands from Web UI
+                        if str(raw_input).startswith("__CMD__"):
+                            cmd_parts = str(raw_input).split(":")
+                            cmd_type = cmd_parts[1]
+                            
+                            if cmd_type == "NEW_SESSION":
+                                current_session = session_mgr.new()
+                                session_mgr.save(current_session) # Save immediately so ID is valid
+                                agent.init_chat()
+                                tui.event("WebUI", "Started new session", style="success")
+                                continue # Loop back to prompt
+                                
+                            elif cmd_type == "LOAD_SESSION":
+                                sid = cmd_parts[2]
+                                try:
+                                    current_session = session_mgr.load(sid)
+                                    # Restore agent history
+                                    agent.init_chat()
+                                    for msg in current_session.messages:
+                                        if msg.get("role") in ["user", "assistant"]:
+                                            agent.history.append({"role": msg.get("role"), "content": msg.get("content")})
+                                    tui.event("WebUI", f"Switched to session: {current_session.name}", style="success")
+                                except Exception as e:
+                                    tui.error(f"Failed to switch session: {e}")
+                                continue # Loop back to prompt
+                        
+                        # Normal Chat Input
+                        user_input = raw_input
+                        tui.console.print(f"\n[bold green]Web UI Input:[/bold green] {user_input}")
+                    else:
+                        # 2. Wait for input with interrupt support
+                        # We pass the queue to input_box to poll it internally? 
+                        # Or simpler: we rely on the wake_word_flag to break the input loop!
+                        
+                        # Hack: We use a separate thread to set the wake_word_flag if web input arrives
+                        # This breaks the prompt_toolkit loop, we check queue, and process.
+                        
+                        def web_input_watcher():
+                            while True:
+                                if not web_queue.empty():
+                                    wake_word_detected_flag.set() # Force exit from input_box
+                                    break
+                                time.sleep(0.2)
+                                if wake_word_detected_flag.is_set(): # Already set by voice
+                                    break
+                        
+                        # Start watcher just for this input cycle
+                        watcher = threading.Thread(target=web_input_watcher, daemon=True)
+                        watcher.start()
+                        
+                        user_input = tui.input_box(
+                            prompt="Message",
+                            placeholder="Type your message... (@ for files, / for commands, L + Enter for voice)",
+                            check_for_auto_exit=True,  # Enable auto-exit when sub-agent results are ready
+                            wake_word_event=wake_word_detected_flag
+                        )
+                        
+                        # If we broke out due to flag, check if it was Web Input
+                        if user_input == "__WAKE_WORD_TRIGGERED__":
+                            if not web_queue.empty():
+                                raw_input = web_queue.get()
+                                
+                                # Handle System Commands (Copy logic from above)
+                                if str(raw_input).startswith("__CMD__"):
+                                    cmd_parts = str(raw_input).split(":")
+                                    cmd_type = cmd_parts[1]
+                                    
+                                    if cmd_type == "NEW_SESSION":
+                                        current_session = session_mgr.new()
+                                        session_mgr.save(current_session)
+                                        agent.init_chat()
+                                        tui.event("WebUI", "Started new session", style="success")
+                                        wake_word_detected_flag.clear()
+                                        continue
+                                        
+                                    elif cmd_type == "LOAD_SESSION":
+                                        sid = cmd_parts[2]
+                                        try:
+                                            current_session = session_mgr.load(sid)
+                                            agent.init_chat()
+                                            for msg in current_session.messages:
+                                                if msg.get("role") in ["user", "assistant"]:
+                                                    agent.history.append({"role": msg.get("role"), "content": msg.get("content")})
+                                            tui.event("WebUI", f"Switched to session: {current_session.name}", style="success")
+                                        except Exception as e:
+                                            tui.error(f"Failed to switch session: {e}")
+                                        wake_word_detected_flag.clear()
+                                        continue
+                                
+                                user_input = raw_input
+                                tui.console.print(f"\n[bold green]Web UI Input:[/bold green] {user_input}")
+                                # Clear flag so we don't trigger voice logic
+                                wake_word_detected_flag.clear()
+                            # Else it was real voice (handled below)
+                
                 except Exception as e:
                     # Catch TUI errors (like NoConsoleScreenBufferError) and switch to fallback
                     tui.error(f"Console interaction failed: {e}")
@@ -1117,7 +1348,6 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None)
                 # CRITICAL FIX: Restore original stdout handles
                 # Libraries like 'inquirer' (via colorama) wrap stdout, confusing prompt_toolkit.
                 # We must reset to the raw stream to ensure Win32 APIs work.
-                import sys
                 if hasattr(sys, '__stdout__'):
                     sys.stdout = sys.__stdout__
                 
@@ -1463,6 +1693,36 @@ Created: {current_session.created_at}
                         tui.error(f"Fehler beim Stoppen: {e}")
                     continue
                 
+                elif cmd in ("restart", "reload", "r"):
+                    tui.event("System", "Restarting VAF...", style="warning")
+                    
+                    # Stop background threads if possible
+                    if wake_word_manager:
+                        wake_word_manager.stop_listening()
+                        
+                    # Restart Process
+                    time.sleep(0.5)
+                    
+                    # Robust restart logic
+                    try:
+                        # If running as executable (vaf.exe)
+                        if sys.argv[0].endswith('.exe'):
+                            os.execl(sys.argv[0], sys.argv[0], *sys.argv[1:])
+                        else:
+                            # If running as script (python vaf ...)
+                            # Check if run as module (-m vaf)
+                            if sys.argv[0].endswith('__main__.py'):
+                                # python -m vaf run ...
+                                args = [sys.executable, "-m", "vaf"] + sys.argv[1:]
+                                os.execl(sys.executable, *args)
+                            else:
+                                # python vaf/main.py run ...
+                                args = [sys.executable] + sys.argv
+                                os.execl(sys.executable, *args)
+                    except Exception as e:
+                        tui.error(f"Restart failed: {e}")
+                        continue
+                
                 else:
                     tui.warning(f"Unknown command: /{cmd}")
                     continue
@@ -1501,7 +1761,6 @@ Created: {current_session.created_at}
         except Exception as e:
             tui.error(f"Error in interaction loop: {e}")
             import traceback
-            from datetime import datetime
             # Save traceback to log for debugging (use absolute path)
             try:
                 # Ensure logs directory exists first
@@ -1564,10 +1823,15 @@ def _process_agent_message(agent, user_input: str, tui, session):
     """Process a message through the agent."""
     response_parts = []
     
+    # Update Web Interface
+    web_iface = get_web_interface()
+    web_iface.update_status("thinking")
+    web_iface.log(f"User: {user_input[:50]}...", level="info", source="user")
+    
     # Delayed import to avoid circular dependencies
     try:
         from vaf.tools.coder import CodingAgentTool
-    except ImportError:
+    except ImportError as e:
         CodingAgentTool = None
     
     # State for styling <think> blocks
@@ -1575,8 +1839,35 @@ def _process_agent_message(agent, user_input: str, tui, session):
     # State for filtering "Resposta" artifact at start
     start_filter = {"buffer": "", "done": False}
     
+    import re
+    def convert_rich_to_xml(text):
+        if not text: return ""
+        # 1. Convert Rich "dim" styling to XML <think> tags
+        text = re.sub(r'\[dim\]', '<think>', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[white dim\]', '<think>', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[.*?dim.*?\]', '<think>', text, flags=re.IGNORECASE)
+        
+        # Replace end tags
+        text = text.replace('[/dim]', '</think>')
+        if '<think>' in text and '</think>' not in text:
+             text = text.replace('[/]', '</think>')
+        
+        # Strip remaining tags
+        text = re.sub(r'\[\/?[^\]]+\]', '', text)
+        return text
+
     def stream_callback(text):
+        nonlocal response_parts 
         response_parts.append(text)
+        
+        # Construct full text so far
+        current_full_text = "".join(response_parts)
+        
+        # Convert Terminal-Styling to Web-Styling (XML)
+        clean_text = convert_rich_to_xml(current_full_text)
+        
+        # Force update to ensure frontend knows we are answering
+        web_iface.emit_agent_message("assistant", clean_text, session_id=session.id)
         
         # CRITICAL: Suppress Main Agent output if Coder TUI is active!
         # This prevents "leaking stdout" that breaks the TUI layout
@@ -1687,12 +1978,48 @@ def _process_agent_message(agent, user_input: str, tui, session):
                 tui.console.print(str(result_text), markup=True, style=f"bold {tui.primary}")
         tui.newline()
         
-        # Save response to session
-        full_response = "".join(response_parts)
-        session.add_message("assistant", full_response)
+        # Save response to session (USE CLEAN TEXT!)
+        full_response_raw = "".join(response_parts)
+        # Use the same converter to ensure consistency
+        full_response_clean = convert_rich_to_xml(full_response_raw)
+        
+        session.add_message("assistant", full_response_clean)
+        
+        # AUTO-SAVE SESSION (Critical for Web UI persistence)
+        # We assume session object handles its own persistence path if it was loaded/created properly.
+        # But session object doesn't know the manager. We need to save via manager or session method.
+        # The session object is a simple data class usually.
+        # We need to access the session manager to save.
+        
+        try:
+            from vaf.core.session import SessionManager
+            # Simple instantiation is cheap
+            mgr = SessionManager()
+            mgr.save(session)
+            
+            # Notify Web UI about session list update (so the timestamp/preview updates)
+            # This keeps the sidebar fresh
+            try:
+                web_iface = get_web_interface()
+                sessions_list = mgr.list(limit=20)
+                web_iface.push_update({
+                    "type": "session_list", 
+                    "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"]} for s in sessions_list]
+                })
+            except:
+                pass
+                
+        except Exception:
+            pass # Don't crash chat if save fails
+        
+        # Update Web Interface
+        web_iface.log("Response complete", level="info", source="system")
+        web_iface.update_status("idle")
         
     except Exception as e:
         tui.error(f"Agent error: {e}")
+        get_web_interface().log(f"Agent error: {e}", level="error")
+        get_web_interface().update_status("idle")
 
 
 def _run_classic(message: str, verbose: bool, session_id: str = None):

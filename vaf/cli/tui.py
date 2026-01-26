@@ -797,6 +797,16 @@ O))         O))       O))))))))
         """Print success message."""
         self.event("✓ Success", message, "success")
     
+        
+        # Also push to Web UI if available
+        try:
+            from vaf.core.web_interface import get_web_interface
+            # Clean category name for display
+            clean_cat = category.replace("|", "").strip()
+            get_web_interface().log(f"{message}", level="info", source=clean_cat)
+        except:
+            pass
+
     def error(self, message: str):
         """Print error message."""
         self.event("✗ Error", message, "error")
@@ -1153,6 +1163,15 @@ class UI:
         type_str = f"[dim] {type_name:<7}[/dim]"
         title_str = f"[{color}]{title}[/{color}]"
         UI.console.print(f"{bar}{type_str} {title_str}")
+        
+        # BRIDGE TO WEB UI
+        try:
+            from vaf.core.web_interface import get_web_interface
+            # Clean category name for display
+            clean_cat = type_name.replace("|", "").strip()
+            get_web_interface().log(f"{title}", level="info", source=clean_cat)
+        except:
+            pass
 
     @staticmethod
     def notification(message: str, style: str = "info"):

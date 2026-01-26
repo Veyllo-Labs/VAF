@@ -1143,6 +1143,9 @@ def main_menu(agent=None):
         timeout_minutes = int(Config.get("subagent_timeout_minutes", 120))
 
         # UX labels
+        web_ui_enabled = bool(Config.get("web_ui_enabled", True))
+        web_ui_label = f"🌐 Web UI Dashboard [{'ON' if web_ui_enabled else 'OFF'}]"
+
         links_label = f"🔗 Auto-Open Links [{'ON' if auto_links else 'OFF'}]"
         outputs_label = f"📄 Auto-Open Outputs [{'ON' if auto_outputs else 'OFF'}] (max {max_tabs})"
         terminals_label = f"💻 Separate Terminals [{'ON' if separate_terminals else 'OFF'}]"
@@ -1201,6 +1204,7 @@ def main_menu(agent=None):
             ('Select Active Model', 'list'),
             ('Search & Download New Models', 'search'),
             ('─────────────────', None),
+            (web_ui_label, 'web_ui'),
             (theme_label, 'theme'),
             (links_label, 'ux_links'),
             (outputs_label, 'ux_outputs'),
@@ -1233,6 +1237,13 @@ def main_menu(agent=None):
         if action is None:  # Separator
             continue
         
+        if action == 'web_ui':
+            new_val = not web_ui_enabled
+            Config.set("web_ui_enabled", new_val)
+            status = "enabled" if new_val else "disabled"
+            UI.event("Settings", f"Web UI Dashboard {status} (Restart VAF to apply)", style="success")
+            time.sleep(1.0)
+
         if action == 'voice_menu':
             voice_settings_menu()
         

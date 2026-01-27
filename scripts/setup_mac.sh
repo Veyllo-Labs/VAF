@@ -81,6 +81,10 @@ else
     echo "✅ Shortcut added to $SHELL_CONFIG"
 fi
 
+# 7. Create Application Bundle
+echo "📱 Creating Application Bundle..."
+python3 scripts/create_app_shortcut.py
+
 echo "🎉 Setup Finished!"
 echo "👉 Please RESTART your terminal (or run 'source ~/.zshrc')."
 echo "👉 Then just type:  vaf"

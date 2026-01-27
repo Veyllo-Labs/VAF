@@ -4,6 +4,9 @@
 
 The VAF Web UI provides a browser-based interface for interacting with the Veyllo Agentic Framework. It offers real-time communication, session management, and visual feedback for agent operations.
 
+### 3. System Tray (New)
+The Web UI can be launched directly from the **VAF System Tray App** (Menu -> Open WebUI). The server runs in the background.
+
 ## Architecture
 
 ### Backend (Python)

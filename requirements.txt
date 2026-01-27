@@ -44,6 +44,11 @@ pyaudio>=0.2.14
 # openwakeword>=0.6.0  # Wake Word Detection (100% local & free) - DISABLED on Mac due to install issues
 # onnxruntime>=1.16.0  # Required for openWakeWord inference
 
+# Tray App / GUI
+pystray>=0.19.5; sys_platform != "darwin"  # Cross-platform tray (Windows/Linux)
+pillow>=10.0.0      # Image handling for icons
+rumps>=0.4.0; sys_platform == "darwin"      # Native macOS menu bar app
+
 # Code Quality & Linting
 ruff>=0.1.0  # Fast Python linter and formatter
 

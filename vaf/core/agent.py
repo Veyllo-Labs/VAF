@@ -76,7 +76,7 @@ class Agent:
     # Defaults handled by Config, but fallback here
     DEFAULT_FILENAME = "VQ-1_Instruct-q4_k_m.gguf"
     
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=False, register_signals=True):
         self.verbose = verbose
         self.config = Config.load()
         self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -209,33 +209,39 @@ class Agent:
         # Register Cleanup Handler (Cross-Platform)
         # WICHTIG: Nur _atexit_cleanup registrieren, nicht shutdown direkt
         # shutdown() wird von Signal-Handlern aufgerufen
-        signal.signal(signal.SIGINT, self.shutdown)
-        signal.signal(signal.SIGTERM, self.shutdown)
-        
-        # Unix-Specific Hangup Handler (Terminal Close)
-        if hasattr(signal, "SIGHUP"):
-             signal.signal(signal.SIGHUP, self.shutdown)
-        
-        # Windows-Specific Console Handler (Catches 'X' button)
-        if platform.system() == "Windows":
-            import ctypes
-            from ctypes import wintypes
-            
-            # Define handler type: BOOL WINAPI HandlerRoutine(DWORD dwCtrlType)
-            HandlerRoutine = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
-            
-            def _win_handler(ctrl_type):
-                # CTRL_C_EVENT = 0, CTRL_BREAK_EVENT = 1, CTRL_CLOSE_EVENT = 2
-                # CTRL_LOGOFF_EVENT = 5, CTRL_SHUTDOWN_EVENT = 6
-                if ctrl_type in (0, 2, 5, 6):
-                    self.shutdown(signum=f"Win32_{ctrl_type}")
-                    return True # True = Handled
-                return False
+        if register_signals:
+            try:
+                signal.signal(signal.SIGINT, self.shutdown)
+                signal.signal(signal.SIGTERM, self.shutdown)
+                
+                # Unix-Specific Hangup Handler (Terminal Close)
+                if hasattr(signal, "SIGHUP"):
+                     signal.signal(signal.SIGHUP, self.shutdown)
+                
+                # Windows-Specific Console Handler (Catches 'X' button)
+                if platform.system() == "Windows":
+                    import ctypes
+                    from ctypes import wintypes
+                    
+                    # Define handler type: BOOL WINAPI HandlerRoutine(DWORD dwCtrlType)
+                    HandlerRoutine = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+                    
+                    def _win_handler(ctrl_type):
+                        # CTRL_C_EVENT = 0, CTRL_BREAK_EVENT = 1, CTRL_CLOSE_EVENT = 2
+                        # CTRL_LOGOFF_EVENT = 5, CTRL_SHUTDOWN_EVENT = 6
+                        if ctrl_type in (0, 2, 5, 6):
+                            self.shutdown(signum=f"Win32_{ctrl_type}")
+                            return True # True = Handled
+                        return False
 
-            # Keep reference to prevent GC
-            self._win_handler_ref = HandlerRoutine(_win_handler)
-            kernel32 = ctypes.windll.kernel32
-            kernel32.SetConsoleCtrlHandler(self._win_handler_ref, True)
+                    # Keep reference to prevent GC
+                    self._win_handler_ref = HandlerRoutine(_win_handler)
+                    kernel32 = ctypes.windll.kernel32
+                    kernel32.SetConsoleCtrlHandler(self._win_handler_ref, True)
+            except ValueError:
+                # Signal registration failed (likely not in main thread)
+                if self.verbose:
+                    print("[WARN] Could not register signal handlers (not in main thread?)")
         
         # Register atexit handler as final backup (nur einmal)
         atexit.register(self._atexit_cleanup)

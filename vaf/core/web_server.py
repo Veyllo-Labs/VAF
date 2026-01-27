@@ -11,6 +11,7 @@ from vaf.core.config import Config
 from pathlib import Path
 from typing import Optional, List
 import logging
+from vaf.core.tray_context import TrayContext
 
 log = logging.getLogger("uvicorn")
 
@@ -28,6 +29,7 @@ app.add_middleware(
 manager = get_web_interface()
 session_mgr = SessionManager()
 autosuggest = SmartAutoSuggest()
+tray_context = TrayContext()
 
 @app.on_event("startup")
 async def startup_event():
@@ -91,6 +93,16 @@ class WorkflowUpdate(BaseModel):
     progress: Optional[int] = None
     result: Optional[str] = None
 
+class Heartbeat(BaseModel):
+    client_id: str
+    timestamp: float = 0.0
+
+@app.post("/api/heartbeat")
+async def receive_heartbeat(hb: Heartbeat):
+    """Receive heartbeat from CLI clients to keep server active."""
+    tray_context.register_activity()
+    return {"status": "ok", "active": True}
+
 @app.post("/api/workflow/update")
 async def receive_workflow_update(update: WorkflowUpdate):
     """Receive workflow updates from external processes (like separate terminals)."""
@@ -106,6 +118,7 @@ async def receive_workflow_update(update: WorkflowUpdate):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
+    tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
     try:
         # Send initial session list
         sessions = session_mgr.list(limit=20)
@@ -591,9 +604,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+        tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
     except Exception as e:
         print(f"WebSocket error: {e}")
         manager.disconnect(websocket)
+        tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
 
 
 async def process_uploaded_files(files: list) -> str:

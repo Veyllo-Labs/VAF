@@ -459,8 +459,8 @@ class ServerManager:
                 pass
         
         # Server läuft nicht oder antwortet nicht - starte neu
-        # Stop existing if any (nur wenn wirklich nötig)
-        self.stop_server()
+        # Stop existing if any (nur wenn wirklich nötig - erzwinge Kill)
+        self.stop_server(force_external=True)
         
         # ═══════════════════════════════════════════════════════════════════
         # SMART CONTEXT & SLOT CALCULATION (VRAM-FIRST)
@@ -639,7 +639,7 @@ class ServerManager:
             UI.error(f"Failed to launch server: {e}")
             return False
 
-    def stop_server(self):
+    def stop_server(self, force_external=False):
         # WICHTIG: Prüfe zuerst PID-Datei, falls self.process nicht gesetzt ist
         # (z.B. wenn Server von anderem Prozess gestartet wurde)
         pid_to_kill = None
@@ -660,8 +660,9 @@ class ServerManager:
                     pass
             
             self.process = None
-        elif os.path.exists(self.pid_file):
+        elif os.path.exists(self.pid_file) and force_external:
             # Server wurde von anderem Prozess gestartet, lese PID aus Datei
+            # Nur stoppen, wenn force_external=True (z.B. bei Neustart oder Tray Exit)
             try:
                 with open(self.pid_file, 'r', encoding='utf-8') as f:
                     pid_to_kill = int(f.read().strip())

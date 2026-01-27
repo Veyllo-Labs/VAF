@@ -47,7 +47,17 @@ def bootstrap():
         "python-pptx": "pptx",             # pip name != import name
         # Code Quality & Linting
         "ruff": "ruff",
+        # System Tray
+        "pystray": "pystray",
+        "pillow": "PIL",
     }
+    
+    # macOS-specific requirements
+    if sys.platform == "darwin":
+        DEPENDENCIES["rumps"] = "rumps"
+        # pystray is excluded on Mac in requirements.txt (uses rumps instead)
+        if "pystray" in DEPENDENCIES:
+            del DEPENDENCIES["pystray"]
     
     missing = []
     for pip_name, import_name in DEPENDENCIES.items():
@@ -111,15 +121,29 @@ def bootstrap():
                 # Fallback: install missing packages directly
                 packages_to_install = missing + optional_extras
                 if packages_to_install:
-                    subprocess.check_call(
-                        [sys.executable, "-m", "pip", "install"] + packages_to_install + ["-q"],
-                        stdout=subprocess.DEVNULL
-                    )
+                    cmd = [sys.executable, "-m", "pip", "install"] + packages_to_install
+                    if sys.platform == "darwin":
+                        cmd.append("--break-system-packages")
+                    
+                    subprocess.check_call(cmd)
             print("  ✓ Installation complete!\n")
             importlib.invalidate_caches()
+        except subprocess.CalledProcessError as e:
+            # Check for externally managed environment error in specific valid cases
+            # (Note: stdout is devnull, so we blindly guess or need to capture it. 
+            #  Given we are in interactive TUI, capturing stderr is tricky impacting UI)
+            print(f"  ✗ Install failed (Exit Code: {e.returncode})")
+            
+            # Suggest --break-system-packages for macOS users
+            if sys.platform == "darwin" and "externally-managed-environment" in str(e): # Popen/run would be needed to capture this
+                 pass # We can't see the output with check_call(..., stdout=DEVNULL)
+            
+            print(f"  Run manually: pip install -r requirements.txt")
+            if sys.platform == "darwin":
+                 print("  Note: On macOS, you may need: pip install --break-system-packages -r requirements.txt")
+            sys.exit(1)
         except Exception as e:
             print(f"  ✗ Install failed: {e}")
-            print(f"  Run manually: pip install -r requirements.txt")
             sys.exit(1)
     else:
         print("\n  Please install manually:")
@@ -267,6 +291,18 @@ app.add_typer(workflow.app, name="workflow", help="Run workflows in separate ter
 
 app.command(name="info")(info.info)
 app.command(name="install-gpu")(info.install_gpu)
+
+@app.command(name="tray")
+def tray_command():
+    """Start the VAF System Tray application (Persistent Background Service)."""
+    try:
+        from vaf.tray import run_app
+        run_app()
+    except ImportError as e:
+        print(f"Error starting tray app: {e}")
+        print("Please ensure requirements are installed: pip install -r requirements.txt")
+    except Exception as e:
+        print(f"Tray app error: {e}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # THEME COMMAND

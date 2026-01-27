@@ -95,7 +95,8 @@ Handles documents of any size using section-by-section generation (no context ov
                 escaped_parts = []
                 for part in cmd_parts:
                     if ' ' in part or '"' in part:
-                        escaped_parts.append(f'"{part.replace('"', '\\"')}"')
+                        escaped = part.replace('"', '\\"')
+                        escaped_parts.append(f'"{escaped}"')
                     else:
                         escaped_parts.append(part)
                 cmd = ' '.join(escaped_parts)

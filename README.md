@@ -11,6 +11,7 @@ O))         O))       O))))))))
 VAF is a comprehensive agent suite designed to transform LLMs like VQ-1 into autonomous powerhouses. It features a modular plug-and-play architecture, allowing you to extend agent capabilities with custom Python workflows. Built for Python 3.10+, VAF offers a terminal UI, cross-platform support (Windows, Linux, macOS), session management, and powerful automation tools.
 
 **New in VAF 2.0:**
+*   **System Tray:** Persistent background server for instant agent availability.
 *   **Gateway Architecture:** A persistent control plane for concurrent multi-channel access.
 *   **Docker Sandboxing:** Secure code execution in isolated containers.
 *   **Discord Bridge:** Connect your agent to external platforms seamlessly.
@@ -113,6 +114,7 @@ See [docs/SANDBOXING.md](docs/SANDBOXING.md).
 - 🎭 **12+ Themes** - Dracula, Nord, Tokyo Night, Catppuccin, and more
 - 💾 **Session Management** - Save, load, and search conversations
 - ⏪ **Undo/Snapshot** - Git-based code change tracking and rollback
+- ⚡ **Persistent Mode** - Background service with system tray icon for instant access.
 - ⚡ **Scheduled Automations** - Time-based tasks (daily news, weather reports)
 - 🔄 **Workflows** - Plug-and-play multi-step pipelines (create website, research & code, etc.)
 - 🛠️ **Powerful Tools** - Bash execution, web fetching, parallel operations
@@ -173,6 +175,9 @@ vaf run --session abc123
 
 # Use minimal interface (troubleshooting/SSH fallback)
 vaf run --classic
+
+# Start persistent background service
+vaf tray
 ```
 
 **Keyboard Shortcuts (in chat):**

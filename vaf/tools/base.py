@@ -97,7 +97,17 @@ class BaseTool(ABC):
         
         config = Config.load()
         provider = config.get("provider", "local")
-        model = config.get("model", "")
+        provider = config.get("provider", "local")
+        # FIX: Use correct model ID for the selected provider
+        # (Previously it used 'model' which is the LOCAL model ID, causing 400 errors with APIs)
+        if provider != "local":
+            model = config.get(f"api_model_{provider}", "")
+            # Fallback to generic model setting if provider-specific is empty
+            if not model:
+               model = config.get("model", "")
+        else:
+            # Local provider uses the main model setting
+            model = config.get("model", "")
         
         # 0. Validate Model
         if not model:

@@ -13,6 +13,23 @@ from vaf.core.agent import Agent
 from vaf.cli.ui import UI
 from vaf.core.web_server import start_background_server
 from vaf.core.web_interface import get_web_interface
+import threading
+
+def _heartbeat_loop(interval=5):
+    """Background thread to send heartbeats to the persistent server (Tray App)."""
+    import uuid
+    client_id = str(uuid.uuid4())
+    while True:
+        try:
+            requests.post(
+                "http://127.0.0.1:8001/api/heartbeat",
+                json={"client_id": client_id, "timestamp": time.time()},
+                timeout=1
+            )
+        except:
+            pass # Use silence if server is not running or unreachable
+        time.sleep(interval)
+
 
 app = typer.Typer()
 console = Console()
@@ -712,6 +729,57 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
         session_mgr.save(current_session) # Initial save so it shows in Web UI
     
     # ═══════════════════════════════════════════════════════════════
+    # TRAY APP CHECK / AUTO-START
+    # ═══════════════════════════════════════════════════════════════
+    # Check if the persistent server (WebUI port 8001) is running.
+    # If not, try to start 'vaf tray' in the background.
+    
+    tray_running = False
+    try:
+        requests.get("http://127.0.0.1:8001/health", timeout=0.2)
+        tray_running = True
+    except:
+        pass
+    
+    if not tray_running and web_enabled:
+        tui.event("System", "Starting background service (Tray App)...", style="dim")
+        try:
+            # Launch vaf tray detached
+            if platform.system() == "Windows":
+                # Windows: DETACHED_PROCESS to hide console
+                subprocess.Popen(
+                    [sys.executable, "-m", "vaf.main", "tray"],
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                    close_fds=True
+                )
+            else:
+                # macOS/Linux: nohup equivalent
+                subprocess.Popen(
+                    [sys.executable, "-m", "vaf.main", "tray"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    preexec_fn=os.setpgrp
+                )
+            
+            # Wait briefly for it to initialize (max 3s)
+            with tui.spinner("Waiting for background service..."):
+                for _ in range(30):
+                    try:
+                        requests.get("http://127.0.0.1:8001/health", timeout=0.2)
+                        tray_running = True
+                        break
+                    except:
+                        time.sleep(0.1)
+                        
+            if tray_running:
+                tui.event("System", "Background service started.", style="success")
+            else:
+                 tui.event("Warning", "Could not verify background service startup (proceeding anyway).", style="warning")
+
+        except Exception as e:
+            tui.event("Warning", f"Failed to auto-start tray app: {e}", style="warning")
+
+    # ═══════════════════════════════════════════════════════════════
     # SESSION-BASED SUB-AGENT CLEANUP
     # ═══════════════════════════════════════════════════════════════
     # Set current session ID for sub-agent tracking and clean up stale tasks
@@ -754,6 +822,10 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     # Simple logic: If it's enabled in CLI, respect config. If disabled in CLI, it's disabled.
     if web_enabled:
         web_enabled = config_web_enabled
+        
+    # Start Heartbeat Thread (keeps persistent server model loaded)
+    hb_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+    hb_thread.start()
     
     # ═══════════════════════════════════════════════════════════════
     # GIT CHECK - Must be installed before proceeding
@@ -890,80 +962,46 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
         except ImportError:
             pass
 
-        # WEB UI STARTUP (ROBUST) - Integrated into Boot Sequence
+        # WEB UI STARTUP (Shared Logic)
         # ═══════════════════════════════════════════════════════════════
         if web_enabled:
             try:
-                # Debug log
-                log_file = os.path.join(os.getcwd(), "logs", "web_debug.log")
-                os.makedirs(os.path.dirname(log_file), exist_ok=True)
-                with open(log_file, "w") as f:
-                    f.write(f"Starting Web UI at {datetime.now()}\n")
-
                 # 1. Start Python Backend (FastAPI + WebSocket)
                 tui.event("WebUI", "Starting Backend API (Port 8001)...", style="dim")
                 start_background_server(port=8001)
                 
-                # 2. Check for Next.js frontend and start it
-                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-                web_dir = os.path.join(base_dir, "web")
-                pkg_file = os.path.join(web_dir, "package.json")
+                # 2. Start Next.js Frontend
+                from vaf.core.frontend_manager import FrontendManager
+                fm = FrontendManager()
                 
-                if os.path.exists(web_dir) and os.path.exists(pkg_file):
-                    # Check for node/npm
-                    try:
-                        import shutil
-                        npm_path = shutil.which("npm")
-                        if not npm_path:
-                            raise FileNotFoundError("npm not found in PATH")
-                        
-                        # Install deps if needed
-                        if not os.path.exists(os.path.join(web_dir, "node_modules")):
-                             tui.event("WebUI", "Installing npm dependencies...", style="warning")
-                             subprocess.run([npm_path, "install"], cwd=web_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        
-                        # FIND FREE PORT (Start at 3000)
-                        import socket
-                        def is_port_in_use(port):
-                            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                                return s.connect_ex(('localhost', port)) == 0
+                # Callback to pipe logs to TUI
+                def tui_log_callback(msg, style="dim"):
+                    if style == "error": tui.error(msg)
+                    elif style == "warning": tui.warning(msg)
+                    elif style == "success": tui.event("WebUI", msg, style="success")
+                    else: tui.event("WebUI", msg, style=style)
 
-                        port = 3000
-                        while is_port_in_use(port):
-                            port += 1
-                        
-                        tui.event("WebUI", f"Launching Dashboard on Port {port}...", style="dim")
-                        
-                        # Start Next.js dev server with specific port
-                        cmd = [npm_path, "run", "dev", "--", "-p", str(port)]
-                        
-                        # Start process
-                        npm_process = subprocess.Popen(
-                            cmd, 
-                            cwd=web_dir, 
-                            stdout=open(log_file, "a"),
-                            stderr=subprocess.STDOUT
-                        )
-                        
-                        # WAIT FOR SERVER TO BE READY (max 15s)
-                        dashboard_url = f"http://localhost:{port}"
-                        server_ready = False
-                        for _ in range(30): # 15 seconds
-                            try:
-                                requests.get(dashboard_url, timeout=0.5)
-                                server_ready = True
-                                break
-                            except:
-                                time.sleep(0.5)
-                        
-                        if server_ready:
-                            tui.event("WebUI", f"Dashboard active at {dashboard_url}", style="success")
-                        else:
-                            tui.warning("Dashboard launch taking longer than expected...")
-                    except Exception as web_e:
-                        tui.error(f"Web UI Frontend failed: {web_e}")
-                        import traceback
-                        traceback.print_exc()
+                port = fm.start_frontend(log_callback=tui_log_callback)
+                
+                if port:
+                    # Wait for ready (CLI specific wait logic)
+                    dashboard_url = f"http://localhost:{port}"
+                    server_ready = False
+                    for _ in range(30): # 15 seconds
+                        try:
+                            requests.get(dashboard_url, timeout=0.5)
+                            server_ready = True
+                            break
+                        except:
+                            time.sleep(0.5)
+                    
+                    if server_ready:
+                        tui.event("WebUI", f"Dashboard active at {dashboard_url}", style="success")
+                    else:
+                        tui.warning("Dashboard launch taking longer than expected...")
+                else:
+                    tui.warning("Skipping frontend launch (failed or directory missing).")
+
             except Exception as e:
                 tui.error(f"Web UI Startup FAILED: {e}")
                 import traceback
@@ -990,7 +1028,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     # ═══════════════════════════════════════════════════════════════
     # PROACTIVE RESULT NOTIFIER (Background)
     # ═══════════════════════════════════════════════════════════════
-    import threading
+
     from prompt_toolkit.patch_stdout import patch_stdout
     
     def result_notifier():

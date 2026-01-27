@@ -839,7 +839,9 @@ export default function VAFDashboard() {
 
                     {/* App Header / Logo */}
                     <div className="h-16 flex items-center px-4 gap-3 shrink-0">
-                        <div className="w-8 h-8 rounded-lg bg-gray-900 flex items-center justify-center text-white text-sm font-bold shrink-0">文</div>
+                        <div className="w-[38px] h-[38px] rounded-lg overflow-hidden shrink-0 -ml-[5.5px]">
+                            <img src="/logo.png" alt="VAF" className="w-full h-full object-cover" />
+                        </div>
                         <span className="font-bold text-gray-800 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity delay-100 duration-300 overflow-hidden">Veyllo Agentic Framework</span>
                     </div>
 

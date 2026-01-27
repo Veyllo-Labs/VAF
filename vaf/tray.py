@@ -41,17 +41,49 @@ tray_context = TrayContext()
 server_thread = None
 
 def check_singleton():
-    """Ensure only one instance of the tray app runs."""
+    """Ensure only one instance runs. If another instance is running, notify it to open browser."""
     import socket
     try:
-        # Try to bind to a specific port to ensure singleton
-        # We use 8002 for the lock (8001 is web server, 8080 is LLM)
+        # Try to bind to port 8002 to ensure singleton
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Set REUSEADDR so we can restart quickly if needed
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("127.0.0.1", 8002))
+        s.listen(5)
         return s
     except socket.error:
-        print("Tray app is already running.")
+        # Port is busy, another instance is running.
+        # Try to notify it.
+        try:
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client.connect(("127.0.0.1", 8002))
+            client.sendall(b"ACTIVATE")
+            client.close()
+            logger.info("[Tray] Sent ACTIVATE signal to existing instance.")
+        except Exception as e:
+            logger.error(f"[Tray] Failed to notify existing instance: {e}")
+        
+        print("VAF is already running. Notifying existing instance...")
         return None
+
+def command_listener(lock_socket):
+    """Listens for 'ACTIVATE' signals from other instances."""
+    while not tray_context.should_exit:
+        try:
+            lock_socket.settimeout(1.0)
+            conn, addr = lock_socket.accept()
+            with conn:
+                data = conn.recv(1024)
+                if b"ACTIVATE" in data:
+                    logger.info("[Tray] Received ACTIVATE signal. Opening Web UI.")
+                    # Run opening in a thread to not block the listener
+                    threading.Thread(target=open_webui, args=(None,), daemon=True).start()
+        except socket.timeout:
+            continue
+        except Exception as e:
+            if not tray_context.should_exit:
+                logger.error(f"[Tray] Command listener error: {e}")
+            break
 
 def start_uvicorn():
     """Start uvicorn server in a separate thread."""
@@ -129,15 +161,76 @@ def get_icon_path(status):
         time.sleep(1)
 
 def open_webui(_):
+    logger.info("[Tray] Opening Web UI...")
     from vaf.core.frontend_manager import FrontendManager
     fm = FrontendManager()
     
     # Check/Start frontend
     port = fm.start_frontend()
-    if port:
-        webbrowser.open(f"http://localhost:{port}")
-    else:
-        print("Failed to start Web UI")
+    if not port:
+        logger.error("[Tray] Failed to start Web UI")
+        return
+
+    url = f"http://localhost:{port}"
+    
+    if platform.system() == "Darwin":
+        # macOS: Try to focus existing tab in Safari or Chrome via AppleScript
+        script = f'''
+        set found to false
+        set targetUrl to "{url}"
+        
+        -- Try Chrome
+        if application "Google Chrome" is running then
+            tell application "Google Chrome"
+                repeat with w in windows
+                    set tabIndex to 0
+                    repeat with t in tabs of w
+                        set tabIndex to tabIndex + 1
+                        if URL of t starts with targetUrl then
+                            set active tab index of w to tabIndex
+                            set index of w to 1
+                            activate
+                            set found to true
+                            exit repeat
+                        end if
+                    end repeat
+                    if found then exit repeat
+                end repeat
+            end tell
+        end if
+        
+        -- Try Safari
+        if not found and application "Safari" is running then
+            tell application "Safari"
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        if URL of t starts with targetUrl then
+                            set current tab of w to t
+                            set index of w to 1
+                            activate
+                            set found to true
+                            exit repeat
+                        end if
+                    end repeat
+                    if found then exit repeat
+                end repeat
+            end tell
+        end if
+        
+        return found
+        '''
+        try:
+            import subprocess
+            res = subprocess.check_output(["osascript", "-e", script]).decode().strip()
+            if res == "true":
+                logger.info("[Tray] Focused existing browser tab.")
+                return
+        except Exception as e:
+            logger.warning(f"[Tray] AppleScript tab focus failed: {e}")
+
+    # Fallback or Non-macOS
+    time.sleep(0.5) 
+    webbrowser.open(url)
 
 def toggle_persistence(item):
     new_state = not tray_context.is_persistent()
@@ -199,6 +292,46 @@ if platform.system() == "Darwin":
                 # Start Timer immediately
                 self.timer = rumps.Timer(self.update_loop, 1)
                 self.timer.start()
+
+                # Robust macOS Dock Reopen Handler
+                self._dock_timer = rumps.Timer(self.setup_mac_handlers, 1)
+                self._dock_timer.start()
+
+                self._last_open = 0
+
+            def setup_mac_handlers(self, _):
+                """Setup notification observers for macOS."""
+                self._dock_timer.stop()
+                try:
+                    from AppKit import NSNotificationCenter, NSApplicationDidBecomeActiveNotification
+                    from Foundation import NSObject
+                    import objc
+
+                    # We MUST use a real NSObject subclass to handle selectors reliably
+                    class ActivationObserver(NSObject):
+                        def onActivate_(self, notification):
+                            # Debounce check
+                            current_time = time.time()
+                            if current_time - self.app_instance._last_open < 1.0:
+                                return
+                            
+                            self.app_instance._last_open = current_time
+                            logger.info("[Tray] App activation detected (Dock click/Focus).")
+                            threading.Thread(target=open_webui, args=(None,), daemon=True).start()
+
+                    self._observer_obj = ActivationObserver.alloc().init()
+                    self._observer_obj.app_instance = self
+                    
+                    NSNotificationCenter.defaultCenter().addObserver_selector_name_object_(
+                        self._observer_obj, 
+                        objc.selector(self._observer_obj.onActivate_, signature=b"v@:@"),
+                        NSApplicationDidBecomeActiveNotification, 
+                        None
+                    )
+                    
+                    logger.info("[Tray] Registered robust macOS Activation observer.")
+                except Exception as e:
+                    logger.error(f"[Tray] Failed to setup macOS observers: {e}")
 
             def update_loop(self, _):
                 """Main logic loop called by timer."""
@@ -270,6 +403,11 @@ if platform.system() == "Darwin":
             
             # Start App
             logger.info("Initializing VafTrayApp().run()")
+            
+            # Start Command Listener thread
+            t_cmd = threading.Thread(target=command_listener, args=(lock_socket,), daemon=True)
+            t_cmd.start()
+            
             VafTrayApp().run()
 
     except ImportError:

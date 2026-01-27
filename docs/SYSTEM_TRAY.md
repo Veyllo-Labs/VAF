@@ -8,6 +8,8 @@ VAF includes a persistent background service managed by a system tray applicatio
     - 🟢 **Green / Active**: Server is running, model is loaded into RAM.
     - 🟡 **Yellow / Idle**: Server is standing by, model is unloaded (saves RAM).
     - 🔵 **Blue / Persistent**: Model is pinned in RAM (Persistent Mode).
+- **macOS Dock Integration**: On macOS, clicking the Dock icon (when VAF is already running) focuses the app and opens/re-activates the Web UI.
+- **Smart Tab Reuse**: If a VAF tab is already open in Safari or Google Chrome, clicking the Dock icon will re-focus that existing tab instead of opening a new one.
 - **Dynamic Resource Management**: Automatically unloads the LLM from RAM after 10 seconds (default) of inactivity to free up system resources.
 - **Instant Wake-on-Demand**: The server wakes up instantly when you run a CLI command (`vaf run`) or open the Web UI.
 - **Graceful Shutdown**: Checks for active CLI sessions before quitting to prevent data loss.
@@ -16,11 +18,15 @@ VAF includes a persistent background service managed by a system tray applicatio
 
 ### Starting the Tray App
 
+**macOS (Recommended):**
+1. Open **Spotlight** (Cmd + Space).
+2. Type `VAF` and press Enter.
+3. VAF will appear in your **Dock** and **Menu Bar**.
+
+**CLI (All Platforms):**
 ```bash
 vaf tray
 ```
-
-This launches the persistent background service. You can add this to your system startup items if desired.
 
 ### Menu Options
 

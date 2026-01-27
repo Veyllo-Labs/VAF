@@ -47,15 +47,15 @@ pip install -e .
     ```bash
     ./scripts/setup_mac.sh
     ```
-    *(This installs dependencies, creates a virtual environment, and adds a `vaf` shortcut).*
+    *(This installs dependencies, creates a virtual environment, and generates the **VAF.app** bundle on macOS).*
 
 2.  **Restart your terminal** (or run `source ~/.zshrc`).
 
 3.  **Start VAF:**
-    ```bash
-    vaf
-    ```
-3.  *Alternative:* Install system-wide with `sudo pip install -e .`
+    - **macOS GUI**: Open `VAF` from your Applications or Spotlight.
+    - **Terminal**: Type `vaf` for TUI, or `vaf tray` for the background service.
+
+4.  *Alternative:* Install system-wide with `sudo pip install -e .`
 
 **🪟 Windows:**
 1.  After installation, **restart your terminal** to update the PATH.

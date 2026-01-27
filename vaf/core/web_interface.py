@@ -99,11 +99,15 @@ class WebInterfaceManager:
     async def broadcast_to_session(self, session_id: str, message: dict):
         """
         Broadcast a message only to clients subscribed to a specific session.
-        
-        This prevents cross-contamination between chat windows by ensuring
-        that updates from one session don't appear in another.
         """
+        if not session_id:
+            return await self.broadcast(message)
+            
         message['sessionId'] = session_id  # Ensure sessionId is always present
+        
+        # DEBUG
+        # if message.get('type') == 'agent_message_update':
+        #    print(f"[DEBUG] Broadcasting update to {session_id}: {message.get('content')[:20]}...")
         
         disconnected = []
         for connection in self.active_connections:
@@ -200,10 +204,10 @@ class WebInterfaceManager:
     def _push_session_update(self, session_id: Optional[str], data: dict):
         """
         Thread-safe push update with session scoping.
-        
-        If session_id is provided, broadcasts only to clients subscribed to that session.
-        Otherwise, falls back to global broadcast.
         """
+        # DEBUG: Log every update to console
+        # print(f"[WebUI] Update: {data.get('type')} (sess: {session_id})")
+        
         if session_id:
             data['sessionId'] = session_id
             if self._server_loop:
@@ -211,6 +215,8 @@ class WebInterfaceManager:
                     self.broadcast_to_session(session_id, data), 
                     self._server_loop
                 )
+            else:
+                pass # print(f"[WebUI] WARNING: No server loop registered for session {session_id}")
         else:
             # Fallback to global broadcast for non-session events
             self.push_update(data)

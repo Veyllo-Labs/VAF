@@ -44,8 +44,6 @@ const WAKE_WORDS = [
     { value: 'alexa', label: 'Alexa' },
     { value: 'hey_mycroft', label: 'Hey Mycroft' },
     { value: 'hey_rhasspy', label: 'Hey Rhasspy' },
-    { value: 'ok_google', label: 'Ok Google' },
-    { value: 'computer', label: 'Computer' },
 ];
 
 export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], automations = [] }: SettingsModalProps) {
@@ -147,23 +145,6 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'general' && (
                             <div className="space-y-6">
-                                <Section title="Primary Provider">
-                                    <Select
-                                        label="AI Provider"
-                                        value={localConfig.provider || 'local'}
-                                        onChange={(v: string) => handleChange('provider', v)}
-                                        options={[
-                                            { value: 'local', label: 'Local (Llama.cpp)' },
-                                            { value: 'openai', label: 'OpenAI' },
-                                            { value: 'anthropic', label: 'Anthropic' },
-                                            { value: 'deepseek', label: 'DeepSeek' },
-                                            { value: 'google', label: 'Google Gemini' },
-                                            { value: 'openrouter', label: 'OpenRouter' },
-                                        ]}
-                                    />
-                                    <p className="text-xs text-gray-500 mt-2">Select the backend used for standard chat completions.</p>
-                                </Section>
-
                                 <Section title="API Keys">
                                     <Input
                                         label="OpenAI Key"
@@ -201,109 +182,109 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'ai' && (
                             <div className="space-y-6">
-                                <Section title="Local Model Settings">
-                                    <div className="flex gap-2 items-end">
-                                        <div className="flex-1">
-                                            <Select
-                                                label="Local Model File"
-                                                value={localConfig.model || ''}
-                                                onChange={(v: string) => handleChange('model', v)}
-                                                options={[
-                                                    { value: '', label: 'Select a model...' },
-                                                    ...availableModels.map(m => ({ value: m, label: m }))
-                                                ]}
+                                <Section title="Provider">
+                                    <Select
+                                        label="Primary AI Provider"
+                                        value={localConfig.provider || 'local'}
+                                        onChange={(v: string) => handleChange('provider', v)}
+                                        options={[
+                                            { value: 'local', label: 'Local (llama.cpp)' },
+                                            ...PROVIDERS.map(p => ({ value: p.id, label: p.label }))
+                                        ]}
+                                    />
+                                </Section>
+
+                                {(!localConfig.provider || localConfig.provider === 'local') && (
+                                    <Section title="Local Model Settings">
+                                        <div className="flex gap-2 items-end">
+                                            <div className="flex-1">
+                                                <Select
+                                                    label="Local Model File"
+                                                    value={localConfig.model || ''}
+                                                    onChange={(v: string) => handleChange('model', v)}
+                                                    options={[
+                                                        { value: '', label: 'Select a model...' },
+                                                        ...availableModels.map(m => ({ value: m, label: m }))
+                                                    ]}
+                                                />
+                                            </div>
+                                            <button
+                                                onClick={onRefreshLocalModels}
+                                                className="px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center"
+                                                title="Refresh local models"
+                                            >
+                                                <RefreshCw size={18} />
+                                            </button>
+                                        </div>
+                                        <p className="text-xs text-gray-400 mt-1 mb-4">Models must be placed in the <code>/models</code> directory.</p>
+
+                                        <div className="grid grid-cols-2 gap-4 mt-4">
+                                            <Input
+                                                label="Context Window (n_ctx)"
+                                                value={localConfig.n_ctx || 8192}
+                                                onChange={(v: string) => handleChange('n_ctx', parseInt(v))}
+                                                type="number"
+                                            />
+                                            <Input
+                                                label="GPU Layers"
+                                                value={localConfig.gpu_layers ?? -1}
+                                                onChange={(v: string) => handleChange('gpu_layers', parseInt(v))}
+                                                type="number"
                                             />
                                         </div>
-                                        <button
-                                            onClick={onRefreshLocalModels}
-                                            className="px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center"
-                                            title="Refresh local models"
-                                        >
-                                            <RefreshCw size={18} />
-                                        </button>
-                                    </div>
-                                    <p className="text-xs text-gray-400 mt-1 mb-4">Models must be placed in the <code>/models</code> directory.</p>
+                                    </Section>
+                                )}
 
-                                    <div className="grid grid-cols-2 gap-4 mt-4">
-                                        <Input
-                                            label="Context Window (n_ctx)"
-                                            value={localConfig.n_ctx || 8192}
-                                            onChange={(v: string) => handleChange('n_ctx', parseInt(v))}
-                                            type="number"
-                                        />
-                                        <Input
-                                            label="GPU Layers"
-                                            value={localConfig.gpu_layers ?? -1}
-                                            onChange={(v: string) => handleChange('gpu_layers', parseInt(v))}
-                                            type="number"
-                                        />
-                                    </div>
-                                    <div className="mt-4">
-                                        <label className="text-sm font-medium text-gray-700 mb-1 block">Temperature ({localConfig.temperature})</label>
-                                        <input
-                                            type="range" min="0" max="2" step="0.1"
-                                            value={localConfig.temperature || 0.7}
-                                            onChange={(e) => handleChange('temperature', parseFloat(e.target.value))}
-                                            className="w-full accent-blue-500"
-                                        />
-                                    </div>
-                                </Section>
-
-                                <Section title="API Models Override">
-                                    <div className="space-y-4">
-                                        {PROVIDERS.map(p => {
-                                            const hasKey = !!localConfig[`api_key_${p.id}`];
-                                            if (!hasKey) return null;
-
-                                            return (
-                                                <div key={p.id} className="flex gap-2 items-end animate-in slide-in-from-left-2 fade-in duration-300">
-                                                    <div className="flex-1">
-                                                        <Select
-                                                            label={`${p.label} Model`}
-                                                            value={localConfig[`api_model_${p.id}`] || p.defaultModel}
-                                                            onChange={(v: string) => handleChange(`api_model_${p.id}`, v)}
-                                                            options={[
-                                                                // Include default/current if not in list
-                                                                ...(apiModels[p.id] ? apiModels[p.id].map(m => ({ value: m, label: m })) : [])
-                                                            ]}
-                                                        />
-                                                    </div>
-                                                    <button
-                                                        onClick={() => handleFetchModels(p.id)}
-                                                        className={cn(
-                                                            "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
-                                                            fetchingProvider === p.id && "animate-pulse"
-                                                        )}
-                                                        title="Fetch available models"
-                                                    >
-                                                        <RefreshCw size={18} className={cn(fetchingProvider === p.id && "animate-spin")} />
-                                                    </button>
+                                {PROVIDERS.map(p => {
+                                    if (localConfig.provider !== p.id) return null;
+                                    const hasKey = !!localConfig[`api_key_${p.id}`];
+                                    
+                                    return (
+                                        <Section key={p.id} title={`${p.label} Settings`}>
+                                            {!hasKey && (
+                                                <div className="p-3 bg-yellow-50 text-yellow-700 text-sm rounded-lg mb-4 flex items-center gap-2">
+                                                    <Shield size={16} />
+                                                    <span>Please set the API Key in the <strong>General</strong> tab first.</span>
                                                 </div>
-                                            );
-                                        })}
-                                        {PROVIDERS.every(p => !localConfig[`api_key_${p.id}`]) && (
-                                            <p className="text-xs text-gray-400 italic">Add API keys in the General tab to configure model overrides.</p>
-                                        )}
-                                    </div>
-                                </Section>
+                                            )}
+                                            <div className="flex gap-2 items-end">
+                                                <div className="flex-1">
+                                                    <Select
+                                                        label={`${p.label} Model`}
+                                                        value={localConfig[`api_model_${p.id}`] || p.defaultModel}
+                                                        onChange={(v: string) => handleChange(`api_model_${p.id}`, v)}
+                                                        options={[
+                                                            { value: p.defaultModel, label: `${p.defaultModel} (Default)` },
+                                                            ...(apiModels[p.id] ? apiModels[p.id].map(m => ({ value: m, label: m })) : [])
+                                                        ]}
+                                                    />
+                                                </div>
+                                                <button
+                                                    onClick={() => handleFetchModels(p.id)}
+                                                    className={cn(
+                                                        "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
+                                                        fetchingProvider === p.id && "animate-pulse"
+                                                    )}
+                                                    title="Fetch available models"
+                                                    disabled={!hasKey}
+                                                >
+                                                    <RefreshCw size={18} className={cn(fetchingProvider === p.id && "animate-spin")} />
+                                                </button>
+                                            </div>
+                                        </Section>
+                                    );
+                                })}
 
-                                <Section title="Find Models">
-                                    <div className="flex gap-2 items-end">
-                                        <Input
-                                            label="Search HuggingFace"
-                                            value={hfQuery}
-                                            onChange={setHfQuery}
-                                            placeholder="e.g. Mistral-7B-Instruct..."
-                                        />
-                                        <button
-                                            onClick={handleSearchHF}
-                                            className="px-4 bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-lg font-medium flex items-center gap-2 transition-colors h-10"
-                                        >
-                                            <Search size={18} /> Search
-                                        </button>
-                                    </div>
-                                    <p className="text-xs text-gray-500 mt-2">Opens HuggingFace in a new tab. Download .gguf files to your <code>models/</code> folder.</p>
-                                </Section>
+                                <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-100">
+                                    <label className="text-sm font-medium text-gray-700 mb-1 block">Temperature ({localConfig.temperature || 0.7})</label>
+                                    <input
+                                        type="range" min="0" max="2" step="0.1"
+                                        value={localConfig.temperature || 0.7}
+                                        onChange={(e) => handleChange('temperature', parseFloat(e.target.value))}
+                                        className="w-full accent-blue-500"
+                                    />
+                                    <p className="text-xs text-gray-400 mt-1">Controls creativity (0 = strict, 1 = creative).</p>
+                                </div>
                             </div>
                         )}
 
@@ -377,19 +358,22 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={localConfig.ux_auto_open_outputs ?? true}
                                         onChange={(v: boolean) => handleChange('ux_auto_open_outputs', v)}
                                     />
-                                </Section>
-
-                                <Section title="Visuals">
-                                    <Select
-                                        label="Theme Variant"
-                                        value={localConfig.theme || 'vaf'}
-                                        onChange={(v: string) => handleChange('theme', v)}
-                                        options={[
-                                            { value: 'vaf', label: 'Default (VAF)' },
-                                            { value: 'dark', label: 'Dark' },
-                                            { value: 'light', label: 'Light' },
-                                            { value: 'hacker', label: 'Hacker' },
-                                        ]}
+                                    {localConfig.ux_auto_open_outputs && (
+                                        <div className="mt-2 pl-4 border-l-2 border-gray-100 animate-in slide-in-from-top-1 fade-in">
+                                            <Input
+                                                label="Max Limit (Items)"
+                                                value={localConfig.ux_auto_open_max || 20}
+                                                onChange={(v: string) => handleChange('ux_auto_open_max', parseInt(v))}
+                                                type="number"
+                                            />
+                                        </div>
+                                    )}
+                                    <div className="h-4" />
+                                    <Switch
+                                        label="Separate Terminals"
+                                        description="Launch sub-agents in new terminal windows"
+                                        checked={localConfig.sub_agents_in_separate_terminals ?? true}
+                                        onChange={(v: boolean) => handleChange('sub_agents_in_separate_terminals', v)}
                                     />
                                 </Section>
                             </div>

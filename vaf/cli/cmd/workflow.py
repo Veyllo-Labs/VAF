@@ -138,8 +138,52 @@ def run_workflow(
         except ImportError as e:
             UI.warning(f"Could not load utility tools: {e}")
         
+        # Web UI Reporting Setup
+        import requests
+        session_id = os.environ.get("VAF_SESSION_ID")
+        
+        def send_web_update(data):
+            if not session_id: return
+            try:
+                # Add session ID to every update
+                data["sessionId"] = session_id
+                requests.post("http://127.0.0.1:8001/api/workflow/update", json=data, timeout=0.2)
+            except: pass
+
+        # Send initial workflow structure
+        if session_id:
+            ui_steps = []
+            for idx, s in enumerate(steps):
+                ui_steps.append({
+                    "id": f"step-{idx+1}", # Use 1-based index or match loop
+                    "name": s.description or s.tool,
+                    "type": "tool",
+                    "status": "idle"
+                })
+            send_web_update({
+                "type": "workflow_start",
+                "workflowId": workflow_id,
+                "name": template['name'],
+                "steps": ui_steps
+            })
+
         # Progress callback
         def progress_callback(event, step, current, total):
+            # Web UI Update
+            if session_id:
+                step_id = f"step-{current}" # Match ID above
+                status = "running"
+                if event == "success": status = "success"
+                elif event == "error": status = "failed"
+                elif event == "skip": status = "skipped"
+                
+                send_web_update({
+                    "type": "workflow_update",
+                    "stepId": step_id,
+                    "status": status,
+                    "progress": int((current / total) * 100)
+                })
+
             if event == "start":
                 UI.event("Workflow", f"Step {current}/{total}: {step.tool}...", style="cyan")
                 

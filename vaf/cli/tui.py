@@ -528,12 +528,15 @@ O))         O))       O))))))))
             
             # Get input with LIVE status on the RIGHT side (updates every second)
             try:
-                result = session.prompt(
-                    HTML(f'<style fg="{self.primary}">&gt;</style> '),
-                    placeholder=HTML(f'<style fg="{self.muted}">{placeholder}</style>'),
-                    rprompt=_get_live_toolbar,  # Live status on right side of input
-                    refresh_interval=0.5,  # Refresh faster for responsiveness
-                )
+                from prompt_toolkit.patch_stdout import patch_stdout
+                with patch_stdout():
+                    result = session.prompt(
+                        HTML(f'<style fg="{self.primary}">&gt;</style> '),
+                        placeholder=HTML(f'<style fg="{self.muted}">{placeholder}</style>'),
+                        rprompt=_get_live_toolbar,  # Live status on right side of input
+                        refresh_interval=0.5,  # Refresh faster for responsiveness
+                        mouse_support=False  # Explicitly disable mouse to avoid escape code leaks
+                    )
             except Exception as e:
                 # Fallback for environments without proper console support (e.g. IDEs, pipes)
                 if "No Windows console found" in str(e) or "Inappropriate ioctl" in str(e):

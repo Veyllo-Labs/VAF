@@ -1437,6 +1437,46 @@ class Agent:
             {"role": "system", "content": system_prompt}
         ]
 
+    def load_session_context(self, session_id: str):
+        """
+        Swap the agent's context to a specific session.
+        Prevents cross-contamination between TUI and Web UI.
+        """
+        from vaf.core.subagent_ipc import set_current_session_id
+        
+        # Check if we are already in this session
+        if hasattr(self, 'current_session_id') and self.current_session_id == session_id:
+            return
+
+        # Load new session data
+        from vaf.core.session import SessionManager
+        sm = SessionManager()
+        try:
+            session = sm.load(session_id)
+            
+            # Reset Context (System Prompt)
+            self.init_chat() 
+            
+            # Replay History
+            for msg in session.messages:
+                role = msg.get("role")
+                content = msg.get("content")
+                if role in ["user", "assistant", "tool", "system"]:
+                    # Skip duplicate system prompts
+                    if role == "system" and "## PROJECT CONTEXT" not in str(content):
+                        continue
+                    self.history.append({"role": role, "content": content})
+            
+            # Update Pointer
+            self.current_session_id = session_id
+            set_current_session_id(session_id)
+            
+        except Exception:
+            # New/Empty session
+            self.init_chat()
+            self.current_session_id = session_id
+            set_current_session_id(session_id)
+
     def _clean_reasoning(self, text: str) -> str:
         """Removes internal reasoning/CoT blocks from the model response."""
         import re
@@ -1527,15 +1567,14 @@ class Agent:
         if any(cue in t for cue in english_cues):
             return "en"
 
-        # 2. Fallback to langid (Probabilistic / General Purpose)
+        # 2. Fallback to langid (Probabilistic / General Purpose) - Supports 97 languages
         try:
             # langid is pure-Python and supports many languages (offline).
             import langid  # type: ignore
 
             # Use langid for detection. It is generally robust even for short phrases.
             # We relax the length constraint to > 3 chars to catch "Was ist das" etc.
-            # UPDATE: Increased to 12 chars to avoid false positives on short typos like "sciher ?"
-            if len(t) >= 12 and any(ch.isalpha() for ch in t):
+            if len(t) >= 5 and any(ch.isalpha() for ch in t):
                 code, score = langid.classify(t)
                 code = (code or "").strip().lower()
                 
@@ -1543,7 +1582,6 @@ class Agent:
                     # Normalize some common variants
                     if code == "iw":  # legacy Hebrew code sometimes seen
                         code = "he"
-                    
                     # Return if valid code
                     return code
         except Exception:
@@ -2849,12 +2887,14 @@ class Agent:
                      )
                      selected_tools_str = output['choices'][0]['message']['content']
                 elif self.api_backend:
-                    output = self.api_backend.create_chat_completion(
+                    # API Backend returns a generator of strings
+                    response_chunks = list(self.api_backend.chat_completion(
                         messages=messages,
                         max_tokens=1224,
-                        temperature=0.1
-                    )
-                    selected_tools_str = output['choices'][0]['message']['content']
+                        temperature=0.1,
+                        stream=False
+                    ))
+                    selected_tools_str = "".join(str(c) for c in response_chunks)
                 else:
                     UI.event("Router Debug", "No backend available for routing", style="yellow")
         except Exception as e:
@@ -3172,7 +3212,7 @@ class Agent:
                         else:
                             # Regular content
                             if first_token:
-                                if stream_callback: stream_callback("")
+                                # Don't send empty string, just mark as not first
                                 first_token = False
                             
                             if stream_callback:
@@ -4646,8 +4686,8 @@ class Agent:
                 res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=120).json()
                 result = res['choices'][0]['message']['content']
             elif self.api_backend: # API
-                output = self.api_backend.create_chat_completion(messages, max_tokens=5, temperature=0.0)
-                result = output['choices'][0]['message']['content']
+                response_chunks = list(self.api_backend.chat_completion(messages, max_tokens=5, temperature=0.0, stream=False))
+                result = "".join(str(c) for c in response_chunks)
             elif self.llm: # Local Library
                 output = self.llm.create_chat_completion(messages=messages, max_tokens=5, temperature=0.0)
                 result = output['choices'][0]['message']['content']

@@ -865,6 +865,14 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     tui.warning("Wake word enabled but dependencies missing")
             except Exception as e:
                 tui.warning(f"Wake word preload failed: {e}")
+        
+        # Preload Language Identification (if installed) to prevent lag during chat
+        try:
+            import langid
+            tui.event("System", "Preloading language detection...", style="dim")
+            langid.classify("test")
+        except ImportError:
+            pass
 
     except Exception as e:
         tui.error(f"Startup failed: {e}")
@@ -1193,10 +1201,25 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     # We can set the event when web input arrives.
                     
                     # 1. Check queue immediately
-                    web_queue = get_web_interface().input_queue
+                    from vaf.core.task_queue import TaskQueue
+                    tq = TaskQueue()
+                    is_web_input = False
                     
-                    if not web_queue.empty():
-                        raw_input = web_queue.get()
+                    if tq.get_queue_size() > 0:
+                        task = tq.get()
+                        agent.load_session_context(task.session_id)
+                        
+                        # Sync current_session with task session
+                        try:
+                            current_session = session_mgr.load(task.session_id)
+                        except:
+                            # Create session if not found (fallback)
+                            current_session = session_mgr.new()
+                            current_session.id = task.session_id
+                            session_mgr.save(current_session)
+                            
+                        raw_input = task.input_text
+                        is_web_input = True
                         
                         # Handle System Commands from Web UI
                         if str(raw_input).startswith("__CMD__"):
@@ -1280,7 +1303,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                         
                         def web_input_watcher():
                             while True:
-                                if not web_queue.empty():
+                                if tq.get_queue_size() > 0:
                                     wake_word_detected_flag.set() # Force exit from input_box
                                     break
                                 time.sleep(0.2)
@@ -1300,8 +1323,21 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                         
                         # If we broke out due to flag, check if it was Web Input
                         if user_input == "__WAKE_WORD_TRIGGERED__":
-                            if not web_queue.empty():
-                                raw_input = web_queue.get()
+                            if tq.get_queue_size() > 0:
+                                task = tq.get()
+                                agent.load_session_context(task.session_id)
+                                
+                                # Sync current_session with task session
+                                try:
+                                    current_session = session_mgr.load(task.session_id)
+                                except:
+                                    # Create session if not found (fallback)
+                                    current_session = session_mgr.new()
+                                    current_session.id = task.session_id
+                                    session_mgr.save(current_session)
+                                    
+                                raw_input = task.input_text
+                                is_web_input = True
                                 
                                 # Handle System Commands (Copy logic from above)
                                 if str(raw_input).startswith("__CMD__"):
@@ -1482,6 +1518,19 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
             if not user_input:
                 # Empty input - just loop back to check for results
                 continue
+            
+            # Context Isolation for TUI Input
+            # If input was not fetched from TaskQueue (is_web_input=False), it came from TUI manually.
+            # Ensure we are in the correct session context.
+            if not is_web_input:
+                # Force TUI to use its own dedicated session ID
+                target_session_id = "cli-main" 
+                agent.load_session_context(target_session_id)
+                # Note: 'current_session' variable might be stale from Web Task, but Agent context is now correct.
+                # Ideally we should reload current_session object too, but Agent history is the critical part.
+                try:
+                    current_session = session_mgr.load(target_session_id)
+                except: pass
             
             # ═══════════════════════════════════════════════════════════════
             # KEYBOARD SHORTCUTS (single letters)
@@ -2123,6 +2172,14 @@ def _process_agent_message(agent, user_input: str, tui, session):
         if result_text and str(result_text).startswith("[ASYNC_ACK]"):
             is_async_ack = True
             result_text = str(result_text).replace("[ASYNC_ACK]", "")
+            
+            # FIX: Ensure Web UI gets this update (since it wasn't streamed)
+            # The async ack bypasses the normal stream loop in chat_step
+            try:
+                # We need to construct a clean XML version (handle Rich tags if any)
+                clean_ack = convert_rich_to_xml(str(result_text))
+                web_iface.emit_agent_message("assistant", clean_ack, session_id=session.id)
+            except: pass
         
         # IMPORTANT: Workflows may stream only progress ticks (e.g. "✓ Step 1/2: ...")
         # which are not the actual final answer. In that case, still print the returned result.

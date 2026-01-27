@@ -9,6 +9,7 @@ from vaf.cli.autosuggest import SmartAutoSuggest
 import json
 from vaf.core.config import Config
 from pathlib import Path
+from typing import Optional, List
 import logging
 
 log = logging.getLogger("uvicorn")
@@ -76,6 +77,31 @@ def _detect_language_simple(text: str) -> str:
 @app.get("/")
 async def root():
     return {"status": "VAF Backend Online", "version": "1.0.0"}
+
+from pydantic import BaseModel
+
+class WorkflowUpdate(BaseModel):
+    type: str
+    sessionId: Optional[str] = None
+    workflowId: Optional[str] = None
+    name: Optional[str] = None
+    steps: Optional[List] = None
+    stepId: Optional[str] = None
+    status: Optional[str] = None
+    progress: Optional[int] = None
+    result: Optional[str] = None
+
+@app.post("/api/workflow/update")
+async def receive_workflow_update(update: WorkflowUpdate):
+    """Receive workflow updates from external processes (like separate terminals)."""
+    data = update.dict(exclude_none=True)
+    if manager._server_loop:
+        # Broadcast to relevant session
+        if update.sessionId:
+            await manager.broadcast_to_session(update.sessionId, data)
+        else:
+            await manager.broadcast(data)
+    return {"status": "ok"}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -365,10 +391,22 @@ async def websocket_endpoint(websocket: WebSocket):
                                 # Append file contents to message (like CLI @filename behavior)
                                 content = content + "\n\n" + file_contents if content else file_contents
                         
-                        manager.input_queue.put(content)
+                        # Use TaskQueue for serialized execution
+                        from vaf.core.task_queue import TaskQueue
+                        tq = TaskQueue()
+                        
+                        # Get session ID for this connection
+                        session_id = manager.get_session_for_connection(websocket)
+                        if not session_id:
+                            # Fallback if not subscribed yet (should be rare)
+                            session_id = "web-default"
+                            
+                        # Add to queue
+                        tq.add(session_id=session_id, input_text=content, source="web")
+                        
                         # Ack to console
                         file_info = f" [{len(files)} file(s)]" if files else ""
-                        print(f"[WebUI] Received input{file_info}: {content[:50]}...")
+                        print(f"[WebUI] Queued input{file_info} for session {session_id}: {content[:50]}...")
                 
                 elif type == "get_tools":
                     # Return list of available tools from agent

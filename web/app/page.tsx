@@ -9,19 +9,26 @@ import {
 import { cn } from '@/lib/utils';
 import SettingsModal from '@/components/SettingsModal';
 import { ToolMessage } from '@/components/ToolMessage';
+import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
+import { useWorkflowStore } from '@/components/workflows/stores/workflowStore';
+import { WorkflowChatElement } from '@/components/workflows/WorkflowChatElement';
 
 // Types
 type Message = {
-    role: 'user' | 'assistant' | 'system' | 'tool';
+    role: 'user' | 'assistant' | 'system' | 'tool' | 'workflow';
     content: string; // For tools: this is the result
     timestamp: number;
     // Extra fields for tools
     toolId?: string;
     toolName?: string;
-    toolArgs?: string;
     toolStatus?: 'running' | 'completed' | 'error';
+    toolArgs?: any;
     toolStartTime?: number;
     toolEndTime?: number;
+    // Extra fields for workflows
+    workflowId?: string;
+    workflowName?: string;
+    initialSteps?: number;
 };
 
 type Session = {
@@ -123,6 +130,9 @@ export default function VAFDashboard() {
     const [status, setStatus] = useState('connecting');
     const [sessions, setSessions] = useState<Session[]>([]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+    const currentSessionIdRef = useRef<string | null>(null);
+    useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
+
     const [ws, setWs] = useState<WebSocket | null>(null);
     const [loading, setLoading] = useState(false);
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
@@ -143,6 +153,9 @@ export default function VAFDashboard() {
 
     // Stats state
     const [tokenStats, setTokenStats] = useState<{ used: number; total: number; percent: number; api: boolean } | null>(null);
+
+    // Workflow Store
+    const { loadWorkflow, updateStepStatus } = useWorkflowStore();
 
     // TTS State
     const [playingMessageId, setPlayingMessageId] = useState<number | null>(null);
@@ -254,12 +267,21 @@ export default function VAFDashboard() {
         socket.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                if (data.type === 'new_log') {
-                    // CRITICAL: Filter by session to prevent cross-contamination!
-                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) {
-                        return; // Ignore logs from other sessions
+                
+                // CRITICAL: Filter by session to prevent cross-contamination!
+                const activeSessionId = currentSessionIdRef.current;
+                
+                // Only filter if both IDs are present and they don't match
+                // If data.sessionId is missing, it's a global update -> Allow
+                // If activeSessionId is missing, we are in initial state -> Allow
+                if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
+                    // Exception: history_update and session_list are handled by their own logic
+                    if (data.type !== 'session_list' && data.type !== 'history_update') {
+                        return;
                     }
+                }
 
+                if (data.type === 'new_log') {
                     const src = data.entry.source || "";
                     const rawMsg = data.entry.message || "";
 
@@ -411,17 +433,41 @@ export default function VAFDashboard() {
                     setSessions(data.sessions);
 
                     // Only auto-create if we have NO sessions and NO active session selected
-                    // This prevents creating duplicates during switching
-                    if (data.sessions.length === 0 && !currentSessionId) {
+                    if (data.sessions.length === 0 && !activeSessionId) {
                         ws?.send(JSON.stringify({ type: 'new_session' }));
                         return;
                     }
 
-                    // Auto-select latest if none selected
-                    if (!currentSessionId && data.sessions.length > 0) {
+                    // Auto-select latest if none selected (initial load)
+                    if (!activeSessionId && data.sessions.length > 0) {
                         setCurrentSessionId(data.sessions[0].id);
                         ws?.send(JSON.stringify({ type: 'load_session', id: data.sessions[0].id }));
                     }
+                }
+                else if (data.type === 'workflow_start') {
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    
+                    loadWorkflow({
+                        id: data.workflowId || 'wf-' + Date.now(),
+                        name: data.name || 'Workflow',
+                        steps: data.steps || [],
+                        currentStepId: null,
+                        status: 'running'
+                    });
+                    
+                    // Add visual element to chat
+                    setMessages(prev => [...prev, {
+                        role: 'workflow',
+                        content: '',
+                        timestamp: Date.now(),
+                        workflowId: data.workflowId || 'wf-' + Date.now(), // Ensure consistent ID
+                        workflowName: data.name || 'Workflow',
+                        initialSteps: (data.steps || []).length
+                    }]);
+                }
+                else if (data.type === 'workflow_update') {
+                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+                    updateStepStatus(data.stepId, data.status, data.progress, data.result);
                 }
                 else if (data.type === 'history_update') {
                     setCurrentSessionId(data.sessionId);
@@ -790,7 +836,7 @@ export default function VAFDashboard() {
                     
                     {/* App Header / Logo */}
                     <div className="h-16 flex items-center px-4 gap-3 shrink-0">
-                        <div className="w-8 h-8 rounded-lg bg-gray-900 flex items-center justify-center text-white text-xs font-bold shrink-0 mx-auto group-hover:mx-0 transition-all">V</div>
+                        <div className="w-8 h-8 rounded-lg bg-gray-900 flex items-center justify-center text-white text-sm font-bold shrink-0">文</div>
                         <span className="font-bold text-gray-800 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity delay-100 duration-300 overflow-hidden">Veyllo Agentic Framework</span>
                     </div>
 
@@ -888,9 +934,10 @@ export default function VAFDashboard() {
                     <div className="flex-1 overflow-y-auto p-6" ref={containerRef}>
                         <div className="max-w-4xl mx-auto space-y-2 pb-32">
                             {messages.length === 0 && (
-                                <div className="h-full flex flex-col items-center justify-center pt-20 text-center">
+                                <div className="h-full flex flex-col items-center justify-center pt-40 pb-20 text-center">
                                     <Bot size={48} className="text-gray-300 mb-4" />
-                                    <h2 className="text-2xl font-bold">How can I help you?</h2>
+                                    <h2 className="text-2xl font-bold text-gray-800">How can I help you?</h2>
+                                    <p className="text-gray-400 mt-2">Start a conversation or choose a workflow</p>
                                 </div>
                             )}
                             {messages.filter(m => !m.content.includes('__CMD__')).map((msg, i) => { // Filter out internal commands
@@ -913,6 +960,20 @@ export default function VAFDashboard() {
                                             startTime={msg.toolStartTime}
                                             endTime={msg.toolEndTime}
                                         />
+                                    );
+                                }
+
+                                // Render Workflow Messages
+                                if (msg.role === 'workflow') {
+                                    return (
+                                        <div key={i} className="flex justify-start gap-4 pt-4">
+                                            <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
+                                            <WorkflowChatElement 
+                                                workflowId={msg.workflowId || ""} 
+                                                name={msg.workflowName || "Workflow"} 
+                                                initialSteps={msg.initialSteps}
+                                            />
+                                        </div>
                                     );
                                 }
 
@@ -1092,6 +1153,8 @@ export default function VAFDashboard() {
                 </div>
             </div>
             {/* Active Tools Panel Moved Inline */}
+            <VAFWorkflowRuntime />
+            
             <SettingsModal
                 isOpen={isSettingsOpen}
                 onClose={() => setIsSettingsOpen(false)}

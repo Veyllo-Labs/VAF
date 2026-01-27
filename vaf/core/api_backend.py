@@ -514,7 +514,7 @@ class APIBackendManager:
                                     if "content" in candidate:
                                         parts = candidate["content"].get("parts", [])
                                         for part in parts:
-                                            if "text" in part:
+                                            if "text" in part and part["text"]:
                                                 yield part["text"]
                                             elif "functionCall" in part:
                                                 # Google function calling format

@@ -555,8 +555,10 @@ $player.Close()
                                     pass
                                 return # Success!
                             # else: Piper failed, silently fall through to system voice
-                        except Exception:
+                        except Exception as e:
                             # Piper error, silently fall through to system voice
+                            from vaf.cli.ui import UI
+                            UI.event("Debug", f"Piper TTS failed: {e}", style="dim")
                             pass
 
                 # 2. Fallback: pyttsx3 (Robotic but reliable) - OR 'say' on macOS
@@ -984,8 +986,7 @@ class WakeWordManager:
             "hey_jarvis",
             "alexa",
             "hey_mycroft",
-            "hey_rhasspy",
-            "timer"  # Can also be used
+            "hey_rhasspy"
         ]
 
     def start_listening(self, callback):

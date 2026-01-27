@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import SettingsModal from '@/components/SettingsModal';
@@ -117,6 +117,9 @@ export default function VAFDashboard() {
     const [input, setInput] = useState('');
     const [suggestion, setSuggestion] = useState('');
     const [messages, setMessages] = useState<Message[]>([]);
+    const messagesRef = useRef<Message[]>([]); // Ref to access messages in WebSocket callback
+    useEffect(() => { messagesRef.current = messages; }, [messages]);
+
     const [status, setStatus] = useState('connecting');
     const [sessions, setSessions] = useState<Session[]>([]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -140,6 +143,38 @@ export default function VAFDashboard() {
 
     // Stats state
     const [tokenStats, setTokenStats] = useState<{ used: number; total: number; percent: number; api: boolean } | null>(null);
+
+    // TTS State
+    const [playingMessageId, setPlayingMessageId] = useState<number | null>(null);
+    const [loadingMessageId, setLoadingMessageId] = useState<number | null>(null);
+    
+    // Refs for WebSocket access
+    const loadingMessageIdRef = useRef<number | null>(null);
+    useEffect(() => { loadingMessageIdRef.current = loadingMessageId; }, [loadingMessageId]);
+
+    const handleSpeak = (index: number, text: string) => {
+        if (playingMessageId === index) {
+            handleStopSpeech();
+            return;
+        }
+        
+        // Stop any current speech
+        if (playingMessageId !== null) {
+            ws?.send(JSON.stringify({ type: 'stop_speech' }));
+        }
+
+        setLoadingMessageId(index);
+        
+        // Send speak command immediately. 
+        // We wait for 'tts_state' event (status='playing') to switch to playing state.
+        ws?.send(JSON.stringify({ type: 'speak', text }));
+    };
+
+    const handleStopSpeech = () => {
+        setPlayingMessageId(null);
+        setLoadingMessageId(null);
+        ws?.send(JSON.stringify({ type: 'stop_speech' }));
+    };
 
     const [isRecording, setIsRecording] = useState(false);
     const [isProcessingAudio, setIsProcessingAudio] = useState(false);
@@ -324,6 +359,53 @@ export default function VAFDashboard() {
                             return [...prev, { role: 'assistant', content: data.content, timestamp: Date.now() }];
                         }
                     });
+                }
+                else if (data.type === 'tts_state') {
+                    if (data.status === 'loading') {
+                        // Find target message for loading state
+                        let targetIndex = -1;
+                        if (loadingMessageIdRef.current !== null) {
+                            targetIndex = loadingMessageIdRef.current;
+                        } else {
+                            // Auto-TTS: Assume last assistant message
+                            const currentMessages = messagesRef.current;
+                            for (let i = currentMessages.length - 1; i >= 0; i--) {
+                                if (currentMessages[i].role === 'assistant') {
+                                    targetIndex = i;
+                                    break;
+                                }
+                            }
+                        }
+                        if (targetIndex !== -1) {
+                            setLoadingMessageId(targetIndex);
+                        }
+                    }
+                    else if (data.status === 'playing') {
+                        // Find target message
+                        let targetIndex = -1;
+                        
+                        // Use Ref to get current loading ID (avoids closure staleness)
+                        if (loadingMessageIdRef.current !== null) {
+                            targetIndex = loadingMessageIdRef.current;
+                        } else {
+                            // Auto-TTS: Assume last assistant message
+                            const currentMessages = messagesRef.current;
+                            for (let i = currentMessages.length - 1; i >= 0; i--) {
+                                if (currentMessages[i].role === 'assistant') {
+                                    targetIndex = i;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (targetIndex !== -1) {
+                            setPlayingMessageId(targetIndex);
+                            setLoadingMessageId(null);
+                        }
+                    } else if (data.status === 'stopped') {
+                        setPlayingMessageId(null);
+                        setLoadingMessageId(null);
+                    }
                 }
                 else if (data.type === 'session_list') {
                     setSessions(data.sessions);
@@ -702,20 +784,26 @@ export default function VAFDashboard() {
 
     return (
         <main className="h-screen flex flex-col bg-gray-50 text-gray-900 font-sans overflow-hidden">
-            <header className="bg-white border-b border-gray-200 px-6 py-4 z-30 relative shadow-sm flex justify-between items-center">
-                <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-lg bg-gray-900 flex items-center justify-center text-white text-xs font-bold">V</div>
-                    Veyllo Agent Framework
-                </h1>
-            </header>
-
+            
             <div className="flex-1 flex overflow-hidden">
                 <aside className="group flex flex-col h-full bg-white border-r border-gray-200 w-16 hover:w-72 transition-all duration-300 z-20 shadow-lg overflow-hidden">
-                    <div onClick={() => ws?.send(JSON.stringify({ type: 'new_session' }))} className="p-4 border-b border-gray-200 flex items-center gap-4 cursor-pointer hover:bg-gray-50">
-                        <Plus size={24} className="text-gray-900 shrink-0" />
-                        <span className="font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">New Chat</span>
+                    
+                    {/* App Header / Logo */}
+                    <div className="h-16 flex items-center px-4 gap-3 shrink-0">
+                        <div className="w-8 h-8 rounded-lg bg-gray-900 flex items-center justify-center text-white text-xs font-bold shrink-0 mx-auto group-hover:mx-0 transition-all">V</div>
+                        <span className="font-bold text-gray-800 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity delay-100 duration-300 overflow-hidden">Veyllo Agentic Framework</span>
                     </div>
-                    <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 space-y-1">
+
+                    <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 pt-0 space-y-1">
+                        {/* New Chat Button */}
+                        <div 
+                            onClick={() => ws?.send(JSON.stringify({ type: 'new_session' }))} 
+                            className="flex items-center gap-3 p-2 pl-3 rounded-lg cursor-pointer hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors"
+                        >
+                            <Plus size={16} className="shrink-0" />
+                            <span className="text-sm font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-200">New Chat</span>
+                        </div>
+
                         {sessions.map(s => (
                             <div key={s.id} onClick={() => handleSessionSwitch(s.id)}
                                 className={cn("flex items-center gap-3 p-2 pl-3 rounded-lg cursor-pointer group/item relative", currentSessionId === s.id ? 'bg-transparent' : 'hover:bg-gray-100')}>
@@ -842,9 +930,34 @@ export default function VAFDashboard() {
                                             {isBot && thought && <ThinkingDetails thought={thought} />}
 
                                             {(answer || !isBot) && (
-                                                <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed",
-                                                    isBot ? "bg-white text-gray-800 rounded-tl-none border border-gray-200" : "bg-gray-800 text-white rounded-tr-none")}>
-                                                    <p className="whitespace-pre-wrap">{answer}</p>
+                                                <div className="relative group flex items-end">
+                                                    <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed",
+                                                        isBot ? "bg-white text-gray-800 rounded-tl-none border border-gray-200" : "bg-gray-800 text-white rounded-tr-none")}>
+                                                        <p className="whitespace-pre-wrap">{answer}</p>
+                                                    </div>
+                                                    {isBot && (
+                                                        <button 
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (playingMessageId === i) handleStopSpeech();
+                                                                else handleSpeak(i, answer);
+                                                            }}
+                                                            className="ml-2 mb-1 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all opacity-40 hover:opacity-100 data-[active=true]:opacity-100 shrink-0"
+                                                            data-active={playingMessageId === i || loadingMessageId === i}
+                                                            title={playingMessageId === i ? "Stop Speaking" : "Read Aloud"}
+                                                        >
+                                                            {loadingMessageId === i ? (
+                                                                <Loader2 size={14} className="animate-spin" />
+                                                            ) : playingMessageId === i ? (
+                                                                <div className="relative">
+                                                                    <Volume2 size={14} className="text-gray-600" />
+                                                                    <span className="absolute -inset-1 rounded-full bg-gray-400/20 animate-ping" />
+                                                                </div>
+                                                            ) : (
+                                                                <Volume2 size={14} />
+                                                            )}
+                                                        </button>
+                                                    )}
                                                 </div>
                                             )}
 
@@ -907,8 +1020,8 @@ export default function VAFDashboard() {
                                         <>
                                             Tokens:
                                             <span className="mx-1 tracking-tighter">
-                                                {"●".repeat(Math.round(tokenStats.percent * 10))}
-                                                {"○".repeat(10 - Math.round(tokenStats.percent * 10))}
+                                                {"●".repeat(Math.min(10, Math.max(0, Math.round(tokenStats.percent * 10))))}
+                                                {"○".repeat(Math.max(0, 10 - Math.min(10, Math.max(0, Math.round(tokenStats.percent * 10)))))}
                                             </span>
                                             {Math.round(tokenStats.percent * 100)}%
                                             ({tokenStats.used.toLocaleString()}/{tokenStats.total.toLocaleString()})

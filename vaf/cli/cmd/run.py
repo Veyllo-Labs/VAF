@@ -460,12 +460,19 @@ def _warmup_model(tui):
     
     # Inner function to do the actual warmup
     def do_warmup():
-        for attempt in range(30):
+        # Check if server is alive first
+        try:
+            requests.get("http://127.0.0.1:8080/health", timeout=2)
+        except:
+            return "error:server_unreachable"
+
+        # Try warmup with long timeout (loading large models can take minutes)
+        for attempt in range(3):
             try:
                 response = requests.post(
                     "http://127.0.0.1:8080/v1/chat/completions",
                     json=warmup_payload,
-                    timeout=60
+                    timeout=300 # 5 minutes max for initial load
                 )
                 
                 if response.status_code == 200:
@@ -481,8 +488,8 @@ def _warmup_model(tui):
                 time.sleep(2)
                 continue
             except requests.exceptions.Timeout:
-                time.sleep(2)
-                continue
+                # If 5 minutes wasn't enough, it's likely stuck or swapping heavily
+                return "timeout"
             except Exception as e:
                 return f"exception:{e}"
         
@@ -893,15 +900,6 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 f.write(f"Web Dir: {web_dir}\n")
             
             if os.path.exists(web_dir) and os.path.exists(pkg_file):
-                # Kill orphan node processes
-                try:
-                    if platform.system() == "Windows":
-                        subprocess.run("taskkill /F /IM node.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    else:
-                        subprocess.run(["pkill", "-f", "node"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except:
-                    pass
-
                 # Check for node/npm
                 try:
                     # Use shutil.which to find npm in PATH (works with nvm)

@@ -34,6 +34,44 @@ async def startup_event():
     loop = asyncio.get_running_loop()
     manager.set_server_loop(loop)
     log.info("VAF Web Interface: Event loop registered")
+    
+    # Register TTS Callbacks for UI sync
+    from vaf.core.speech import SpeechManager
+    sm = SpeechManager.get_instance()
+    
+    def on_tts_loading():
+        if manager._server_loop:
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({"type": "tts_state", "status": "loading"}),
+                manager._server_loop
+            )
+
+    def on_tts_start(text):
+        if manager._server_loop:
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({"type": "tts_state", "status": "playing", "text": text}),
+                manager._server_loop
+            )
+            
+    def on_tts_end():
+        if manager._server_loop:
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({"type": "tts_state", "status": "stopped"}),
+                manager._server_loop
+            )
+            
+    sm.on_speech_loading = on_tts_loading
+    sm.on_speech_start = on_tts_start
+    sm.on_speech_end = on_tts_end
+
+def _detect_language_simple(text: str) -> str:
+    """Simple heuristic for language detection (de/en)."""
+    t = text.lower()
+    # German indicators
+    de_words = [" das ", " und ", " der ", " die ", " ist ", " nicht ", " ich ", " sie ", " es ", " wie ", " was ", " eine ", " ein ", " mit ", " von "]
+    if any(w in t for w in de_words): return "de"
+    if any(ch in t for ch in ["ä", "ö", "ü", "ß"]): return "de"
+    return "en" # Default fallback
 
 @app.get("/")
 async def root():
@@ -495,6 +533,23 @@ async def websocket_endpoint(websocket: WebSocket):
                             "type": "stt_error",
                             "error": str(e)
                         })
+                
+                elif type == "speak":
+                    # TTS Output
+                    text = cmd.get("text")
+                    if text:
+                        from vaf.core.speech import SpeechManager
+                        sm = SpeechManager.get_instance()
+                        
+                        # Detect Language
+                        lang = _detect_language_simple(text)
+                        sm.speak(text, lang=lang)
+                
+                elif type == "stop_speech":
+                    # Stop TTS
+                    from vaf.core.speech import SpeechManager
+                    sm = SpeechManager.get_instance()
+                    sm.stop()
 
             except json.JSONDecodeError:
                 pass

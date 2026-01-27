@@ -46,9 +46,18 @@ class SpeechManager:
         self._has_piper = False
         self._speech_generation = 0  # To invalidate pending tasks on stop()
         
+        # Process handles for safe cleanup
+        self._current_player_process = None
+        self._current_tts_process = None
+        
         # TTS sequencing lock - ensures TTS plays sequentially, not in parallel
         self._tts_lock = threading.Lock()
         
+        # Event callbacks
+        self.on_speech_loading = None
+        self.on_speech_start = None
+        self.on_speech_end = None
+
         # Base paths
         self.base_dir = Path(__file__).parents[2]
         self.bin_dir = self.base_dir / "bin" / "piper"
@@ -354,20 +363,28 @@ Start-Sleep -Seconds $duration
 $player.Stop()
 $player.Close()
 """
-                        subprocess.run(['powershell', '-NoProfile', '-Command', ps_script], 
-                                     check=True, 
-                                     creationflags=subprocess.CREATE_NO_WINDOW,
-                                     timeout=5)
+                        self._current_player_process = subprocess.Popen(
+                             ['powershell', '-NoProfile', '-Command', ps_script],
+                             creationflags=subprocess.CREATE_NO_WINDOW
+                        )
+                        self._current_player_process.wait(timeout=5)
                     except:
                         # Fallback: Use mplayer/vlc if installed, or just skip
                         pass
                 else:
                     # For WAV: Use SoundPlayer (works reliably)
                     cmd = f"(New-Object Media.SoundPlayer '{file_path}').PlaySync()"
-                    subprocess.run(['powershell', '-c', cmd], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                    self._current_player_process = subprocess.Popen(
+                        ['powershell', '-c', cmd], 
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                    self._current_player_process.wait()
+
             elif system == "darwin":
                 # macOS: afplay supports both WAV and MP3
-                subprocess.run(['afplay', file_path], check=True)
+                self._current_player_process = subprocess.Popen(['afplay', file_path])
+                self._current_player_process.wait()
+
             else:
                 # Linux: Try multiple players (mpg123 for MP3, aplay for WAV)
                 if file_path.lower().endswith('.mp3'):
@@ -376,21 +393,25 @@ $player.Close()
                     for player in players:
                         try:
                             if player == 'mpv':
-                                subprocess.run([player, '--no-video', '--really-quiet', file_path], 
-                                             check=True, timeout=5)
+                                cmd = [player, '--no-video', '--really-quiet', file_path]
                             elif player == 'ffplay':
-                                subprocess.run([player, '-nodisp', '-autoexit', '-loglevel', 'quiet', file_path],
-                                             check=True, timeout=5)
+                                cmd = [player, '-nodisp', '-autoexit', '-loglevel', 'quiet', file_path]
                             else:
-                                subprocess.run([player, '-q', file_path], check=True, timeout=5)
+                                cmd = [player, '-q', file_path]
+                            
+                            self._current_player_process = subprocess.Popen(cmd)
+                            self._current_player_process.wait(timeout=5)
                             break
                         except (FileNotFoundError, subprocess.CalledProcessError):
                             continue
                 else:
                     # WAV: Use aplay
-                    subprocess.run(['aplay', '-q', file_path], check=True)
+                    self._current_player_process = subprocess.Popen(['aplay', '-q', file_path])
+                    self._current_player_process.wait()
         except:
             pass  # Silently fail - sound is optional
+        finally:
+            self._current_player_process = None
     
     def _play_success_sound(self):
         """Play success sound after successful STT (OS-independent)."""
@@ -435,22 +456,22 @@ $player.Close()
         self._is_speaking = False
         self._speech_generation += 1  # Invalidate pending tasks
         
-        # Kill player processes
-        system = platform.system().lower()
-        if system == "windows":
+        # Kill specific player process if running
+        if self._current_player_process:
             try:
-                # Kill powershell (used for playback) and piper
-                subprocess.run(['taskkill', '/F', '/IM', 'powershell.exe'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(['taskkill', '/F', '/IM', 'piper.exe'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self._current_player_process.terminate()
+                # If terminate doesn't work, we could try kill, but terminate is usually enough
+                self._current_player_process = None
             except:
                 pass
-        else:
-            # Kill linux/mac players
-            for proc in ['piper', 'aplay', 'afplay', 'mpg123', 'mpv', 'ffplay']:
-                try:
-                    subprocess.run(['pkill', '-9', proc], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except:
-                    pass
+
+        # Kill specific TTS process (Piper) if running
+        if self._current_tts_process:
+            try:
+                self._current_tts_process.terminate()
+                self._current_tts_process = None
+            except:
+                pass
                     
         # pyttsx3 stop
         if self.tts_engine:
@@ -476,6 +497,10 @@ $player.Close()
             # CRITICAL: Acquire TTS lock to ensure sequential playback
             # This prevents multiple TTS calls from overlapping
             with self._tts_lock:
+                if self.on_speech_loading:
+                    try: self.on_speech_loading()
+                    except: pass
+                
                 # ABORT if stop() was called while we were waiting
                 if self._speech_generation != current_gen:
                     return
@@ -502,18 +527,28 @@ $player.Close()
                             binary = self._get_piper_binary()
                             
                             # Run Piper
-                            proc = subprocess.Popen(
+                            self._current_tts_process = subprocess.Popen(
                                 [str(binary), "--model", str(model_path), "--output_file", wav_path],
                                 stdin=subprocess.PIPE,
                                 stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL
                             )
-                            proc.communicate(input=clean_text.encode('utf-8'))
+                            self._current_tts_process.communicate(input=clean_text.encode('utf-8'))
+                            self._current_tts_process = None
                             
                             # Check if WAV file was generated (even if Piper crashed)
                             # Sometimes Piper returns non-zero but still produces valid audio
                             if os.path.exists(wav_path) and os.path.getsize(wav_path) > 1000:  # At least 1KB
+                                if self.on_speech_start:
+                                    try: self.on_speech_start(clean_text)
+                                    except: pass
+                                
                                 self._play_audio(wav_path)
+                                
+                                if self.on_speech_end:
+                                    try: self.on_speech_end()
+                                    except: pass
+
                                 try:
                                     os.remove(wav_path) 
                                 except:
@@ -540,7 +575,17 @@ $player.Close()
                             pass 
                             
                         cmd = ["say"] + voice_arg + [clean_text]
+                        
+                        if self.on_speech_start:
+                            try: self.on_speech_start(clean_text)
+                            except: pass
+                            
                         subprocess.run(cmd, check=True)
+                        
+                        if self.on_speech_end:
+                            try: self.on_speech_end()
+                            except: pass
+                            
                     except Exception as e:
                         # If 'say' fails, we are really out of options
                         pass
@@ -591,8 +636,17 @@ $player.Close()
                         if target:
                             engine.setProperty('voice', target)
                         
+                        if self.on_speech_start:
+                            try: self.on_speech_start(clean_text)
+                            except: pass
+
                         engine.say(clean_text)
                         engine.runAndWait()
+                        
+                        if self.on_speech_end:
+                            try: self.on_speech_end()
+                            except: pass
+
                     except: pass
                     finally:
                         self._is_speaking = False

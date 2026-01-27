@@ -1,0 +1,210 @@
+# VAF Session Management & Chat Synchronization
+
+This document describes how VAF manages user sessions across TUI (Text UI), WebUI, and persistent storage.
+
+---
+
+## Architecture Overview
+
+```mermaid
+flowchart TB
+    subgraph Frontend["WebUI (Next.js)"]
+        FE_State[currentSessionId State]
+        FE_WS[WebSocket Client]
+    end
+    
+    subgraph Backend["Python Backend"]
+        WS_Server[WebSocket Server]
+        TaskQueue[Task Queue]
+        Agent[Agent Instance]
+        SessionMgr[Session Manager]
+    end
+    
+    subgraph Storage["Persistent Storage"]
+        Sessions[(~/.vaf/sessions/*.json)]
+    end
+    
+    FE_WS -->|"chat + sessionId"| WS_Server
+    WS_Server -->|"add(session_id, input)"| TaskQueue
+    TaskQueue -->|"get()"| Agent
+    Agent -->|"load/save"| SessionMgr
+    SessionMgr -->|"read/write"| Sessions
+    Agent -->|"emit updates"| WS_Server
+    WS_Server -->|"filter by sessionId"| FE_WS
+```
+
+---
+
+## Session ID Flow
+
+### 1. Frontend → Backend (Sending Messages)
+
+When user sends a chat message:
+
+```typescript
+// web/app/page.tsx (line 645-650)
+ws.send(JSON.stringify({
+    type: 'chat',
+    content: textToSend,
+    files: filesData,
+    sessionId: currentSessionId  // CRITICAL: Must include session ID
+}));
+```
+
+### 2. Backend Processing
+
+```python
+# vaf/core/web_server.py (line 395-399)
+# Priority: message sessionId > connection sessionId > fallback
+session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+if not session_id:
+    session_id = "web-default"  # Last resort fallback
+```
+
+### 3. Task Queue → Agent
+
+```python
+# vaf/cli/cmd/run.py (line 1204-1226)
+task = tq.get()
+agent.load_session_context(task.session_id)
+
+# Sync current_session for state tracking
+current_session = session_mgr.load(task.session_id)
+
+# CRITICAL: Sync agent._session_id for WebSocket routing
+if hasattr(agent, '_session_id') and agent._session_id != current_session.id:
+    agent._unregister_session()
+    agent._session_id = current_session.id
+    agent._register_session()
+```
+
+### 4. Agent → Frontend (Broadcasting Updates)
+
+```python
+# vaf/core/web_interface.py
+def _push_session_update(self, session_id: str, data: dict):
+    if session_id:
+        data['sessionId'] = session_id  # Tag message with session
+    # ... broadcast via WebSocket
+```
+
+### 5. Frontend Filtering
+
+```typescript
+// web/app/page.tsx (line 278-283)
+if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
+    if (data.type !== 'session_list' && data.type !== 'history_update') {
+        return;  // Reject messages for other sessions
+    }
+}
+```
+
+---
+
+## Session ID Sources
+
+| Location | Variable | Purpose |
+|----------|----------|---------|
+| Frontend State | `currentSessionId` | Currently selected session in UI |
+| Frontend Ref | `currentSessionIdRef` | Stable reference for WebSocket callbacks |
+| WebSocket Message | `data.sessionId` | Backend-specified session for each message |
+| Connection Manager | `manager.get_session_for_connection()` | Per-WebSocket connection mapping |
+| Agent Instance | `agent._session_id` | Agent's current context session |
+| Session Manager | `current_session.id` | Active session being processed |
+
+---
+
+## Common Issues & Solutions
+
+### Issue: WebUI Shows No Response
+
+**Symptom:** TUI displays response, WebUI empty.
+
+**Cause:** Session ID mismatch between frontend and backend.
+
+**Fix:** Ensure frontend sends `sessionId` with every chat message.
+
+---
+
+### Issue: Messages Go to Wrong Session
+
+**Symptom:** Response appears in different session than expected.
+
+**Cause:** `agent._session_id` not synced after task queue processing.
+
+**Fix:** After loading task from queue, sync agent session ID:
+```python
+agent._session_id = current_session.id
+agent._register_session()
+```
+
+---
+
+### Issue: Session Not Found
+
+**Symptom:** Error loading session from storage.
+
+**Cause:** WebUI created new session ID that doesn't exist in `~/.vaf/sessions/`.
+
+**Fix:** Create session on-the-fly if not found:
+```python
+try:
+    current_session = session_mgr.load(task.session_id)
+except:
+    current_session = session_mgr.new()
+    current_session.id = task.session_id
+    session_mgr.save(current_session)
+```
+
+---
+
+## Session Storage Format
+
+Sessions are stored as JSON in `~/.vaf/sessions/<session_id>.json`:
+
+```json
+{
+    "id": "blue464411",
+    "name": "Session 2026-01-27 05:30",
+    "created_at": "2026-01-27T05:30:00.000Z",
+    "updated_at": "2026-01-27T05:45:00.000Z",
+    "model": "gpt-4o",
+    "messages": [
+        {"role": "user", "content": "Hey", "timestamp": "..."},
+        {"role": "assistant", "content": "Hello!", "timestamp": "..."}
+    ],
+    "runtime_state": {}
+}
+```
+
+---
+
+## Debugging Session Issues
+
+Enable debug logging:
+
+```python
+# vaf/core/web_interface.py (line 208)
+print(f"[WebUI] Update: {data.get('type')} (sess: {session_id})")
+```
+
+```typescript
+// web/app/page.tsx (line 280)
+console.log(`🔍 [FILTER] Rejecting ${data.type}: backend=${data.sessionId}, frontend=${activeSessionId}`);
+```
+
+---
+
+## Key Files
+
+| File | Responsibility |
+|------|----------------|
+| `vaf/core/session.py` | Session data model, SessionManager class |
+| `vaf/core/web_server.py` | WebSocket server, message routing |
+| `vaf/core/web_interface.py` | Agent → WebUI broadcast manager |
+| `vaf/cli/cmd/run.py` | Main loop, task queue processing |
+| `web/app/page.tsx` | Frontend state, session filtering |
+
+---
+
+*Last updated: 2026-01-27*

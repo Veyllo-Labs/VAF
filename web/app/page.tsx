@@ -161,7 +161,7 @@ export default function VAFDashboard() {
     // TTS State
     const [playingMessageId, setPlayingMessageId] = useState<number | null>(null);
     const [loadingMessageId, setLoadingMessageId] = useState<number | null>(null);
-    
+
     // Refs for WebSocket access
     const loadingMessageIdRef = useRef<number | null>(null);
     useEffect(() => { loadingMessageIdRef.current = loadingMessageId; }, [loadingMessageId]);
@@ -171,14 +171,14 @@ export default function VAFDashboard() {
             handleStopSpeech();
             return;
         }
-        
+
         // Stop any current speech
         if (playingMessageId !== null) {
             ws?.send(JSON.stringify({ type: 'stop_speech' }));
         }
 
         setLoadingMessageId(index);
-        
+
         // Send speak command immediately. 
         // We wait for 'tts_state' event (status='playing') to switch to playing state.
         ws?.send(JSON.stringify({ type: 'speak', text }));
@@ -268,16 +268,17 @@ export default function VAFDashboard() {
         socket.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                
+
                 // CRITICAL: Filter by session to prevent cross-contamination!
                 const activeSessionId = currentSessionIdRef.current;
-                
+
                 // Only filter if both IDs are present and they don't match
                 // If data.sessionId is missing, it's a global update -> Allow
                 // If activeSessionId is missing, we are in initial state -> Allow
                 if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
                     // Exception: history_update and session_list are handled by their own logic
                     if (data.type !== 'session_list' && data.type !== 'history_update') {
+                        console.log(`🔍 [FILTER] Rejecting ${data.type}: backend=${data.sessionId}, frontend=${activeSessionId}`);
                         return;
                     }
                 }
@@ -406,7 +407,7 @@ export default function VAFDashboard() {
                     else if (data.status === 'playing') {
                         // Find target message
                         let targetIndex = -1;
-                        
+
                         // Use Ref to get current loading ID (avoids closure staleness)
                         if (loadingMessageIdRef.current !== null) {
                             targetIndex = loadingMessageIdRef.current;
@@ -420,7 +421,7 @@ export default function VAFDashboard() {
                                 }
                             }
                         }
-                        
+
                         if (targetIndex !== -1) {
                             setPlayingMessageId(targetIndex);
                             setLoadingMessageId(null);
@@ -447,7 +448,7 @@ export default function VAFDashboard() {
                 }
                 else if (data.type === 'workflow_start') {
                     if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
-                    
+
                     loadWorkflow({
                         id: data.workflowId || 'wf-' + Date.now(),
                         name: data.name || 'Workflow',
@@ -455,7 +456,7 @@ export default function VAFDashboard() {
                         currentStepId: null,
                         status: 'running'
                     });
-                    
+
                     // Add visual element to chat
                     setMessages(prev => [...prev, {
                         role: 'workflow',
@@ -644,7 +645,8 @@ export default function VAFDashboard() {
         ws.send(JSON.stringify({
             type: 'chat',
             content: textToSend,
-            files: filesData
+            files: filesData,
+            sessionId: currentSessionId // CRITICAL: Include session ID for proper routing
         }));
         setInput('');
         setSuggestion('');
@@ -831,10 +833,10 @@ export default function VAFDashboard() {
 
     return (
         <main className="h-screen flex flex-col bg-gray-50 text-gray-900 font-sans overflow-hidden">
-            
+
             <div className="flex-1 flex overflow-hidden">
                 <aside className="group flex flex-col h-full bg-white border-r border-gray-200 w-16 hover:w-72 transition-all duration-300 z-20 shadow-lg overflow-hidden">
-                    
+
                     {/* App Header / Logo */}
                     <div className="h-16 flex items-center px-4 gap-3 shrink-0">
                         <div className="w-8 h-8 rounded-lg bg-gray-900 flex items-center justify-center text-white text-sm font-bold shrink-0">文</div>
@@ -843,8 +845,8 @@ export default function VAFDashboard() {
 
                     <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 pt-0 space-y-1">
                         {/* New Chat Button */}
-                        <div 
-                            onClick={() => ws?.send(JSON.stringify({ type: 'new_session' }))} 
+                        <div
+                            onClick={() => ws?.send(JSON.stringify({ type: 'new_session' }))}
                             className="flex items-center gap-3 p-2 pl-3 rounded-lg cursor-pointer hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors"
                         >
                             <Plus size={16} className="shrink-0" />
@@ -887,8 +889,8 @@ export default function VAFDashboard() {
                                         {!editingId && (
                                             <>
                                                 <Edit2 size={12} className="text-gray-400 hover:text-gray-900" onClick={(e) => { e.stopPropagation(); startEditing(s); }} />
-                                                <Trash2 size={12} className="text-gray-400 hover:text-red-600" onClick={(e) => { 
-                                                    e.stopPropagation(); 
+                                                <Trash2 size={12} className="text-gray-400 hover:text-red-600" onClick={(e) => {
+                                                    e.stopPropagation();
                                                     if (confirm('Delete?')) {
                                                         ws?.send(JSON.stringify({ type: 'delete_session', id: s.id }));
                                                         // If we are deleting the current session, find a new home
@@ -896,7 +898,7 @@ export default function VAFDashboard() {
                                                             const remaining = sessions.filter(sess => sess.id !== s.id);
                                                             // Prefer an empty session
                                                             const empty = remaining.find(sess => (sess.messageCount || 0) === 0);
-                                                            
+
                                                             if (empty) {
                                                                 handleSessionSwitch(empty.id);
                                                             } else if (remaining.length > 0) {
@@ -991,9 +993,9 @@ export default function VAFDashboard() {
                                     return (
                                         <div key={i} className="flex justify-start gap-4 pt-4">
                                             <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
-                                            <WorkflowChatElement 
-                                                workflowId={msg.workflowId || ""} 
-                                                name={msg.workflowName || "Workflow"} 
+                                            <WorkflowChatElement
+                                                workflowId={msg.workflowId || ""}
+                                                name={msg.workflowName || "Workflow"}
                                                 initialSteps={msg.initialSteps}
                                             />
                                         </div>
@@ -1020,7 +1022,7 @@ export default function VAFDashboard() {
                                                         <p className="whitespace-pre-wrap">{answer}</p>
                                                     </div>
                                                     {isBot && (
-                                                        <button 
+                                                        <button
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 if (playingMessageId === i) handleStopSpeech();
@@ -1177,7 +1179,7 @@ export default function VAFDashboard() {
             </div>
             {/* Active Tools Panel Moved Inline */}
             <VAFWorkflowRuntime />
-            
+
             <SettingsModal
                 isOpen={isSettingsOpen}
                 onClose={() => setIsSettingsOpen(false)}

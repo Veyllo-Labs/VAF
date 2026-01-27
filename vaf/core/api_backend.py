@@ -36,6 +36,7 @@ class BaseAIProvider(ABC):
         stream: bool = True,
         model: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
+        tool_choice: Optional[Union[str, Dict]] = None,  # 'auto', 'none', 'required', or specific function
     ) -> Generator[str, None, None]:
         """Execute a chat completion request."""
         pass
@@ -56,7 +57,7 @@ class OpenAIProvider(BaseAIProvider):
             self.client = None
             logger.error("OpenAI SDK not installed. Please run: pip install openai")
 
-    def chat_completion(self, messages, temperature, max_tokens, stream, model, tools):
+    def chat_completion(self, messages, temperature, max_tokens, stream, model, tools, tool_choice=None):
         if not self.client:
             yield "[Error] OpenAI SDK missing."
             return
@@ -72,6 +73,11 @@ class OpenAIProvider(BaseAIProvider):
             }
             if tools:
                 kwargs["tools"] = tools
+                kwargs["parallel_tool_calls"] = True  # Allow multiple tools in one response
+                
+                # tool_choice: 'auto' (default), 'none', 'required', or specific function
+                if tool_choice:
+                    kwargs["tool_choice"] = tool_choice
             
             if stream:
                 # Enable usage for streaming (OpenAI specific)
@@ -129,7 +135,7 @@ class AnthropicProvider(BaseAIProvider):
             self.client = None
             logger.error("Anthropic SDK not installed. Please run: pip install anthropic")
 
-    def chat_completion(self, messages, temperature, max_tokens, stream, model, tools):
+    def chat_completion(self, messages, temperature, max_tokens, stream, model, tools, tool_choice=None):
         if not self.client:
             yield "[Error] Anthropic SDK missing."
             return
@@ -212,7 +218,7 @@ class GoogleProvider(BaseAIProvider):
             self.sdk = None
             logger.error("Google GenerativeAI SDK missing. Please run: pip install google-generativeai")
 
-    def chat_completion(self, messages, temperature, max_tokens, stream, model, tools):
+    def chat_completion(self, messages, temperature, max_tokens, stream, model, tools, tool_choice=None):
         if not self.sdk:
             yield "[Error] Google GenerativeAI SDK missing."
             return
@@ -270,6 +276,7 @@ class GoogleProvider(BaseAIProvider):
                             # Convert to OpenAI compatible format
                             yield json.dumps({
                                 "tool_calls": [{
+                                    "index": 0, # Since Gemini streams one candidate part at a time usually, but for parallel safe to expect one-by-one or handle list
                                     "id": f"call_{part.function_call.name}",
                                     "type": "function",
                                     "function": {
@@ -328,8 +335,13 @@ class APIBackendManager:
         else:
             raise ValueError(f"Unsupported provider: {self.provider_name}")
 
-    def chat_completion(self, messages, temperature=0.7, max_tokens=4096, stream=True, model=None, tools=None):
-        """Unified entry point for chat completion."""
+    def chat_completion(self, messages, temperature=0.7, max_tokens=4096, stream=True, model=None, tools=None, tool_choice=None):
+        """Unified entry point for chat completion.
+        
+        Args:
+            tool_choice: Control tool usage - 'auto' (default), 'none', 'required', 
+                        or {'type': 'function', 'function': {'name': '...'}} for specific tool
+        """
         # Determine model
         if not model:
             default_models = {
@@ -342,7 +354,7 @@ class APIBackendManager:
             model = self.config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, "gpt-4o"))
 
         # Execute via provider
-        for chunk in self.provider.chat_completion(messages, temperature, max_tokens, stream, model, tools):
+        for chunk in self.provider.chat_completion(messages, temperature, max_tokens, stream, model, tools, tool_choice):
             # Sync usage stats back to manager
             self.session_usage["input_tokens"] = self.provider.usage["input_tokens"]
             self.session_usage["output_tokens"] = self.provider.usage["output_tokens"]

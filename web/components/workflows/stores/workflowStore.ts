@@ -5,7 +5,7 @@ export interface VAFStep {
   id: string;
   name: string;
   type: 'agent' | 'tool' | 'wait' | 'condition';
-  status: 'idle' | 'running' | 'success' | 'failed';
+  status: 'idle' | 'running' | 'success' | 'failed' | 'skipped';
   progress?: number;
   result?: string;
   error?: string;
@@ -26,7 +26,7 @@ interface WorkflowState {
   workflow: VAFWorkflow | null;
   nodes: Node[];
   edges: Edge[];
-  
+
   // Actions
   setIsOpen: (isOpen: boolean) => void;
   loadWorkflow: (workflow: VAFWorkflow) => void;
@@ -61,11 +61,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       style: { stroke: '#e2e8f0' },
     }));
 
-    set({ 
-      isOpen: true, 
-      workflow, 
-      nodes, 
-      edges 
+    set({
+      isOpen: true,
+      workflow,
+      nodes,
+      edges
     });
   },
 
@@ -74,15 +74,15 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     if (!workflow) return;
 
     // Update workflow steps
-    const newSteps = workflow.steps.map(step => 
-      step.id === stepId 
+    const newSteps = workflow.steps.map(step =>
+      step.id === stepId
         ? { ...step, status, progress, result }
         : step
     );
 
     // Update nodes data
-    const newNodes = nodes.map(node => 
-      node.id === stepId 
+    const newNodes = nodes.map(node =>
+      node.id === stepId
         ? { ...node, data: { ...node.data, status, progress, result } }
         : node
     );
@@ -94,7 +94,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     // Check completion if this step succeeded
     const allDone = newSteps.every(s => s.status === 'success' || s.status === 'skipped');
     if (allDone) wfStatus = 'completed';
-    
+
     set({
       workflow: { ...workflow, steps: newSteps, status: wfStatus },
       nodes: newNodes

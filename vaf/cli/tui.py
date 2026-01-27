@@ -778,7 +778,7 @@ O))         O))       O))))))))
     # STATUS & EVENTS
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def event(self, type_name: str, message: str, style: str = "info"):
+    def event(self, type_name: str, message: str, style: str = "info", end: str = "\n"):
         """Print an event/status message."""
         color_map = {
             "info": self.primary,
@@ -794,7 +794,7 @@ O))         O))       O))))))))
         type_str = f"[{self.muted}]{type_name:<10}[/{self.muted}]"
         msg_str = f"[{color}]{message}[/{color}]"
             
-        self.console.print(f"{bar} {type_str} {msg_str}")
+        self.console.print(f"{bar} {type_str} {msg_str}", end=end)
         
         # Broadcast to Web UI (Centralized)
         # Filter out "Tool" events to avoid duplication with Tool Cards
@@ -1194,7 +1194,7 @@ class UI:
         sys.stdout.flush()
 
     @staticmethod
-    def event(type_name: str, title: str, style: str = "info"):
+    def event(type_name: str, title: str, style: str = "info", end: str = "\n"):
         """Print event in OpenCode style."""
         
         # CRITICAL: Suppress Main Agent events if Coder TUI is active!
@@ -1221,7 +1221,7 @@ class UI:
         bar = f"[{color}]|[/{color}]"
         type_str = f"[dim] {type_name:<7}[/dim]"
         title_str = f"[{color}]{title}[/{color}]"
-        UI.console.print(f"{bar}{type_str} {title_str}")
+        UI.console.print(f"{bar}{type_str} {title_str}", end=end)
         
         # BRIDGE TO WEB UI
         try:

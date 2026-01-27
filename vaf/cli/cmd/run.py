@@ -776,6 +776,22 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
         if hasattr(agent, 'state_registry'):
             session_mgr.state_registry = agent.state_registry
         
+        # CRITICAL FIX: Sync Agent's internal session ID with the User's Session ID
+        # The Agent generates a random UUID in __init__, but we want it to use the persistent session ID
+        # so that WebSocket updates (which use agent._session_id) match what the Frontend expects.
+        try:
+            # 1. Provide a way to use the existing session ID if possible
+            if hasattr(agent, '_session_id') and agent._session_id != current_session.id:
+                # Unregister the temporary random session ID
+                agent._unregister_session()
+                # Update to the real session ID
+                agent._session_id = current_session.id 
+                # Register the real session ID
+                agent._register_session()
+        except Exception as e:
+            if verbose:
+                tui.error(f"Failed to sync session ID: {e}")
+        
         # Initialize backend (local or API)
         if agent.provider == "local":
             # Download model first (if needed) - this shows tqdm progress bar
@@ -945,9 +961,13 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                         else:
                             tui.warning("Dashboard launch taking longer than expected...")
                     except Exception as web_e:
-                        tui.warning(f"Web UI Frontend failed: {web_e}")
+                        tui.error(f"Web UI Frontend failed: {web_e}")
+                        import traceback
+                        traceback.print_exc()
             except Exception as e:
-                tui.warning(f"Web UI Startup warning: {e}")
+                tui.error(f"Web UI Startup FAILED: {e}")
+                import traceback
+                traceback.print_exc()
 
     except Exception as e:
         tui.error(f"Startup failed: {e}")
@@ -1049,7 +1069,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     "used": used,
                     "total": total,
                     "percent": 0.0,
-                    "api": agent.api_backend
+                    "api": bool(agent.api_backend)  # Convert to boolean for JSON serialization
                 }
                 
                 if agent.api_backend:
@@ -1197,6 +1217,13 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                         raw_input = task.input_text
                         is_web_input = True
                         
+                        # CRITICAL: Sync agent session ID with current session
+                        # This ensures WebSocket updates go to the correct session
+                        if hasattr(agent, '_session_id') and agent._session_id != current_session.id:
+                            agent._unregister_session()
+                            agent._session_id = current_session.id
+                            agent._register_session()
+                        
                         # Handle System Commands from Web UI
                         if str(raw_input).startswith("__CMD__"):
                             try:
@@ -1314,6 +1341,12 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                     
                                 raw_input = task.input_text
                                 is_web_input = True
+                                
+                                # CRITICAL: Sync agent session ID with current session
+                                if hasattr(agent, '_session_id') and agent._session_id != current_session.id:
+                                    agent._unregister_session()
+                                    agent._session_id = current_session.id
+                                    agent._register_session()
                                 
                                 # Handle System Commands (Copy logic from above)
                                 if str(raw_input).startswith("__CMD__"):
@@ -1514,7 +1547,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
             
             if user_input.lower() in ("s", "settings"):
                 from vaf.cli.cmd import settings
-                settings.main_menu(agent=agent)
+                reload_needed = settings.main_menu(agent=agent)
                 
                 # CRITICAL FIX: Restore original stdout handles
                 # Libraries like 'inquirer' (via colorama) wrap stdout, confusing prompt_toolkit.
@@ -1525,12 +1558,15 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 tui.clear()
                 tui.logo_minimal()
                 
-                tui.event("System", "Reloading...", style="dim")
-                agent.shutdown()
-                agent = Agent(verbose=verbose)
-                global_agent = agent
-                agent.load_model()
-                agent.init_chat()
+                if reload_needed:
+                    tui.event("System", "Applying changes, reloading agent...", style="warning")
+                    agent.shutdown()
+                    agent = Agent(verbose=verbose)
+                    global_agent = agent
+                    agent.load_model()
+                    agent.init_chat()
+                else:
+                    tui.event("System", "Settings updated", style="dim")
                 continue
             
             if user_input.lower() in ("c", "model"):
@@ -1543,7 +1579,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 tui.clear()
                 tui.logo_minimal()
                 
-                tui.event("System", "Reloading...", style="dim")
+                tui.event("System", "Applying changes, reloading agent...", style="warning")
                 agent.shutdown()
                 agent = Agent(verbose=verbose)
                 global_agent = agent
@@ -2063,8 +2099,18 @@ def _process_agent_message(agent, user_input: str, tui, session):
         # Convert Terminal-Styling to Web-Styling (XML)
         clean_text = convert_rich_to_xml(current_full_text)
         
+        # UI FIX: Strip leading whitespace strings to prevent large gaps/bubbles
+        # This handles "\n\nText" AND "<think>...</think>\n\nText"
+        # Regex explanation:
+        # ^(\s*<think>[\s\S]*?</think>)? : Group 1 (Optional) matches <think> block (and prec space)
+        # \s+                            : Matches the whitespace FOLLOWING it (or start)
+        def _cleanup_ws(m): return m.group(1) or ""
+        clean_text = re.sub(r'^(\s*<think>[\s\S]*?</think>)?\s+', _cleanup_ws, clean_text)
+        
         # Force update to ensure frontend knows we are answering
-        web_iface.emit_agent_message("assistant", clean_text, session_id=session.id)
+        # Only emit if there is meaningful content (prevent empty bubbles)
+        if clean_text and clean_text.strip():
+            web_iface.emit_agent_message("assistant", clean_text, session_id=session.id)
         
         # CRITICAL: Suppress Main Agent output if Coder TUI is active!
         # This prevents "leaking stdout" that breaks the TUI layout
@@ -2179,8 +2225,12 @@ def _process_agent_message(agent, user_input: str, tui, session):
                 # Ensure it's in the response parts for session saving
                 response_parts.append(str(result_text))
             elif (not response_parts) or (not has_real_content):
-                response_parts = [str(result_text)]
-                tui.console.print(str(result_text), markup=True, style=f"bold {tui.primary}")
+                # Fallback print DISABLED to prevent duplicate output.
+                # The agent.py streaming loop already handles printing to stdout (white).
+                # This fallback was causing double printing (Blue) if response_parts logic failed.
+                pass 
+                # response_parts = [str(result_text)]
+                # tui.console.print(str(result_text), markup=True, style=f"bold {tui.primary}")
         tui.newline()
         
         # Save response to session (USE CLEAN TEXT!)

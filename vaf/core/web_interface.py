@@ -206,7 +206,7 @@ class WebInterfaceManager:
         Thread-safe push update with session scoping.
         """
         # DEBUG: Log every update to console
-        # print(f"[WebUI] Update: {data.get('type')} (sess: {session_id})")
+        # print(f"🔍 [WebUI] Update: {data.get('type')} (sess: {session_id})")
         
         if session_id:
             data['sessionId'] = session_id

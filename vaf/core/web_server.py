@@ -392,8 +392,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         from vaf.core.task_queue import TaskQueue
                         tq = TaskQueue()
                         
-                        # Get session ID for this connection
-                        session_id = manager.get_session_for_connection(websocket)
+                        # Get session ID: prefer from message, then connection, then fallback
+                        session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
                         if not session_id:
                             # Fallback if not subscribed yet (should be rare)
                             session_id = "web-default"

@@ -1005,7 +1005,8 @@ class Agent:
                         # Debug info (only if verbose)
                         # print(f"Loaded tool: {instance.name}")
             except Exception as e:
-                pass # Silently ignore broken plugins for stability
+                print(f"[ERROR] Failed to load tool {name}: {e}")
+                pass # Still ignore for stability, but report error
         
         # Manually register Context Tools for Main Agent
         try:
@@ -1026,6 +1027,9 @@ class Agent:
         except Exception as e:
             if self.verbose:
                 print(f"[WARN] Failed to load context tools: {e}")
+
+        # DEBUG: Always print active tools during this debugging session
+        print(f"[DEBUG] Active Tools: {list(self.tools.keys())}")
 
         # Track active async sub-agent tasks
         self._async_subagent_tasks = {}  # task_id -> {"agent_type": str, "task": str, "started_at": datetime}
@@ -3170,55 +3174,122 @@ class Agent:
             # API Backend Path (OpenAI, Anthropic, DeepSeek, Google, OpenRouter)
             if self.api_backend:
                 try:
+                    # CRITICAL: Sanitize history before API call
+                    # Fix any old tool_calls with missing/null type field
+                    for msg in self.history:
+                        if isinstance(msg, dict) and "tool_calls" in msg:
+                            for tc in msg["tool_calls"]:
+                                # Fix missing 'type'
+                                if isinstance(tc, dict) and ("type" not in tc or tc.get("type") is None):
+                                    tc["type"] = "function"
+                                # Fix missing 'id'
+                                if isinstance(tc, dict) and ("id" not in tc or tc.get("id") is None):
+                                    import os
+                                    tc["id"] = f"call_{os.urandom(4).hex()}"
+                    
+                    
                     # Prepare messages
                     prepared_messages = self._prepare_messages(self.history)
                     
                     # Disable tools if requested
                     current_tools = self.TOOLS if not disable_tools else None
-                    
+                    tool_choice = "auto" if current_tools else "none" # Default to auto if tools, none otherwise
+
                     first_token = True
+                    import json
+                    import sys
+                    from html import escape
+                    tool_call_accumulator = {}
+
                     for chunk in self.api_backend.chat_completion(
                         messages=prepared_messages,
                         temperature=current_temp,
                         max_tokens=8192,
                         stream=True,
-                        tools=current_tools
+                        tools=current_tools,
+                        tool_choice=tool_choice  # Pass tool_choice if set
                     ):
-                        # Handle JSON chunks (Tools or Finish Reason)
+                        if not chunk: continue
+                        
+                        # Check for error/warning messages from backend
+                        if isinstance(chunk, str) and chunk.startswith("[Error]"):
+                            UI.error(chunk)
+                            content_for_history = chunk
+                            break
+                            
+                        # Try to parse as internal control message (Tools/Status)
+                        is_control_msg = False
                         if chunk.startswith("{"):
                             try:
                                 data = json.loads(chunk)
-                                
-                                # Handle Finish Reason (e.g. "length")
-                                if "finish_reason" in data:
-                                    if data["finish_reason"] == "length":
-                                        auto_continue = True
-                                        UI.event("System", "Response cut off - Auto-continuing...", style="dim")
-                                
-                                # Handle Tools
-                                elif "tool_calls" in data:
-                                    for tc in data["tool_calls"]:
-                                        tool_calls_detected.append(tc)
-                                elif "tool_use" in data:
-                                    # Anthropic format conversion
-                                    tool_calls_detected.append({
-                                        "function": {
-                                            "name": data["tool_use"].get("name"),
-                                            "arguments": json.dumps(data["tool_use"].get("input", {}))
-                                        }
-                                    })
+                                if isinstance(data, dict) and any(k in data for k in ["tool_calls", "finish_reason", "tool_use"]):
+                                    is_control_msg = True
+                                    
+                                    # Handle Finish Reason
+                                    if "finish_reason" in data:
+                                        if data["finish_reason"] == "length":
+                                            UI.event("System", "Response cut off - Auto-continuing...", style="dim")
+                                    
+                                    # Handle Tool Calls (Streaming Aggregation)
+                                    elif "tool_calls" in data:
+                                        for tc in data["tool_calls"]:
+                                            idx = tc.get("index", 0)
+                                            if idx not in tool_call_accumulator:
+                                                tool_call_accumulator[idx] = {
+                                                    "index": idx,
+                                                    "id": tc.get("id"),
+                                                    "type": tc.get("type", "function"),
+                                                    "function": {"name": tc.get("function", {}).get("name"), "arguments": ""}
+                                                }
+                                            if tc.get("id"): tool_call_accumulator[idx]["id"] = tc.get("id")
+                                            func_data = tc.get("function", {})
+                                            if func_data.get("name"): tool_call_accumulator[idx]["function"]["name"] = func_data.get("name")
+                                            if func_data.get("arguments"): tool_call_accumulator[idx]["function"]["arguments"] += func_data.get("arguments")
+
+                                    elif "tool_use" in data:
+                                        # Anthropic format
+                                        tool_calls_detected.append({
+                                            "id": data["tool_use"].get("id", f"call_{os.urandom(4).hex()}"),
+                                            "type": "function",
+                                            "function": {
+                                                "name": data["tool_use"].get("name"),
+                                                "arguments": json.dumps(data["tool_use"].get("input", {}))
+                                            }
+                                        })
                             except json.JSONDecodeError:
-                                pass
-                        else:
-                            # Regular content
+                                pass # Not valid JSON, treat as content
+                        
+                        # If not a control message, treat as regular content
+                        if not is_control_msg:
+                            full_response += chunk
+                            
+                            # Live Update (TUI)
                             if first_token:
-                                # Don't send empty string, just mark as not first
+                                UI.event("Response", "", style="bold green", end="")
                                 first_token = False
                             
+                            # Stream to WebUI / Host Callback
                             if stream_callback:
-                                stream_callback(f"{escape(chunk)}")
-                            full_response += chunk
+                                # Delegate printing and web streaming to the callback
+                                # Pass RAW chunk so <think> tags can be parsed by the TUI
+                                stream_callback(chunk)
+                            else:
+                                # Fallback for standalone usage: Print directly
+                                print(escape(chunk), end="")
+                                sys.stdout.flush()
+                            
+                            # Also populate full_content for downstream checks
                             full_content += chunk
+
+                    # POST-LOOP: Convert accumulator to list
+                    for idx, tc_data in sorted(tool_call_accumulator.items()):
+                        # Ensure ID and Type
+                        if not tc_data.get("id"): 
+                            tc_data["id"] = f"call_{os.urandom(4).hex()}"
+                        if not tc_data.get("type"): 
+                            tc_data["type"] = "function"
+                            
+                        tool_calls_detected.append(tc_data)
                     
                     if stream_callback: stream_callback("\n")
                     
@@ -3841,14 +3912,29 @@ class Agent:
                         result = error_msg
                         # Log error for debugging
                         UI.error(f"Tool {function_name} failed: {e}")
-
+                        # API Spam Prevention: Wait 2s on error
+                        import time
+                        time.sleep(2)
+                        
                     # Web UI Event: Tool End
                     try:
                         from vaf.core.web_interface import get_web_interface
                         from vaf.core.subagent_ipc import get_current_session_id
                         r_str = str(result) if result else ""
                         is_err = "error" in r_str.lower() or "failed" in r_str.lower()
+                        
+                        # Use is_err to trigger delay if not already triggered by exception
+                        # (e.g. tool returned "Error: ..." string without crashing)
+                        if is_err and not isinstance(result, str): # Simple check, exact logic varies
+                             # But simpler: just check if we haven't slept yet. 
+                             # Actually, let's just make sure we slow down loops on ANY error status
+                             pass 
+                             
                         get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=r_str, session_id=get_current_session_id())
+                        
+                        if is_err and "Error executing tool" not in r_str: # Avoid double sleep if exception already slept
+                             import time
+                             time.sleep(2)
                     except Exception: pass
 
                     # Check if this is an async sub-agent task BEFORE adding to history

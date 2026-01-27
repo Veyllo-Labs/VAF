@@ -1114,6 +1114,9 @@ $;+xxxx+++xxxxxxxx+++xxxxx;;$
 
 
 def main_menu(agent=None):
+    # Track if reload is required (provider/model changes)
+    reload_required = False
+    
     while True:
         UI.clear()
         UI.print()
@@ -1230,7 +1233,7 @@ def main_menu(agent=None):
         ]
         answers = inquirer.prompt(questions)
         if not answers:
-            break
+            return reload_required  # Return reload flag if user cancels
         
         action = answers['action']
         
@@ -1263,8 +1266,10 @@ def main_menu(agent=None):
             
         if action == 'provider':
             api_provider_menu()
+            reload_required = True  # Provider change requires reload
         elif action == 'api_model':
             select_api_model_menu()
+            reload_required = True  # Model change requires reload
         elif action == 'subagent_provider':
             subagent_provider_menu()
         elif action == 'persist':
@@ -1275,13 +1280,14 @@ def main_menu(agent=None):
             time.sleep(1.5)
             
         if action == 'exit':
-            break
+            return reload_required  # Return reload flag on exit
         elif action == 'context':
             set_context_limit_menu()
         elif action == 'search':
             search_models_menu()
         elif action == 'list':
             select_model_menu()
+            reload_required = True  # Model selection requires reload
         elif action == 'tools':
             show_tools_menu(agent)
         elif action == 'theme':

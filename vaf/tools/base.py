@@ -99,25 +99,50 @@ class BaseTool(ABC):
         provider = config.get("provider", "local")
         model = config.get("model", "")
         
+        # 0. Validate Model
+        if not model:
+            # Fallback: Try to get default based on provider
+            if provider == "openai": model = "gpt-4o"
+            elif provider == "anthropic": model = "claude-3-5-sonnet-20240620"
+            elif provider == "google": model = "gemini-1.5-pro"
+            
+            if not model:
+                print(f"[WARN] Tool {self.name}: No model configured. Skipping LLM query.")
+                return None
+        
         # 1. API Backend Mode
         if provider != "local":
-            try:
+            def _execute_query(target_model):
                 from vaf.core.api_backend import APIBackendManager
                 backend = APIBackendManager(provider)
                 response_text = ""
-                # API calls are streamed, consume generator
                 for chunk in backend.chat_completion(
                     messages=messages, 
                     temperature=temperature, 
                     max_tokens=max_tokens, 
                     stream=True, 
-                    model=model
+                    model=target_model
                 ):
-                     # Simple filtering of JSON tool calls if they leak (unlikely here)
                      if not chunk.strip().startswith("{"): 
                          response_text += chunk
                 return response_text.strip()
-            except Exception:
+
+            try:
+                return _execute_query(model)
+            except Exception as e:
+                err_str = str(e).lower()
+                # Self-Healing: If Invalid Model (400) or Model Not Found (404), try fallback
+                if "400" in err_str or "404" in err_str or "invalid model" in err_str:
+                    fallback = "gpt-4o" if provider == "openai" else ("claude-3-5-sonnet-20240620" if provider == "anthropic" else "gemini-1.5-pro")
+                    if fallback and fallback != model:
+                        print(f"[WARN] Tool {self.name}: API Error with model '{model}'. Retrying with fallback '{fallback}'...")
+                        try:
+                            return _execute_query(fallback)
+                        except Exception as e2:
+                            print(f"[ERROR] Tool {self.name}: Fallback failed too: {e2}")
+                            return None
+                
+                print(f"[ERROR] Tool {self.name}: Query failed: {e}")
                 return None
         
         # 2. Local Server Mode (Fallback)

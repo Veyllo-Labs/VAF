@@ -34,6 +34,7 @@ type Message = {
 type Session = {
     id: string;
     title: string;
+    messageCount?: number;
 };
 
 // Helper to parse and merge thinking blocks
@@ -886,7 +887,29 @@ export default function VAFDashboard() {
                                         {!editingId && (
                                             <>
                                                 <Edit2 size={12} className="text-gray-400 hover:text-gray-900" onClick={(e) => { e.stopPropagation(); startEditing(s); }} />
-                                                <Trash2 size={12} className="text-gray-400 hover:text-red-600" onClick={(e) => { e.stopPropagation(); if (confirm('Delete?')) ws?.send(JSON.stringify({ type: 'delete_session', id: s.id })); }} />
+                                                <Trash2 size={12} className="text-gray-400 hover:text-red-600" onClick={(e) => { 
+                                                    e.stopPropagation(); 
+                                                    if (confirm('Delete?')) {
+                                                        ws?.send(JSON.stringify({ type: 'delete_session', id: s.id }));
+                                                        // If we are deleting the current session, find a new home
+                                                        if (currentSessionId === s.id) {
+                                                            const remaining = sessions.filter(sess => sess.id !== s.id);
+                                                            // Prefer an empty session
+                                                            const empty = remaining.find(sess => (sess.messageCount || 0) === 0);
+                                                            
+                                                            if (empty) {
+                                                                handleSessionSwitch(empty.id);
+                                                            } else if (remaining.length > 0) {
+                                                                handleSessionSwitch(remaining[0].id);
+                                                            } else {
+                                                                // Truly empty list, trigger new session
+                                                                setTimeout(() => {
+                                                                    ws?.send(JSON.stringify({ type: 'new_session' }));
+                                                                }, 100);
+                                                            }
+                                                        }
+                                                    }
+                                                }} />
                                             </>
                                         )}
                                     </div>

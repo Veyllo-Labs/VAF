@@ -111,9 +111,8 @@ async def websocket_endpoint(websocket: WebSocket):
         sessions = session_mgr.list(limit=20)
         await websocket.send_json({
             "type": "session_list", 
-            "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"]} for s in sessions]
+            "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
         })
-
         # Send cached stats if available
         if manager.last_stats:
              await websocket.send_json({
@@ -134,9 +133,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     sessions = session_mgr.list(limit=20)
                     await websocket.send_json({
                         "type": "session_list", 
-                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"]} for s in sessions]
-                    })
-                
+                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
+                    })                
                 elif type == "load_session":
                     sid = cmd.get("id")
                     try:
@@ -212,7 +210,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     sessions = session_mgr.list(limit=20)
                     await manager.broadcast({
                         "type": "session_list", 
-                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"]} for s in sessions]
+                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
                     })
 
                 elif type == "new_session":
@@ -231,9 +229,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     
                     await websocket.send_json({
                         "type": "session_list", 
-                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"]} for s in sessions]
-                    })
-                    
+                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
+                    })                    
                     # Clear frontend chat
                     await websocket.send_json({
                         "type": "history_update",
@@ -253,7 +250,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         sessions = session_mgr.list(limit=20)
                         await manager.broadcast({
                             "type": "session_list", 
-                            "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"]} for s in sessions]
+                            "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
                         })
 
                 elif type == "get_config":

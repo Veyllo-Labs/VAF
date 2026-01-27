@@ -874,6 +874,81 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
         except ImportError:
             pass
 
+        # WEB UI STARTUP (ROBUST) - Integrated into Boot Sequence
+        # ═══════════════════════════════════════════════════════════════
+        if web_enabled:
+            try:
+                # Debug log
+                log_file = os.path.join(os.getcwd(), "logs", "web_debug.log")
+                os.makedirs(os.path.dirname(log_file), exist_ok=True)
+                with open(log_file, "w") as f:
+                    f.write(f"Starting Web UI at {datetime.now()}\n")
+
+                # 1. Start Python Backend (FastAPI + WebSocket)
+                tui.event("WebUI", "Starting Backend API (Port 8001)...", style="dim")
+                start_background_server(port=8001)
+                
+                # 2. Check for Next.js frontend and start it
+                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+                web_dir = os.path.join(base_dir, "web")
+                pkg_file = os.path.join(web_dir, "package.json")
+                
+                if os.path.exists(web_dir) and os.path.exists(pkg_file):
+                    # Check for node/npm
+                    try:
+                        import shutil
+                        npm_path = shutil.which("npm")
+                        if not npm_path:
+                            raise FileNotFoundError("npm not found in PATH")
+                        
+                        # Install deps if needed
+                        if not os.path.exists(os.path.join(web_dir, "node_modules")):
+                             tui.event("WebUI", "Installing npm dependencies...", style="warning")
+                             subprocess.run([npm_path, "install"], cwd=web_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        
+                        # FIND FREE PORT (Start at 3000)
+                        import socket
+                        def is_port_in_use(port):
+                            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                                return s.connect_ex(('localhost', port)) == 0
+
+                        port = 3000
+                        while is_port_in_use(port):
+                            port += 1
+                        
+                        tui.event("WebUI", f"Launching Dashboard on Port {port}...", style="dim")
+                        
+                        # Start Next.js dev server with specific port
+                        cmd = [npm_path, "run", "dev", "--", "-p", str(port)]
+                        
+                        # Start process
+                        npm_process = subprocess.Popen(
+                            cmd, 
+                            cwd=web_dir, 
+                            stdout=open(log_file, "a"),
+                            stderr=subprocess.STDOUT
+                        )
+                        
+                        # WAIT FOR SERVER TO BE READY (max 15s)
+                        dashboard_url = f"http://localhost:{port}"
+                        server_ready = False
+                        for _ in range(30): # 15 seconds
+                            try:
+                                requests.get(dashboard_url, timeout=0.5)
+                                server_ready = True
+                                break
+                            except:
+                                time.sleep(0.5)
+                        
+                        if server_ready:
+                            tui.event("WebUI", f"Dashboard active at {dashboard_url}", style="success")
+                        else:
+                            tui.warning("Dashboard launch taking longer than expected...")
+                    except Exception as web_e:
+                        tui.warning(f"Web UI Frontend failed: {web_e}")
+            except Exception as e:
+                tui.warning(f"Web UI Startup warning: {e}")
+
     except Exception as e:
         tui.error(f"Startup failed: {e}")
         sys.exit(1)
@@ -883,108 +958,9 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     tui.logo()
     tui.newline()
 
-    # WEB UI STARTUP (ROBUST)
+    # (Previous Web UI startup block removed from here)
     # ═══════════════════════════════════════════════════════════════
-    if web_enabled:
-        try:
-            # Debug log
-            log_file = os.path.join(os.getcwd(), "logs", "web_debug.log")
-            os.makedirs(os.path.dirname(log_file), exist_ok=True)
-            with open(log_file, "w") as f:
-                f.write(f"Starting Web UI at {datetime.now()}\n")
 
-            # 1. Start Python Backend (FastAPI + WebSocket)
-            console.print("[dim]WebUI: Starting Backend API (Port 8001)...[/dim]")
-            start_background_server(port=8001)
-            
-            # 2. Check for Next.js frontend and start it
-            # Absolute path to web dir (4 levels up from this file's dir: vaf/cli/cmd/run.py -> vaf/cli/cmd -> vaf/cli -> vaf -> root)
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-            web_dir = os.path.join(base_dir, "web")
-            pkg_file = os.path.join(web_dir, "package.json")
-            
-            with open(log_file, "a") as f:
-                f.write(f"Base Dir: {base_dir}\n")
-                f.write(f"Web Dir: {web_dir}\n")
-            
-            if os.path.exists(web_dir) and os.path.exists(pkg_file):
-                # Check for node/npm
-                try:
-                    # Use shutil.which to find npm in PATH (works with nvm)
-                    import shutil
-                    npm_path = shutil.which("npm")
-                    if not npm_path:
-                        raise FileNotFoundError("npm not found in PATH")
-                    
-                    # Verify npm works
-                    subprocess.run([npm_path, "--version"], capture_output=True, check=True)
-                    
-                    # Install deps if needed
-                    if not os.path.exists(os.path.join(web_dir, "node_modules")):
-                         console.print("[yellow]WebUI: Installing npm dependencies...[/yellow]")
-                         subprocess.run([npm_path, "install"], cwd=web_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    
-                    # FIND FREE PORT (Start at 3000)
-                    import socket
-                    def is_port_in_use(port):
-                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                            return s.connect_ex(('localhost', port)) == 0
-
-                    port = 3000
-                    while is_port_in_use(port):
-                        port += 1
-                    
-                    with open(log_file, "a") as f:
-                        f.write(f"Selected Port: {port}\n")
-
-                    console.print(f"[dim]WebUI: Launching Dashboard on Port {port}...[/dim]")
-                    
-                    # Start Next.js dev server with specific port
-                    cmd = [npm_path, "run", "dev", "--", "-p", str(port)]
-                    
-                    # Start process
-                    npm_process = subprocess.Popen(
-                        cmd, 
-                        cwd=web_dir, 
-                        stdout=open(log_file, "a"),
-                        stderr=subprocess.STDOUT
-                    )
-                    
-                    # WAIT FOR SERVER TO BE READY (max 15s)
-                    dashboard_url = f"http://localhost:{port}"
-                    server_ready = False
-                    for _ in range(30): # 15 seconds (30 * 0.5s)
-                        try:
-                            # Use a short timeout for the request itself
-                            r = requests.get(dashboard_url, timeout=0.5)
-                            if r.status_code == 200:
-                                server_ready = True
-                                break
-                        except:
-                            time.sleep(0.5)
-                    
-                    if server_ready:
-                        console.print(f"[green]WebUI: Dashboard active at {dashboard_url}[/green]")
-                        import webbrowser
-                        webbrowser.open(dashboard_url)
-                    else:
-                        console.print(f"[yellow]WebUI: Dashboard started but not responding yet. Check {dashboard_url}[/yellow]")
-                        import webbrowser
-                        webbrowser.open(dashboard_url)
-                    
-                except (FileNotFoundError, subprocess.CalledProcessError) as e:
-                     with open(log_file, "a") as f:
-                        f.write(f"NPM Error: {e}\n")
-                     console.print("[yellow]WebUI: npm not found. Dashboard disabled.[/yellow]")
-            else:
-                 console.print(f"[dim]WebUI: Dashboard folder not found at {web_dir}[/dim]")
-                 
-        except Exception as e:
-            console.print(f"[red]WebUI Error: {e}[/red]")
-            try:
-                with open("logs/web_error.log", "a") as f:
-                    f.write(f"{datetime.now()}: {str(e)}\n")
-            except: pass
 
     # Handle initial message
     if message:

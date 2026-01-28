@@ -231,47 +231,79 @@ def create_windows_shortcut():
     print("🪟 Creating Windows Desktop Shortcut...")
     
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    # We use pythonw.exe to run without a console window if possible,
-    # or just python.exe with the tray script
     
-    # Ideally, we point to start_vaf.bat if we had one, or direct python command
-    # Let's point to the start_vaf.sh equivalent.
-    # Actually, proper way is usually a .bat wrapper or pointing to python.exe with args.
-    
-    target = sys.executable
-    # Using pythonw to hide console? Actually users might want to see it initially, 
-    # but for tray app usually hidden.
-    if "python.exe" in target:
-        target = target.replace("python.exe", "pythonw.exe")
-        
+    # 1. Determine Python Executable (prefer venv)
+    venv_python = os.path.join(base_dir, "venv", "Scripts", "pythonw.exe")
+    if os.path.exists(venv_python):
+        target = venv_python
+    else:
+        target = sys.executable
+        if "python.exe" in target:
+            target = target.replace("python.exe", "pythonw.exe")
+
     arguments = "-m vaf.main tray"
     
-    # Icon
-    icon_path = os.path.join(base_dir, "web", "public", "logo.png")
-    # Windows shortcuts prefer .ico. If only png exists, it might not pick it up well.
-    # But usually it falls back or we can convert if pillow is there.
-    # For robust dependency-free, we just try to point to it.
+    # 2. Icon Handling
+    # Check multiple locations
+    logo_candidates = [
+        os.path.join(base_dir, "vaf", "media", "logo_original.png"),
+        os.path.join(base_dir, "web", "public", "logo.png")
+    ]
     
+    logo_path = None
+    for cand in logo_candidates:
+        if os.path.exists(cand):
+            logo_path = cand
+            break
+            
+    icon_path = logo_path # Fallback
+    
+    # Try to convert to .ico for Windows (Shortcuts need .ico)
+    if logo_path:
+        try:
+            from PIL import Image
+            ico_path = os.path.join(base_dir, "vaf", "media", "app_icon.ico")
+            img = Image.open(logo_path)
+            img.save(ico_path, format='ICO', sizes=[(256, 256)])
+            icon_path = ico_path
+            print(f"✅ Converted icon to .ico: {icon_path}")
+        except ImportError:
+            print("⚠️  Pillow not installed, using PNG as icon (might not work on all Windows versions).")
+        except Exception as e:
+            print(f"⚠️  Icon conversion failed: {e}")
+
     desktop = os.path.join(os.environ["USERPROFILE"], "Desktop")
     shortcut_path = os.path.join(desktop, "VAF Agent.lnk")
     working_dir = base_dir
 
+    # PowerShell script to create shortcut
+    # We create TWO shortcuts: Desktop and Start Menu
+    start_menu = os.path.join(os.environ["APPDATA"], "Microsoft", "Windows", "Start Menu", "Programs")
+    shortcut_paths = {
+        "Desktop": os.path.join(desktop, "VAF Agent.lnk"),
+        "StartMenu": os.path.join(start_menu, "VAF Agent.lnk")
+    }
+
     ps_script = f"""
     $WshShell = New-Object -comObject WScript.Shell
-    $Shortcut = $WshShell.CreateShortcut("{shortcut_path}")
+    """
+    
+    for name, path in shortcut_paths.items():
+        ps_script += f"""
+    $Shortcut = $WshShell.CreateShortcut("{path}")
     $Shortcut.TargetPath = "{target}"
     $Shortcut.Arguments = "{arguments}"
     $Shortcut.WorkingDirectory = "{working_dir}"
     $Shortcut.IconLocation = "{icon_path}"
     $Shortcut.Description = "VAF AI Agent"
     $Shortcut.Save()
+    Write-Host "✅ Created {name} Shortcut: {path}"
     """
     
     try:
         subprocess.run(["powershell", "-Command", ps_script], check=True)
-        print(f"✅ Shortcut created at: {shortcut_path}")
     except Exception as e:
-        print(f"❌ Failed to create shortcut: {e}")
+        print(f"❌ Failed to create shortcuts: {e}")
 
 
 if __name__ == "__main__":

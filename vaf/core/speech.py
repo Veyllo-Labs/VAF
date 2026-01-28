@@ -60,6 +60,7 @@ class SpeechManager:
 
         # Base paths
         self.base_dir = Path(__file__).parents[2]
+        self.media_dir = Path(__file__).parents[1] / "media"
         self.bin_dir = self.base_dir / "bin" / "piper"
         self.models_dir = self.base_dir / "models" / "voices"
         self.bin_dir.mkdir(parents=True, exist_ok=True)
@@ -417,7 +418,7 @@ $player.Close()
         """Play success sound after successful STT (OS-independent)."""
         try:
             # Find the sound file
-            sound_path = self.base_dir / "sounds" / "sst.mp3"
+            sound_path = self.media_dir / "sounds" / "sst.mp3"
             
             if not sound_path.exists():
                 return  # No sound file, skip silently
@@ -436,7 +437,7 @@ $player.Close()
         """Play sound when agent has finished thinking and answer is ready (OS-independent)."""
         try:
             # Find the sound file
-            sound_path = self.base_dir / "sounds" / "tts01.mp3"
+            sound_path = self.media_dir / "sounds" / "tts01.mp3"
             
             if not sound_path.exists():
                 return  # No sound file, skip silently

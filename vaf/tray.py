@@ -1,6 +1,16 @@
 
 import os
 import sys
+
+# CRITICAL FIX: Patch stdout/stderr/stdin IMMEDIATELY for pythonw (no console)
+# This prevents crashes in logging/uvicorn which assume sys.stdout exists.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, 'w')
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, 'w')
+if sys.stdin is None:
+    sys.stdin = open(os.devnull, 'r')
+
 import time
 import threading
 import signal
@@ -12,6 +22,7 @@ from vaf.core.backend import ServerManager
 from vaf.core.web_server import app
 from vaf.core.tray_context import TrayContext
 import uvicorn
+from vaf.startup_logger import log, clear_log
 try:
     from PIL import Image, ImageDraw
 except ImportError:
@@ -42,6 +53,7 @@ server_thread = None
 
 def check_singleton():
     """Ensure only one instance runs. If another instance is running, notify it to open browser."""
+    log("Tray", "Checking singleton status...")
     import socket
     try:
         # Try to bind to port 8002 to ensure singleton
@@ -50,8 +62,10 @@ def check_singleton():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("127.0.0.1", 8002))
         s.listen(5)
+        log("Tray", "Singleton check passed (Port 8002 bound)")
         return s
-    except socket.error:
+    except socket.error as e:
+        log("Tray", f"Singleton check failed: {e}")
         # Port is busy, another instance is running.
         # Try to notify it.
         try:
@@ -60,14 +74,17 @@ def check_singleton():
             client.sendall(b"ACTIVATE")
             client.close()
             logger.info("[Tray] Sent ACTIVATE signal to existing instance.")
+            log("Tray", "Sent ACTIVATE signal to existing instance")
         except Exception as e:
             logger.error(f"[Tray] Failed to notify existing instance: {e}")
+            log("Tray", f"Failed to notify existing instance: {e}")
         
         print("VAF is already running. Notifying existing instance...")
         return None
 
 def command_listener(lock_socket):
     """Listens for 'ACTIVATE' signals from other instances."""
+    log("Tray", "Starting command listener thread")
     while not tray_context.should_exit:
         try:
             lock_socket.settimeout(1.0)
@@ -76,6 +93,7 @@ def command_listener(lock_socket):
                 data = conn.recv(1024)
                 if b"ACTIVATE" in data:
                     logger.info("[Tray] Received ACTIVATE signal. Opening Web UI.")
+                    log("Tray", "Received ACTIVATE signal")
                     # Run opening in a thread to not block the listener
                     threading.Thread(target=open_webui, args=(None,), daemon=True).start()
         except socket.timeout:
@@ -83,17 +101,75 @@ def command_listener(lock_socket):
         except Exception as e:
             if not tray_context.should_exit:
                 logger.error(f"[Tray] Command listener error: {e}")
+                log("Tray", f"Command listener error: {e}")
             break
 
 def start_uvicorn():
     """Start uvicorn server in a separate thread."""
+    log("Tray", "start_uvicorn thread started")
     try:
-        uvicorn.run(app, host="127.0.0.1", port=8001, log_level="error")
-    except Exception as e:
-        print(f"Web server failed: {e}")
+        import asyncio
+        import pythoncom
+        import sys
+        import os
 
+        # CRITICAL FIX: Patch stdout/stderr/stdin if running in pythonw (no console)
+        # Uvicorn crashes if sys.stdout is None because it checks .isatty()
+        if sys.stdout is None:
+            sys.stdout = open(os.devnull, 'w')
+        if sys.stderr is None:
+            sys.stderr = open(os.devnull, 'w')
+        if sys.stdin is None:
+            sys.stdin = open(os.devnull, 'r')
+
+        pythoncom.CoInitialize()
+        
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        log("Tray", "Event loop created for Uvicorn")
+        
+        # Check if port 8001 is available
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        result = sock.connect_ex(('127.0.0.1', 8001))
+        sock.close()
+        if result == 0:
+            log("Tray", "CRITICAL WARNING: Port 8001 is ALREADY IN USE! Server will likely fail.")
+        else:
+            log("Tray", "Port 8001 is free.")
+
+        print("[Tray] Starting Uvicorn thread on port 8001 (0.0.0.0)...")
+        log("Tray", "Initializing Uvicorn Config (0.0.0.0:8001)...")
+        
+        # Listen on 0.0.0.0 to support both IPv4 (127.0.0.1) and IPv6 (::1/localhost)
+        # log_level="info" to see startup errors
+        # use_colors=False to avoid further isatty checks
+        config = uvicorn.Config(app, host="0.0.0.0", port=8001, log_level="info", use_colors=False)
+        server = uvicorn.Server(config)
+        
+        # Manually disable signal handlers to prevent main thread interference
+        server.install_signal_handlers = lambda: None
+        
+        # Force reset exit flag in case it was set by signal handlers during init
+        server.should_exit = False
+        
+        log("Tray", "Running Uvicorn server (serve)...")
+        try:
+            loop.run_until_complete(server.serve())
+        except Exception as serve_error:
+            log("Tray", f"Uvicorn serve() failed: {serve_error}")
+            raise serve_error
+            
+        log("Tray", "Uvicorn server stopped gracefully (loop ended)")
+        log("Tray", "Uvicorn server stopped gracefully")
+        
     except Exception as e:
-        print(f"Web server failed: {e}")
+        print(f"Web server thread failed: {e}")
+        logger.error(f"Web server failed: {e}")
+        log("Tray", f"CRITICAL: Web server thread crashed: {e}")
+        import traceback
+        log("Tray", traceback.format_exc())
 
 def get_icon_path(status):
     """Generate and return path to an icon for the given status."""
@@ -122,6 +198,7 @@ def get_icon_path(status):
         
     return str(filename)
 
+def check_activity_loop(update_icon_callback):
     """Monitor activity and manage model state."""
     while not tray_context.should_exit:
         is_active = tray_context.is_active()
@@ -241,10 +318,6 @@ def quit_app(icon_or_app):
     """Handle quit action with safety check."""
     # Check if CLI is running (heartbeat active)
     if tray_context.active_websockets > 0 or (time.time() - tray_context.last_heartbeat < 30):
-        # We can't show a native dialog easily cross-platform without blocking
-        # But rumps has alert, pystray doesn't.
-        # For now, we print to console and just exit, or we could use tkinter/osascript for dialogs.
-        # Since requirements asked for confirmation:
         pass 
 
     print("Shutting down...")
@@ -431,22 +504,37 @@ if platform.system() != "Darwin" or "rumps" not in sys.modules:
         return Image.new('RGB', (64, 64), 'red') # Fallback
 
     def run_app():
+        clear_log()
+        log("Tray", "run_app called (Pystray)")
         print("[Tray] run_app called (Pystray)")
         # Singleton Check
         lock_socket = check_singleton()
         if not lock_socket:
             print("[Tray] Singleton check failed (another instance running)")
+            log("Tray", "Singleton check failed - aborting")
             return
 
         print("[Tray] Singleton check passed")
+        log("Tray", "Singleton check passed")
+
+        # Initialize SpeechManager on Main Thread to avoid COM issues
+        try:
+            log("Tray", "Initializing SpeechManager (Main Thread)...")
+            from vaf.core.speech import SpeechManager
+            SpeechManager.get_instance()
+            log("Tray", "SpeechManager initialized")
+        except Exception as e:
+            log("Tray", f"SpeechManager init failed: {e}")
 
         # Start Web Server
         print("[Tray] Starting Web Server thread...")
+        log("Tray", "Spawning Web Server thread...")
         t = threading.Thread(target=start_uvicorn, daemon=True)
         t.start()
 
         # Start Headless Agent Loop (for Web UI processing)
         print("[Tray] Starting Agent thread...")
+        log("Tray", "Spawning Agent thread...")
         from vaf.core.headless_runner import run_headless_agent
         t_agent = threading.Thread(target=run_headless_agent, daemon=True)
         t_agent.start()
@@ -454,20 +542,25 @@ if platform.system() != "Darwin" or "rumps" not in sys.modules:
         # Start Frontend (Next.js) automatically
         def start_frontend_bg():
             print("[Tray] Starting Frontend manager...")
+            log("Tray", "Starting Frontend Manager...")
             from vaf.core.frontend_manager import FrontendManager
-            port = FrontendManager().start_frontend()
+            port = FrontendManager().start_frontend(log_callback=lambda msg, style: log("Frontend", msg))
             if port:
                 print(f"[Tray] Frontend started on port {port}, opening browser...")
+                log("Tray", f"Frontend started on port {port}")
                 import webbrowser
                 webbrowser.open(f"http://localhost:{port}")
             else:
                 print("[Tray] Frontend failed to start.")
+                log("Tray", "Frontend failed to start")
         print("[Tray] Starting Frontend thread...")
         t_fe = threading.Thread(target=start_frontend_bg, daemon=True)
         t_fe.start()
 
         # Menu
         print("[Tray] Initializing Pystray icon...")
+        log("Tray", "Initializing System Tray Icon...")
+        
         menu = pystray.Menu(
             pystray.MenuItem("Status: Idle", lambda icon, item: None, enabled=False),
             pystray.MenuItem("Open WebUI", open_webui, default=True),
@@ -475,21 +568,27 @@ if platform.system() != "Darwin" or "rumps" not in sys.modules:
             pystray.MenuItem("Quit", quit_app)
         )
 
-        icon = pystray.Icon("VAF", create_image("yellow"), "VAF Agent", menu)
+        icon = pystray.Icon("VAF", create_image("idle"), "VAF Agent", menu)
 
         def update_icon(state):
             if state == "active":
-                icon.icon = create_image("green")
-                # Update title? Pystray items are immutable-ish, need specific update method if supported
+                icon.icon = create_image("active")
             elif state == "idle":
-                icon.icon = create_image("yellow")
+                icon.icon = create_image("idle")
             elif state == "persistent":
-                icon.icon = create_image("blue")
-
+                icon.icon = create_image("persistent")
+        
         # Logic Thread
+        log("Tray", "Starting Activity Logic thread...")
         t_logic = threading.Thread(target=check_activity_loop, args=(update_icon,), daemon=True)
         t_logic.start()
 
+        # Command Listener thread (for singleton activation)
+        log("Tray", "Starting Command Listener thread...")
+        t_cmd = threading.Thread(target=command_listener, args=(lock_socket,), daemon=True)
+        t_cmd.start()
+
+        log("Tray", "Entering Pystray main loop (icon.run)")
         icon.run()
 
 if __name__ == "__main__":

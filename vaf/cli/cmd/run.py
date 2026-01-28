@@ -564,7 +564,7 @@ def run(
     classic: bool = typer.Option(False, "--classic", "-c", help="Use classic interface (no TUI)"),
     theme: str = typer.Option(None, "--theme", "-t", help="UI theme"),
     session: str = typer.Option(None, "--session", "-s", help="Load a previous session by ID"),
-    web: bool = typer.Option(True, "--web/--no-web", help="Start Web UI server (default: True)")
+    web: bool = typer.Option(False, "--web/--no-web", help="Start Web UI server (default: False)")
 ):
     """
     Start the VAF Agent interaction loop.

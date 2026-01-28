@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-    reactStrictMode: false, // Prevent double-render in dev for WebSocket safety
-};
+  reactStrictMode: false,
+  images: {
+    unoptimized: true,
+  }
+}
 
-module.exports = nextConfig;
+module.exports = nextConfig

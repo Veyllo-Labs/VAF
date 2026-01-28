@@ -4,7 +4,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 # Configuration
-LOGO_PATH = "/Users/m.c.elsner/VAF/logo_original.png"
+LOGO_PATH = Path(__file__).parent.parent / "vaf" / "media" / "logo_original.png"
 ICON_DIR = Path(os.path.expanduser("~/.vaf/icons"))
 STATUS_COLORS = {
     "active": (46, 204, 113),  # Green

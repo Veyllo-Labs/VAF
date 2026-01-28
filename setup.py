@@ -37,6 +37,10 @@ setup(
     packages=find_packages(),
     python_requires=">=3.10",
     install_requires=requirements,
+    include_package_data=True,
+    package_data={
+        "vaf": ["media/*", "media/**/*"],
+    },
     entry_points={
         "console_scripts": [
             "vaf=vaf.main:main",

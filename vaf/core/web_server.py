@@ -1,8 +1,13 @@
+from vaf.startup_logger import log
+log("WebServer", "Module load started")
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import uvicorn
 import threading
+log("WebServer", "Basic imports done")
+
 from vaf.core.web_interface import get_web_interface
 from vaf.core.session import SessionManager
 from vaf.cli.autosuggest import SmartAutoSuggest
@@ -12,31 +17,42 @@ from pathlib import Path
 from typing import Optional, List
 import logging
 from vaf.core.tray_context import TrayContext
+log("WebServer", "VAF imports done")
 
-log = logging.getLogger("uvicorn")
+log_uvicorn = logging.getLogger("uvicorn")
 
 app = FastAPI(title="VAF Local Server")
 
 # Allow CORS for Next.js dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
-    allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+log("WebServer", "Getting WebInterfaceManager...")
 manager = get_web_interface()
+log("WebServer", "Getting SessionManager...")
 session_mgr = SessionManager()
-autosuggest = SmartAutoSuggest()
+log("WebServer", "SmartAutoSuggest will be lazy loaded...")
+autosuggest = None
 tray_context = TrayContext()
+log("WebServer", "Module initialization complete")
+
+def get_autosuggest():
+    global autosuggest
+    if autosuggest is None:
+        log("WebServer", "Lazy loading SmartAutoSuggest...")
+        autosuggest = SmartAutoSuggest()
+    return autosuggest
 
 @app.on_event("startup")
 async def startup_event():
     # Set the event loop for thread-safe broadcasting
     loop = asyncio.get_running_loop()
     manager.set_server_loop(loop)
-    log.info("VAF Web Interface: Event loop registered")
+    log("WebServer", "VAF Web Interface: Event loop registered")
     
     # Register TTS Callbacks for UI sync
     from vaf.core.speech import SpeechManager
@@ -117,8 +133,16 @@ async def receive_workflow_update(update: WorkflowUpdate):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
-    tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
+    print(f"[WebSocket] Connection attempt from {websocket.client.host}")
+    log("API", f"WebSocket connection attempt from {websocket.client.host}")
+    try:
+        await manager.connect(websocket)
+        print(f"[WebSocket] Connected! Active: {len(manager.active_connections)}")
+        log("API", f"WebSocket connected! Active: {len(manager.active_connections)}")
+        tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
+    except Exception as e:
+        log("API", f"WebSocket handshake failed: {e}")
+        raise e
     try:
         # Send initial session list
         sessions = session_mgr.list(limit=20)
@@ -356,7 +380,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     data = resp.json()
                                     models = [m["id"] for m in data.get("data", [])][:50]  # Limit
                     except Exception as e:
-                        log.error(f"Failed to fetch models for {provider}: {e}")
+                        log("WebServer", f"Failed to fetch models for {provider}: {e}")
                     
                     await websocket.send_json({
                         "type": "api_models_list",
@@ -378,7 +402,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     text = cmd.get("text", "")
                     if text:
                         # Use the internal _get_best_suggestion method
-                        suggestion = autosuggest._get_best_suggestion(text)
+                        suggestion = get_autosuggest()._get_best_suggestion(text)
                         await websocket.send_json({
                             "type": "autosuggest_result",
                             "suggestion": suggestion
@@ -391,7 +415,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     if content or files:
                         # Learn from user input
                         if content:
-                            autosuggest.learn(content)
+                            get_autosuggest().learn(content)
                         
                         # Process files if attached
                         if files:

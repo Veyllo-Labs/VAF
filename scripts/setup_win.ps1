@@ -18,18 +18,22 @@ if (-not (Test-Path "venv")) {
 }
 
 # 3. Install Dependencies
-Write-Host "Installing Dependencies..."
-$env:VIRTUAL_ENV = "$ProjectRoot\venv"
-$env:Path = "$ProjectRoot\venv\Scripts;$env:Path"
+if ($env:VAF_SKIP_PIP_INSTALL -eq "1") {
+    Write-Host "Skipping dependency installation (already running via setup.py)..."
+} else {
+    Write-Host "Installing Dependencies..."
+    $env:VIRTUAL_ENV = "$ProjectRoot\venv"
+    $env:Path = "$ProjectRoot\venv\Scripts;$env:Path"
 
-python -m pip install --upgrade pip
-python -m pip install pywin32 requests beautifulsoup4 rich typer prompt_toolkit pyttsx3 SpeechRecognition pyaudio
-python -m pip install -e .
+    python -m pip install --upgrade pip
+    python -m pip install pywin32 requests beautifulsoup4 rich typer prompt_toolkit pyttsx3 SpeechRecognition pyaudio
+    python -m pip install -e .
 
-try {
-    python -m pip install -r requirements.txt
-} catch {
-    Write-Host "Some optional requirements failed, but core should work."
+    try {
+        python -m pip install -r requirements.txt
+    } catch {
+        Write-Host "Some optional requirements failed, but core should work."
+    }
 }
 
 # 4. Create Shortcuts

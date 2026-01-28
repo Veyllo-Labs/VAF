@@ -25,25 +25,29 @@ source venv/bin/activate
 echo "ℹ️ Python Version: $(python3 --version)"
 
 # 3. Critical Dependencies First (Ensure Agent runs even if AI fails)
-echo "⬇️ Installing Core Audio Components..."
-export LDFLAGS="-L$(brew --prefix portaudio)/lib"
-export CFLAGS="-I$(brew --prefix portaudio)/include"
+if [ "$VAF_SKIP_PIP_INSTALL" = "1" ]; then
+    echo "ℹ️ Skipping dependency installation (already running via setup.py)..."
+else
+    echo "⬇️ Installing Core Audio Components..."
+    export LDFLAGS="-L$(brew --prefix portaudio)/lib"
+    export CFLAGS="-I$(brew --prefix portaudio)/include"
 
-pip install --upgrade pip
-# Explicitly install core libs so they are guaranteed present
-pip install pyttsx3 SpeechRecognition pyaudio requests beautifulsoup4 rich typer prompt_toolkit
+    pip install --upgrade pip
+    # Explicitly install core libs so they are guaranteed present
+    pip install pyttsx3 SpeechRecognition pyaudio requests beautifulsoup4 rich typer prompt_toolkit
 
-# Install the project itself in editable mode (Creates 'vaf' command)
-pip install -e .
+    # Install the project itself in editable mode (Creates 'vaf' command)
+    pip install -e .
 
-# 4. Attempt Full Installation
-echo "⬇️ Installing remaining requirements..."
-# Try to install onnxruntime specifically for Mac if needed
-# (Sometimes just 'onnxruntime' fails on new Pythons/M1 without specific pip version)
-pip install "onnxruntime>=1.16.0" 2>/dev/null || echo "⚠️  Standard ONNX Runtime install failed. Skipping for now (Wake Word might not work)."
+    # 4. Attempt Full Installation
+    echo "⬇️ Installing remaining requirements..."
+    # Try to install onnxruntime specifically for Mac if needed
+    # (Sometimes just 'onnxruntime' fails on new Pythons/M1 without specific pip version)
+    pip install "onnxruntime>=1.16.0" 2>/dev/null || echo "⚠️  Standard ONNX Runtime install failed. Skipping for now (Wake Word might not work)."
 
-# Install requirements but ignore errors to ensure setup finishes
-pip install -r requirements.txt || echo "⚠️  Some optional requirements failed to install (likely onnxruntime). Core functionality should still work."
+    # Install requirements but ignore errors to ensure setup finishes
+    pip install -r requirements.txt || echo "⚠️  Some optional requirements failed to install (likely onnxruntime). Core functionality should still work."
+fi
 
 # 5. Verification
 echo "🔍 Verifying Installation..."

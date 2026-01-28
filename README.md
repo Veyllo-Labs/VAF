@@ -36,56 +36,41 @@ Dependencies are automatically handled during installation.
 git clone https://github.com/Veyllo-Labs/VAF.git
 cd VAF
 
-# Install in editable mode (recommended for developers)
+# Install in editable mode
+# This now AUTOMATICALLY detects your OS and runs the setup scripts!
 pip install -e .
 ```
 
-### 2. Platform-Specific Setup
+### 2. Platform-Specific Setup (Triggered Automatically)
 
-**🪟 Windows (Recommended):**
-1.  **Run the automated setup:**
-    ```powershell
-    powershell -ExecutionPolicy Bypass -File scripts\setup_win.ps1
-    ```
-    *(This creates a virtual environment, installs all dependencies including Windows-specific drivers, and creates **Desktop & Start Menu shortcuts**).*
+**🪟 Windows:**
+`pip install -e .` will automatically run `scripts\setup_win.ps1`.
+*(This creates a virtual environment, installs all dependencies, and generates shortcuts).*
 
-2.  **Start VAF:**
-    - **Desktop Shortcut**: Double-click "VAF Agent" to start in **Background/WebUI mode**.
-    - **Terminal**: Type `vaf run` for the **Interactive TUI**.
+For manual setup or troubleshooting, see [docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md).
 
 **🐧 Linux & 🍎 macOS:**
-1.  **Run the automated setup:**
-    ```bash
-    ./scripts/setup_mac.sh
-    ```
-    *(This installs dependencies, creates a virtual environment, and generates the **VAF.app** bundle on macOS).*
-
-2.  **Restart your terminal** (or run `source ~/.zshrc`).
-
-3.  **Start VAF:**
-    - **macOS GUI**: Open `VAF` from your Applications or Spotlight.
-    - **Terminal**: Type `vaf run` for TUI, or `vaf tray` for the background service.
+`pip install -e .` will automatically run `./scripts/setup_mac.sh` on macOS.
+*(This installs dependencies, creates a virtual environment, and generates the **VAF.app** bundle).*
 
 ### 3. Run VAF
 
-VAF offers two distinct modes:
+VAF offers two distinct modes tailored to your workflow:
 
-| Mode | Command / Icon | Best For |
-|------|----------------|----------|
-| **Desktop Mode** | Shortcut / `vaf tray` | Browser-based experience, background persistence, auto-loading. |
-| **Terminal Mode** | `vaf run` | Fast, keyboard-centric coding and research directly in your console. |
+| Mode | Entry Point | Best For |
+|------|-------------|----------|
+| **Desktop Mode** | **Desktop Shortcut** or `vaf tray` | Silent background service, Web Dashboard, persistent agent access. |
+| **CLI Mode** | `vaf run` | Professional TUI for fast, keyboard-centric coding and research. |
 
 ---
 
 ## 🚀 Advanced Features (Gateway & Bridges)
 
-VAF runs a persistent background service (Gateway) to handle WebUI and multi-channel access.
+VAF runs a persistent background service (Gateway) to handle WebUI and multi-channel access. In **Desktop Mode**, this service starts silently without a console window.
 
-### 1. Start the Background Service
-This is usually handled automatically by the **Desktop Shortcut** or by running:
-```bash
-vaf tray
-```
+### 1. View Logs
+For troubleshooting the background service, check the startup trace:
+`logs/startup_trace.txt`
 
 ### 2. Connect Discord (Bridge)
 Once VAF is running (Tray or CLI), you can connect it to Discord.
@@ -1013,5 +998,5 @@ For commercial use including hardware embedding, SaaS, or proprietary distributi
 
 <p align="center">
   <b>VAF</b> - Veyllo Agentic Framework<br>
-  Built with ❤️ by Veyllo Labs
+  Built with ❤️ (and Cursor Credits) by Veyllo Labs – Mainly one guy named Mert.
 </p>

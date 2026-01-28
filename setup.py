@@ -3,7 +3,44 @@ Setup script for VAF (Veyllo Agentic Framework)
 """
 
 from setuptools import setup, find_packages
+from setuptools.command.install import install
+from setuptools.command.develop import develop
 from pathlib import Path
+import subprocess
+import platform
+import os
+
+def run_setup_scripts():
+    """Run platform-specific setup scripts after installation."""
+    system = platform.system()
+    project_root = Path(__file__).parent
+    
+    # Set environment variable to prevent loops
+    os.environ["VAF_SKIP_PIP_INSTALL"] = "1"
+    
+    try:
+        if system == "Windows":
+            print("\n🪟 Windows detected. Running setup_win.ps1...")
+            script_path = project_root / "scripts" / "setup_win.ps1"
+            subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script_path)], check=False)
+        elif system == "Darwin":
+            print("\n🍎 macOS detected. Running setup_mac.sh...")
+            script_path = project_root / "scripts" / "setup_mac.sh"
+            subprocess.run(["bash", str(script_path)], check=False)
+        elif system == "Linux":
+            print("\n🐧 Linux detected. Skipping automated setup (manual steps may be required).")
+    except Exception as e:
+        print(f"⚠️  Post-installation scripts failed: {e}")
+
+class PostInstallCommand(install):
+    def run(self):
+        install.run(self)
+        run_setup_scripts()
+
+class PostDevelopCommand(develop):
+    def run(self):
+        develop.run(self)
+        run_setup_scripts()
 
 # Read README for long description
 readme_file = Path(__file__).parent / "README.md"
@@ -40,6 +77,10 @@ setup(
     include_package_data=True,
     package_data={
         "vaf": ["media/*", "media/**/*"],
+    },
+    cmdclass={
+        'install': PostInstallCommand,
+        'develop': PostDevelopCommand,
     },
     entry_points={
         "console_scripts": [

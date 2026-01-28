@@ -5,6 +5,7 @@ import socket
 import shutil
 import subprocess
 import threading
+import platform
 from datetime import datetime
 from pathlib import Path
 from vaf.core.config import Config
@@ -25,12 +26,9 @@ class FrontendManager:
         if callback:
             callback(message, style)
         else:
-            # Fallback for headless/tray
             print(f"[Frontend] {message}")
 
     def get_web_dir(self):
-        # Locate 'web' folder relative to this file
-        # vaf/core/frontend_manager.py -> vaf/core -> vaf -> VAF -> VAF/web
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         return os.path.join(base_dir, "web")
 
@@ -38,7 +36,6 @@ class FrontendManager:
         return os.path.join(os.path.expanduser("~"), ".vaf", "web_port")
 
     def is_port_in_use(self, port):
-        # Check both 127.0.0.1 and localhost to be sure (Windows IPv4/IPv6 mix)
         for host in ['127.0.0.1', 'localhost']:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -50,7 +47,6 @@ class FrontendManager:
         return False
 
     def get_active_port(self):
-        """Read the last known port from file."""
         try:
             port_file = self.get_port_file()
             if os.path.exists(port_file):
@@ -62,6 +58,22 @@ class FrontendManager:
             pass
         return None
 
+    def _kill_process_on_port(self, port):
+        """Find and kill process using a specific port on Windows."""
+        if platform.system() != "Windows": return
+        try:
+            cmd = f"netstat -ano | findstr :{port}"
+            output = subprocess.check_output(cmd, shell=True).decode()
+            for line in output.splitlines():
+                if "LISTENING" in line:
+                    parts = line.strip().split()
+                    if len(parts) > 4:
+                        pid = parts[-1]
+                        subprocess.run(["taskkill", "/F", "/T", "/PID", pid], 
+                                     capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        except:
+            pass
+
     def start_frontend(self, log_callback=None):
         """Start the Next.js frontend if not already reachable."""
         web_dir = self.get_web_dir()
@@ -71,13 +83,10 @@ class FrontendManager:
             self._log("Web directory not found.", "error", log_callback)
             return None
 
-        # Check if already running (check stored port)
+        # Check for existing port
         active_port = self.get_active_port()
         if active_port and self.is_port_in_use(active_port):
-            # Verify it's actually responding (light check)
-            # Actually, is_port_in_use just checks socket. 
-            # If 'vaf run' is running, this should be true.
-            self._log(f"Frontend already active on port {active_port}", "success", log_callback)
+            self._log(f"Frontend active on port {active_port}", "success", log_callback)
             return active_port
 
         # Not running, need to start
@@ -89,12 +98,17 @@ class FrontendManager:
             # Install deps if needed
             if not os.path.exists(os.path.join(web_dir, "node_modules")):
                 self._log("Installing npm dependencies...", "warning", log_callback)
-                subprocess.run([npm_path, "install"], cwd=web_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run([npm_path, "install"], cwd=web_dir, capture_output=True)
             
-            # Find free port
+            # Find free port starting at 3000
             port = 3000
             while self.is_port_in_use(port):
-                port += 1
+                # If port is in use but no VAF process owns it, try to clean it
+                self._kill_process_on_port(port)
+                if self.is_port_in_use(port):
+                    port += 1
+                else:
+                    break
             
             self._log(f"Launching Dashboard on Port {port}...", "dim", log_callback)
             
@@ -103,8 +117,7 @@ class FrontendManager:
                 os.makedirs(os.path.dirname(self.get_port_file()), exist_ok=True)
                 with open(self.get_port_file(), "w") as f:
                     f.write(str(port))
-            except Exception as e:
-                self._log(f"Failed to save port file: {e}", "warning", log_callback)
+            except: pass
 
             # Log file
             log_dir = os.path.join(os.getcwd(), "logs")
@@ -113,19 +126,22 @@ class FrontendManager:
             
             # Start Process
             cmd = [npm_path, "run", "dev", "--", "-p", str(port)]
+            
+            creationflags = 0
+            use_shell = False
+            if platform.system() == "Windows":
+                creationflags = subprocess.CREATE_NO_WINDOW
+                use_shell = True
+                
             self.process = subprocess.Popen(
                 cmd, 
                 cwd=web_dir, 
                 stdout=open(log_file, "a"),
-                stderr=subprocess.STDOUT
+                stderr=subprocess.STDOUT,
+                creationflags=creationflags,
+                shell=use_shell
             )
             
-            # Wait for ready
-            dashboard_url = f"http://localhost:{port}"
-            # Simple spin wait
-            # We won't block indefinitely here in Tray, but for CLI we might want to.
-            # Allowing caller to handle wait or simple delay.
-            # We'll return the port immediately.
             self.port = port
             return port
 
@@ -134,9 +150,16 @@ class FrontendManager:
             return None
 
     def stop_frontend(self):
-        """Stop the subprocess if we own it."""
+        """Stop the subprocess and its entire tree if we own it."""
         if self.process:
-            self.process.terminate()
+            if platform.system() == "Windows":
+                try:
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.process.pid)], 
+                                 capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                except: pass
+            else:
+                self.process.terminate()
+            
             self.process = None
             try:
                 if os.path.exists(self.get_port_file()):

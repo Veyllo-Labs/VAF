@@ -546,6 +546,8 @@ class ServerManager:
             "--port", str(port),
             "--host", "127.0.0.1",
             "--parallel", str(final_parallel),
+            # Disable integrated web UI to save resources and keep port 8080 clean
+            "--no-webui",
             # VRAM Optimization: Use 8-bit cache for Key/Value memory
             # This reduces context VRAM usage by ~50% with minimal quality loss
             "-ctk", "q8_0",

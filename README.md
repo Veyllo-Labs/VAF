@@ -42,6 +42,17 @@ pip install -e .
 
 ### 2. Platform-Specific Setup
 
+**🪟 Windows (Recommended):**
+1.  **Run the automated setup:**
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File scripts\setup_win.ps1
+    ```
+    *(This creates a virtual environment, installs all dependencies including Windows-specific drivers, and creates **Desktop & Start Menu shortcuts**).*
+
+2.  **Start VAF:**
+    - **Desktop Shortcut**: Double-click "VAF Agent" to start in **Background/WebUI mode**.
+    - **Terminal**: Type `vaf run` for the **Interactive TUI**.
+
 **🐧 Linux & 🍎 macOS:**
 1.  **Run the automated setup:**
     ```bash
@@ -53,46 +64,31 @@ pip install -e .
 
 3.  **Start VAF:**
     - **macOS GUI**: Open `VAF` from your Applications or Spotlight.
-    - **Terminal**: Type `vaf` for TUI, or `vaf tray` for the background service.
+    - **Terminal**: Type `vaf run` for TUI, or `vaf tray` for the background service.
 
-4.  *Alternative:* Install system-wide with `sudo pip install -e .`
+### 3. Run VAF
 
-**🪟 Windows:**
-1.  After installation, **restart your terminal** to update the PATH.
-2.  If `vaf` is still not recognized, add the Python Scripts directory to your PATH:
-    - Path usually looks like: `%LOCALAPPDATA%\Programs\Python\Python31x\Scripts` or `%APPDATA%\Python\Python31x\Scripts`
-3.  *Alternative:* Run via Python module:
-    ```powershell
-    python -m vaf run
-    ```
+VAF offers two distinct modes:
 
-### 3. Verify Installation
-```bash
-vaf --version
-```
-
-### 4. Run VAF
-To start the interactive AI assistant, simply execute:
-```bash
-vaf run
-```
-
-*Note: If the `vaf` command is not found, you can use the fallback:* `python -m vaf run`
+| Mode | Command / Icon | Best For |
+|------|----------------|----------|
+| **Desktop Mode** | Shortcut / `vaf tray` | Browser-based experience, background persistence, auto-loading. |
+| **Terminal Mode** | `vaf run` | Fast, keyboard-centric coding and research directly in your console. |
 
 ---
 
 ## 🚀 Advanced Features (Gateway & Bridges)
 
-VAF now supports running as a persistent server (Gateway) to handle multiple inputs simultaneously.
+VAF runs a persistent background service (Gateway) to handle WebUI and multi-channel access.
 
-### 1. Start the Gateway
-This enables the WebSocket API and background processing.
+### 1. Start the Background Service
+This is usually handled automatically by the **Desktop Shortcut** or by running:
 ```bash
-python -m vaf.core.gateway
+vaf tray
 ```
 
 ### 2. Connect Discord (Bridge)
-Once the gateway is running, you can connect VAF to Discord.
+Once VAF is running (Tray or CLI), you can connect it to Discord.
 ```bash
 vaf bridge discord --token "YOUR_DISCORD_BOT_TOKEN"
 ```

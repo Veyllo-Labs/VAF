@@ -38,8 +38,16 @@ class FrontendManager:
         return os.path.join(os.path.expanduser("~"), ".vaf", "web_port")
 
     def is_port_in_use(self, port):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            return s.connect_ex(('localhost', port)) == 0
+        # Check both 127.0.0.1 and localhost to be sure (Windows IPv4/IPv6 mix)
+        for host in ['127.0.0.1', 'localhost']:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.1)
+                    if s.connect_ex((host, port)) == 0:
+                        return True
+            except:
+                continue
+        return False
 
     def get_active_port(self):
         """Read the last known port from file."""

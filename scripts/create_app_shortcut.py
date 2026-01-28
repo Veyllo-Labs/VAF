@@ -27,10 +27,6 @@ def create_mac_app():
     os.makedirs(resources_dir, exist_ok=True)
     
     # 1. Info.plist
-    # LSUIElement=False allows the app to show in Dock (with correct icon).
-    # If the user wants Tray-Only, it should be True, but Rumps apps showing 'Python' in Dock
-    # means they are failing to register as the bundle.
-    # By setting it False, we force it to be a normal app, which usually verifies the icon works.
     info_plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -60,11 +56,6 @@ def create_mac_app():
     launcher_src_path = os.path.join(macos_dir, "launcher.c")
     launcher_exe_path = os.path.join(macos_dir, "VAF")
     
-    # Improved C Launcher
-    # We use posix_spawn or execv, but ensuring environment is robust.
-    # We also attempt to re-assert the bundle ID if possible, but simplest is usually
-    # just exec-ing the python binary with correct argv[0] or similar.
-    
     c_source = r'''
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,26 +66,18 @@ def create_mac_app():
 #include <sys/stat.h>
 
 int main(int argc, char *argv[]) {
-    // 1. Setup Paths
-    // Injected by build script
     const char *vaf_dir = "VAF_DIR_PLACEHOLDER";
     const char *python_bin = "PYTHON_BIN_PLACEHOLDER";
     
-    // 2. Environment
     setenv("VAF_DIR", vaf_dir, 1);
     setenv("PYTHONPATH", vaf_dir, 1);
     
-    // PATH for Node/npm
     const char *old_path = getenv("PATH");
     char new_path[4096];
     snprintf(new_path, sizeof(new_path), 
         "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:%s/.nvm/versions/node/current/bin:%s", 
         getenv("HOME"), old_path ? old_path : "");
     setenv("PATH", new_path, 1);
-    
-    // 3. Execution
-    // We exec, but we might want to try to keep argv[0] as ourself?
-    // No, python needs to be the executable.
     
     char *new_argv[] = {
         (char*)python_bin,
@@ -104,14 +87,6 @@ int main(int argc, char *argv[]) {
         NULL
     };
     
-    // Log
-    FILE *log = fopen("/tmp/vaf_launch_c.log", "a");
-    if (log) {
-        fprintf(log, "VAF C Wrapper (v2) Launching...\n");
-        fprintf(log, "Python: %s\n", python_bin);
-        fclose(log);
-    }
-    
     if (execv(python_bin, new_argv) == -1) {
         perror("execv failed");
         return 1;
@@ -120,7 +95,6 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 '''
-    # Inject actual paths
     python_cmd = os.path.join(base_dir, "venv", "bin", "python3")
     if not os.path.exists(python_cmd):
         python_cmd = sys.executable 
@@ -128,102 +102,34 @@ int main(int argc, char *argv[]) {
     c_source = c_source.replace("VAF_DIR_PLACEHOLDER", base_dir)
     c_source = c_source.replace("PYTHON_BIN_PLACEHOLDER", python_cmd)
     
-    # Write Source
     with open(launcher_src_path, "w") as f:
         f.write(c_source)
         
-    # Compile
-    # We check for gcc or clang
     cc = "clang"
     if subprocess.call(["which", "clang"], stdout=subprocess.DEVNULL) != 0:
-        cc = "gcc" # try gcc
+        cc = "gcc"
         
-    print(f"🔨 Compiling launcher with {cc}...")
     try:
         subprocess.run([cc, "-o", launcher_exe_path, launcher_src_path], check=True)
-        print("✅ Compilation successful.")
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Compilation failed: {e}")
-        # Fallback to shell script?
+    except Exception:
         return
 
-    # Cleanup source
-    # os.remove(launcher_src_path)
-    
-    # 3. Icon (Convert png to icns if simple tools exist, else just cp png)
-    # properly making .icns on mac can be done with sips + iconutil
-    # For now, we'll try a simple sips conversion or skip if complex
-    
     icon_dest = os.path.join(resources_dir, "AppIcon.icns")
     
     if os.path.exists(logo_path):
-        # Create a temporary iconset
         iconset_dir = os.path.join(resources_dir, "AppIcon.iconset")
         os.makedirs(iconset_dir, exist_ok=True)
-        
-        # Resize to standard sizes
         sizes = [16, 32, 64, 128, 256, 512, 1024]
         try:
             for size in sizes:
-                subprocess.run([
-                    "sips", "-z", str(size), str(size), 
-                    logo_path, 
-                    "--out", os.path.join(iconset_dir, f"icon_{size}x{size}.png")
-                ], check=True, stdout=subprocess.DEVNULL)
-                # Retina (2x)
-                subprocess.run([
-                    "sips", "-z", str(size*2), str(size*2), 
-                    logo_path, 
-                    "--out", os.path.join(iconset_dir, f"icon_{size}x{size}@2x.png")
-                ], check=False, stdout=subprocess.DEVNULL) # 2x might fail if source small
-            
-            # Convert to icns
-            subprocess.run([
-                "iconutil", "-c", "icns", 
-                iconset_dir, 
-                "-o", icon_dest
-            ], check=True, stdout=subprocess.DEVNULL)
-            
-            # Cleanup
+                subprocess.run(["sips", "-z", str(size), str(size), logo_path, "--out", os.path.join(iconset_dir, f"icon_{size}x{size}.png")], check=True, stdout=subprocess.DEVNULL)
+                subprocess.run(["sips", "-z", str(size*2), str(size*2), logo_path, "--out", os.path.join(iconset_dir, f"icon_{size}x{size}@2x.png")], check=False, stdout=subprocess.DEVNULL)
+            subprocess.run(["iconutil", "-c", "icns", iconset_dir, "-o", icon_dest], check=True, stdout=subprocess.DEVNULL)
             shutil.rmtree(iconset_dir)
-            print("✅ Created AppIcon.icns")
-        except Exception as e:
-            print(f"⚠️  Failed to create .icns icon: {e}. App will have generic icon.")
+        except Exception:
+            pass
     
     print(f"✅ VAF.app created at {app_dir}")
-    print("👉 You can now open Spotlight and type 'VAF'")
-
-
-def create_linux_shortcut():
-    """Create a .desktop entry for Linux."""
-    print("🐧 Creating Linux .desktop shortcut...")
-    
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    start_script = os.path.join(base_dir, "start_vaf.sh")
-    logo_path = os.path.join(base_dir, "web", "public", "logo.png")
-    
-    desktop_entry = f"""[Desktop Entry]
-Name=VAF Agent
-Comment=VAF AI Agent & Tray App
-Exec="{start_script}"
-Icon={logo_path}
-Terminal=false
-Type=Application
-Categories=Utility;
-"""
-    
-    app_dir = os.path.expanduser("~/.local/share/applications")
-    os.makedirs(app_dir, exist_ok=True)
-    
-    desktop_file = os.path.join(app_dir, "vaf.desktop")
-    with open(desktop_file, "w") as f:
-        f.write(desktop_entry)
-        
-    os.chmod(desktop_file, 0o755)
-    print(f"✅ Shortcut created: {desktop_file}")
-
-
-    print(f"✅ Shortcut created: {desktop_file}")
 
 
 def create_windows_shortcut():
@@ -232,19 +138,13 @@ def create_windows_shortcut():
     
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
-    # 1. Determine Python Executable (prefer venv)
     venv_python = os.path.join(base_dir, "venv", "Scripts", "pythonw.exe")
-    if os.path.exists(venv_python):
-        target = venv_python
-    else:
-        target = sys.executable
-        if "python.exe" in target:
-            target = target.replace("python.exe", "pythonw.exe")
+    target = venv_python if os.path.exists(venv_python) else sys.executable
+    if "python.exe" in target:
+        target = target.replace("python.exe", "pythonw.exe")
 
     arguments = "-m vaf.main tray"
     
-    # 2. Icon Handling
-    # Check multiple locations
     logo_candidates = [
         os.path.join(base_dir, "vaf", "media", "logo_original.png"),
         os.path.join(base_dir, "web", "public", "logo.png")
@@ -256,63 +156,75 @@ def create_windows_shortcut():
             logo_path = cand
             break
             
-    icon_path = logo_path # Fallback
+    icon_path = logo_path
     
-    # Try to convert to .ico for Windows (Shortcuts need .ico)
     if logo_path:
         try:
             from PIL import Image
-            ico_path = os.path.join(base_dir, "vaf", "media", "app_icon.ico")
-            img = Image.open(logo_path)
-            img.save(ico_path, format='ICO', sizes=[(256, 256)])
+            # NEW FILENAME to bypass icon cache
+            ico_filename = "vaf_icon_v6.ico"
+            ico_path = os.path.join(base_dir, "vaf", "media", ico_filename)
+            img = Image.open(logo_path).convert("RGBA")
+            
+            # Aggressive Autocrop
+            bbox = img.getbbox()
+            if bbox:
+                img = img.crop(bbox)
+            
+            # PERFECT FILL: 98% of canvas for maximum size with tiny margin
+            canvas_size = 256
+            new_img = Image.new('RGBA', (canvas_size, canvas_size), (0, 0, 0, 0))
+            
+            fill_factor = 0.98
+            target_size = int(canvas_size * fill_factor)
+            
+            w, h = img.size
+            if w > h:
+                new_w = target_size
+                new_h = int(h * (target_size / w))
+            else:
+                new_h = target_size
+                new_w = int(w * (target_size / h))
+                
+            img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            offset = ((canvas_size - new_w) // 2, (canvas_size - new_h) // 2)
+            new_img.paste(img_resized, offset, img_resized)
+            
+            new_img.save(ico_path, format='ICO', sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)])
             icon_path = ico_path
-            print(f"✅ Converted icon to .ico: {icon_path}")
-        except ImportError:
-            print("⚠️  Pillow not installed, using PNG as icon (might not work on all Windows versions).")
+            print(f"✅ Converted icon to .ico (Max Fill): {icon_path}")
         except Exception as e:
             print(f"⚠️  Icon conversion failed: {e}")
 
     desktop = os.path.join(os.environ["USERPROFILE"], "Desktop")
-    shortcut_path = os.path.join(desktop, "VAF Agent.lnk")
-    working_dir = base_dir
-
-    # PowerShell script to create shortcut
-    # We create TWO shortcuts: Desktop and Start Menu
     start_menu = os.path.join(os.environ["APPDATA"], "Microsoft", "Windows", "Start Menu", "Programs")
     shortcut_paths = {
         "Desktop": os.path.join(desktop, "VAF Agent.lnk"),
         "StartMenu": os.path.join(start_menu, "VAF Agent.lnk")
     }
 
-    ps_script = f"""
-    $WshShell = New-Object -comObject WScript.Shell
-    """
-    
+    ps_script = "$WshShell = New-Object -comObject WScript.Shell\n"
     for name, path in shortcut_paths.items():
-        ps_script += f"""
-    $Shortcut = $WshShell.CreateShortcut("{path}")
-    $Shortcut.TargetPath = "{target}"
-    $Shortcut.Arguments = "{arguments}"
-    $Shortcut.WorkingDirectory = "{working_dir}"
-    $Shortcut.IconLocation = "{icon_path}"
-    $Shortcut.Description = "VAF AI Agent"
-    $Shortcut.Save()
-    Write-Host "✅ Created {name} Shortcut: {path}"
-    """
+        ps_script += f'if (Test-Path "{path}") {{ Remove-Item "{path}" -Force }}\n'
+        ps_script += f'$Shortcut = $WshShell.CreateShortcut("{path}")\n'
+        ps_script += f'$Shortcut.TargetPath = "{target}"\n'
+        ps_script += f'$Shortcut.Arguments = "{arguments}"\n'
+        ps_script += f'$Shortcut.WorkingDirectory = "{base_dir}"\n'
+        ps_script += f'$Shortcut.IconLocation = "{icon_path}"\n'
+        ps_script += f'$Shortcut.Save()\n'
+        ps_script += f'Write-Host "✅ Recreated {name} Shortcut"\n'
     
     try:
         subprocess.run(["powershell", "-Command", ps_script], check=True)
     except Exception as e:
-        print(f"❌ Failed to create shortcuts: {e}")
+        print(f"❌ Failed: {e}")
 
 
 if __name__ == "__main__":
     system = platform.system()
     if system == "Darwin":
         create_mac_app()
-    elif system == "Linux":
-        create_linux_shortcut()
     elif system == "Windows":
         create_windows_shortcut()
     else:
-        print(f"⚠️  Shortcut creation not implemented for {system} yet.")
+        print(f"Shortcut creation not implemented for {system}.")

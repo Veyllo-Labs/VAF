@@ -58,8 +58,12 @@ def check_singleton():
     try:
         # Try to bind to port 8002 to ensure singleton
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # Set REUSEADDR so we can restart quickly if needed
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
+        # Windows: DO NOT use SO_REUSEADDR for singleton checks as it allows multiple binds.
+        # Unix: SO_REUSEADDR is fine/needed to restart quickly.
+        if platform.system() != "Windows":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            
         s.bind(("127.0.0.1", 8002))
         s.listen(5)
         log("Tray", "Singleton check passed (Port 8002 bound)")
@@ -172,29 +176,64 @@ def start_uvicorn():
         log("Tray", traceback.format_exc())
 
 def get_icon_path(status):
-    """Generate and return path to an icon for the given status."""
+    """Generate and return path to an icon for the given status using the VAF logo."""
     if not Image: return None
     
     # Define colors
     colors = {
         "active": (46, 204, 113),  # Green
         "idle": (241, 196, 15),    # Yellow
-        "persistent": (52, 152, 219) # Blue
+        "persistent": (231, 76, 60) # Red
     }
     color = colors.get(status, (128, 128, 128))
     
     # Ensure dir exists
-    icon_dir = Path(Config.load().get("vaf_dir", os.path.expanduser("~/.vaf"))) / "icons"
+    vaf_dir = Path(Config.load().get("vaf_dir", os.path.expanduser("~/.vaf")))
+    icon_dir = vaf_dir / "icons"
     icon_dir.mkdir(parents=True, exist_ok=True)
     
-    filename = icon_dir / f"tray_{status}.png"
-    if not filename.exists():
-        # Create 64x64 icon
-        img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        # Draw circle
-        draw.ellipse((8, 8, 56, 56), fill=color)
-        img.save(filename)
+    filename = icon_dir / f"tray_v2_{status}.png"
+    
+    # Base logo path
+    base_dir = Path(__file__).parent.parent
+    logo_path = base_dir / "vaf" / "media" / "logo_original.png"
+
+    if not filename.exists() or True: # Force recreate for now to see changes
+        try:
+            if logo_path.exists():
+                # Load logo
+                img_src = Image.open(logo_path).convert("RGBA")
+                
+                # Autocrop: Remove transparent borders
+                # We use a small threshold to catch nearly-transparent pixels
+                bbox = img_src.getbbox()
+                if bbox:
+                    img_src = img_src.crop(bbox)
+                
+                # Create 64x64 canvas
+                img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+                
+                # Resize logo to fill the ENTIRE canvas (64x64)
+                img_src.thumbnail((64, 64), Image.Resampling.LANCZOS)
+                
+                # Center the logo on the canvas
+                offset = ((64 - img_src.width) // 2, (64 - img_src.height) // 2)
+                img.paste(img_src, offset, img_src)
+            else:
+                # Fallback to transparent canvas
+                img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+            
+            draw = ImageDraw.Draw(img)
+            
+            # Draw a small indicator circle in the bottom right corner
+            # Smaller indicator to not cover the now even larger logo
+            draw.ellipse((46, 46, 64, 64), fill=(255, 255, 255, 255)) 
+            draw.ellipse((48, 48, 62, 62), fill=color)
+            
+            img.save(filename)
+        except Exception as e:
+            print(f"Failed to create icon: {e}")
+            return None
         
     return str(filename)
 
@@ -250,6 +289,29 @@ def open_webui(_):
 
     url = f"http://localhost:{port}"
     
+    if platform.system() == "Windows":
+        try:
+            import win32gui
+            import win32con
+            
+            def window_enum_handler(hwnd, ctx):
+                # Search for windows containing "VAF" in title
+                title = win32gui.GetWindowText(hwnd)
+                if "VAF" in title and "Google Chrome" in title or "Firefox" in title or "Edge" in title:
+                    # Found a browser window with VAF
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    win32gui.SetForegroundWindow(hwnd)
+                    ctx['found'] = True
+
+            context = {'found': False}
+            win32gui.EnumWindows(window_enum_handler, context)
+            
+            if context['found']:
+                logger.info("[Tray] Focused existing browser window on Windows.")
+                return
+        except Exception as e:
+            logger.warning(f"[Tray] Windows window focus failed: {e}")
+
     if platform.system() == "Darwin":
         # macOS: Try to focus existing tab in Safari or Chrome via AppleScript
         script = f'''

@@ -239,12 +239,15 @@ async def websocket_endpoint(websocket: WebSocket):
             "type": "session_list", 
             "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
         })
-        # Send cached stats if available
-        if manager.last_stats:
-             await websocket.send_json({
-                "type": "stats",
-                "stats": manager.last_stats
-            })
+        # Send cached stats if available, otherwise send defaults
+        stats_to_send = manager.last_stats
+        if not stats_to_send:
+            # Default stats until agent provides real values
+            stats_to_send = {"used": 0, "total": 8192, "percent": 0.0, "api": False}
+        await websocket.send_json({
+            "type": "stats",
+            "stats": stats_to_send
+        })
         # Auto-load latest session so WebUI gets a valid sessionId immediately
         if sessions:
             sid = sessions[0]["id"]

@@ -43,6 +43,15 @@ def run_headless_agent():
             print("[Headless] Agent initialized and ready.")
             try:
                 get_web_interface().log("Headless agent initialized and ready.", level="info", source="System")
+                # Send initial token stats so WebUI shows context usage immediately
+                used, total = agent.get_token_usage()
+                stats = {
+                    "used": used,
+                    "total": total,
+                    "percent": (used / total) if total else 0.0,
+                    "api": bool(getattr(agent, 'api_backend', False))
+                }
+                get_web_interface().emit_stats(stats)
             except Exception:
                 pass
         except Exception as e:

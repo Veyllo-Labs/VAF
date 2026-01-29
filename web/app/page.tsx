@@ -39,8 +39,9 @@ type Session = {
 };
 
 // Helper to parse and merge thinking blocks
-const parseContent = (content: string) => {
-    if (!content) return { thought: null, answer: "" };
+// Returns: { thought, answer, isThinkingComplete }
+const parseContent = (content: string): { thought: string | null; answer: string; isThinkingComplete: boolean } => {
+    if (!content) return { thought: null, answer: "", isThinkingComplete: true };
 
     // Clean Rich markup tags and "resposta" prefix
     let clean = content.replace(/[\[][\/]?\w+\s*\w+[\]]/g, '').replace(/^resposta\s*/i, '');
@@ -59,13 +60,15 @@ const parseContent = (content: string) => {
     if (openIndex !== -1) {
         const closeIndex = merged.lastIndexOf(closeTag);
         if (closeIndex !== -1 && closeIndex > openIndex) {
+            // Complete thinking block - has both open and close tags
             const thought = merged.substring(openIndex + openTag.length, closeIndex).trim();
             const answer = (merged.substring(0, openIndex) + merged.substring(closeIndex + closeTag.length)).trim();
-            return { thought, answer };
+            return { thought, answer, isThinkingComplete: true };
         } else {
+            // Incomplete thinking - has open tag but no close tag (still streaming)
             const thought = merged.substring(openIndex + openTag.length).trim();
             const answer = merged.substring(0, openIndex).trim();
-            return { thought, answer };
+            return { thought, answer, isThinkingComplete: false };
         }
     }
 
@@ -109,29 +112,47 @@ const parseContent = (content: string) => {
         if (splitIndex > 50) { // Ensure we have meaningful thinking content
             const thought = merged.substring(0, splitIndex).trim();
             const answer = merged.substring(splitIndex).trim();
-            return { thought, answer };
+            return { thought, answer, isThinkingComplete: true };
         }
     }
 
-    return { thought: null, answer: merged };
+    return { thought: null, answer: merged, isThinkingComplete: true };
 };
 
 // Component: Thinking Accordion
-const ThinkingDetails = ({ thought }: { thought: string }) => {
-    const [isOpen, setIsOpen] = useState(false);
+// Open while incomplete, auto-close when complete
+const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isComplete?: boolean }) => {
+    const [isOpen, setIsOpen] = useState(!isComplete);
+
+    // Auto-update when isComplete changes
+    useEffect(() => {
+        setIsOpen(!isComplete);
+    }, [isComplete]);
+
     if (!thought) return null;
+
     return (
         <div className="mb-3 rounded-xl border border-gray-200 bg-gray-50/50 overflow-hidden w-full max-w-[95%] shadow-sm">
             <button
-                type="button" onClick={() => setIsOpen(!isOpen)}
+                type="button"
+                onClick={() => setIsOpen(!isOpen)}
                 className="w-full px-4 py-2.5 flex items-center justify-between text-[11px] uppercase tracking-wide font-semibold text-gray-500 hover:bg-gray-100 transition-colors"
             >
-                <span className="flex items-center gap-2"><Activity size={14} /> Thinking Process</span>
-                <div className={cn("transition-transform duration-300 text-gray-400", isOpen ? "rotate-180" : "")}>▼</div>
+                <span className="flex items-center gap-2">
+                    {!isComplete ? (
+                        <Loader2 size={14} className="animate-spin text-blue-500" />
+                    ) : (
+                        <Activity size={14} />
+                    )}
+                    {!isComplete ? "Thinking..." : "Thinking Process"}
+                </span>
+                <ChevronRight size={14} className={cn("text-gray-400 transition-transform duration-200", isOpen && "rotate-90")} />
             </button>
-            <div className={cn("px-4 text-xs text-slate-600 font-mono leading-relaxed border-t border-gray-200 transition-all bg-white/50", isOpen ? "max-h-[500px] opacity-100 py-3 overflow-y-auto" : "max-h-0 opacity-0 py-0 overflow-hidden")}>
-                {thought}
-            </div>
+            {isOpen && (
+                <div className="px-4 py-3 text-xs text-slate-600 font-mono leading-relaxed border-t border-gray-200 bg-white/50 max-h-[500px] overflow-y-auto">
+                    {thought}
+                </div>
+            )}
         </div>
     );
 };
@@ -1198,8 +1219,12 @@ export default function VAFDashboard() {
                                     );
                                 }
 
-                                const { thought, answer } = parseContent(msg.content);
+                                const { thought, answer, isThinkingComplete } = parseContent(msg.content);
                                 const isBot = msg.role === 'assistant';
+                                const isLastMessage = i === messages.length - 1;
+                                // Simple: thinking is done when the </think> tag is found (isThinkingComplete)
+                                // For non-last messages, always treat as complete
+                                const thinkingDone = !isLastMessage || isThinkingComplete;
 
                                 // Add top margin if following a system step
                                 const prevWasSystem = i > 0 && messages[i - 1].role === 'system';
@@ -1209,7 +1234,7 @@ export default function VAFDashboard() {
                                         {isBot && <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>}
                                         <div className={cn("max-w-[85%] flex flex-col w-full", isBot ? "items-start" : "items-end")}>
 
-                                            {isBot && thought && <ThinkingDetails thought={thought} />}
+                                            {isBot && thought && <ThinkingDetails thought={thought} isComplete={thinkingDone} />}
 
                                             {/* Show answer bubble: always for user, for bot if there's an answer OR if there's no thought (fallback) */}
                                             {(answer || !isBot || (isBot && !thought)) && (

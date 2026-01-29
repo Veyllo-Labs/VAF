@@ -8,8 +8,12 @@ This directory contains the logic for individual `vaf` CLI commands. Each file t
 - **settings.py**: Provides the interactive settings menu to modify `config.json`.
 - **scaffold.py**: Logic for creating new project templates from pre-defined structures.
 - **bridge.py**: Manages external platform connections like Discord.
+- **bridge_discord.py**: Discord-specific bridge helper.
+- **automate.py**: Test/build/lint automation commands.
 - **git.py**: AI-enhanced Git operations (auto-commits, status summaries).
+- **models.py**: Model management commands (list, download, select).
 - **subagent.py**: Allows running specialized sub-agents (Coder, Researcher) independently.
+- **workflow.py**: Workflow execution and inspection commands.
 
 ## Development Guide
 

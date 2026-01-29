@@ -46,11 +46,11 @@ Singleton pattern manager that:
 **Location**: `web/`
 
 **Technology Stack**:
-- Next.js 14 (React 18)
+- Next.js 16 (React 18)
 - TypeScript
 - Tailwind CSS
 - Lucide React (icons)
-- WebSocket API
+- WebSocket API (native browser WebSocket)
 
 **Main Component**: `app/page.tsx`
 
@@ -225,7 +225,7 @@ npm start
 ### Frontend Dependencies
 
 See `web/package.json`:
-- `next`: 14.1.0
+- `next`: 16.1.6
 - `react`: ^18
 - `lucide-react`: ^0.300.0 (icons)
 - `tailwind-merge`: ^2.2.0 (utility merging)

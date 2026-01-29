@@ -8,9 +8,13 @@ The `vaf.core` module contains the fundamental building blocks of the Veyllo Age
 - **gateway.py**: The FastAPI-based gateway server for multi-client access (Web UI, Discord, etc.).
 - **context.py**: Implements Cursor-style context management, compression, and token tracking.
 - **backend.py**: Manages local LLM servers (e.g., llama-server) with GPU acceleration detection.
+- **web_server.py**: WebSocket API server for the WebUI.
+- **web_interface.py**: Session-scoped broadcast manager for WebUI updates.
+- **headless_runner.py**: Headless agent loop used by the tray app.
 - **system_prompt.py**: The dynamic prompt router that loads context modules on-demand.
 - **snapshot.py**: Handles the Git-based undo and state tracking system.
 - **trust.py**: Security and permission gating for tool execution.
+- **subagent_ipc.py**: Sub-agent IPC and result coordination.
 
 ## Usage
 

@@ -78,7 +78,6 @@ const VAFWorkflowRuntime = () => {
           nodeTypes={nodeTypes}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
-          onInit={onInit}
           fitView
           attributionPosition="bottom-right"
           nodesDraggable={false} // Lock layout for vertical list feel

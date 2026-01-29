@@ -245,6 +245,58 @@ async def websocket_endpoint(websocket: WebSocket):
                 "type": "stats",
                 "stats": manager.last_stats
             })
+        # Auto-load latest session so WebUI gets a valid sessionId immediately
+        if sessions:
+            sid = sessions[0]["id"]
+            try:
+                # Subscribe this connection to the session for scoped updates
+                manager.subscribe_to_session(websocket, sid)
+
+                # Load from disk and send history update
+                loaded = session_mgr.load(sid)
+
+                import re
+                def clean_history_text(text):
+                    if not text: return ""
+                    text = re.sub(r'\[dim\]', '<think>', text, flags=re.IGNORECASE)
+                    text = re.sub(r'\[white dim\]', '<think>', text, flags=re.IGNORECASE)
+                    text = re.sub(r'\[.*?dim.*?\]', '<think>', text, flags=re.IGNORECASE)
+                    text = text.replace('[/dim]', '</think>')
+                    if '<think>' in text and '</think>' not in text:
+                        text = text.replace('[/]', '</think>')
+                    text = re.sub(r'\[\/?[^\]]+\]', '', text)
+                    return text
+
+                frontend_messages = []
+                for msg in loaded.messages:
+                    role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "user")
+                    content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+                    timestamp = msg.get("timestamp") if isinstance(msg, dict) else getattr(msg, "timestamp", None)
+                    if role == "assistant":
+                        content = clean_history_text(content)
+                    frontend_messages.append({
+                        "role": role,
+                        "content": content,
+                        "timestamp": timestamp
+                    })
+
+                is_active = False
+                try:
+                    if (manager.agent_instance and
+                        getattr(manager.agent_instance, '_session_id', None) == sid and
+                        manager.latest_state.get("status") != "idle"):
+                        is_active = True
+                except: pass
+
+                await websocket.send_json({
+                    "type": "history_update",
+                    "messages": frontend_messages,
+                    "sessionId": sid,
+                    "isActive": is_active,
+                    "currentStatus": manager.latest_state.get("status", "idle") if is_active else "idle"
+                })
+            except Exception as e:
+                log("WebServer", f"Auto-load session failed: {e}")
 
         while True:
             # Listen for client commands
@@ -558,6 +610,15 @@ async def websocket_endpoint(websocket: WebSocket):
                         # Ack to console
                         file_info = f" [{len(files)} file(s)]" if files else ""
                         print(f"[WebUI] Queued input{file_info} for session {session_id}: {content[:50]}...")
+                        try:
+                            manager.log(
+                                f"Queued input{file_info} for session {session_id}: {content[:50]}...",
+                                level="info",
+                                source="System",
+                                session_id=session_id
+                            )
+                        except Exception:
+                            pass
                 
                 elif type == "get_tools":
                     # Return list of available tools from agent

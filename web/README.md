@@ -4,10 +4,9 @@ This directory contains the source code for the VAF Web UI, a modern dashboard b
 
 ## Technology Stack
 
-- **Frontend Framework**: Next.js (React)
+- **Frontend Framework**: Next.js (App Router, React)
 - **Styling**: Tailwind CSS
-- **UI Components**: Radix UI / Shadcn UI
-- **Communication**: WebSockets (via `Socket.io-client`)
+- **Communication**: Native WebSocket API
 - **Icons**: Lucide React
 
 ## Structure
@@ -27,7 +26,7 @@ npm install
 npm run dev
 ```
 
-The Web UI is designed to communicate with the VAF Gateway server (typically running on port 8001).
+The Web UI connects to the VAF WebSocket backend on port 8001.
 
 ## Deployment
 

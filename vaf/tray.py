@@ -117,6 +117,9 @@ def start_uvicorn():
         import sys
         import os
 
+        # Ensure UTF-8 output for background threads (prevents Unicode log crashes)
+        os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
         # CRITICAL FIX: Patch stdout/stderr/stdin if running in pythonw (no console)
         # Uvicorn crashes if sys.stdout is None because it checks .isatty()
         if sys.stdout is None:

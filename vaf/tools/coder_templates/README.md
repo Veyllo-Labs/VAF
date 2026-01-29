@@ -5,7 +5,7 @@ This directory contains pre-built templates that the Coding Agent uses to quickl
 ## Structure
 
 - **java/**: Templates for Java applications and web servers.
-- **javascript/**: Templates for Node.js applications, Express servers, and React components.
+- **javascript/**: Templates for Node.js applications and Express servers.
 - **python/**: Templates for CLI tools, local servers, and general scripts.
 - **websites/**: Basic HTML/CSS/JS website templates.
 - **__init__.py**: Template loader and manager.
@@ -31,7 +31,7 @@ A responsive website template with:
 
 ### 1. Create Your Template File
 
-Add a new file in this directory with appropriate extension:
+Add a new file inside a language folder (or create a new folder) with the appropriate extension:
 - `.html` for HTML templates
 - `.css` for CSS templates
 - `.js` for JavaScript templates

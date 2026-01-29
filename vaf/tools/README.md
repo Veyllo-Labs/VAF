@@ -448,7 +448,7 @@ if not is_trusted_dir(Path.cwd()):
 - **BaseTool Documentation**: `vaf/tools/base.py`
 - **Tool Examples**: See other tools in this directory
 - **MCP Specification**: https://modelcontextprotocol.io
-- **VAF Documentation**: `docs/TOOL_ARCHITECTURE_COMPARISON.md`
+- **VAF Documentation**: `docs/TOOL_ROUTER_ARCHITECTURE.md`
 
 ---
 
@@ -479,5 +479,5 @@ A:
 
 ---
 
-*Last updated: 2024*
+*Last updated: 2026*
 

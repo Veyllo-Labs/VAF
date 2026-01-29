@@ -1,6 +1,6 @@
 # UI Primitives
 
-This directory contains low-level, reusable UI components such as buttons, inputs, labels, and dialogs.
+This directory contains low-level, reusable UI components such as cards and layout primitives.
 
 ## Source
 Most components here are based on **Shadcn UI** and **Radix UI**. They provide accessible, unstyled primitives that are then styled with Tailwind CSS.
@@ -9,10 +9,15 @@ Most components here are based on **Shadcn UI** and **Radix UI**. They provide a
 These components should be used to build more complex features in the parent `components/` directory.
 
 ```tsx
-import { Button } from "@/components/ui/button"
+import { Card, CardHeader, CardContent } from "@/components/ui/card"
 
 export function MyComponent() {
-  return <Button variant="primary">Click Me</Button>
+  return (
+    <Card>
+      <CardHeader>Title</CardHeader>
+      <CardContent>Body</CardContent>
+    </Card>
+  )
 }
 ```
 

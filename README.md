@@ -21,7 +21,7 @@ VAF is a comprehensive agent suite designed to transform LLMs like VQ-1 into aut
 ## 📥 Installation & Setup
 
 ### Prerequisites
-- **Python 3.10 or higher**
+- **Python 3.13 or higher**
 - **pip** (Python package installer)
 - **Git** (for cloning the repository)
 - **Docker Desktop** (Optional, but required for Sandboxing and safe code execution)
@@ -110,7 +110,7 @@ See [docs/SANDBOXING.md](docs/SANDBOXING.md).
 
 ### 🌐 Web UI Dashboard
 
-Browser-based interface for interacting with VAF. Automatically starts when running `vaf run`.
+Browser-based interface for interacting with VAF. In Desktop Mode (`vaf tray`) it starts automatically; in CLI mode it can be started with `--web`.
 
 **Features:**
 - Real-time chat with streaming responses

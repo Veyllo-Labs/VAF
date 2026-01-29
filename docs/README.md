@@ -10,6 +10,7 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 - **GATEWAY.md**: Documentation for the persistent gateway server and multi-channel access.
 - **SANDBOXING.md**: Information on secure code execution using Docker.
 - **WEB_UI.md**: Details about the browser-based dashboard and its WebSocket API.
+- **WEBUI_WEBSOCKET_FLOW.md**: WebSocket flow, session scoping, and debugging.
 - ... and more specialized documentation for various features.
 
 ## Usage for Developers

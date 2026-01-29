@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import SettingsModal from '@/components/SettingsModal';
+import SubAgentWindow from '@/components/SubAgentWindow';
 import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
 import { useWorkflowStore } from '@/components/workflows/stores/workflowStore';
@@ -202,6 +203,11 @@ export default function VAFDashboard() {
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     const currentSessionIdRef = useRef<string | null>(null);
     useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
+    const pendingSendRef = useRef<{
+        text: string;
+        files: Array<{ name: string; data: string; mimeType: string }>;
+    } | null>(null);
+    const pendingSessionRequestRef = useRef(false);
 
     const [ws, setWs] = useState<WebSocket | null>(null);
     const [loading, setLoading] = useState(false);
@@ -223,6 +229,78 @@ export default function VAFDashboard() {
 
     // Stats state
     const [tokenStats, setTokenStats] = useState<{ used: number; total: number; percent: number; api: boolean } | null>(null);
+
+    // Sub-Agent Window State
+    const [subAgentState, setSubAgentState] = useState<{
+        isOpen: boolean;
+        agentName: string;
+        status: string;
+        currentFile: string;
+        codeContent: string;
+        steps: any[];
+    }>({
+        isOpen: false,
+        agentName: "Sub-Agent",
+        status: "Idle",
+        currentFile: "",
+        codeContent: "",
+        steps: []
+    });
+
+    // Suggestion State
+    const [suggestionList, setSuggestionList] = useState<any[]>([]);
+    const [suggestionType, setSuggestionType] = useState<'command' | 'workflow' | null>(null);
+
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = e.target.value;
+        setInput(val);
+
+        // Simple trigger logic: Check last word
+        const words = val.split(' ');
+        const lastWord = words[words.length - 1];
+
+        if (lastWord.startsWith('/')) {
+            const query = lastWord.slice(1).toLowerCase();
+            const commands = [
+                { name: 'clear', description: 'Clear conversation' },
+                { name: 'help', description: 'Show help' },
+                { name: 'settings', description: 'Open settings' },
+                { name: 'tools', description: 'Show tools' },
+                { name: 'stop', description: 'Stop speaking' },
+                { name: 'new', description: 'New session' },
+                { name: 'load', description: 'Load session' },
+            ];
+            const filtered = commands.filter(c => c.name.startsWith(query));
+            setSuggestionList(filtered);
+            setSuggestionType('command');
+        } else if (lastWord.startsWith('@')) {
+            const query = lastWord.slice(1).toLowerCase();
+            // Workflows are loaded in `workflows` state
+            const filtered = workflows.filter(w => 
+                (w.name && w.name.toLowerCase().includes(query)) || 
+                (w.id && w.id.toLowerCase().includes(query))
+            );
+            setSuggestionList(filtered);
+            setSuggestionType('workflow');
+        } else {
+            setSuggestionList([]);
+            setSuggestionType(null);
+        }
+    };
+
+    const handleSuggestionClick = (item: any) => {
+        const words = input.split(' ');
+        words.pop(); // Remove partial
+        const prefix = suggestionType === 'command' ? '/' : '@';
+        // Use ID for workflows if available, else name
+        const value = suggestionType === 'workflow' ? (item.id || item.name) : item.name;
+        const newValue = [...words, prefix + value].join(' ') + ' ';
+        setInput(newValue);
+        setSuggestionList([]);
+        setSuggestionType(null);
+        // Refocus input if needed
+        (document.querySelector('input[type="text"]') as HTMLInputElement)?.focus(); // Simple hack for focus
+    };
 
     // Workflow Store
     const { loadWorkflow, updateStepStatus } = useWorkflowStore();
@@ -331,8 +409,11 @@ export default function VAFDashboard() {
         const socket = new WebSocket('ws://localhost:8001/ws');
         socket.onopen = () => {
             setStatus('connected');
+            socket.send(JSON.stringify({ type: 'get_sessions' }));
             socket.send(JSON.stringify({ type: 'get_config' }));
             socket.send(JSON.stringify({ type: 'get_models' }));
+            socket.send(JSON.stringify({ type: 'get_workflows' })); // Fetch workflows for autocomplete
+            socket.send(JSON.stringify({ type: 'get_tools' }));     // Fetch tools for reference
         };
         socket.onmessage = (event) => {
             try {
@@ -436,7 +517,11 @@ export default function VAFDashboard() {
                 else if (data.type === 'agent_message_update') {
                     // CRITICAL: Only update if this message belongs to the current session!
                     // If user switched chats while bot was typing, ignore this update.
-                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) {
+                    const activeSessionId = currentSessionIdRef.current;
+                    if (!activeSessionId && data.sessionId) {
+                        setCurrentSessionId(data.sessionId);
+                        ws?.send(JSON.stringify({ type: 'load_session', id: data.sessionId }));
+                    } else if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
                         return;
                     }
 
@@ -510,9 +595,13 @@ export default function VAFDashboard() {
                     }
 
                     // Auto-select latest if none selected (initial load)
-                    if (!activeSessionId && data.sessions.length > 0) {
-                        setCurrentSessionId(data.sessions[0].id);
-                        ws?.send(JSON.stringify({ type: 'load_session', id: data.sessions[0].id }));
+                    // or if the current session no longer exists in the list.
+                    if (data.sessions.length > 0) {
+                        const sessionIds = new Set(data.sessions.map((s: Session) => s.id));
+                        if (!activeSessionId || !sessionIds.has(activeSessionId)) {
+                            setCurrentSessionId(data.sessions[0].id);
+                            ws?.send(JSON.stringify({ type: 'load_session', id: data.sessions[0].id }));
+                        }
                     }
                 }
                 else if (data.type === 'workflow_start') {
@@ -539,6 +628,17 @@ export default function VAFDashboard() {
                 else if (data.type === 'workflow_update') {
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
                     updateStepStatus(data.stepId, data.status, data.progress, data.result);
+                }
+                else if (data.type === 'subagent_update') {
+                    setSubAgentState(prev => ({
+                        ...prev,
+                        isOpen: true,
+                        agentName: data.agentName || prev.agentName,
+                        status: data.status || prev.status,
+                        currentFile: data.file || prev.currentFile,
+                        codeContent: data.code || prev.codeContent,
+                        steps: data.steps || prev.steps
+                    }));
                 }
                 else if (data.type === 'history_update') {
                     setCurrentSessionId(data.sessionId);
@@ -606,6 +706,19 @@ export default function VAFDashboard() {
                     const finalMsgs = [...hydratedServerMsgs, ...orphans].sort((a, b) => a.timestamp - b.timestamp);
 
                     setMessages(finalMsgs);
+
+                    // If a chat was queued before we had a session, send it now.
+                    if (pendingSendRef.current && data.sessionId) {
+                        const pending = pendingSendRef.current;
+                        pendingSendRef.current = null;
+                        pendingSessionRequestRef.current = false;
+                        ws?.send(JSON.stringify({
+                            type: 'chat',
+                            content: pending.text,
+                            files: pending.files,
+                            sessionId: data.sessionId
+                        }));
+                    }
                 }
                 else if (data.type === 'config_update') {
                     setConfig(data.config);
@@ -711,6 +824,18 @@ export default function VAFDashboard() {
 
         setMessages(prev => [...prev, { role: 'user', content: textToSend, timestamp: Date.now() }]);
         setLoading(true);
+        if (!currentSessionId) {
+            pendingSendRef.current = { text: textToSend, files: filesData };
+            if (!pendingSessionRequestRef.current) {
+                pendingSessionRequestRef.current = true;
+                ws.send(JSON.stringify({ type: 'new_session' }));
+            }
+            setInput('');
+            setSuggestion('');
+            setAttachedFiles([]); // Clear attached files after sending
+            return;
+        }
+
         ws.send(JSON.stringify({
             type: 'chat',
             content: textToSend,
@@ -1207,6 +1332,33 @@ export default function VAFDashboard() {
                                 <Paperclip size={20} />
                             </button>
                             <div className="flex-1 relative">
+                                {/* Suggestions Popup */}
+                                {suggestionList.length > 0 && (
+                                    <div className="absolute bottom-full mb-2 left-0 w-72 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2">
+                                        <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                                            {suggestionType === 'command' ? 'Commands' : 'Workflows'}
+                                        </div>
+                                        <div className="max-h-64 overflow-y-auto">
+                                            {suggestionList.map((item, idx) => (
+                                                <div
+                                                    key={idx}
+                                                    className="px-4 py-3 hover:bg-indigo-50 cursor-pointer flex items-center gap-3 transition-colors border-b border-gray-50 last:border-0"
+                                                    onClick={() => handleSuggestionClick(item)}
+                                                >
+                                                    <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center shrink-0", 
+                                                        suggestionType === 'command' ? "bg-yellow-100 text-yellow-600" : "bg-blue-100 text-blue-600")}>
+                                                        {suggestionType === 'command' ? <Zap size={16}/> : <Workflow size={16}/>}
+                                                    </div>
+                                                    <div className="flex flex-col min-w-0">
+                                                        <span className="text-sm font-medium text-gray-700 truncate">{item.name || item.id}</span>
+                                                        {item.description && <span className="text-xs text-gray-400 truncate">{item.description}</span>}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
                                 <div className="absolute inset-0 py-4 px-1 pointer-events-none text-sm text-gray-400 whitespace-pre">
                                     <span className="text-transparent">{input}</span>
                                     {suggestion}
@@ -1214,7 +1366,7 @@ export default function VAFDashboard() {
                                 <input
                                     type="text"
                                     value={input}
-                                    onChange={e => setInput(e.target.value)}
+                                    onChange={handleInputChange}
                                     onKeyDown={handleKeyDown}
                                     placeholder={input ? "" : "Ask anything..."}
                                     className="w-full py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10"
@@ -1251,6 +1403,16 @@ export default function VAFDashboard() {
             </div>
             {/* Active Tools Panel Moved Inline */}
             <VAFWorkflowRuntime />
+
+            <SubAgentWindow
+                isOpen={subAgentState.isOpen}
+                onClose={() => setSubAgentState(prev => ({ ...prev, isOpen: false }))}
+                agentName={subAgentState.agentName}
+                status={subAgentState.status}
+                currentFile={subAgentState.currentFile}
+                codeContent={subAgentState.codeContent}
+                steps={subAgentState.steps}
+            />
 
             <SettingsModal
                 isOpen={isSettingsOpen}

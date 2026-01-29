@@ -6,6 +6,7 @@ This directory contains static media assets used for branding, icons, and UI ele
 
 - **logo_original.png**: The source high-resolution logo for VAF.
 - **app_icon.ico**: The current Windows application icon.
+- **vaf_icon_v5.ico**: Previous Windows icon variant (kept for compatibility).
 - **vaf_icon_v6.ico**: Versioned icon optimized for the Windows Desktop and Start Menu (maximized zoom).
 - **sounds/**: Directory containing audio files for notifications and speech feedback.
 

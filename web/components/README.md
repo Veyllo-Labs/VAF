@@ -4,8 +4,12 @@ This directory contains the reusable React components used throughout the VAF We
 
 ## Structure
 
-- **SettingsModal.tsx**: The interface for modifying VAF configuration from the web.
-- **ui/**: Atomic UI components (Buttons, Inputs, Dialogs) primarily sourced from Shadcn UI.
+- **ActiveToolsPanel.tsx**: Legacy tools panel (kept for compatibility).
+- **SettingsModal.tsx**: Web UI configuration dialog.
+- **SubAgentWindow.tsx**: Large modal showing sub-agent progress.
+- **ToolMessage.tsx**: Inline tool execution cards in chat.
+- **workflows/**: Workflow runtime UI components and store.
+- **ui/**: Low-level UI primitives used by higher-level components.
 
 ## Usage
 
@@ -19,5 +23,4 @@ Components in this directory should be modular and focus on specific UI features
 
 ## Dependencies
 
-- **Radix UI**: Used for accessible UI primitives.
 - **Lucide React**: The standard icon set.

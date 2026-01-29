@@ -12,7 +12,7 @@ The `vaf.cli` module implements the user-facing terminal interface, including th
 
 ## Usage
 
-The CLI is the main entry point for most users. Commands are structured using `argparse` or similar, and are routed through `vaf/main.py`.
+The CLI is the main entry point for most users. Commands are structured using Typer and are routed through `vaf/main.py`.
 
 ### Key CLI Actions:
 - `vaf run`: Starts the interactive TUI.

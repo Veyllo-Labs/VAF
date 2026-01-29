@@ -166,7 +166,7 @@ Create a python script in `vaf/workflows/workflows/` (e.g., `my_workflow.py`). D
 
 ## 📝 Style Guide
 
-- **Python:** We use Python 3.10+. Type hints are **mandatory**.
+- **Python:** We use Python 3.13+. Type hints are **mandatory**.
 - **Docstrings:** Every class and function must have a Google-style docstring.
 - **Naming:** `snake_case` for functions/variables, `PascalCase` for classes.
 - **Imports:** Group standard libs, third-party libs, and local imports.

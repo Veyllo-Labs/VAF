@@ -89,6 +89,12 @@ def _push_session_update(self, session_id: str, data: dict):
 ```
 
 ### 5. Frontend Filtering
+### 6. Initial Session Bootstrap
+
+On WebSocket connect, the backend sends `session_list` and immediately follows with
+`history_update` for the most recent session. The frontend should set
+`currentSessionId` from that update so that `agent_message_update` is not filtered out.
+
 
 ```typescript
 // web/app/page.tsx (line 278-283)

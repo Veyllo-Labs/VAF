@@ -217,12 +217,16 @@ To increase match probability:
 Check the existing workflows in `workflows/` for examples:
 - `create_website.py` - Multi-file web project
 - `research_and_code.py` - Web search then code generation
+- `research_and_document.py` - Research + document creation
 - `analyze_website.py` - Fetch and analyze web content
 - `code_review.py` - Review code files
 - `deep_research.py` - Multi-query research
-- `web_lookup.py` - Quick web search
 - `generate_docs.py` - Generate documentation
+- `create_document.py` - Create a document
 - `create_file.py` - Create a single file
+- `create_scheduled_task.py` - Scheduled task workflow
+- `legal_contract_research.py` - Legal research workflow
+- `technical_doc_research.py` - Technical research workflow
 
 ## Reloading Workflows
 

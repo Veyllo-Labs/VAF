@@ -4,7 +4,7 @@ This directory contains the main pages, layouts, and global styles for the VAF W
 
 ## Key Files
 
-- **layout.tsx**: The root layout shared across all pages, including the main navigation and context providers.
+- **layout.tsx**: The root layout shared across all pages (HTML/body setup).
 - **page.tsx**: The main dashboard page where the chat interface and session management reside.
 - **globals.css**: Global CSS styles and Tailwind imports.
 

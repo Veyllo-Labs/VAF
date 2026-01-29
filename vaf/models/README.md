@@ -4,7 +4,7 @@ This directory is used by VAF to store and cache large machine learning models, 
 
 ## Structure
 
-- **.cache/**: Contains internal cache files for the model management system (e.g., Hugging Face cache).
+Runtime downloads are stored in the user's VAF data directory (for example `~/.vaf/models`). Cache folders (like `.cache/`) are created at runtime as needed.
 
 ## Usage
 

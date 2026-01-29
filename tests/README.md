@@ -6,7 +6,6 @@ This directory contains the testing suite for VAF, including unit tests, integra
 
 - **test_agent_features.py**: Tests for core agent capabilities, tool usage, and response generation.
 - **test_integrity.py**: Verifies the overall system health and critical pathways.
-- Root level tests (e.g., `test_gateway.py`, `test_sandbox.py` in the project root) are also relevant but primary suite resides here.
 
 ## Running Tests
 

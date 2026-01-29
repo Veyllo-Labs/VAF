@@ -148,8 +148,22 @@ const SystemStep = ({ message, isLoading }: { message: string, isLoading?: boole
     // Ensure we don't show empty steps (fixes lag if empty router logs sent)
     if (!cleanText.trim()) return null;
 
+    // Use standard React state for animation to avoid build issues with framer-motion
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const [isVisible, setIsVisible] = useState(false);
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useEffect(() => {
+        const timer = setTimeout(() => setIsVisible(true), 50);
+        return () => clearTimeout(timer);
+    }, []);
+
     return (
-        <div className="flex gap-4 w-full animate-in fade-in slide-in-from-left-2 duration-300 my-1">
+        <div 
+            className={cn(
+                "flex gap-4 w-full my-1 transition-all duration-500 ease-out",
+                isVisible ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-2"
+            )}
+        >
             <div className="w-9 shrink-0 flex justify-center">
                 <div className="w-0.5 h-full bg-gray-100 relative">
                     <div className={cn(

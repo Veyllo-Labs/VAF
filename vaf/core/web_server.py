@@ -3,9 +3,12 @@ log("WebServer", "Module load started")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 import asyncio
 import uvicorn
 import threading
+import inspect
+import html
 log("WebServer", "Basic imports done")
 
 from vaf.core.web_interface import get_web_interface
@@ -130,6 +133,92 @@ async def receive_workflow_update(update: WorkflowUpdate):
         else:
             await manager.broadcast(data)
     return {"status": "ok"}
+
+@app.get("/api/tools/{name}/source")
+async def get_tool_source(name: str):
+    """Get the source code of a tool."""
+    print(f"[DEBUG] Fetching source for tool: {name}")
+    try:
+        manager = get_web_interface()
+        if not manager.agent_instance:
+            print("[DEBUG] Agent instance not found in manager")
+            return {"error": "Agent not initialized"}
+            
+        if not hasattr(manager.agent_instance, 'tools'):
+            print("[DEBUG] Agent has no tools attribute")
+            return {"error": "Agent has no tools"}
+            
+        tool = manager.agent_instance.tools.get(name)
+        if tool:
+             try:
+                 # Try to get source of the class
+                 src = inspect.getsource(tool.__class__)
+                 print(f"[DEBUG] Found source, length: {len(src)}")
+                 return {"name": name, "code": src}
+             except Exception as e:
+                 print(f"[DEBUG] inspect.getsource failed: {e}")
+                 # Fallback: Try to read from __file__ if available
+                 try:
+                     import os
+                     file_path = inspect.getfile(tool.__class__)
+                     if os.path.exists(file_path):
+                         with open(file_path, 'r', encoding='utf-8') as f:
+                             src = f.read()
+                             return {"name": name, "code": src}
+                 except Exception as ex:
+                     print(f"[DEBUG] File read fallback failed: {ex}")
+                 
+                 return {"error": f"Failed to read source: {e}"}
+        else:
+             print(f"[DEBUG] Tool '{name}' not found in agent.tools")
+             print(f"[DEBUG] Available tools: {list(manager.agent_instance.tools.keys())}")
+             
+    except Exception as e:
+        print(f"[DEBUG] General error in get_tool_source: {e}")
+        return {"error": str(e)}
+    return {"error": "Tool not found"}
+
+@app.get("/api/workflows/{wf_id}")
+async def get_workflow_details(wf_id: str):
+    """Get workflow definition and steps."""
+    try:
+        from vaf.workflows.templates import WORKFLOW_TEMPLATES
+        
+        # Try to find by ID first
+        wf = WORKFLOW_TEMPLATES.get(wf_id)
+        
+        # If not found, try by name (fallback)
+        if not wf:
+            for w in WORKFLOW_TEMPLATES.values():
+                if w.get("name") == wf_id:
+                    wf = w
+                    break
+        
+        if wf:
+            # Format steps for visualization
+            steps = []
+            for idx, step in enumerate(wf.get("steps", [])):
+                # Create a pseudo-code representation of the step
+                import json
+                step_code = json.dumps(step, indent=2)
+                steps.append({
+                    "id": str(idx),
+                    "name": step.get("description", f"Step {idx+1}"),
+                    "type": step.get("tool", "unknown"),
+                    "code": step_code
+                })
+                
+            return {
+                "id": wf_id,
+                "name": wf.get("name"),
+                "description": wf.get("description"),
+                "steps": steps
+            }
+        return {"error": "Workflow not found"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.websocket("/ws")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -473,16 +562,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif type == "get_tools":
                     # Return list of available tools from agent
                     try:
-                        # Access global agent if available
-                        from vaf.cli.cmd.run import global_agent
-                        if global_agent and hasattr(global_agent, 'tools'):
+                        # Use registered agent instance from manager
+                        agent = manager.agent_instance
+                        if agent and hasattr(agent, 'tools'):
                             tools_list = [
                                 {
                                     "name": name,
                                     "description": getattr(tool, 'description', 'No description'),
                                     "category": getattr(tool, 'category', 'general')
                                 }
-                                for name, tool in global_agent.tools.items()
+                                for name, tool in agent.tools.items()
                             ]
                             await websocket.send_json({
                                 "type": "tools_list",

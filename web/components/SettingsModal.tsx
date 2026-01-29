@@ -1,9 +1,19 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import ReactFlow, { 
+    Background, 
+    Controls, 
+    MiniMap, 
+    useNodesState, 
+    useEdgesState,
+    Position,
+    MarkerType
+} from 'reactflow';
+import 'reactflow/dist/style.css';
 import {
     X, Globe, Cpu, Volume2, Monitor, Shield, Save, RotateCcw,
-    Check, ChevronRight, Zap, Search, Download, RefreshCw
+    Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -52,10 +62,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [changed, setChanged] = useState(false);
     const [hfQuery, setHfQuery] = useState('');
     const [fetchingProvider, setFetchingProvider] = useState<string | null>(null);
+    
+    // Modals State
     const [showToolsModal, setShowToolsModal] = useState(false);
     const [showWorkflowsModal, setShowWorkflowsModal] = useState(false);
+
     const [toolsSearch, setToolsSearch] = useState('');
     const [workflowsSearch, setWorkflowsSearch] = useState('');
+    const [codeModal, setCodeModal] = useState<{name: string, code: string} | null>(null);
+    
+    // Workflow Visualization State
+    const [workflowModal, setWorkflowModal] = useState<any>(null);
+    const [nodes, setNodes, onNodesChange] = useNodesState([]);
+    const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
     useEffect(() => {
         setLocalConfig(config || {});
@@ -67,11 +86,137 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setFetchingProvider(null);
     }, [apiModels]);
 
+    // Stacked Escape Key Handling
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                // Check topmost modal first
+                if (codeModal) {
+                    setCodeModal(null);
+                    e.stopPropagation();
+                    return;
+                }
+                if (workflowModal) {
+                    setWorkflowModal(null);
+                    e.stopPropagation();
+                    return;
+                }
+                if (showToolsModal) {
+                    setShowToolsModal(false);
+                    e.stopPropagation();
+                    return;
+                }
+                if (showWorkflowsModal) {
+                    setShowWorkflowsModal(false);
+                    e.stopPropagation();
+                    return;
+                }
+                // Finally close settings
+                if (isOpen) {
+                    onClose();
+                }
+            }
+        };
+
+        if (isOpen) {
+            window.addEventListener('keydown', handleKeyDown);
+        }
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isOpen, codeModal, workflowModal, showToolsModal, showWorkflowsModal, onClose]);
+
     if (!isOpen) return null;
 
     const handleChange = (key: string, value: any) => {
         setLocalConfig((prev: any) => ({ ...prev, [key]: value }));
         setChanged(true);
+    };
+    
+    const handleViewCode = async (name: string) => {
+        try {
+            const res = await fetch(`/api/tools/${encodeURIComponent(name)}/source`);
+            if (!res.ok) {
+                const text = await res.text();
+                alert(`API Error ${res.status}: ${text}`);
+                return;
+            }
+            const data = await res.json();
+            if (data.code) {
+                setCodeModal({ name, code: data.code });
+            } else {
+                alert("Could not load code: " + (data.error || "Unknown error"));
+            }
+        } catch (e) {
+            console.error(e);
+            alert("Failed to fetch code: " + String(e));
+        }
+    };
+
+    const handleViewWorkflow = async (id: string) => {
+        try {
+            // Using ID (filename) is safer than name
+            const res = await fetch(`/api/workflows/${encodeURIComponent(id)}`);
+            if (!res.ok) throw new Error(await res.text());
+            const data = await res.json();
+            
+            // Build ReactFlow Nodes
+            const newNodes = (data.steps || []).map((step: any, idx: number) => ({
+                id: step.id,
+                type: 'default', // Built-in node type
+                data: { label: step.name, code: step.code },
+                position: { x: 250, y: idx * 120 + 50 },
+                style: { 
+                    background: '#fff', 
+                    // Highlight first node by default
+                    border: idx === 0 ? '2px solid #9333ea' : '1px solid #e5e7eb', 
+                    borderRadius: '12px', 
+                    padding: '12px',
+                    width: 250,
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    // Add glow to first node
+                    boxShadow: idx === 0 ? '0 0 0 4px rgba(147, 51, 234, 0.2)' : '0 4px 6px -1px rgb(0 0 0 / 0.1)'
+                },
+                // Vertical layout
+                sourcePosition: Position.Bottom,
+                targetPosition: Position.Top,
+            }));
+            
+            // Build Edges
+            const newEdges = (data.steps || []).slice(0, -1).map((step: any, idx: number) => ({
+                id: `e${idx}-${idx+1}`,
+                source: step.id,
+                target: data.steps[idx+1].id,
+                animated: true,
+                style: { stroke: '#9333ea', strokeWidth: 2 }, // Purple
+                markerEnd: { type: MarkerType.ArrowClosed, color: '#9333ea' },
+            }));
+
+            setNodes(newNodes);
+            setEdges(newEdges);
+            setWorkflowModal({ ...data, selectedCode: data.steps[0]?.code || "// Select a step to view details" });
+        } catch (e) {
+            console.error(e);
+            alert("Failed to load workflow: " + String(e));
+        }
+    };
+    
+    const onNodeClick = (_: any, clickedNode: any) => {
+        setWorkflowModal((prev: any) => ({ ...prev, selectedCode: clickedNode.data.code }));
+        
+        // Highlight selected node
+        setNodes((nds) =>
+            nds.map((node) => {
+                const isSelected = node.id === clickedNode.id;
+                return {
+                    ...node,
+                    style: {
+                        ...node.style,
+                        border: isSelected ? '2px solid #9333ea' : '1px solid #e5e7eb',
+                        boxShadow: isSelected ? '0 0 0 4px rgba(147, 51, 234, 0.2)' : '0 4px 6px -1px rgb(0 0 0 / 0.1)'
+                    },
+                };
+            })
+        );
     };
 
     const handleSave = () => {
@@ -575,58 +720,132 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             {/* Tools Modal */}
             {showToolsModal && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowToolsModal(false)}>
-                    <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-2xl max-h-[600px] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200"
+                        className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
                         onClick={(e) => e.stopPropagation()}
                     >
-                        <div className="h-16 border-b border-gray-100 flex items-center justify-between px-6 shrink-0">
-                            <h2 className="text-xl font-bold text-gray-800">Available Tools ({tools.length})</h2>
+                        {/* Header */}
+                        <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
+                            <div>
+                                <h2 className="text-2xl font-bold text-gray-800">Available Tools</h2>
+                                <p className="text-sm text-gray-500">{tools.length} modules installed</p>
+                            </div>
                             <button onClick={() => setShowToolsModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
-                                <X size={20} />
+                                <X size={24} />
                             </button>
                         </div>
-                        <div className="p-4 border-b border-gray-100">
-                            <div className="relative">
-                                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                        
+                        {/* Search Bar */}
+                        <div className="p-6 border-b border-gray-100 bg-gray-50/50">
+                            <div className="relative max-w-md">
+                                <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
                                 <input
                                     type="text"
-                                    placeholder="Search tools..."
+                                    placeholder="Search tools by name or description..."
                                     value={toolsSearch}
                                     onChange={(e) => setToolsSearch(e.target.value)}
-                                    className="w-full pl-10 pr-4 h-10 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                                    className="w-full pl-12 pr-4 h-12 bg-white border border-gray-200 rounded-xl text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                                 />
                             </div>
                         </div>
-                        <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                            {tools
-                                .filter(tool =>
-                                    toolsSearch === '' ||
-                                    tool.name.toLowerCase().includes(toolsSearch.toLowerCase()) ||
-                                    tool.description.toLowerCase().includes(toolsSearch.toLowerCase())
-                                )
-                                .map((tool, idx) => (
-                                    <div key={idx} className="p-4 bg-gray-50 rounded-lg border border-gray-100 hover:border-gray-200 transition-colors">
-                                        <div className="font-mono text-sm font-medium text-gray-900">{tool.name}</div>
-                                        <div className="text-sm text-gray-600 mt-1">{tool.description}</div>
-                                        {tool.category && (
-                                            <div className="mt-2">
-                                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded">
-                                                    {tool.category}
-                                                </span>
+
+                        {/* Tools Grid */}
+                        <div className="flex-1 overflow-y-auto p-6 bg-gray-50/30">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+                                {tools
+                                    .filter(tool =>
+                                        toolsSearch === '' ||
+                                        tool.name.toLowerCase().includes(toolsSearch.toLowerCase()) ||
+                                        tool.description.toLowerCase().includes(toolsSearch.toLowerCase())
+                                    )
+                                    .map((tool, idx) => (
+                                        <div 
+                                            key={idx} 
+                                            onClick={() => handleViewCode(tool.name)}
+                                            className="group relative aspect-square bg-white rounded-2xl border-2 border-gray-200 hover:border-blue-500 hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden flex flex-col"
+                                        >
+                                            {/* Decoration: Floppy Disk Icon Background */}
+                                            <div className="absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity rotate-12">
+                                                <Save size={160} />
                                             </div>
-                                        )}
-                                    </div>
-                                ))}
-                            {tools.filter(tool =>
+                                            
+                                            {/* Content */}
+                                            <div className="p-5 flex-1 flex flex-col relative z-10">
+                                                <div className="flex items-start justify-between mb-2">
+                                                    <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shadow-sm group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                                                        <Cpu size={20} />
+                                                    </div>
+                                                    {tool.category && (
+                                                        <span className="px-2 py-1 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-md">
+                                                            {tool.category}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                
+                                                <h3 className="text-lg font-bold text-gray-900 mb-1 group-hover:text-blue-600 transition-colors line-clamp-1">{tool.name}</h3>
+                                                
+                                                <div className="flex-1">
+                                                    <p className="text-xs text-gray-500 line-clamp-4 leading-relaxed">
+                                                        {tool.description}
+                                                    </p>
+                                                </div>
+
+                                                <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 group-hover:text-gray-600">
+                                                    <span className="font-mono">v1.0.0</span>
+                                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity text-blue-600 font-medium">
+                                                        View Code <ChevronRight size={12} />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Bottom Bar (Floppy style) */}
+                                            <div className="h-2 bg-gray-100 border-t border-gray-200 group-hover:bg-blue-50 group-hover:border-blue-100 transition-colors" />
+                                        </div>
+                                    ))}
+                            </div>
+
+                            {/* Empty State */}
+                            {tools.length > 0 && tools.filter(tool =>
                                 toolsSearch === '' ||
                                 tool.name.toLowerCase().includes(toolsSearch.toLowerCase()) ||
                                 tool.description.toLowerCase().includes(toolsSearch.toLowerCase())
                             ).length === 0 && (
-                                    <div className="text-center py-12 text-gray-400">
-                                        <p>No tools found matching "{toolsSearch}"</p>
+                                <div className="flex flex-col items-center justify-center py-20 text-center">
+                                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4 text-gray-400">
+                                        <Search size={32} />
                                     </div>
-                                )}
+                                    <h3 className="text-lg font-medium text-gray-900">No tools found</h3>
+                                    <p className="text-sm text-gray-500 mt-1">Try adjusting your search terms.</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Code Viewer Modal */}
+            {codeModal && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setCodeModal(null)}>
+                    <div className="absolute inset-0 bg-black/50 backdrop-blur-md" />
+                    <div
+                        className="relative bg-[#1e1e1e] w-full max-w-[90vw] h-[90vh] rounded-2xl shadow-2xl flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {/* Header */}
+                        <div className="h-14 border-b border-gray-700 flex items-center justify-between px-6 shrink-0 bg-[#252526]">
+                            <div className="flex items-center gap-3">
+                                <Cpu size={18} className="text-blue-400" />
+                                <span className="font-mono text-sm font-medium text-gray-200">{codeModal.name}.py</span>
+                            </div>
+                            <button onClick={() => setCodeModal(null)} className="p-1.5 text-gray-400 hover:text-white rounded-md hover:bg-gray-700 transition-colors">
+                                <X size={18} />
+                            </button>
+                        </div>
+                        
+                        {/* Code Content */}
+                        <div className="flex-1 overflow-auto p-4 font-mono text-sm text-[#d4d4d4] leading-relaxed selection:bg-blue-500/30">
+                            <pre>{codeModal.code}</pre>
                         </div>
                     </div>
                 </div>
@@ -635,56 +854,161 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             {/* Workflows Modal */}
             {showWorkflowsModal && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowWorkflowsModal(false)}>
-                    <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-2xl max-h-[600px] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200"
+                        className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
                         onClick={(e) => e.stopPropagation()}
                     >
-                        <div className="h-16 border-b border-gray-100 flex items-center justify-between px-6 shrink-0">
-                            <h2 className="text-xl font-bold text-gray-800">Available Workflows ({workflows.length})</h2>
+                        {/* Header */}
+                        <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
+                            <div>
+                                <h2 className="text-2xl font-bold text-gray-800">Available Workflows</h2>
+                                <p className="text-sm text-gray-500">{workflows.length} templates available</p>
+                            </div>
                             <button onClick={() => setShowWorkflowsModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
-                                <X size={20} />
+                                <X size={24} />
                             </button>
                         </div>
-                        <div className="p-4 border-b border-gray-100">
-                            <div className="relative">
-                                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                        
+                        {/* Search Bar */}
+                        <div className="p-6 border-b border-gray-100 bg-gray-50/50">
+                            <div className="relative max-w-md">
+                                <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
                                 <input
                                     type="text"
                                     placeholder="Search workflows..."
                                     value={workflowsSearch}
                                     onChange={(e) => setWorkflowsSearch(e.target.value)}
-                                    className="w-full pl-10 pr-4 h-10 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                                    className="w-full pl-12 pr-4 h-12 bg-white border border-gray-200 rounded-xl text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all"
                                 />
                             </div>
                         </div>
-                        <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                            {workflows
-                                .filter(wf =>
-                                    workflowsSearch === '' ||
-                                    wf.name.toLowerCase().includes(workflowsSearch.toLowerCase()) ||
-                                    wf.description.toLowerCase().includes(workflowsSearch.toLowerCase())
-                                )
-                                .map((wf, idx) => (
-                                    <div key={idx} className="p-4 bg-gray-50 rounded-lg border border-gray-100 hover:border-gray-200 transition-colors">
-                                        <div className="flex items-center justify-between">
-                                            <div className="font-mono text-sm font-medium text-gray-900">{wf.name}</div>
-                                            <div className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded">
-                                                {wf.steps} steps
+
+                        {/* Workflows Grid */}
+                        <div className="flex-1 overflow-y-auto p-6 bg-gray-50/30">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+                                {workflows
+                                    .filter(wf =>
+                                        workflowsSearch === '' ||
+                                        wf.name.toLowerCase().includes(workflowsSearch.toLowerCase()) ||
+                                        wf.description.toLowerCase().includes(workflowsSearch.toLowerCase())
+                                    )
+                                    .map((wf, idx) => (
+                                        <div 
+                                            key={idx} 
+                                            onClick={() => handleViewWorkflow(wf.id)}
+                                            className="group relative aspect-square bg-white rounded-2xl border-2 border-gray-200 hover:border-purple-500 hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden flex flex-col"
+                                        >
+                                            {/* Decoration: Workflow Icon Background */}
+                                            <div className="absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity rotate-12">
+                                                <Workflow size={160} />
                                             </div>
+                                            
+                                            {/* Content */}
+                                            <div className="p-5 flex-1 flex flex-col relative z-10">
+                                                <div className="flex items-start justify-between mb-2">
+                                                    <div className="w-10 h-10 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center shadow-sm group-hover:bg-purple-600 group-hover:text-white transition-colors">
+                                                        <GitBranch size={20} />
+                                                    </div>
+                                                    <span className="px-2 py-1 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-md">
+                                                        {wf.steps} Steps
+                                                    </span>
+                                                </div>
+                                                
+                                                <h3 className="text-lg font-bold text-gray-900 mb-1 group-hover:text-purple-600 transition-colors line-clamp-1">{wf.name}</h3>
+                                                
+                                                <div className="flex-1">
+                                                    <p className="text-xs text-gray-500 line-clamp-4 leading-relaxed">
+                                                        {wf.description}
+                                                    </p>
+                                                </div>
+
+                                                <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 group-hover:text-gray-600">
+                                                    <span className="font-mono">Template</span>
+                                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity text-purple-600 font-medium">
+                                                        Details <ChevronRight size={12} />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Bottom Bar (Purple style) */}
+                                            <div className="h-2 bg-gray-100 border-t border-gray-200 group-hover:bg-purple-50 group-hover:border-purple-100 transition-colors" />
                                         </div>
-                                        <div className="text-sm text-gray-600 mt-1">{wf.description}</div>
-                                    </div>
-                                ))}
-                            {workflows.filter(wf =>
+                                    ))}
+                            </div>
+
+                            {/* Empty State */}
+                            {workflows.length > 0 && workflows.filter(wf =>
                                 workflowsSearch === '' ||
                                 wf.name.toLowerCase().includes(workflowsSearch.toLowerCase()) ||
                                 wf.description.toLowerCase().includes(workflowsSearch.toLowerCase())
                             ).length === 0 && (
-                                    <div className="text-center py-12 text-gray-400">
-                                        <p>No workflows found matching "{workflowsSearch}"</p>
+                                <div className="flex flex-col items-center justify-center py-20 text-center">
+                                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4 text-gray-400">
+                                        <Search size={32} />
                                     </div>
-                                )}
+                                    <h3 className="text-lg font-medium text-gray-900">No workflows found</h3>
+                                    <p className="text-sm text-gray-500 mt-1">Try adjusting your search terms.</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Workflow Visualizer Modal */}
+            {workflowModal && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setWorkflowModal(null)}>
+                    <div className="absolute inset-0 bg-black/50 backdrop-blur-md" />
+                    <div
+                        className="relative bg-white w-full max-w-[90vw] h-[90vh] rounded-2xl shadow-2xl flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {/* Header */}
+                        <div className="h-16 border-b border-gray-100 flex items-center justify-between px-6 shrink-0 bg-white z-10">
+                            <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
+                                    <GitBranch size={18} />
+                                </div>
+                                <div>
+                                    <h2 className="text-lg font-bold text-gray-800">{workflowModal.name}</h2>
+                                    <p className="text-xs text-gray-500">Interactive Flow Visualization</p>
+                                </div>
+                            </div>
+                            <button onClick={() => setWorkflowModal(null)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        
+                        {/* Content Split View */}
+                        <div className="flex-1 flex overflow-hidden">
+                            {/* Left: ReactFlow Canvas */}
+                            <div className="flex-1 bg-gray-50 relative border-r border-gray-200">
+                                <ReactFlow
+                                    nodes={nodes}
+                                    edges={edges}
+                                    onNodesChange={onNodesChange}
+                                    onEdgesChange={onEdgesChange}
+                                    onNodeClick={onNodeClick}
+                                    nodesDraggable={false}
+                                    fitView
+                                    fitViewOptions={{ padding: 0.2 }}
+                                    proOptions={{ hideAttribution: true }}
+                                >
+                                    <Background color="#ccc" gap={20} />
+                                    <Controls />
+                                </ReactFlow>
+                            </div>
+
+                            {/* Right: Code Viewer (Fixed 30%) */}
+                            <div className="w-[30%] shrink-0 bg-[#1e1e1e] flex flex-col border-l border-gray-800">
+                                <div className="h-10 border-b border-gray-700 flex items-center px-4 bg-[#252526] shrink-0">
+                                    <span className="text-xs font-mono font-medium text-gray-400 uppercase tracking-wide">Step Definition</span>
+                                </div>
+                                <div className="flex-1 overflow-auto p-4 font-mono text-xs text-[#d4d4d4] leading-relaxed selection:bg-purple-500/30">
+                                    <pre>{workflowModal.selectedCode}</pre>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

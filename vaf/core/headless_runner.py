@@ -73,7 +73,7 @@ def run_headless_agent():
                     stats = {
                         "used": used,
                         "total": total,
-                        "percent": round((used / total) * 100) if total else 0,
+                        "percent": (used / total) if total else 0.0,
                         "api": bool(getattr(agent, 'api_backend', False))
                     }
                     get_web_interface().emit_stats(stats, session_id=task.session_id)
@@ -130,7 +130,7 @@ def run_headless_agent():
                         stats = {
                             "used": used,
                             "total": total,
-                            "percent": round((used / total) * 100) if total else 0,
+                            "percent": (used / total) if total else 0.0,
                             "api": bool(getattr(agent, 'api_backend', False))
                         }
                         get_web_interface().emit_stats(stats, session_id=task.session_id)

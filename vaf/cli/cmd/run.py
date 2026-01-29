@@ -2339,7 +2339,7 @@ def _process_agent_message(agent, user_input: str, tui, session):
             stats = {
                 "used": used,
                 "total": total,
-                "percent": round((used / total) * 100) if total else 0,
+                "percent": (used / total) if total else 0.0,
                 "api": bool(getattr(agent, 'api_backend', False))
             }
             web_iface.emit_stats(stats, session_id=session_id)

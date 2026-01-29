@@ -235,6 +235,34 @@ async def websocket_endpoint(websocket: WebSocket):
                             "isActive": is_active,
                             "currentStatus": manager.latest_state.get("status", "idle") if is_active else "idle"
                         })
+
+                        # 4. Send initial estimated stats (so UI is not empty)
+                        try:
+                            # Estimate based on loaded history
+                            total_chars = sum(len(str(m.get("content", ""))) for m in frontend_messages)
+                            est_tokens = total_chars // 3  # Rough estimate
+                            
+                            # Get max context from config
+                            cfg = Config.load()
+                            max_ctx = cfg.get("n_ctx", 8192)
+                            is_api = cfg.get("provider", "local") != "local"
+                            
+                            if is_api and max_ctx <= 16384:
+                                max_ctx = 128000
+                                
+                            stats = {
+                                "used": est_tokens,
+                                "total": max_ctx,
+                                "percent": (est_tokens / max_ctx) if max_ctx else 0.0,
+                                "api": is_api
+                            }
+                            await websocket.send_json({
+                                "type": "stats",
+                                "stats": stats
+                            })
+                        except Exception as e:
+                            print(f"[WebServer] Stats estimation error: {e}")
+
                     except Exception as e:
                         import traceback
                         traceback.print_exc()

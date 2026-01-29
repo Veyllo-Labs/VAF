@@ -78,7 +78,14 @@ Singleton pattern manager that:
 - **Workflow Steps**: Real-time display of Router, Workflow, System, and Info events
 - **Inline Tool Status**: Visual cards for running/completed tools directly in the chat stream
 
-### 4. Message Features
+### 4. Sub-Agent Panel & Tool Cards
+
+- **Docked Panel**: Sub-agent output renders in a right-side panel that slides in/out.
+- **Auto-Open**: The panel opens when a sub-agent starts (via tool events/logs).
+- **Tool Card Toggle**: Clicking a sub-agent tool card expands details and opens the panel; collapsing the card closes the panel.
+- **Auto-Close Guard**: The panel does not auto-close while any sub-agent step is still running.
+
+### 5. Message Features
 
 **Thinking Details**:
 - Extracted from `<think>...</think>` tags

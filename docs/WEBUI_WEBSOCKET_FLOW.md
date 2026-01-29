@@ -66,6 +66,8 @@ Key rules:
 - `tool_update`: tool start/end/error
 - `stats`: token/usage metrics
 - `subagent_update`: sub-agent window payload
+- `subagent_output`: final sub-agent output block
+- `subagent_output_stream`: live stdout/stderr lines from headless sub-agents
 
 ## Troubleshooting Checklist
 
@@ -95,6 +97,17 @@ If `agent_message_update` appears in WS frames but UI is empty:
 If only `stats` or `new_log` arrives:
 - The agent likely failed before streaming.
 - Check for `Chat_step failed` log in the WebUI timeline.
+
+### 4) Sub-Agent Panel Does Not Open
+
+Expected triggers for the docked panel:
+- `subagent_update` (preferred)
+- `subagent_output` / `subagent_output_stream`
+- `tool_update` with sub-agent tool name (e.g., `librarian_agent`)
+- `new_log` with source/message containing "Sub-Agent"
+
+If the tool card expands but the panel does not open:
+- Confirm the WebSocket payloads include `sessionId` matching `currentSessionId`.
 
 ## Known Failure Modes and Fixes
 

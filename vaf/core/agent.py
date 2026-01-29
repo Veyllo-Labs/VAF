@@ -2570,6 +2570,8 @@ class Agent:
                     session_id = get_current_session_id()
                     if session_id:
                         os.environ["VAF_SESSION_ID"] = session_id
+                    os.environ["VAF_TASK_ID"] = task_id
+                    os.environ["VAF_AGENT_TYPE"] = f"workflow:{workflow_id}"
                     
                     # Pass Language Hint to workflow terminal
                     if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language:

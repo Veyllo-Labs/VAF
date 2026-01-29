@@ -223,20 +223,89 @@ def run_headless_agent():
                             found_results_text = []
                             for result_task in pending_results:
                                 # Ensure agent context is aligned with result session
-                                if result_task.session_id:
-                                    agent.load_session_context(result_task.session_id)
-                                    subagent_last_activity[result_task.session_id] = now
+                                session_id = result_task.session_id or getattr(agent, "current_session_id", None)
+                                if session_id:
+                                    agent.load_session_context(session_id)
+                                    subagent_last_activity[session_id] = now
                                 agent._process_subagent_result(result_task)
+                                
+                                # Ensure WebUI opens the Sub-Agent window even if no active task was seen
+                                sid = session_id
+                                if sid:
+                                    status_label = "Completed"
+                                    if result_task.status == "failed":
+                                        status_label = "Failed"
+                                    elif result_task.status == "timeout":
+                                        status_label = "Timed out"
+                                    step_status = "completed" if result_task.status in ("completed", "failed", "timeout") else "running"
+                                    steps = [{
+                                        "id": result_task.task_id,
+                                        "title": result_task.agent_type.replace("_", " ").title(),
+                                        "description": result_task.task_description,
+                                        "status": step_status,
+                                        "actions": []
+                                    }]
+                                    subagent_last_steps[sid] = steps
+                                    open_subagent_sessions.add(sid)
+                                    subagent_last_activity[sid] = now
+                                    get_web_interface()._push_session_update(sid, {
+                                        "type": "subagent_update",
+                                        "agentName": "Sub-Agent",
+                                        "status": status_label,
+                                        "file": "",
+                                        "code": "",
+                                        "steps": steps
+                                    })
 
                                 if result_task.status == "completed":
+                                    try:
+                                        output_text = str(result_task.result or "")
+                                        if output_text:
+                                            max_len = 8000
+                                            if len(output_text) > max_len:
+                                                output_text = output_text[:max_len] + "\n... [Output Truncated]\n"
+                                            if session_id:
+                                                get_web_interface()._push_session_update(session_id, {
+                                                "type": "subagent_output",
+                                                "taskId": result_task.task_id,
+                                                "agentType": result_task.agent_type,
+                                                "status": "completed",
+                                                "output": output_text
+                                                })
+                                    except Exception:
+                                        pass
                                     found_results_text.append(
                                         f"Sub-Agent '{result_task.agent_type}' completed:\n{result_task.result}"
                                     )
                                 elif result_task.status == "failed":
+                                    try:
+                                        error_text = str(result_task.error or "")
+                                        if error_text:
+                                            if session_id:
+                                                get_web_interface()._push_session_update(session_id, {
+                                                    "type": "subagent_output",
+                                                    "taskId": result_task.task_id,
+                                                    "agentType": result_task.agent_type,
+                                                    "status": "failed",
+                                                    "output": error_text
+                                                })
+                                    except Exception:
+                                        pass
                                     found_results_text.append(
                                         f"Sub-Agent '{result_task.agent_type}' FAILED:\n{result_task.error}"
                                     )
                                 elif result_task.status == "timeout":
+                                    try:
+                                        if session_id:
+                                            get_web_interface()._push_session_update(session_id, {
+                                                "type": "subagent_output",
+                                                "taskId": result_task.task_id,
+                                                "agentType": result_task.agent_type,
+                                                "status": "timeout",
+                                                "output": "Sub-Agent timed out."
+                                            })
+                                    except Exception:
+                                        pass
                                     found_results_text.append(
                                         f"Sub-Agent '{result_task.agent_type}' TIMEOUT."
                                     )

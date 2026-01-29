@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import SettingsModal from '@/components/SettingsModal';
@@ -123,11 +123,45 @@ const parseContent = (content: string): { thought: string | null; answer: string
 // Open while incomplete, auto-close when complete
 const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isComplete?: boolean }) => {
     const [isOpen, setIsOpen] = useState(!isComplete);
+    const openedAtRef = useRef<number>(Date.now());
+    const closeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const scrollRef = useRef<HTMLDivElement | null>(null);
+    const MIN_OPEN_MS = 800;
+    const CLOSE_DELAY_MS = 400;
 
     // Auto-update when isComplete changes
     useEffect(() => {
-        setIsOpen(!isComplete);
+        if (!isComplete) {
+            if (closeTimeoutRef.current) {
+                clearTimeout(closeTimeoutRef.current);
+                closeTimeoutRef.current = null;
+            }
+            openedAtRef.current = Date.now();
+            setIsOpen(true);
+            return;
+        }
+
+        const elapsed = Date.now() - openedAtRef.current;
+        const delay = Math.max(MIN_OPEN_MS - elapsed, 0) + CLOSE_DELAY_MS;
+        if (closeTimeoutRef.current) {
+            clearTimeout(closeTimeoutRef.current);
+        }
+        closeTimeoutRef.current = setTimeout(() => {
+            setIsOpen(false);
+            closeTimeoutRef.current = null;
+        }, delay);
+        return () => {
+            if (closeTimeoutRef.current) {
+                clearTimeout(closeTimeoutRef.current);
+                closeTimeoutRef.current = null;
+            }
+        };
     }, [isComplete]);
+
+    useEffect(() => {
+        if (!isOpen || !scrollRef.current) return;
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }, [thought, isOpen]);
 
     if (!thought) return null;
 
@@ -135,7 +169,17 @@ const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isCo
         <div className="mb-3 rounded-xl border border-gray-200 bg-gray-50/50 overflow-hidden w-full max-w-[95%] shadow-sm">
             <button
                 type="button"
-                onClick={() => setIsOpen(!isOpen)}
+                onClick={() => {
+                    if (closeTimeoutRef.current) {
+                        clearTimeout(closeTimeoutRef.current);
+                        closeTimeoutRef.current = null;
+                    }
+                    const next = !isOpen;
+                    if (next) {
+                        openedAtRef.current = Date.now();
+                    }
+                    setIsOpen(next);
+                }}
                 className="w-full px-4 py-2.5 flex items-center justify-between text-[11px] uppercase tracking-wide font-semibold text-gray-500 hover:bg-gray-100 transition-colors"
             >
                 <span className="flex items-center gap-2">
@@ -148,17 +192,21 @@ const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isCo
                 </span>
                 <ChevronRight size={14} className={cn("text-gray-400 transition-transform duration-200", isOpen && "rotate-90")} />
             </button>
-            {isOpen && (
-                <div className="px-4 py-3 text-xs text-slate-600 font-mono leading-relaxed border-t border-gray-200 bg-white/50 max-h-[500px] overflow-y-auto">
-                    {thought}
-                </div>
-            )}
+            <div
+                ref={scrollRef}
+                className={cn(
+                    "text-xs text-slate-600 font-mono leading-relaxed border-t border-gray-200 bg-white/50 overflow-y-auto transition-all duration-300 ease-out",
+                    isOpen ? "max-h-[500px] opacity-100 px-4 py-3" : "max-h-0 opacity-0 px-0 py-0 border-t-transparent"
+                )}
+            >
+                {thought}
+            </div>
         </div>
     );
 };
 
 // Component: System Step Log
-const SystemStep = ({ message, isLoading }: { message: string, isLoading?: boolean }) => {
+const SystemStep = ({ message, isLoading, onClick }: { message: string, isLoading?: boolean, onClick?: () => void }) => {
     const isRouter = message.includes('Router');
     const isWorkflow = message.includes('Step') || message.includes('Workflow');
     const isSafety = message.includes('Safety');
@@ -183,8 +231,18 @@ const SystemStep = ({ message, isLoading }: { message: string, isLoading?: boole
         <div 
             className={cn(
                 "flex gap-4 w-full my-1 transition-all duration-500 ease-out",
-                isVisible ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-2"
+                isVisible ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-2",
+                onClick ? "cursor-pointer" : ""
             )}
+            onClick={onClick}
+            role={onClick ? "button" : undefined}
+            tabIndex={onClick ? 0 : undefined}
+            onKeyDown={onClick ? (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onClick();
+                }
+            } : undefined}
         >
             <div className="w-9 shrink-0 flex justify-center">
                 <div className="w-0.5 h-full bg-gray-100 relative">
@@ -203,7 +261,7 @@ const SystemStep = ({ message, isLoading }: { message: string, isLoading?: boole
                 </div>
             </div>
             <div className="flex-1 py-1">
-                <div className="text-xs text-gray-500 flex items-center gap-2">
+                <div className={cn("text-xs text-gray-500 flex items-center gap-2", onClick && "hover:text-gray-800")}>
                     <span className={cn("font-semibold uppercase tracking-wider text-[10px]", isLoading ? "text-gray-600" : "text-gray-400")}>{source}</span>
                     <span className={cn(isLoading ? "text-gray-900 font-medium" : "text-gray-600")}>{cleanText}</span>
                 </div>
@@ -258,6 +316,10 @@ export default function VAFDashboard() {
         status: string;
         currentFile: string;
         codeContent: string;
+        artifactFile: string;
+        artifactCode: string;
+        artifactStatus: string;
+        consoleLines: string[];
         steps: any[];
     }>({
         isOpen: false,
@@ -265,14 +327,39 @@ export default function VAFDashboard() {
         status: "Idle",
         currentFile: "",
         codeContent: "",
+        artifactFile: "",
+        artifactCode: "",
+        artifactStatus: "Idle",
+        consoleLines: [],
         steps: []
     });
 
     // Suggestion State
     const [suggestionList, setSuggestionList] = useState<any[]>([]);
-    const [suggestionType, setSuggestionType] = useState<'command' | 'workflow' | null>(null);
+    const [suggestionType, setSuggestionType] = useState<'tool' | 'workflow' | null>(null);
     const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
     const inputRef = useRef<HTMLInputElement>(null);
+    const suggestionListRef = useRef<HTMLDivElement>(null);
+
+    // Scroll Sync for Suggestions
+    useEffect(() => {
+        if (suggestionListRef.current && suggestionList.length > 0) {
+            const activeItem = suggestionListRef.current.children[selectedSuggestionIndex] as HTMLElement;
+            if (activeItem) {
+                const container = suggestionListRef.current;
+                const itemTop = activeItem.offsetTop;
+                const itemBottom = itemTop + activeItem.offsetHeight;
+                const containerTop = container.scrollTop;
+                const containerBottom = containerTop + container.offsetHeight;
+
+                if (itemTop < containerTop) {
+                    container.scrollTop = itemTop;
+                } else if (itemBottom > containerBottom) {
+                    container.scrollTop = itemBottom - container.offsetHeight;
+                }
+            }
+        }
+    }, [selectedSuggestionIndex, suggestionList.length]);
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = e.target.value;
@@ -288,22 +375,38 @@ export default function VAFDashboard() {
                 { name: 'clear', description: 'Clear conversation' },
                 { name: 'help', description: 'Show help' },
                 { name: 'settings', description: 'Open settings' },
-                { name: 'tools', description: 'Show tools' },
                 { name: 'stop', description: 'Stop speaking' },
                 { name: 'new', description: 'New session' },
                 { name: 'load', description: 'Load session' },
             ];
-            const filtered = commands.filter(c => c.name.startsWith(query));
+
+            // Ensure tools are loaded if list is empty
+            if (tools.length === 0 && ws) {
+                ws.send(JSON.stringify({ type: 'get_tools' }));
+            }
+            
+            // Merge Tools + Commands (Tools First!)
+            const allOptions = [
+                ...tools.map(t => ({ name: t.name, description: t.description })),
+                ...commands
+            ];
+
+            const filtered = allOptions
+                .filter(c => c.name.toLowerCase().includes(query))
+                .slice(0, 15); // Increased limit
+                
             setSuggestionList(filtered);
-            setSuggestionType('command');
+            setSuggestionType('tool');
             setSelectedSuggestionIndex(0);
         } else if (lastWord.startsWith('@')) {
             const query = lastWord.slice(1).toLowerCase();
             // Workflows are loaded in `workflows` state
-            const filtered = workflows.filter(w =>
-                (w.name && w.name.toLowerCase().includes(query)) ||
-                (w.id && w.id.toLowerCase().includes(query))
-            );
+            const filtered = workflows
+                .filter(w =>
+                    (w.name && w.name.toLowerCase().includes(query)) ||
+                    (w.id && w.id.toLowerCase().includes(query))
+                )
+                .slice(0, 10); // Predictive limit
             setSuggestionList(filtered);
             setSuggestionType('workflow');
             setSelectedSuggestionIndex(0);
@@ -317,7 +420,7 @@ export default function VAFDashboard() {
     const handleSuggestionClick = (item: any) => {
         const words = input.split(' ');
         words.pop(); // Remove partial
-        const prefix = suggestionType === 'command' ? '/' : '@';
+        const prefix = suggestionType === 'tool' ? '/' : '@';
         // Use ID for workflows if available, else name
         const value = suggestionType === 'workflow' ? (item.id || item.name) : item.name;
         const newValue = [...words, prefix + value].join(' ') + ' ';
@@ -359,6 +462,11 @@ export default function VAFDashboard() {
     };
 
     const handleStopSpeech = () => {
+        // Stop frontend audio
+        if (currentAudioRef.current) {
+            currentAudioRef.current.pause();
+            currentAudioRef.current = null;
+        }
         setPlayingMessageId(null);
         setLoadingMessageId(null);
         ws?.send(JSON.stringify({ type: 'stop_speech' }));
@@ -375,9 +483,62 @@ export default function VAFDashboard() {
     const silenceStartRef = useRef<number | null>(null);
     const hasSpokenRef = useRef(false);
     const animationFrameRef = useRef<number | null>(null);
+    const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+
+    const artifactDirtyRef = useRef(false);
+    const artifactLastEditRef = useRef(0);
+    const artifactSendTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const subAgentStepsRef = useRef<Array<{ id: string; status: string; title?: string; description?: string }>>([]);
+    const subAgentLogSetRef = useRef<Set<string>>(new Set());
+    const subAgentAutoCloseRef = useRef<NodeJS.Timeout | null>(null);
+    const subAgentManualOpenRef = useRef(false);
+    const subAgentOutputSetRef = useRef<Set<string>>(new Set());
+    const [showSubAgentPanel, setShowSubAgentPanel] = useState(true);
+    const subAgentUnmountRef = useRef<NodeJS.Timeout | null>(null);
+
+    const appendSubAgentLine = (line: string) => {
+        if (!line) return;
+        if (subAgentLogSetRef.current.has(line)) return;
+        subAgentLogSetRef.current.add(line);
+        setSubAgentState(prev => ({
+            ...prev,
+            consoleLines: [...prev.consoleLines, line].slice(-500)
+        }));
+    };
+
+    const appendSubAgentBlock = (block: string, keyHint?: string) => {
+        if (!block) return;
+        const key = `${keyHint || ''}:${block.length}:${block.slice(0, 200)}`;
+        if (subAgentOutputSetRef.current.has(key)) return;
+        subAgentOutputSetRef.current.add(key);
+        setSubAgentState(prev => ({
+            ...prev,
+            consoleLines: [...prev.consoleLines, block].slice(-500)
+        }));
+    };
+
+    const openSubAgentWindow = (manual: boolean) => {
+        if (manual) {
+            subAgentManualOpenRef.current = true;
+            if (subAgentAutoCloseRef.current) {
+                clearTimeout(subAgentAutoCloseRef.current);
+                subAgentAutoCloseRef.current = null;
+            }
+        } else {
+            subAgentManualOpenRef.current = false;
+        }
+        setSubAgentState(prev => ({ ...prev, isOpen: true }));
+    };
+
+    const closeSubAgentWindow = (manual: boolean) => {
+        if (manual) {
+            subAgentManualOpenRef.current = false;
+        }
+        setSubAgentState(prev => ({ ...prev, isOpen: false }));
+    };
 
     // Cache State
     const sessionCache = useRef<Record<string, Message[]>>({});
@@ -463,6 +624,21 @@ export default function VAFDashboard() {
                 if (data.type === 'new_log') {
                     const src = data.entry.source || "";
                     const rawMsg = data.entry.message || "";
+                    const msgLower = rawMsg.toLowerCase();
+                    const srcLower = src.toLowerCase();
+                    const isSubAgentLog =
+                        msgLower.includes('sub-agent') ||
+                        msgLower.includes('subagent') ||
+                        srcLower.includes('sub-agent') ||
+                        srcLower.includes('subagent');
+                    if (isSubAgentLog) {
+                        const timeStamp = new Date().toISOString().slice(11, 19);
+                        appendSubAgentLine(`[${timeStamp}] ${rawMsg}`);
+                        openSubAgentWindow(false);
+                    } else if (subAgentState.isOpen && (src === 'System' || src === 'Info') && rawMsg) {
+                        const timeStamp = new Date().toISOString().slice(11, 19);
+                        appendSubAgentLine(`[${timeStamp}] ${src}: ${rawMsg}`);
+                    }
 
                     // ACTIVE TOOLS HANDLING via tool_update
                     // Legacy code removed
@@ -501,6 +677,17 @@ export default function VAFDashboard() {
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
 
                     const { subType, toolId, name, data: eventData, timestamp } = data;
+                    const toolName = String(name || '').toLowerCase();
+                    const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding)_agent(?:$|[^a-z])/.test(toolName);
+                    if (subType === 'start' && isSubAgentTool) {
+                        openSubAgentWindow(false);
+                    }
+                    if (subAgentState.isOpen) {
+                        const timeStamp = new Date().toISOString().slice(11, 19);
+                        const statusLabel = subType === 'start' ? 'Start' : subType === 'end' ? 'End' : 'Error';
+                        const payload = eventData ? ` - ${eventData}` : '';
+                        appendSubAgentLine(`[${timeStamp}] ${statusLabel}: ${name}${payload}`);
+                    }
 
                     setMessages(prev => {
                         // Check if tool message exists
@@ -563,6 +750,43 @@ export default function VAFDashboard() {
                         } else {
                             return [...prev, { role: 'assistant', content: data.content, timestamp: Date.now() }];
                         }
+                    });
+                }
+                else if (data.type === 'tts_audio') {
+                    // Stop any current audio
+                    if (currentAudioRef.current) {
+                        currentAudioRef.current.pause();
+                    }
+
+                    // Play new audio
+                    const audioSrc = `data:audio/wav;base64,${data.audio}`;
+                    const audio = new Audio(audioSrc);
+                    currentAudioRef.current = audio;
+
+                    audio.onplay = () => {
+                        // Transition from loading to playing
+                        if (loadingMessageIdRef.current !== null) {
+                            setPlayingMessageId(loadingMessageIdRef.current);
+                            setLoadingMessageId(null);
+                        }
+                    };
+
+                    audio.onended = () => {
+                        setPlayingMessageId(null);
+                        currentAudioRef.current = null;
+                    };
+
+                    audio.onerror = (e) => {
+                        console.error("Audio playback error", e);
+                        setPlayingMessageId(null);
+                        setLoadingMessageId(null);
+                        currentAudioRef.current = null;
+                    };
+
+                    audio.play().catch(e => {
+                        console.error("Autoplay failed", e);
+                        setPlayingMessageId(null);
+                        setLoadingMessageId(null);
                     });
                 }
                 else if (data.type === 'tts_state') {
@@ -657,6 +881,30 @@ export default function VAFDashboard() {
                     updateStepStatus(data.stepId, data.status, data.progress, data.result);
                 }
                 else if (data.type === 'subagent_update') {
+                    const newSteps = data.steps || [];
+                    const prevSteps = subAgentStepsRef.current;
+                    const prevMap = new Map(prevSteps.map(step => [step.id, step.status]));
+                    const statusLines: string[] = [];
+
+                    newSteps.forEach((step: any) => {
+                        const prevStatus = prevMap.get(step.id);
+                        if (!prevStatus || prevStatus !== step.status) {
+                            const label = step.status === 'completed'
+                                ? 'Completed'
+                                : step.status === 'running'
+                                    ? 'Running'
+                                    : 'Pending';
+                            const detail = step.description ? ` - ${step.description}` : '';
+                            statusLines.push(`${label}: ${step.title}${detail}`);
+                        }
+                    });
+
+                    if (statusLines.length > 0) {
+                        const timeStamp = new Date().toISOString().slice(11, 19);
+                        statusLines.forEach(line => appendSubAgentLine(`[${timeStamp}] ${line}`));
+                    }
+
+                    subAgentStepsRef.current = newSteps;
                     setSubAgentState(prev => ({
                         ...prev,
                         isOpen: true,
@@ -664,8 +912,52 @@ export default function VAFDashboard() {
                         status: data.status || prev.status,
                         currentFile: data.file || prev.currentFile,
                         codeContent: data.code || prev.codeContent,
-                        steps: data.steps || prev.steps
+                        steps: data.steps || prev.steps,
+                        artifactFile: artifactDirtyRef.current ? prev.artifactFile : (data.file || prev.artifactFile),
+                        artifactCode: artifactDirtyRef.current ? prev.artifactCode : (data.code || prev.artifactCode),
+                        artifactStatus: artifactDirtyRef.current ? prev.artifactStatus : (data.code || data.file ? 'Synced' : prev.artifactStatus)
                     }));
+                }
+                else if (data.type === 'artifact_update') {
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    setSubAgentState(prev => {
+                        const incomingFile = data.file ?? prev.artifactFile;
+                        const incomingCode = data.code ?? prev.artifactCode;
+                        if (artifactDirtyRef.current) {
+                            if (incomingCode === prev.artifactCode) {
+                                artifactDirtyRef.current = false;
+                                return {
+                                    ...prev,
+                                    artifactFile: incomingFile,
+                                    artifactStatus: 'Saved'
+                                };
+                            }
+                            return prev;
+                        }
+                        return {
+                            ...prev,
+                            artifactFile: incomingFile,
+                            artifactCode: incomingCode,
+                            artifactStatus: 'Saved'
+                        };
+                    });
+                }
+                else if (data.type === 'subagent_output') {
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (data.output) {
+                        const prefix = data.agentType ? `### ${data.agentType.replace(/_/g, ' ')}` : '### Sub-Agent Output';
+                        appendSubAgentBlock(`${prefix}\n${data.output}`, data.taskId);
+                        setSubAgentState(prev => ({ ...prev, isOpen: true }));
+                    }
+                }
+                else if (data.type === 'subagent_output_stream') {
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    const line = typeof data.line === 'string' ? data.line : '';
+                    if (line) {
+                        const timeStamp = new Date().toISOString().slice(11, 19);
+                        appendSubAgentLine(`[${timeStamp}] ${line}`);
+                        setSubAgentState(prev => ({ ...prev, isOpen: true }));
+                    }
                 }
                 else if (data.type === 'history_update') {
                     setCurrentSessionId(data.sessionId);
@@ -912,7 +1204,7 @@ export default function VAFDashboard() {
                 );
                 return;
             }
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' || e.key === 'Tab') {
                 e.preventDefault();
                 handleSuggestionClick(suggestionList[selectedSuggestionIndex]);
                 return;
@@ -1084,6 +1376,86 @@ export default function VAFDashboard() {
         ws?.send(JSON.stringify({ type: 'get_models' }));
     };
 
+    const subAgentStatusLower = subAgentState.status.toLowerCase();
+    const hasRunningSubAgentStep = subAgentState.steps.some(step => step.status === 'running');
+    const subAgentCanClose = !hasRunningSubAgentStep && (
+        subAgentStatusLower.includes('completed') ||
+        subAgentStatusLower.includes('idle') ||
+        subAgentStatusLower.includes('done')
+    );
+    const subAgentHasContent = Boolean(
+        subAgentState.steps.length ||
+        subAgentState.artifactCode ||
+        subAgentState.codeContent ||
+        subAgentState.artifactFile ||
+        subAgentState.currentFile
+    );
+
+    const handleArtifactChange = (nextValue: string) => {
+        const nextFile = subAgentState.artifactFile || subAgentState.currentFile;
+        artifactDirtyRef.current = true;
+        artifactLastEditRef.current = Date.now();
+        setSubAgentState(prev => ({
+            ...prev,
+            artifactCode: nextValue,
+            artifactFile: nextFile,
+            artifactStatus: 'Editing'
+        }));
+
+        if (artifactSendTimeoutRef.current) {
+            clearTimeout(artifactSendTimeoutRef.current);
+        }
+
+        artifactSendTimeoutRef.current = setTimeout(() => {
+            const sessionId = currentSessionIdRef.current;
+            if (!sessionId || !ws) return;
+            setSubAgentState(prev => ({ ...prev, artifactStatus: 'Saving' }));
+            ws.send(JSON.stringify({
+                type: 'artifact_edit',
+                sessionId,
+                file: nextFile,
+                code: nextValue,
+                source: 'web'
+            }));
+        }, 500);
+    };
+
+    useEffect(() => {
+        if (!subAgentState.isOpen) return;
+        if (subAgentManualOpenRef.current) return;
+        if (!subAgentCanClose) {
+            if (subAgentAutoCloseRef.current) {
+                clearTimeout(subAgentAutoCloseRef.current);
+                subAgentAutoCloseRef.current = null;
+            }
+            return;
+        }
+
+        if (subAgentAutoCloseRef.current) {
+            clearTimeout(subAgentAutoCloseRef.current);
+        }
+
+        subAgentAutoCloseRef.current = setTimeout(() => {
+            setSubAgentState(prev => ({ ...prev, isOpen: false }));
+            subAgentAutoCloseRef.current = null;
+        }, 3000);
+
+        return () => {
+            if (subAgentAutoCloseRef.current) {
+                clearTimeout(subAgentAutoCloseRef.current);
+                subAgentAutoCloseRef.current = null;
+            }
+        };
+    }, [subAgentCanClose, subAgentState.isOpen]);
+
+    useEffect(() => {
+        if (subAgentState.isOpen && !showSubAgentPanel) {
+            setShowSubAgentPanel(true);
+        }
+    }, [subAgentState.isOpen, showSubAgentPanel]);
+
+    const chatWidthClass = subAgentState.isOpen ? 'max-w-3xl' : 'max-w-4xl';
+
     return (
         <main className="h-screen flex flex-col bg-gray-50 text-gray-900 font-sans overflow-hidden">
 
@@ -1210,9 +1582,16 @@ export default function VAFDashboard() {
                     </div>
                 </aside>
 
-                <div className="flex-1 flex flex-col relative bg-white overflow-hidden">
-                    <div className="flex-1 overflow-y-auto p-6" ref={containerRef}>
-                        <div className="max-w-4xl mx-auto space-y-2 pb-32">
+                <div
+                    className={cn(
+                        "flex-1 flex overflow-hidden pr-4 transition-all duration-300 ease-out",
+                        subAgentState.isOpen ? "gap-4" : "gap-0"
+                    )}
+                >
+                    <div className="flex-1 flex flex-col relative bg-white overflow-hidden">
+                        <div className="flex-1 overflow-y-auto p-6" ref={containerRef}>
+                        <div className={cn(chatWidthClass, "mx-auto space-y-2 pb-32")}>
+                            {/* Sub-Agent banner removed; reopen via tool cards or system log */}
                             {messages.length === 0 && (
                                 <div className="h-full flex flex-col items-center justify-center pt-40 pb-20 text-center">
                                     <Bot size={48} className="text-gray-300 mb-4" />
@@ -1224,11 +1603,21 @@ export default function VAFDashboard() {
                                 // Render System Steps (Timeline Style)
                                 if (msg.role === 'system') {
                                     const isLast = i === messages.length - 1;
-                                    return <SystemStep key={i} message={msg.content} isLoading={loading && isLast} />;
+                                    const isSubAgentMessage = msg.content.toLowerCase().includes('sub-agent');
+                                    return (
+                                        <SystemStep
+                                            key={i}
+                                            message={msg.content}
+                                            isLoading={loading && isLast}
+                                            onClick={isSubAgentMessage ? () => openSubAgentWindow(true) : undefined}
+                                        />
+                                    );
                                 }
 
                                 // Render Tool Messages
                                 if (msg.role === 'tool') {
+                                    const toolLower = (msg.toolName || '').toLowerCase();
+                                    const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding)_agent(?:$|[^a-z])/.test(toolLower);
                                     return (
                                         <ToolMessage
                                             key={i}
@@ -1239,6 +1628,13 @@ export default function VAFDashboard() {
                                             args={msg.toolArgs}
                                             startTime={msg.toolStartTime}
                                             endTime={msg.toolEndTime}
+                                            onToggle={isSubAgentTool ? (nextExpanded) => {
+                                                if (nextExpanded) {
+                                                    openSubAgentWindow(true);
+                                                } else {
+                                                    closeSubAgentWindow(true);
+                                                }
+                                            } : undefined}
                                         />
                                     );
                                 }
@@ -1337,24 +1733,24 @@ export default function VAFDashboard() {
                         </div>
                     </div>
 
-                    <div className="absolute bottom-0 w-full bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6 z-40">
-                        {/* File chips display */}
-                        {attachedFiles.length > 0 && (
-                            <div className="max-w-4xl mx-auto mb-2 flex gap-2 flex-wrap">
-                                {attachedFiles.map((file, index) => (
-                                    <div key={index} className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-1.5 text-sm">
-                                        <span className="text-gray-700">{file.name}</span>
-                                        <button
-                                            type="button"
-                                            onClick={() => removeFile(index)}
-                                            className="text-gray-500 hover:text-red-600 transition-colors"
-                                        >
-                                            ×
-                                        </button>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
+                        <div className="absolute bottom-0 w-full bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6 z-40">
+                            {/* File chips display */}
+                            {attachedFiles.length > 0 && (
+                                <div className={cn(chatWidthClass, "mx-auto mb-2 flex gap-2 flex-wrap")}>
+                                    {attachedFiles.map((file, index) => (
+                                        <div key={index} className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-1.5 text-sm">
+                                            <span className="text-gray-700">{file.name}</span>
+                                            <button
+                                                type="button"
+                                                onClick={() => removeFile(index)}
+                                                className="text-gray-500 hover:text-red-600 transition-colors"
+                                            >
+                                                ×
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
 
                         {/* Suggestions Popup - Fixed centered, with arrow key navigation */}
                         {suggestionList.length > 0 && (
@@ -1363,29 +1759,36 @@ export default function VAFDashboard() {
                                 style={{ bottom: '120px' }}
                             >
                                 <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider flex justify-between">
-                                    <span>{suggestionType === 'command' ? 'Commands' : 'Workflows'}</span>
+                                    <span>{suggestionType === 'tool' ? 'Tools' : 'Workflows'}</span>
                                     <span className="text-gray-300">↑↓ Navigate · Enter Select</span>
                                 </div>
-                                <div className="max-h-64 overflow-y-auto">
+                                <div className="max-h-64 overflow-y-auto" ref={suggestionListRef}>
                                     {suggestionList.map((item, idx) => (
                                         <div
                                             key={idx}
                                             className={cn(
                                                 "px-4 py-3 cursor-pointer flex items-center gap-3 transition-colors border-b border-gray-50 last:border-0",
                                                 idx === selectedSuggestionIndex
-                                                    ? "bg-indigo-100 border-l-2 border-l-indigo-500"
-                                                    : "hover:bg-indigo-50"
+                                                    ? "bg-gray-900 text-white"
+                                                    : "hover:bg-gray-100 text-gray-700"
                                             )}
                                             onClick={() => handleSuggestionClick(item)}
                                             onMouseEnter={() => setSelectedSuggestionIndex(idx)}
                                         >
-                                            <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
-                                                suggestionType === 'command' ? "bg-yellow-100 text-yellow-600" : "bg-blue-100 text-blue-600")}>
-                                                {suggestionType === 'command' ? <Zap size={16}/> : <Workflow size={16}/>}
+                                            <div className={cn(
+                                                "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200",
+                                                suggestionType === 'tool' ? "bg-orange-100 text-orange-600" : "bg-blue-100 text-blue-600",
+                                                idx === selectedSuggestionIndex && (
+                                                    suggestionType === 'tool' 
+                                                        ? "shadow-[0_0_12px_rgba(249,115,22,0.5)] scale-105" 
+                                                        : "shadow-[0_0_12px_rgba(59,130,246,0.5)] scale-105"
+                                                )
+                                            )}>
+                                                {suggestionType === 'tool' ? <Wrench size={16}/> : <Workflow size={16}/>}
                                             </div>
                                             <div className="flex flex-col min-w-0">
-                                                <span className="text-sm font-medium text-gray-700 truncate">{item.name || item.id}</span>
-                                                {item.description && <span className="text-xs text-gray-400 truncate">{item.description}</span>}
+                                                <span className="text-sm font-medium truncate">{item.name || item.id}</span>
+                                                {item.description && <span className={cn("text-xs truncate", idx === selectedSuggestionIndex ? "text-gray-400" : "text-gray-400")}>{item.description}</span>}
                                             </div>
                                         </div>
                                     ))}
@@ -1395,7 +1798,7 @@ export default function VAFDashboard() {
 
                         {/* Token Stats (TUI Style) */}
                         {tokenStats && (
-                            <div className="max-w-4xl mx-auto mb-1 flex justify-end">
+                            <div className={cn(chatWidthClass, "mx-auto mb-1 flex justify-end")}>
                                 <span className="text-[10px] sm:text-xs font-mono text-gray-400 opacity-80 select-none">
                                     {tokenStats.api ? (
                                         <>Tokens: In: {tokenStats.used.toLocaleString()} | Out: {tokenStats.total.toLocaleString()}</>
@@ -1414,7 +1817,7 @@ export default function VAFDashboard() {
                             </div>
                         )}
 
-                        <form onSubmit={sendMessage} className="max-w-4xl mx-auto flex items-center bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden">
+                        <form onSubmit={sendMessage} className={cn(chatWidthClass, "mx-auto flex items-center bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden")}>
                             <input
                                 type="file"
                                 ref={fileInputRef}
@@ -1475,19 +1878,42 @@ export default function VAFDashboard() {
                         </form>
                     </div>
                 </div>
+                    {showSubAgentPanel && (
+                        <div
+                            className={cn(
+                                "hidden lg:flex h-full items-stretch overflow-hidden transition-all duration-300 ease-out",
+                                subAgentState.isOpen
+                                    ? "w-[58%] min-w-[640px] max-w-[940px] opacity-100"
+                                    : "w-0 min-w-0 max-w-0 opacity-0 pointer-events-none"
+                            )}
+                            aria-hidden={!subAgentState.isOpen}
+                        >
+                            <SubAgentWindow
+                                isOpen={subAgentState.isOpen}
+                                mode="dock"
+                                onClose={() => {
+                                    if (!subAgentCanClose) return;
+                                    subAgentManualOpenRef.current = false;
+                                    setSubAgentState(prev => ({ ...prev, isOpen: false }));
+                                }}
+                                canClose={subAgentCanClose}
+                                agentName={subAgentState.agentName}
+                                status={subAgentState.status}
+                                currentFile={subAgentState.currentFile}
+                                codeContent={subAgentState.codeContent}
+                                artifactFile={subAgentState.artifactFile || subAgentState.currentFile}
+                                artifactCode={subAgentState.artifactCode || subAgentState.codeContent}
+                                artifactStatus={subAgentState.artifactStatus}
+                                onArtifactChange={handleArtifactChange}
+                                consoleLines={subAgentState.consoleLines}
+                                steps={subAgentState.steps}
+                            />
+                        </div>
+                    )}
+                </div>
             </div>
             {/* Active Tools Panel Moved Inline */}
             <VAFWorkflowRuntime />
-
-            <SubAgentWindow
-                isOpen={subAgentState.isOpen}
-                onClose={() => setSubAgentState(prev => ({ ...prev, isOpen: false }))}
-                agentName={subAgentState.agentName}
-                status={subAgentState.status}
-                currentFile={subAgentState.currentFile}
-                codeContent={subAgentState.codeContent}
-                steps={subAgentState.steps}
-            />
 
             <SettingsModal
                 isOpen={isSettingsOpen}

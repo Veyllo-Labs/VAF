@@ -1745,6 +1745,8 @@ Thumbs.db
             session_id = get_current_session_id()
             if session_id:
                 os.environ["VAF_SESSION_ID"] = session_id
+            os.environ["VAF_TASK_ID"] = task_id
+            os.environ["VAF_AGENT_TYPE"] = "coding_agent"
             
             # Pass provider configuration to sub-agent
             use_separate_provider = Config.get("subagent_use_separate_provider", False)

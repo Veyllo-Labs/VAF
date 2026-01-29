@@ -13,6 +13,7 @@ export interface ToolMessageProps {
     startTime?: number;
     endTime?: number;
     args?: string; // Arguments passed to the tool
+    onToggle?: (nextExpanded: boolean) => void;
 }
 
 export const ToolMessage: React.FC<ToolMessageProps> = ({
@@ -21,7 +22,8 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     status,
     startTime,
     endTime,
-    args
+    args,
+    onToggle
 }) => {
     const [isExpanded, setIsExpanded] = useState(false);
 
@@ -43,7 +45,11 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                 {/* Header */}
                 <div
                     className="flex items-center justify-between p-3 cursor-pointer hover:bg-accent/50 transition-colors"
-                    onClick={() => setIsExpanded(!isExpanded)}
+                    onClick={() => {
+                        const nextExpanded = !isExpanded;
+                        if (onToggle) onToggle(nextExpanded);
+                        setIsExpanded(nextExpanded);
+                    }}
                 >
                     <div className="flex items-center gap-3">
                         <div className="relative flex h-8 w-8 items-center justify-center rounded-full border bg-muted/50 shrink-0">

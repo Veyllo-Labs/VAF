@@ -9,6 +9,7 @@ import uvicorn
 import threading
 import inspect
 import html
+import os
 log("WebServer", "Basic imports done")
 
 from vaf.core.web_interface import get_web_interface
@@ -94,6 +95,26 @@ def _detect_language_simple(text: str) -> str:
     if any(w in t for w in de_words): return "de"
     if any(ch in t for ch in ["ä", "ö", "ü", "ß"]): return "de"
     return "en" # Default fallback
+
+def _build_artifact_payload(session, session_id: str = None):
+    if not session:
+        return None
+    try:
+        state = session.get_provider_state("artifact")
+    except Exception:
+        state = None
+    if not state:
+        return None
+    payload = {
+        "type": "artifact_update",
+        "file": state.get("file", ""),
+        "code": state.get("code", ""),
+        "updatedAt": state.get("updatedAt"),
+        "source": state.get("source", "backend")
+    }
+    if session_id:
+        payload["sessionId"] = session_id
+    return payload
 
 @app.get("/")
 async def root():
@@ -226,6 +247,7 @@ async def websocket_endpoint(websocket: WebSocket):
     log("API", f"WebSocket connection attempt from {websocket.client.host}")
     try:
         await manager.connect(websocket)
+        os.environ["VAF_WEBUI_ACTIVE"] = "1"
         print(f"[WebSocket] Connected! Active: {len(manager.active_connections)}")
         log("API", f"WebSocket connected! Active: {len(manager.active_connections)}")
         tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
@@ -298,6 +320,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     "isActive": is_active,
                     "currentStatus": manager.latest_state.get("status", "idle") if is_active else "idle"
                 })
+                artifact_payload = _build_artifact_payload(loaded, sid)
+                if artifact_payload:
+                    await websocket.send_json(artifact_payload)
             except Exception as e:
                 log("WebServer", f"Auto-load session failed: {e}")
 
@@ -379,6 +404,9 @@ async def websocket_endpoint(websocket: WebSocket):
                             "isActive": is_active,
                             "currentStatus": manager.latest_state.get("status", "idle") if is_active else "idle"
                         })
+                        artifact_payload = _build_artifact_payload(loaded, sid)
+                        if artifact_payload:
+                            await websocket.send_json(artifact_payload)
 
                         # 4. Send initial estimated stats (so UI is not empty)
                         try:
@@ -579,6 +607,34 @@ async def websocket_endpoint(websocket: WebSocket):
                             "type": "autosuggest_result",
                             "suggestion": suggestion
                         })
+                
+                elif type == "artifact_edit":
+                    session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                    if not session_id:
+                        session_id = "web-default"
+                    file = cmd.get("file", "")
+                    code = cmd.get("code", "")
+                    source = cmd.get("source", "web")
+                    try:
+                        from datetime import datetime
+                        updated_at = datetime.now().isoformat()
+                        loaded = session_mgr.load(session_id)
+                        loaded.update_runtime_state("artifact", {
+                            "file": file,
+                            "code": code,
+                            "updatedAt": updated_at,
+                            "source": source
+                        })
+                        session_mgr.save(loaded, sync_state=False)
+                        await manager.broadcast_to_session(session_id, {
+                            "type": "artifact_update",
+                            "file": file,
+                            "code": code,
+                            "updatedAt": updated_at,
+                            "source": source
+                        })
+                    except Exception as e:
+                        log("WebServer", f"Artifact update failed: {e}")
 
                 elif type == "chat":
                     content = cmd.get("content")
@@ -703,7 +759,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Process audio for STT - OFFLINE ONLY (faster-whisper)
                     import base64
                     import tempfile
-                    import os
                     
                     print(f"DEBUG: process_audio request received (OFFLINE MODE)") # DEBUG
                     temp_path = None
@@ -788,15 +843,43 @@ async def websocket_endpoint(websocket: WebSocket):
                         })
                 
                 elif type == "speak":
-                    # TTS Output
+                    # TTS Output (Streamed to Browser)
                     text = cmd.get("text")
                     if text:
                         from vaf.core.speech import SpeechManager
                         sm = SpeechManager.get_instance()
                         
+                        # Notify UI: Loading
+                        await websocket.send_json({"type": "tts_state", "status": "loading"})
+                        
                         # Detect Language
                         lang = _detect_language_simple(text)
-                        sm.speak(text, lang=lang)
+                        
+                        # Run synthesis in background thread
+                        import asyncio
+                        import base64
+                        loop = asyncio.get_running_loop()
+                        
+                        try:
+                            audio_bytes = await loop.run_in_executor(None, sm.synthesize_audio, text, lang)
+                            
+                            if audio_bytes:
+                                # Encode to Base64
+                                audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+                                
+                                # Send to client
+                                await websocket.send_json({
+                                    "type": "tts_audio",
+                                    "audio": audio_b64,
+                                    "format": "wav"
+                                })
+                                # Note: Client will set status to 'playing' when audio starts
+                            else:
+                                # Synthesis failed (e.g. TTS disabled or Piper error)
+                                await websocket.send_json({"type": "tts_state", "status": "stopped"})
+                        except Exception as e:
+                            print(f"[WebServer] TTS Error: {e}")
+                            await websocket.send_json({"type": "tts_state", "status": "stopped"})
                 
                 elif type == "stop_speech":
                     # Stop TTS
@@ -810,10 +893,14 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
         tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
+        if len(manager.active_connections) == 0:
+            os.environ.pop("VAF_WEBUI_ACTIVE", None)
     except Exception as e:
         print(f"WebSocket error: {e}")
         manager.disconnect(websocket)
         tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
+        if len(manager.active_connections) == 0:
+            os.environ.pop("VAF_WEBUI_ACTIVE", None)
 
 
 async def process_uploaded_files(files: list) -> str:

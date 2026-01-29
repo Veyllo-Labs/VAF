@@ -389,6 +389,59 @@ class Platform:
         import subprocess
         
         try:
+            webui_active = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
+            if webui_active:
+                proc = subprocess.Popen(
+                    command,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    start_new_session=True
+                )
+                try:
+                    from vaf.core.web_interface import get_web_interface
+                    session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+                    task_id = os.environ.get("VAF_TASK_ID", "").strip()
+                    agent_type = os.environ.get("VAF_AGENT_TYPE", "").strip()
+                    
+                    if session_id and (task_id or agent_type):
+                        title = (agent_type or "Sub-Agent").replace("_", " ").title()
+                        steps = [{
+                            "id": task_id or "subagent",
+                            "title": title,
+                            "description": "Sub-agent running...",
+                            "status": "running",
+                            "actions": []
+                        }]
+                        get_web_interface()._push_session_update(session_id, {
+                            "type": "subagent_update",
+                            "agentName": title,
+                            "status": "Running sub-agent task...",
+                            "file": "",
+                            "code": "",
+                            "steps": steps
+                        })
+
+                    def _stream_output():
+                        if not proc.stdout:
+                            return
+                        for line in proc.stdout:
+                            clean = line.rstrip("\r\n")
+                            if not clean:
+                                continue
+                            get_web_interface()._push_session_update(session_id or None, {
+                                "type": "subagent_output_stream",
+                                "taskId": task_id or None,
+                                "agentType": agent_type or None,
+                                "line": clean
+                            })
+                    import threading
+                    threading.Thread(target=_stream_output, daemon=True).start()
+                except Exception:
+                    pass
+                return True
             if Platform.is_windows():
                 # Windows: Use start cmd /c to open new window and close when done
                 # /c = execute command then terminate (terminal closes after exit)

@@ -452,6 +452,63 @@ $player.Close()
         except:
             pass  # Silently fail - sound is optional
 
+    def synthesize_audio(self, text: str, lang: str = "auto") -> Optional[bytes]:
+        """Synthesize text to audio bytes (WAV) without playing. Used for Web UI streaming."""
+        if not self.is_tts_enabled(): return None
+        
+        clean_text = self._clean_markdown(text)
+        if not clean_text.strip(): return None
+        
+        # Only Piper supported for streaming currently (pyttsx3 doesn't easily output to bytes)
+        preferred_engine = self.config.get("speech_tts_engine", "piper")
+        
+        if preferred_engine == "piper" and self._check_piper():
+            model_path = self._ensure_voice_model(lang)
+            if model_path:
+                import tempfile
+                fd, wav_path = tempfile.mkstemp(suffix=".wav")
+                os.close(fd)
+                try:
+                    binary = self._get_piper_binary()
+                    
+                    # Run Piper
+                    # Use subprocess.run for synchronous execution (we need the file now)
+                    # Ensure NO WINDOW is spawned on Windows
+                    run_args = {}
+                    if os.name == 'nt':
+                        run_args["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+                        si = subprocess.STARTUPINFO()
+                        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                        si.wShowWindow = subprocess.SW_HIDE
+                        run_args["startupinfo"] = si
+                    
+                    subprocess.run(
+                        [str(binary), "--model", str(model_path), "--output_file", wav_path],
+                        input=clean_text.encode('utf-8'),
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=True,
+                        **run_args
+                    )
+                    
+                    # Read the generated WAV file
+                    if os.path.exists(wav_path) and os.path.getsize(wav_path) > 1000:
+                        with open(wav_path, "rb") as f:
+                            audio_data = f.read()
+                        return audio_data
+                        
+                except Exception as e:
+                    from vaf.cli.ui import UI
+                    UI.event("Debug", f"Piper synthesis failed: {e}", style="dim")
+                finally:
+                    if os.path.exists(wav_path):
+                        try:
+                            os.remove(wav_path)
+                        except:
+                            pass
+                            
+        return None
+
     def stop(self):
         """Stop speaking immediately."""
         self._is_speaking = False
@@ -527,12 +584,22 @@ $player.Close()
                             
                             binary = self._get_piper_binary()
                             
+                            # Prepare flags for no window
+                            popen_args = {}
+                            if os.name == 'nt':
+                                popen_args["creationflags"] = 0x08000000 # CREATE_NO_WINDOW
+                                si = subprocess.STARTUPINFO()
+                                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                                si.wShowWindow = subprocess.SW_HIDE
+                                popen_args["startupinfo"] = si
+
                             # Run Piper
                             self._current_tts_process = subprocess.Popen(
                                 [str(binary), "--model", str(model_path), "--output_file", wav_path],
                                 stdin=subprocess.PIPE,
                                 stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL
+                                stderr=subprocess.DEVNULL,
+                                **popen_args
                             )
                             self._current_tts_process.communicate(input=clean_text.encode('utf-8'))
                             self._current_tts_process = None

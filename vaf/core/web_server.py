@@ -44,6 +44,31 @@ autosuggest = None
 tray_context = TrayContext()
 log("WebServer", "Module initialization complete")
 
+def _scan_tool_modules() -> List[dict]:
+    """
+    Fallback tool list based on available Python modules.
+    This avoids importing modules (no side effects).
+    """
+    try:
+        from pathlib import Path
+        tools_dir = Path(__file__).resolve().parents[1] / "tools"
+        if not tools_dir.exists():
+            return []
+        excluded = {"__init__", "base", "__pycache__"}
+        tools = []
+        for path in tools_dir.glob("*.py"):
+            name = path.stem
+            if name in excluded or name.startswith("_"):
+                continue
+            tools.append({
+                "name": name,
+                "description": "Python tool module",
+                "category": "general"
+            })
+        return sorted(tools, key=lambda t: t["name"])
+    except Exception:
+        return []
+
 def get_autosuggest():
     global autosuggest
     if autosuggest is None:
@@ -281,6 +306,28 @@ async def websocket_endpoint(websocket: WebSocket):
             "type": "stats",
             "stats": stats_to_send
         })
+        # Send tools list (cached or live) so UI has correct count
+        try:
+            agent = manager.agent_instance
+            if agent and hasattr(agent, "tools"):
+                tools_list = [
+                    {
+                        "name": name,
+                        "description": getattr(tool, "description", "No description"),
+                        "category": getattr(tool, "category", "general")
+                    }
+                    for name, tool in agent.tools.items()
+                ]
+            elif manager.tools_cache:
+                tools_list = manager.tools_cache
+            else:
+                tools_list = _scan_tool_modules()
+            await websocket.send_json({
+                "type": "tools_list",
+                "tools": tools_list or []
+            })
+        except Exception:
+            pass
         # Auto-load latest session so WebUI gets a valid sessionId immediately
         if sessions:
             sid = sessions[0]["id"]
@@ -716,10 +763,15 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "type": "tools_list",
                                 "tools": tools_list
                             })
+                        elif manager.tools_cache:
+                            await websocket.send_json({
+                                "type": "tools_list",
+                                "tools": manager.tools_cache
+                            })
                         else:
                             await websocket.send_json({
                                 "type": "tools_list",
-                                "tools": []
+                                "tools": _scan_tool_modules()
                             })
                     except Exception as e:
                         await websocket.send_json({

@@ -28,6 +28,7 @@ class WebInterfaceManager:
         self.active_connections: List[WebSocket] = []
         self.connection_sessions: Dict[WebSocket, str] = {}  # ws -> session_id
         self.agent_instance = None
+        self.tools_cache: List[Dict[str, str]] = []
         # Queue for incoming chat messages from Web UI -> Main Loop
         self.input_queue = queue.Queue()
         
@@ -46,6 +47,19 @@ class WebInterfaceManager:
     def register_agent(self, agent):
         """Register the active agent instance to allow control from Web UI."""
         self.agent_instance = agent
+        try:
+            if agent and hasattr(agent, "tools"):
+                self.tools_cache = [
+                    {
+                        "name": name,
+                        "description": getattr(tool, "description", "No description"),
+                        "category": getattr(tool, "category", "general")
+                    }
+                    for name, tool in agent.tools.items()
+                ]
+                self.push_update({"type": "tools_list", "tools": self.tools_cache})
+        except Exception:
+            pass
 
     # ═══════════════════════════════════════════════════════════════════════════
     # CONNECTION MANAGEMENT (Session-Scoped)
@@ -195,6 +209,11 @@ class WebInterfaceManager:
     def set_server_loop(self, loop):
         """Set the asyncio event loop for thread-safe broadcasting."""
         self._server_loop = loop
+        if self.tools_cache:
+            asyncio.run_coroutine_threadsafe(
+                self.broadcast({"type": "tools_list", "tools": self.tools_cache}),
+                self._server_loop
+            )
         
     def push_update(self, data: dict):
         """Thread-safe push update (global broadcast)."""

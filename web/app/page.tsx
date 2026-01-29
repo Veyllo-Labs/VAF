@@ -271,6 +271,8 @@ export default function VAFDashboard() {
     // Suggestion State
     const [suggestionList, setSuggestionList] = useState<any[]>([]);
     const [suggestionType, setSuggestionType] = useState<'command' | 'workflow' | null>(null);
+    const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
+    const inputRef = useRef<HTMLInputElement>(null);
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = e.target.value;
@@ -294,18 +296,21 @@ export default function VAFDashboard() {
             const filtered = commands.filter(c => c.name.startsWith(query));
             setSuggestionList(filtered);
             setSuggestionType('command');
+            setSelectedSuggestionIndex(0);
         } else if (lastWord.startsWith('@')) {
             const query = lastWord.slice(1).toLowerCase();
             // Workflows are loaded in `workflows` state
-            const filtered = workflows.filter(w => 
-                (w.name && w.name.toLowerCase().includes(query)) || 
+            const filtered = workflows.filter(w =>
+                (w.name && w.name.toLowerCase().includes(query)) ||
                 (w.id && w.id.toLowerCase().includes(query))
             );
             setSuggestionList(filtered);
             setSuggestionType('workflow');
+            setSelectedSuggestionIndex(0);
         } else {
             setSuggestionList([]);
             setSuggestionType(null);
+            setSelectedSuggestionIndex(0);
         }
     };
 
@@ -319,6 +324,7 @@ export default function VAFDashboard() {
         setInput(newValue);
         setSuggestionList([]);
         setSuggestionType(null);
+        setSelectedSuggestionIndex(0);
         // Refocus input if needed
         (document.querySelector('input[type="text"]') as HTMLInputElement)?.focus(); // Simple hack for focus
     };
@@ -758,6 +764,7 @@ export default function VAFDashboard() {
                     setTools(data.tools || []);
                 }
                 else if (data.type === 'workflows_list') {
+                    console.log('[Workflows]', data.workflows);
                     setWorkflows(data.workflows || []);
                 }
                 else if (data.type === 'config') {
@@ -889,6 +896,37 @@ export default function VAFDashboard() {
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        // Handle suggestion popup navigation
+        if (suggestionList.length > 0) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setSelectedSuggestionIndex(prev =>
+                    prev < suggestionList.length - 1 ? prev + 1 : 0
+                );
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setSelectedSuggestionIndex(prev =>
+                    prev > 0 ? prev - 1 : suggestionList.length - 1
+                );
+                return;
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSuggestionClick(suggestionList[selectedSuggestionIndex]);
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                setSuggestionList([]);
+                setSuggestionType(null);
+                setSelectedSuggestionIndex(0);
+                return;
+            }
+        }
+
+        // Tab completion for inline suggestions
         if (e.key === 'Tab' && suggestion) {
             e.preventDefault();
             setInput(input + suggestion);
@@ -1318,6 +1356,43 @@ export default function VAFDashboard() {
                             </div>
                         )}
 
+                        {/* Suggestions Popup - Fixed centered, with arrow key navigation */}
+                        {suggestionList.length > 0 && (
+                            <div
+                                className="fixed left-1/2 -translate-x-1/2 w-80 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden z-[9999]"
+                                style={{ bottom: '120px' }}
+                            >
+                                <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider flex justify-between">
+                                    <span>{suggestionType === 'command' ? 'Commands' : 'Workflows'}</span>
+                                    <span className="text-gray-300">↑↓ Navigate · Enter Select</span>
+                                </div>
+                                <div className="max-h-64 overflow-y-auto">
+                                    {suggestionList.map((item, idx) => (
+                                        <div
+                                            key={idx}
+                                            className={cn(
+                                                "px-4 py-3 cursor-pointer flex items-center gap-3 transition-colors border-b border-gray-50 last:border-0",
+                                                idx === selectedSuggestionIndex
+                                                    ? "bg-indigo-100 border-l-2 border-l-indigo-500"
+                                                    : "hover:bg-indigo-50"
+                                            )}
+                                            onClick={() => handleSuggestionClick(item)}
+                                            onMouseEnter={() => setSelectedSuggestionIndex(idx)}
+                                        >
+                                            <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
+                                                suggestionType === 'command' ? "bg-yellow-100 text-yellow-600" : "bg-blue-100 text-blue-600")}>
+                                                {suggestionType === 'command' ? <Zap size={16}/> : <Workflow size={16}/>}
+                                            </div>
+                                            <div className="flex flex-col min-w-0">
+                                                <span className="text-sm font-medium text-gray-700 truncate">{item.name || item.id}</span>
+                                                {item.description && <span className="text-xs text-gray-400 truncate">{item.description}</span>}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
                         {/* Token Stats (TUI Style) */}
                         {tokenStats && (
                             <div className="max-w-4xl mx-auto mb-1 flex justify-end">
@@ -1357,38 +1432,13 @@ export default function VAFDashboard() {
                                 <Paperclip size={20} />
                             </button>
                             <div className="flex-1 relative">
-                                {/* Suggestions Popup */}
-                                {suggestionList.length > 0 && (
-                                    <div className="absolute bottom-full mb-2 left-0 w-72 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2">
-                                        <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                                            {suggestionType === 'command' ? 'Commands' : 'Workflows'}
-                                        </div>
-                                        <div className="max-h-64 overflow-y-auto">
-                                            {suggestionList.map((item, idx) => (
-                                                <div
-                                                    key={idx}
-                                                    className="px-4 py-3 hover:bg-indigo-50 cursor-pointer flex items-center gap-3 transition-colors border-b border-gray-50 last:border-0"
-                                                    onClick={() => handleSuggestionClick(item)}
-                                                >
-                                                    <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center shrink-0", 
-                                                        suggestionType === 'command' ? "bg-yellow-100 text-yellow-600" : "bg-blue-100 text-blue-600")}>
-                                                        {suggestionType === 'command' ? <Zap size={16}/> : <Workflow size={16}/>}
-                                                    </div>
-                                                    <div className="flex flex-col min-w-0">
-                                                        <span className="text-sm font-medium text-gray-700 truncate">{item.name || item.id}</span>
-                                                        {item.description && <span className="text-xs text-gray-400 truncate">{item.description}</span>}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
 
                                 <div className="absolute inset-0 py-4 px-1 pointer-events-none text-sm text-gray-400 whitespace-pre">
                                     <span className="text-transparent">{input}</span>
                                     {suggestion}
                                 </div>
                                 <input
+                                    ref={inputRef}
                                     type="text"
                                     value={input}
                                     onChange={handleInputChange}

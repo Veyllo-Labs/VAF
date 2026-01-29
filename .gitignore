@@ -65,3 +65,7 @@ build/
 node_modules/
 .npm
 
+# Next.js
+.next/
+out/
+

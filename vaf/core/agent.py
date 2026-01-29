@@ -1325,6 +1325,16 @@ class Agent:
         is_mac = platform.system() == "Darwin"
         if is_py313 or is_mac or self.config.get("force_server", False):
             UI.event("System", f"Initializing Standalone Server (Py3.13 / Mac / GPU Mode)...", style="warning")
+            # If the server is already running (or still loading), reuse it to avoid duplicates.
+            try:
+                response = requests.get("http://127.0.0.1:8080/health", timeout=1)
+                if response.status_code in (200, 503):
+                    self.server = ServerManager()
+                    self.use_server = True
+                    UI.event("System", "Reusing existing HTTP backend on :8080.", style="dim")
+                    return
+            except Exception:
+                pass
             self.server = ServerManager()
             if self.server.start_server(self.model_path, n_gpu_layers=n_gpu, n_ctx=n_ctx):
                 self.use_server = True
@@ -3958,7 +3968,6 @@ class Agent:
                         # Log error for debugging
                         UI.error(f"Tool {function_name} failed: {e}")
                         # API Spam Prevention: Wait 2s on error
-                        import time
                         time.sleep(2)
                         
                     # Web UI Event: Tool End
@@ -3978,7 +3987,6 @@ class Agent:
                         get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=r_str, session_id=get_current_session_id())
                         
                         if is_err and "Error executing tool" not in r_str: # Avoid double sleep if exception already slept
-                             import time
                              time.sleep(2)
                     except Exception: pass
 

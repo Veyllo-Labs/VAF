@@ -74,6 +74,7 @@ Singleton pattern manager that:
 ### 3. Status Indicators
 
 - **Connection Status**: Visual indicator (green/red) in header
+- **Local Model Idle**: Shows `Idle` when the local model is unloaded and waiting for a prompt
 - **Loading States**: Animated dots during agent processing
 - **Workflow Steps**: Real-time display of Router, Workflow, System, and Info events
 - **Inline Tool Status**: Visual cards for running/completed tools directly in the chat stream
@@ -96,6 +97,14 @@ Singleton pattern manager that:
 - Timeline-style visualization
 - Icons for different step types (Router, Workflow, Safety)
 - Automatic filtering of redundant messages
+
+## Local Model Idle Behavior
+
+When the provider is `local`, the tray process only loads the model on real activity (prompt/CLI heartbeat). If there are no active WebUI WebSocket connections for 15 seconds, the model is unloaded from VRAM unless persistence is enabled.
+
+## Local HTTP Backend Reuse
+
+The local LLM runs as a single HTTP backend on `127.0.0.1:8080`. When a prompt arrives, VAF first checks `/health` and reuses the existing backend if it is already running (or still loading). This prevents duplicate `llama-server` processes and keeps WebUI and CLI on the same server instance.
 
 ## WebSocket Protocol
 
@@ -205,6 +214,22 @@ vaf run --web     # Enable Web UI (default)
   "web_ui_enabled": true
 }
 ```
+
+### Tray Autostart
+
+Use `tray_autostart` to control whether the tray app starts when the OS logs in:
+
+```json
+{
+  "tray_autostart": false
+}
+```
+
+### Sub-Agent Terminals (Global Setting)
+
+`sub_agents_in_separate_terminals` applies to CLI and workflow execution. In the WebUI,
+sub-agents still run headless and stream output to the docked panel even when this
+setting is enabled.
 
 ### Port Configuration
 

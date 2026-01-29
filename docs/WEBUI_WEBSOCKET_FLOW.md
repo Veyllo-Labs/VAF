@@ -68,6 +68,7 @@ Key rules:
 - `subagent_update`: sub-agent window payload
 - `subagent_output`: final sub-agent output block
 - `subagent_output_stream`: live stdout/stderr lines from headless sub-agents
+- `model_state`: local model load/unload status (`loaded`, `persistent`, `provider`)
 
 ## Troubleshooting Checklist
 
@@ -85,6 +86,13 @@ If `Queued input...` is present but no further logs appear:
 If `Starting chat_step...` appears but no response:
 - **chat_step crashed or hung**.
 - Check if the error mentions encoding (`charmap`); fix with UTF-8 output.
+
+### 1b) Local Backend Not Reachable
+
+If you see `LLM Call Failed: HTTPConnectionPool(127.0.0.1:8080)`:
+- The local HTTP backend is not running or was stopped.
+- Ensure the tray is running and the backend is reused instead of starting a second process.
+- If multiple `llama-server.exe` instances appear, close all of them and restart the tray.
 
 ### 2) Messages Filtered on Frontend
 
@@ -114,6 +122,7 @@ If the tool card expands but the panel does not open:
 | Symptom | Likely Cause | Fix |
 |---|---|---|
 | `Chat_step failed ... charmap` | Windows console encoding | Set `PYTHONIOENCODING=utf-8` and reconfigure stdout/stderr |
+| `LLM Call Failed: HTTPConnectionPool(127.0.0.1:8080)` | Backend not running or duplicate server start | Restart tray; ensure only one `llama-server` is running |
 | Messages appear in CLI only | Headless agent not running | Ensure tray starts `run_headless_agent()` |
 | WebUI shows only system logs | `agent_message_update` filtered by session | Fix session sync and auto-load `history_update` |
 | Sub-agent window never appears | No `subagent_update` emitted | Send periodic sub-agent status updates from headless loop |

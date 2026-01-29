@@ -27,12 +27,14 @@ class TrayContext:
         self.initialized = True
         
         # Configuration
-        # Load timeout from config, default to 10 seconds
-        self.idle_timeout = Config.get("server_idle_timeout", 10)
+        # Load timeout from config, default to 15 seconds
+        self.idle_timeout = Config.get("server_idle_timeout", 15)
         
         # State
         self.active_websockets = 0
         self.last_heartbeat = 0.0
+        self.last_websocket_disconnect = 0.0
+        self.last_websocket_activity = 0.0
         self.model_loaded = False
         self.server_port = 8001
         self.should_exit = False
@@ -49,11 +51,13 @@ class TrayContext:
         old_count = self.active_websockets
         self.active_websockets = count
         if count > 0:
-            self.register_activity()
-        
-        # If transitioning from 0 to >0, we might need to wake up
-        if old_count == 0 and count > 0:
-            pass # The loop in tray.py checks is_active()
+            self.last_websocket_activity = time.time()
+        if count == 0 and old_count > 0:
+            self.last_websocket_disconnect = time.time()
+
+    def register_websocket_activity(self):
+        """Register any WebSocket activity (message received)."""
+        self.last_websocket_activity = time.time()
 
     def is_active(self) -> bool:
         """
@@ -63,11 +67,7 @@ class TrayContext:
         OR
         2. A heartbeat was received recently (CLI)
         """
-        # 1. WebSocket Connections
-        if self.active_websockets > 0:
-            return True
-        
-        # 2. Recent Heartbeat (within timeout window + buffer)
+        # Recent Heartbeat (within timeout window + buffer)
         # We give a small buffer (e.g. 2s) to avoid flickering
         if time.time() - self.last_heartbeat < (self.idle_timeout + 2.0):
             return True
@@ -89,6 +89,8 @@ class TrayContext:
         """Update model loaded state."""
         if self.model_loaded != loaded:
             self.model_loaded = loaded
+            if loaded:
+                self.register_activity()
             # Notify listener
             if self.on_status_change:
                 self.on_status_change()

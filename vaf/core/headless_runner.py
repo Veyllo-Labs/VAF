@@ -3,9 +3,11 @@ import threading
 import traceback
 import os
 import sys
+import requests
 from vaf.core.agent import Agent
 from vaf.core.task_queue import TaskQueue
 from vaf.core.session import SessionManager
+from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
 
 def run_headless_agent():
@@ -34,11 +36,6 @@ def run_headless_agent():
 
             # Register with Web Interface
             get_web_interface().register_agent(agent)
-
-            # Ensure model is ready (might already be loaded by tray logic, but safe to check)
-            if not agent.api_backend:
-                agent.ensure_model_exists()
-                agent.load_model(skip_download_check=True)
 
             print("[Headless] Agent initialized and ready.")
             try:
@@ -104,6 +101,26 @@ def run_headless_agent():
                     # Create fallback session?
                     # valid session is needed for chat_step to work properly with history
                     pass
+
+                # Lazy-load local model only when a task arrives
+                try:
+                    if agent.provider == "local" and not agent.api_backend and not agent.llm and not agent.use_server:
+                        agent.load_model(skip_download_check=True)
+                        if agent.llm or agent.use_server:
+                            from vaf.core.tray_context import TrayContext
+                            from vaf.core.web_interface import get_web_interface
+                            tray_ctx = TrayContext()
+                            tray_ctx.set_model_loaded(True)
+                            get_web_interface().push_update({
+                                "type": "model_state",
+                                "loaded": True,
+                                "persistent": tray_ctx.is_persistent(),
+                                "provider": "local"
+                            })
+                except Exception as e:
+                    print(f"[Headless] Lazy model load failed: {e}")
+                
+                # HTTP backend startup is managed by the Tray activity loop.
 
                 # Send initial token stats to WebUI (before processing)
                 try:
@@ -202,8 +219,15 @@ def run_headless_agent():
                     print(f"[Headless] Error during chat step: {e}")
                     traceback.print_exc()
                     try:
+                        tb = traceback.format_exc()
                         get_web_interface().log(
                             f"Chat_step failed for session {task.session_id}: {e}",
+                            level="error",
+                            source="System",
+                            session_id=task.session_id
+                        )
+                        get_web_interface().log(
+                            f"Traceback (chat_step):\n{tb}",
                             level="error",
                             source="System",
                             session_id=task.session_id

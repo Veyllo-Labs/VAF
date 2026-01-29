@@ -515,8 +515,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     )}
                                     <div className="h-4" />
                                     <Switch
-                                        label="Separate Terminals"
-                                        description="Launch sub-agents in new terminal windows"
+                                        label="Separate Terminals (Global)"
+                                        description="Applies to CLI/workflows. WebUI still runs sub-agents headless and streams output."
                                         checked={localConfig.sub_agents_in_separate_terminals ?? true}
                                         onChange={(v: boolean) => handleChange('sub_agents_in_separate_terminals', v)}
                                     />
@@ -528,8 +528,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <div className="space-y-6">
                                 <Section title="Sub-Agents">
                                     <Switch
-                                        label="Separate Terminals"
-                                        description="Launch sub-agents in new terminal windows"
+                                        label="Separate Terminals (Global)"
+                                        description="Applies to CLI/workflows. WebUI still runs sub-agents headless and streams output."
                                         checked={localConfig.sub_agents_in_separate_terminals ?? true}
                                         onChange={(v: boolean) => handleChange('sub_agents_in_separate_terminals', v)}
                                     />
@@ -572,6 +572,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         description="Start Web UI automatically on launch"
                                         checked={localConfig.web_ui_enabled ?? true}
                                         onChange={(v: boolean) => handleChange('web_ui_enabled', v)}
+                                    />
+                                    <div className="h-4" />
+                                    <Switch
+                                        label="Start Tray on Login"
+                                        description="Auto-start the tray app when your OS logs in"
+                                        checked={localConfig.tray_autostart ?? false}
+                                        onChange={(v: boolean) => handleChange('tray_autostart', v)}
                                     />
                                     <div className="h-4" />
                                     <Switch

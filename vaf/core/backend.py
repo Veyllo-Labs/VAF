@@ -48,6 +48,29 @@ class ServerManager:
         # Windows: Create Job Object to ensure child process terminates with parent
         if self.system == "Windows":
             self._create_job_object()
+
+    def get_model_path(self, model_name: str | None = None) -> str:
+        """
+        Resolve the local model file path from config or input name.
+        Handles repo-style names and ensures .gguf extension.
+        """
+        from pathlib import Path
+        from vaf.core.config import Config
+
+        name = (model_name or Config.get("model") or "").strip()
+        if not name:
+            return str(Path(self.base_dir) / "models" / "VQ-1_Instruct-q4_k_m.gguf")
+
+        candidate = Path(name)
+        if candidate.is_file():
+            return str(candidate.resolve())
+
+        # If a repo/path was supplied, use the filename portion.
+        filename = name.rsplit("/", 1)[-1]
+        if not filename.lower().endswith(".gguf"):
+            filename += ".gguf"
+
+        return str(Path(self.base_dir) / "models" / filename)
     
     def __del__(self):
         """Destructor: Clean up job object handle on Windows."""
@@ -434,6 +457,29 @@ class ServerManager:
         
         if not self.ensure_server_exists():
             return False
+
+        # If a server is already listening, reuse it instead of spawning another.
+        try:
+            response = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
+            if response.status_code == 200:
+                self.process = None  # Reuse existing external process
+                UI.event("Server", f"Reusing existing server on :{port}...", style="dim")
+                return True
+            # If it's still loading, wait briefly before deciding to restart.
+            if response.status_code == 503:
+                wait_start = time.time()
+                while time.time() - wait_start < 30:
+                    try:
+                        response = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
+                        if response.status_code == 200:
+                            self.process = None
+                            UI.event("Server", f"Reusing existing server on :{port}...", style="dim")
+                            return True
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+        except Exception:
+            pass
         
         # PRÜFE ZUERST, OB SERVER BEREITS LÄUFT
         # Check if server is already running by checking PID file and health endpoint

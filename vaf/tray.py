@@ -242,40 +242,107 @@ def get_icon_path(status):
 
 def check_activity_loop(update_icon_callback):
     """Monitor activity and manage model state."""
+    last_loaded = None
+    last_persistent = None
+    last_log_ts = 0.0
+    loading_lock = threading.Lock()
+    loading_in_progress = False
+
+    def start_model_async(reason: str):
+        nonlocal loading_in_progress
+        with loading_lock:
+            if loading_in_progress or tray_context.model_loaded:
+                return
+            loading_in_progress = True
+
+        def _runner():
+            nonlocal loading_in_progress
+            try:
+                model = Config.get("model")
+                started = server_mgr.start_server(
+                    model_path=server_mgr.get_model_path(model),
+                    port=8080
+                )
+                log("Tray", f"{reason} start_server result: {started}")
+                if started:
+                    tray_context.set_model_loaded(True)
+                    log("Tray", f"Model loaded ({reason}).")
+                else:
+                    log("Tray", f"Failed to start server ({reason}).")
+            finally:
+                with loading_lock:
+                    loading_in_progress = False
+        threading.Thread(target=_runner, daemon=True).start()
+
+    def emit_model_state():
+        try:
+            from vaf.core.web_interface import get_web_interface
+            provider = Config.get("provider", "local")
+            loaded_for_ui = tray_context.model_loaded if provider == "local" else True
+            get_web_interface().push_update({
+                "type": "model_state",
+                "loaded": loaded_for_ui,
+                "persistent": tray_context.is_persistent(),
+                "provider": provider
+            })
+        except Exception:
+            pass
+
     while not tray_context.should_exit:
-        is_active = tray_context.is_active()
         is_loaded = tray_context.model_loaded
         is_persistent = tray_context.is_persistent()
+        is_active = tray_context.is_active()
+        time_since_last = time.time() - tray_context.last_heartbeat
+        time_since_disconnect = time.time() - tray_context.last_websocket_disconnect
+        time_since_ws_activity = time.time() - tray_context.last_websocket_activity
         
-        # ACTIVE STATE
-        if is_active:
+        if is_persistent:
             if not is_loaded:
-                # Load Model
+                print("Persistent mode enabled. Loading model...")
+                log("Tray", "Persistent mode enabled. Loading model...")
+                start_model_async("Persistent")
+            update_icon_callback("persistent")
+        elif is_active:
+            if not is_loaded:
                 print("Activity detected. Loading model...")
-                update_icon_callback("active")
-                # We start server using configured model
-                model = Config.get("model")
-                if server_mgr.start_server(model_path=server_mgr.get_model_path(model), port=8080):
-                    tray_context.set_model_loaded(True)
-                else:
-                    print("Failed to start server")
-            else:
-                # Already loaded, ensure icon is green
-                update_icon_callback("active")
-                
-        # IDLE STATE
+                log("Tray", "Activity detected. Loading model...")
+                start_model_async("Activity")
+            update_icon_callback("active")
         else:
-            if is_loaded and not is_persistent:
-                # Check timeout
-                time_since_last = time.time() - tray_context.last_heartbeat
-                if time_since_last > tray_context.idle_timeout:
-                    print(f"Idle timeout ({tray_context.idle_timeout}s) reached. Unloading model...")
-                    server_mgr.stop_server(force_external=True) # We own it effectively here
-                    tray_context.set_model_loaded(False)
-                    update_icon_callback("idle")
+            if (
+                is_loaded and
+                tray_context.active_websockets == 0 and
+                time_since_last > tray_context.idle_timeout and
+                time_since_ws_activity > tray_context.idle_timeout and
+                time_since_disconnect > tray_context.idle_timeout
+            ):
+                print(f"Idle timeout ({tray_context.idle_timeout}s) reached. Unloading model...")
+                log("Tray", f"Idle timeout reached. Unloading model (loaded={is_loaded}).")
+                server_mgr.stop_server(force_external=True) # We own it effectively here
+                tray_context.set_model_loaded(False)
+                log("Tray", "Model unloaded.")
+                update_icon_callback("idle")
             else:
-                # Already unloaded or persistent
-                update_icon_callback("persistent" if is_persistent else "idle")
+                update_icon_callback("active" if is_loaded else "idle")
+
+        if time.time() - last_log_ts >= 5:
+            last_log_ts = time.time()
+            state_line = (
+                f"IdleCheck state: loaded={tray_context.model_loaded} "
+                f"persistent={is_persistent} ws={tray_context.active_websockets} "
+                f"lastHeartbeat={time_since_last:.1f}s lastWs={time_since_ws_activity:.1f}s "
+                f"lastDisconnect={time_since_disconnect:.1f}s"
+            )
+            log("Tray", state_line)
+            try:
+                logger.info(state_line)
+            except Exception:
+                pass
+
+        if last_loaded is None or last_loaded != tray_context.model_loaded or last_persistent != is_persistent:
+            emit_model_state()
+            last_loaded = tray_context.model_loaded
+            last_persistent = is_persistent
                 
         time.sleep(1)
 
@@ -492,11 +559,13 @@ if platform.system() == "Darwin":
             def start_frontend_bg():
                 logger.info("[Tray] Starting Frontend manager...")
                 from vaf.core.frontend_manager import FrontendManager
+                auto_open = Config.get("web_ui_enabled", True)
                 port = FrontendManager().start_frontend()
                 if port:
                     logger.info(f"[Tray] Frontend started on port {port}, opening browser...")
-                    import webbrowser
-                    webbrowser.open(f"http://localhost:{port}")
+                    if auto_open:
+                        import webbrowser
+                        webbrowser.open(f"http://localhost:{port}")
             t_fe = threading.Thread(target=start_frontend_bg, daemon=True)
             t_fe.start()
             
@@ -570,11 +639,13 @@ if platform.system() != "Darwin" or "rumps" not in sys.modules:
             print("[Tray] Starting Frontend manager...")
             log("Tray", "Starting Frontend Manager...")
             from vaf.core.frontend_manager import FrontendManager
+            auto_open = Config.get("web_ui_enabled", True)
             port = FrontendManager().start_frontend(log_callback=lambda msg, style: log("Frontend", msg))
             if port:
                 print(f"[Tray] Frontend started on port {port}, opening browser...")
                 log("Tray", f"Frontend started on port {port}")
-                open_webui(None)
+                if auto_open:
+                    open_webui(None)
             else:
                 print("[Tray] Frontend failed to start.")
                 log("Tray", "Frontend failed to start")
@@ -598,10 +669,22 @@ if platform.system() != "Darwin" or "rumps" not in sys.modules:
         def update_icon(state):
             if state == "active":
                 icon.icon = create_image("active")
+                try:
+                    logger.info("[Tray] Icon state -> active")
+                except Exception:
+                    pass
             elif state == "idle":
                 icon.icon = create_image("idle")
+                try:
+                    logger.info("[Tray] Icon state -> idle")
+                except Exception:
+                    pass
             elif state == "persistent":
                 icon.icon = create_image("persistent")
+                try:
+                    logger.info("[Tray] Icon state -> persistent")
+                except Exception:
+                    pass
         
         # Logic Thread
         log("Tray", "Starting Activity Logic thread...")

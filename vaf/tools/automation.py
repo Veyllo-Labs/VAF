@@ -86,7 +86,7 @@ Use this when user wants to schedule recurring tasks like:
         name = kwargs.get("name", "untitled")
         prompt = kwargs.get("prompt", "")
         frequency = kwargs.get("frequency", "daily")
-        time = kwargs.get("time", "06:00")
+        schedule_time = kwargs.get("time", "06:00")
         # IMPORTANT: Distinguish between "not provided" (None) and "default value"
         # This allows us to detect if user explicitly passed a path or not
         output_path_arg = kwargs.get("output_path")
@@ -216,14 +216,14 @@ Use this when user wants to schedule recurring tasks like:
                     frequency = "daily"  # Safe default
         
         # Validate time format (HH:MM)
-        if not isinstance(time, str) or ":" not in time:
-            return f"Error: Invalid time format '{time}'. Expected HH:MM format (e.g., '22:46')."
+        if not isinstance(schedule_time, str) or ":" not in schedule_time:
+            return f"Error: Invalid time format '{schedule_time}'. Expected HH:MM format (e.g., '22:46')."
         
         try:
             from datetime import datetime
-            datetime.strptime(time, "%H:%M")
+            datetime.strptime(schedule_time, "%H:%M")
         except ValueError:
-            return f"Error: Invalid time format '{time}'. Expected HH:MM format (e.g., '22:46')."
+            return f"Error: Invalid time format '{schedule_time}'. Expected HH:MM format (e.g., '22:46')."
         
         try:
             manager = AutomationManager()
@@ -254,7 +254,7 @@ Use this when user wants to schedule recurring tasks like:
             # Check for automations at the same time
             conflicting_task = None
             for task in existing_tasks:
-                if task.time == time and task.frequency == frequency and task.enabled:
+                if task.time == schedule_time and task.frequency == frequency and task.enabled:
                     conflicting_task = task
                     break
             
@@ -262,7 +262,7 @@ Use this when user wants to schedule recurring tasks like:
                 return (
                     f"ERROR: Automation already exists at the same time!\n\n"
                     f"❌ **DO NOT RETRY create_automation** - An active automation '{conflicting_task.name}' ({conflicting_task.id}) "
-                    f"already runs at the same time ({time}) with the same frequency ({frequency}).\n\n"
+                    f"already runs at the same time ({schedule_time}) with the same frequency ({frequency}).\n\n"
                     f"**Solution:**\n"
                     f"- Use `read_automation(task_id='{conflicting_task.id}')` to see details, then `update_automation(task_id='{conflicting_task.id}', ...)` to update it\n"
                     f"- Or choose a different time for the new automation\n"
@@ -272,14 +272,14 @@ Use this when user wants to schedule recurring tasks like:
             
             # If existing task found, check if it's at the same time or different time
             if existing_task:
-                same_time = existing_task.time == time and existing_task.frequency == frequency
+                same_time = existing_task.time == schedule_time and existing_task.frequency == frequency
                 
                 if same_time:
                     # Same time - suggest updating
                     return (
                         f"ERROR: Automation already exists with same name and time!\n\n"
                         f"❌ **DO NOT RETRY create_automation** - An automation '{existing_task.name}' ({existing_task.id}) already exists "
-                        f"with the same time ({time}) and frequency ({frequency}).\n\n"
+                        f"with the same time ({schedule_time}) and frequency ({frequency}).\n\n"
                         f"**Current settings:**\n"
                         f"- Schedule: {existing_task.frequency} at {existing_task.time}\n"
                         f"- Prompt: {existing_task.prompt[:100]}{'...' if len(existing_task.prompt) > 100 else ''}\n"
@@ -304,18 +304,18 @@ Use this when user wants to schedule recurring tasks like:
                             f"{similar_info if similar_tasks else ''}\n\n"
                             f"**Neue Automatisierung:**\n"
                             f"- Name: {name}\n"
-                            f"- Zeit: {time} ({frequency})\n\n"
+                            f"- Zeit: {schedule_time} ({frequency})\n\n"
                             f"**Optionen:**\n"
                             f"1. **Neue Automatisierung erstellen** (wird fortgesetzt) - da die Zeit unterschiedlich ist, ist das in Ordnung\n"
                             f"2. **Bestehende aktualisieren** - verwende `read_automation(task_id='{existing_task.id}')` und dann `update_automation`\n\n"
-                            f"**Hinweis:** Da die Zeiten unterschiedlich sind ({existing_task.time} vs {time}), können beide Automatisierungen parallel laufen."
+                            f"**Hinweis:** Da die Zeiten unterschiedlich sind ({existing_task.time} vs {schedule_time}), können beide Automatisierungen parallel laufen."
                         )
                     else:
                         # Just one similar task at different time - allow creation
                         return (
                             f"ℹ️ **Ähnliche Automatisierung existiert bereits (aber zu anderer Zeit):**\n\n"
                             f"Eine ähnliche Automatisierung '{existing_task.name}' ({existing_task.id}) existiert bereits, "
-                            f"aber zu einer anderen Zeit ({existing_task.time} vs {time}).\n\n"
+                            f"aber zu einer anderen Zeit ({existing_task.time} vs {schedule_time}).\n\n"
                             f"**Da die Zeiten unterschiedlich sind, wird die neue Automatisierung erstellt.**\n"
                             f"Beide können parallel laufen.\n\n"
                             f"**Falls du stattdessen die bestehende aktualisieren möchtest:**\n"
@@ -324,7 +324,7 @@ Use this when user wants to schedule recurring tasks like:
             
             # Check cooldown BEFORE creating automation (so agent can inform user)
             # Only apply cooldown if there's a time conflict with existing automations
-            can_create, error_msg = manager.check_can_create_automation(new_time=time, new_frequency=frequency)
+            can_create, error_msg = manager.check_can_create_automation(new_time=schedule_time, new_frequency=frequency)
             if not can_create:
                 return error_msg
             
@@ -361,7 +361,7 @@ Use this when user wants to schedule recurring tasks like:
                 prompt=prompt,  # Keep for backwards compatibility
                 workflow_steps=workflow_steps if workflow_steps else [],  # NEW: Structured workflow
                 frequency=frequency,
-                time=time,
+                time=schedule_time,
                 output_path=output_path,
                 output_format=format_type,  # IMPORTANT: Set the output format!
                 parameters=params

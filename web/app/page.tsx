@@ -278,6 +278,8 @@ export default function VAFDashboard() {
     useEffect(() => { messagesRef.current = messages; }, [messages]);
 
     const [status, setStatus] = useState('connecting');
+    const [modelLoaded, setModelLoaded] = useState<boolean | null>(null);
+    const [modelProvider, setModelProvider] = useState<string | null>(null);
     const [sessions, setSessions] = useState<Session[]>([]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     const currentSessionIdRef = useRef<string | null>(null);
@@ -1070,6 +1072,14 @@ export default function VAFDashboard() {
                 else if (data.type === 'automations_list') {
                     setAutomations(data.automations || []);
                 }
+                else if (data.type === 'model_state') {
+                    if (typeof data.loaded === 'boolean') {
+                        setModelLoaded(data.loaded);
+                    }
+                    if (typeof data.provider === 'string') {
+                        setModelProvider(data.provider);
+                    }
+                }
                 else if (data.type === 'stt_result') {
                     // STT transcription result
                     const text = data.text || '';
@@ -1391,6 +1401,12 @@ export default function VAFDashboard() {
         subAgentState.currentFile
     );
 
+    const providerName = modelProvider || config?.provider || 'local';
+    const isLocalProvider = providerName === 'local';
+    const isConnected = status === 'connected';
+    const showIdleState = isConnected && isLocalProvider && modelLoaded === false;
+    const connectionLabel = isConnected ? (showIdleState ? 'Idle' : 'Connected') : 'Disconnected';
+
     const handleArtifactChange = (nextValue: string) => {
         const nextFile = subAgentState.artifactFile || subAgentState.currentFile;
         artifactDirtyRef.current = true;
@@ -1556,11 +1572,17 @@ export default function VAFDashboard() {
                                 <div
                                     className={cn(
                                         "w-2.5 h-2.5 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.2)] transition-colors",
-                                        status === 'connected' ? "bg-green-500 shadow-green-400/50" : "bg-red-500 shadow-red-400/50"
+                                        showIdleState
+                                            ? "bg-yellow-400 shadow-yellow-300/50"
+                                            : isConnected
+                                                ? "bg-green-500 shadow-green-400/50"
+                                                : "bg-red-500 shadow-red-400/50"
                                     )}
                                 />
                             </div>
-                            <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 whitespace-nowrap text-sm font-medium text-gray-500">{status === 'connected' ? 'Connected' : 'Disconnected'}</span>
+                            <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 whitespace-nowrap text-sm font-medium text-gray-500">
+                                {connectionLabel}
+                            </span>
                         </div>
 
                         <div

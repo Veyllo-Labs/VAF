@@ -10,9 +10,11 @@ VAF includes a persistent background service managed by a system tray applicatio
     - 🔵 **Blue / Persistent**: Model is pinned in RAM (Persistent Mode).
 - **macOS Dock Integration**: On macOS, clicking the Dock icon (when VAF is already running) focuses the app and opens/re-activates the Web UI.
 - **Smart Tab Reuse**: If a VAF tab is already open in Safari or Google Chrome, clicking the Dock icon will re-focus that existing tab instead of opening a new one.
-- **Dynamic Resource Management**: Automatically unloads the LLM from RAM after 10 seconds (default) of inactivity to free up system resources.
+- **Dynamic Resource Management**: Automatically unloads the LLM from RAM after 15 seconds (default) of inactivity to free up system resources.
+- **WebUI-Aware Idle**: The local model unloads after 15 seconds with no active WebUI WebSocket connections (unless persistence is enabled).
 - **Instant Wake-on-Demand**: The server wakes up instantly when you run a CLI command (`vaf run`) or open the Web UI.
 - **Graceful Shutdown**: Checks for active CLI sessions before quitting to prevent data loss.
+- **Single HTTP Backend**: The tray manages a single `llama-server` on `127.0.0.1:8080`. Other components reuse it instead of spawning duplicates.
 
 ## Usage
 
@@ -44,11 +46,13 @@ Settings are managed in `~/.vaf/config.json`:
 
 | Setting | Default | Description |
 | :--- | :--- | :--- |
-| `server_idle_timeout` | `10` | Seconds to wait before unloading model |
+| `server_idle_timeout` | `15` | Seconds to wait before unloading model |
 | `persist_server` | `false` | If true, model stays loaded (same as checkbox) |
+| `tray_autostart` | `false` | Auto-start tray app on OS login |
 
 ## Architecture
 
 The system uses a shared `TrayContext` to manage state between the Uvicorn web server and the UI loop.
 - **macOS**: Uses `rumps` for a native Cocoa menu bar experience.
 - **Windows/Linux**: Uses `pystray` for cross-platform system tray support.
+- **HTTP Backend**: The tray starts and unloads the local backend; health checks reuse an existing backend to avoid multiple processes.

@@ -6,6 +6,8 @@ import os
 import sys
 import platform
 import shutil
+import shlex
+import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any
 import webbrowser
@@ -302,6 +304,109 @@ class Platform:
         This is the backward-compatible option.
         """
         return Path.home() / ".vaf"
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # AUTOSTART (Tray)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _tray_command_args() -> list[str]:
+        """Build the command used to launch the tray app."""
+        python_bin = Path(sys.executable)
+        if Platform.is_windows():
+            if python_bin.name.lower() == "python.exe":
+                candidate = python_bin.with_name("pythonw.exe")
+                if candidate.exists():
+                    python_bin = candidate
+        return [str(python_bin), "-m", "vaf.main", "tray"]
+
+    @staticmethod
+    def set_tray_autostart(enable: bool) -> bool:
+        """
+        Enable/disable OS login autostart for the tray app.
+
+        Returns:
+            True if the change was applied successfully, False otherwise.
+        """
+        try:
+            cmd_args = Platform._tray_command_args()
+            if Platform.is_windows():
+                base = os.environ.get("APPDATA", str(Path.home()))
+                startup_dir = Path(base) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+                startup_dir.mkdir(parents=True, exist_ok=True)
+                entry_path = startup_dir / "VAF Tray.cmd"
+                if enable:
+                    python_cmd = f'"{cmd_args[0]}"' if " " in cmd_args[0] else cmd_args[0]
+                    cmd_line = " ".join([python_cmd] + cmd_args[1:])
+                    entry_path.write_text(f"@echo off\nstart \"\" {cmd_line}\n", encoding="utf-8")
+                else:
+                    if entry_path.exists():
+                        entry_path.unlink()
+                return True
+
+            if Platform.is_macos():
+                agents_dir = Path.home() / "Library" / "LaunchAgents"
+                agents_dir.mkdir(parents=True, exist_ok=True)
+                entry_path = agents_dir / "com.vaf.tray.plist"
+                if enable:
+                    args_xml = "\n".join([f"            <string>{arg}</string>" for arg in cmd_args])
+                    plist = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+    <dict>
+        <key>Label</key>
+        <string>com.vaf.tray</string>
+        <key>ProgramArguments</key>
+        <array>
+{args_xml}
+        </array>
+        <key>RunAtLoad</key>
+        <true/>
+    </dict>
+</plist>
+"""
+                    entry_path.write_text(plist, encoding="utf-8")
+                    if shutil.which("launchctl"):
+                        try:
+                            subprocess.run(["launchctl", "unload", str(entry_path)], check=False)
+                            subprocess.run(["launchctl", "load", str(entry_path)], check=False)
+                        except Exception:
+                            pass
+                else:
+                    if entry_path.exists():
+                        if shutil.which("launchctl"):
+                            try:
+                                subprocess.run(["launchctl", "unload", str(entry_path)], check=False)
+                            except Exception:
+                                pass
+                        entry_path.unlink()
+                return True
+
+            if Platform.is_linux():
+                config_dir = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+                autostart_dir = config_dir / "autostart"
+                autostart_dir.mkdir(parents=True, exist_ok=True)
+                entry_path = autostart_dir / "vaf-tray.desktop"
+                if enable:
+                    exec_cmd = " ".join(shlex.quote(arg) for arg in cmd_args)
+                    desktop_entry = "\n".join([
+                        "[Desktop Entry]",
+                        "Type=Application",
+                        "Name=VAF Tray",
+                        f"Exec={exec_cmd}",
+                        "X-GNOME-Autostart-enabled=true",
+                        "NoDisplay=false",
+                        ""
+                    ])
+                    entry_path.write_text(desktop_entry, encoding="utf-8")
+                else:
+                    if entry_path.exists():
+                        entry_path.unlink()
+                return True
+
+            return False
+        except Exception:
+            return False
     
     # ═══════════════════════════════════════════════════════════════════════════
     # SHELL

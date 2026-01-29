@@ -251,6 +251,17 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"[WebSocket] Connected! Active: {len(manager.active_connections)}")
         log("API", f"WebSocket connected! Active: {len(manager.active_connections)}")
         tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
+        log("API", f"WebSocket count updated: {tray_context.active_websockets}")
+        try:
+            provider = Config.get("provider", "local")
+            await websocket.send_json({
+                "type": "model_state",
+                "loaded": tray_context.model_loaded,
+                "persistent": tray_context.is_persistent(),
+                "provider": provider
+            })
+        except Exception:
+            pass
     except Exception as e:
         log("API", f"WebSocket handshake failed: {e}")
         raise e
@@ -329,6 +340,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             # Listen for client commands
             data_str = await websocket.receive_text()
+            tray_context.register_websocket_activity()
             try:
                 cmd = json.loads(data_str)
                 type = cmd.get("type")
@@ -592,6 +604,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     new_config = cmd.get("config")
                     if new_config:
                         Config.save(new_config)
+                        try:
+                            if "tray_autostart" in new_config:
+                                from vaf.core.platform import Platform
+                                Platform.set_tray_autostart(bool(new_config.get("tray_autostart")))
+                        except Exception as e:
+                            log("WebServer", f"Tray autostart update failed: {e}")
                         manager.input_queue.put("__CMD__:RELOAD_CONFIG")
                         await websocket.send_json({
                             "type": "config_saved",
@@ -641,6 +659,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     files = cmd.get("files", [])  # List of file objects with {name, data, mimeType}
                     
                     if content or files:
+                        tray_context.register_activity()
                         # Learn from user input
                         if content:
                             get_autosuggest().learn(content)
@@ -893,12 +912,14 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
         tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
+        log("API", f"WebSocket disconnected. Active: {tray_context.active_websockets}")
         if len(manager.active_connections) == 0:
             os.environ.pop("VAF_WEBUI_ACTIVE", None)
     except Exception as e:
         print(f"WebSocket error: {e}")
         manager.disconnect(websocket)
         tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
+        log("API", f"WebSocket error; active now {tray_context.active_websockets}")
         if len(manager.active_connections) == 0:
             os.environ.pop("VAF_WEBUI_ACTIVE", None)
 

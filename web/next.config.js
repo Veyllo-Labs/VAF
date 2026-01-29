@@ -4,6 +4,8 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  // Disable the Next.js dev indicator (bottom-left corner)
+  devIndicators: false,
   async rewrites() {
     return [
       {

@@ -205,18 +205,26 @@ class WebInterfaceManager:
         """
         Thread-safe push update with session scoping.
         """
-        # DEBUG: Log every update to console
-        # print(f"🔍 [WebUI] Update: {data.get('type')} (sess: {session_id})")
-        
+        # DEBUG: Log every update to file
+        try:
+            with open("D:/VAF/logs/webui_push_debug.txt", "a", encoding="utf-8") as f:
+                content_preview = str(data.get('content', ''))[:50] if data.get('content') else 'N/A'
+                f.write(f"[PUSH] type={data.get('type')} | sess={session_id} | loop={self._server_loop is not None} | content={content_preview}\n")
+        except: pass
+
         if session_id:
             data['sessionId'] = session_id
             if self._server_loop:
                 asyncio.run_coroutine_threadsafe(
-                    self.broadcast_to_session(session_id, data), 
+                    self.broadcast_to_session(session_id, data),
                     self._server_loop
                 )
             else:
-                pass # print(f"[WebUI] WARNING: No server loop registered for session {session_id}")
+                # WARNING: No server loop means messages are silently dropped!
+                try:
+                    with open("D:/VAF/logs/webui_push_debug.txt", "a", encoding="utf-8") as f:
+                        f.write(f"[WARNING] No server loop! Message dropped for session {session_id}\n")
+                except: pass
         else:
             # Fallback to global broadcast for non-session events
             self.push_update(data)

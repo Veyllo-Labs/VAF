@@ -67,6 +67,19 @@ def run_headless_agent():
                     # valid session is needed for chat_step to work properly with history
                     pass
 
+                # Send initial token stats to WebUI (before processing)
+                try:
+                    used, total = agent.get_token_usage()
+                    stats = {
+                        "used": used,
+                        "total": total,
+                        "percent": round((used / total) * 100) if total else 0,
+                        "api": bool(getattr(agent, 'api_backend', False))
+                    }
+                    get_web_interface().emit_stats(stats, session_id=task.session_id)
+                except Exception:
+                    pass
+
                 # Process Input
                 input_text = task.input_text
                 
@@ -82,21 +95,48 @@ def run_headless_agent():
                     # We pass skip_input=False because we ARE providing input
                     # We disable workflows for now if they require TUI, or we need to ensure workflows work headless
                     # Agent.chat_step logic handles tool execution.
-                    
+
+                    # Streaming callback for WebUI - accumulates chunks and sends updates
+                    response_parts = []
+                    def webui_stream_callback(text):
+                        response_parts.append(text)
+                        # Construct full text so far and send to WebUI
+                        full_text = "".join(response_parts)
+                        if full_text.strip():
+                            get_web_interface().emit_agent_message(
+                                role="assistant",
+                                content=full_text,
+                                session_id=task.session_id
+                            )
+
                     response = agent.chat_step(
                         user_input=input_text,
-                        stream_callback=None, # No streaming to stdout
+                        stream_callback=webui_stream_callback,  # Stream to WebUI!
                         skip_input=False
                     )
-                    
-                    # Broadcast the final response to the Web UI
-                    if response:
+
+                    # Final response broadcast (in case streaming missed the final state)
+                    final_text = "".join(response_parts) if response_parts else response
+                    if final_text:
                          get_web_interface().emit_agent_message(
-                             role="assistant", 
-                             content=response, 
+                             role="assistant",
+                             content=final_text,
                              session_id=task.session_id
                          )
-                    
+
+                    # Send token/context stats to WebUI
+                    try:
+                        used, total = agent.get_token_usage()
+                        stats = {
+                            "used": used,
+                            "total": total,
+                            "percent": round((used / total) * 100) if total else 0,
+                            "api": bool(getattr(agent, 'api_backend', False))
+                        }
+                        get_web_interface().emit_stats(stats, session_id=task.session_id)
+                    except Exception:
+                        pass  # Ignore stats errors
+
                     # Result is already added to history and broadcast to WebUI by agent logic
                     print("[Headless] Task complete.")
                     

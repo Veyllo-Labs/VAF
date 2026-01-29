@@ -2117,26 +2117,44 @@ def _process_agent_message(agent, user_input: str, tui, session):
         text = re.sub(r'\[dim\]', '<think>', text, flags=re.IGNORECASE)
         text = re.sub(r'\[white dim\]', '<think>', text, flags=re.IGNORECASE)
         text = re.sub(r'\[.*?dim.*?\]', '<think>', text, flags=re.IGNORECASE)
-        
+
         # Replace end tags
         text = text.replace('[/dim]', '</think>')
         if '<think>' in text and '</think>' not in text:
              text = text.replace('[/]', '</think>')
-        
-        # Strip remaining tags
+
+        # Strip remaining Rich tags
         text = re.sub(r'\[\/?[^\]]+\]', '', text)
+
+        # 2. Auto-detect thinking when model doesn't use <think> tags
+        # Look for English reasoning followed by German answer (VQ-1 pattern)
+        if '<think>' not in text and len(text) > 100:
+            # Common German sentence starters that indicate the actual answer
+            german_starters = r'(Ich bin|Ich kann|Ich werde|Ich habe|Hallo|Guten|Gerne|Natürlich|Ja,|Nein,|Das ist|Die |Der |Ein |Eine |Hier ist|Hier sind|Klar|Sicher|Selbstverständlich)'
+
+            # Find where German answer starts (after English reasoning)
+            match = re.search(german_starters, text)
+            if match and match.start() > 50:
+                # Check if text before looks like English reasoning
+                before = text[:match.start()]
+                # English reasoning indicators
+                if re.search(r'\b(I should|I need|I will|I\'ll|Let me|The user|should be|because|since|First|Also)\b', before, re.IGNORECASE):
+                    reasoning = before.strip()
+                    answer = text[match.start():].strip()
+                    text = f"<think>{reasoning}</think>\n\n{answer}"
+
         return text
 
     def stream_callback(text):
-        nonlocal response_parts 
+        nonlocal response_parts
         response_parts.append(text)
-        
+
         # Construct full text so far
         current_full_text = "".join(response_parts)
-        
+
         # Convert Terminal-Styling to Web-Styling (XML)
         clean_text = convert_rich_to_xml(current_full_text)
-        
+
         # UI FIX: Strip leading whitespace strings to prevent large gaps/bubbles
         # This handles "\n\nText" AND "<think>...</think>\n\nText"
         # Regex explanation:
@@ -2144,7 +2162,13 @@ def _process_agent_message(agent, user_input: str, tui, session):
         # \s+                            : Matches the whitespace FOLLOWING it (or start)
         def _cleanup_ws(m): return m.group(1) or ""
         clean_text = re.sub(r'^(\s*<think>[\s\S]*?</think>)?\s+', _cleanup_ws, clean_text)
-        
+
+        # DEBUG: Log to file what's being sent to WebUI
+        try:
+            with open("D:/VAF/logs/stream_debug.txt", "a", encoding="utf-8") as f:
+                f.write(f"[CHUNK] text={repr(text[:30] if len(text)>30 else text)} | clean={repr(clean_text[:50] if len(clean_text)>50 else clean_text)} | will_emit={bool(clean_text and clean_text.strip())}\n")
+        except: pass
+
         # Force update to ensure frontend knows we are answering
         # Only emit if there is meaningful content (prevent empty bubbles)
         if clean_text and clean_text.strip():

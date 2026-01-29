@@ -1922,6 +1922,36 @@ class Agent:
 
         self.history[0]["content"] = content
 
+    def _estimate_token_usage(self):
+        """
+        Estimate token usage without loading the tokenizer.
+        Used when server mode is active to avoid blocking on model file.
+        Uses ~4 chars per token as a conservative estimate for most LLMs.
+        """
+        import json as json_module  # Local import to avoid scope issues
+
+        total_chars = 0
+
+        # 1. Estimate chat history tokens
+        for msg in self.history:
+            content = str(msg.get("content", ""))
+            role = str(msg.get("role", ""))
+            total_chars += len(content) + len(role) + 20  # 20 for message structure
+
+        # 2. Estimate tool schema tokens
+        if hasattr(self, 'TOOLS') and self.TOOLS:
+            try:
+                schema_str = json_module.dumps(self.TOOLS)
+                total_chars += len(schema_str)
+            except Exception:
+                total_chars += 2000  # Fallback estimate for tools
+
+        # Convert chars to tokens (conservative: ~4 chars per token)
+        estimated_tokens = total_chars // 4
+        max_tokens = self.config.get("n_ctx", 8192)
+
+        return estimated_tokens, max_tokens
+
     def get_token_usage(self):
         """
         Calculates a precise token usage by using the model's tokenizer.
@@ -1930,7 +1960,13 @@ class Agent:
         # API Backend: Return real token usage from API
         if self.api_backend:
             usage = self.api_backend.session_usage
-            return usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+            total_used = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            return total_used, self.context_manager.max_tokens
+
+        # Server Mode: Use estimation to avoid loading a second model instance
+        # Loading the tokenizer separately would block since the model file is already in use
+        if self.use_server:
+            return self._estimate_token_usage()
 
         tokenizer = self._get_tokenizer()
         if not tokenizer:
@@ -3148,7 +3184,7 @@ class Agent:
         # Skip if already played during workflow match analysis (Step 1/2)
         if not workflow_tried:
             self._speak_filler("thinking")
-        
+
         retries = 0
         MAX_RETRIES = 5
         
@@ -3202,9 +3238,7 @@ class Agent:
                     tool_choice = "auto" if current_tools else "none" # Default to auto if tools, none otherwise
 
                     first_token = True
-                    import json
-                    import sys
-                    from html import escape
+                    # json, sys, escape already imported globally
                     tool_call_accumulator = {}
 
                     for chunk in self.api_backend.chat_completion(
@@ -3352,7 +3386,7 @@ class Agent:
                         if current_tools is None:
                             if "tools" in payload: del payload["tools"]
                             if "tool_choice" in payload: del payload["tool_choice"]
-                        
+
                         response = requests.post(
                             "http://127.0.0.1:8080/v1/chat/completions", 
                             json=payload, 
@@ -3506,12 +3540,7 @@ class Agent:
                         chunk_count += 1
                         if not line: continue
                         line_text = line.decode('utf-8')
-                        
-                        # DEBUG: Verify we get data
-                        # if chunk_count == 1:
-                        #      UI.event("Debug", f"First Chunk: {line_text[:50]}...")
 
-                        
                         if line_text.startswith("data: "):
                             raw_data = line_text[6:]
                             if raw_data.strip() == "[DONE]": break
@@ -3537,43 +3566,51 @@ class Agent:
                                             if 'arguments' in fn: streaming_tools[idx]['arguments'] += fn['arguments']
 
                                 # Process Content & Reasoning
-                                content_chunk = delta.get('content', '')
-                                reasoning_chunk = delta.get('reasoning_content', '')
-                                
+                                # Note: Server may return null instead of empty string
+                                content_chunk = delta.get('content') or ''
+                                reasoning_chunk = delta.get('reasoning_content') or ''
+
+                                # Method 1: Explicit reasoning_content field (DeepSeek R1, etc.)
                                 if reasoning_chunk:
-                                    # We wrap each chunk in dim to ensure safe rich printing per-call
-                                    # instead of trying to maintain open tags across stream calls
                                     if not is_reasoning:
-                                        # Start of reasoning (User visual cue)
                                         is_reasoning = True
-                                    
-                                    if first_token:
-                                        if stream_callback: stream_callback("") 
-                                        first_token = False
-                                        
-                                    if stream_callback: 
-                                        # Use rich escape to handle brackets properly
-                                        stream_callback(f"[white dim]{escape(reasoning_chunk)}[/]")
-                                    full_response += reasoning_chunk
-                                    full_reasoning += reasoning_chunk
-                                
-                                if content_chunk:
-                                    if is_reasoning:
-                                        # End of reasoning - Add Separator!
-                                        if stream_callback: stream_callback("\n\n") 
-                                        is_reasoning = False
-                                        
+                                        if stream_callback: stream_callback("<think>")
+
                                     if first_token:
                                         if stream_callback: stream_callback("")
                                         first_token = False
-                                    
-                                    if stream_callback: 
-                                        # Content is cyan (handled by run.py style)
-                                        stream_callback(f"{escape(content_chunk)}")
+
+                                    if stream_callback:
+                                        stream_callback(reasoning_chunk)
+                                    full_response += reasoning_chunk
+                                    full_reasoning += reasoning_chunk
+
+                                # Method 2: Content field (may contain inline <think> tags)
+                                if content_chunk:
+                                    # Close explicit reasoning if we were in it
+                                    if is_reasoning and not reasoning_chunk:
+                                        if stream_callback: stream_callback("</think>\n\n")
+                                        is_reasoning = False
+
+                                    if first_token:
+                                        if stream_callback: stream_callback("")
+                                        first_token = False
+
+                                    if stream_callback:
+                                        # Content is sent raw - inline <think> tags are preserved
+                                        # The WebUI/CLI will parse them
+                                        stream_callback(content_chunk)
                                     full_response += content_chunk
                                     full_content += content_chunk
                                     
-                            except: pass
+                            except Exception:
+                                pass  # Skip malformed chunks
+
+                    # Close thinking tag if still open at end of stream
+                    if is_reasoning and stream_callback:
+                        stream_callback("</think>")
+                        is_reasoning = False
+
                 except Exception as e:
                     UI.error(f"Server Error: {e}")
                     return

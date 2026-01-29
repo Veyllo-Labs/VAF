@@ -551,7 +551,12 @@ class ServerManager:
             # VRAM Optimization: Use 8-bit cache for Key/Value memory
             # This reduces context VRAM usage by ~50% with minimal quality loss
             "-ctk", "q8_0",
-            "-ctv", "q8_0", 
+            "-ctv", "q8_0",
+            # Thinking Support: Enable Jinja templates and reasoning parsing
+            # - --jinja: Activates Jinja2 template processing (auto-loads from GGUF/HuggingFace)
+            # - --reasoning-format deepseek: Parses <think>...</think> blocks into reasoning_content field
+            "--jinja",
+            "--reasoning-format", "deepseek",
             "--verbose" # Helpful for debug output in console
         ]
         

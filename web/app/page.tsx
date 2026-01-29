@@ -40,11 +40,21 @@ type Session = {
 // Helper to parse and merge thinking blocks
 const parseContent = (content: string) => {
     if (!content) return { thought: null, answer: "" };
+
+    // Clean Rich markup tags and "resposta" prefix
     let clean = content.replace(/[\[][\/]?\w+\s*\w+[\]]/g, '').replace(/^resposta\s*/i, '');
+
+    // Normalize different thinking tag formats to <think>
+    clean = clean.replace(/<thinking>/gi, '<think>').replace(/<\/thinking>/gi, '</think>');
+
+    // Merge consecutive thinking blocks
     let merged = clean.replace(/<\/think>\s*<think>/g, ' ');
+
     const openTag = "<think>";
     const closeTag = "</think>";
     const openIndex = merged.indexOf(openTag);
+
+    // Method 1: Explicit <think> tags
     if (openIndex !== -1) {
         const closeIndex = merged.lastIndexOf(closeTag);
         if (closeIndex !== -1 && closeIndex > openIndex) {
@@ -57,6 +67,51 @@ const parseContent = (content: string) => {
             return { thought, answer };
         }
     }
+
+    // Method 2: Heuristic detection of thinking patterns (VQ-1 style, no tags)
+    // Look for reasoning paragraphs at the start that end with a clear transition
+    const thinkingIndicators = [
+        'First, I', 'I called', 'I need to', 'I should', 'I will',
+        'Now, I', 'Now I', 'Let me', 'The user', 'Okay,', 'Okay I',
+        'I\'ll check', 'I\'ll use', 'I\'ll need'
+    ];
+
+    // Check if content starts with thinking pattern
+    const startsWithThinking = thinkingIndicators.some(ind =>
+        merged.trimStart().toLowerCase().startsWith(ind.toLowerCase())
+    );
+
+    if (startsWithThinking) {
+        // Find where actual answer starts (usually after double newline + formatted content)
+        // Look for: **Header**, bullet lists, or German response start
+        const answerPatterns = [
+            /\n\n\*\*[A-ZÄÖÜ]/,           // **Bold Header**
+            /\n\n[A-ZÄÖÜ][a-zäöüß]+\s+ist\s/, // "Google ist..."
+            /\n\n- [A-ZÄÖÜ]/,              // Bullet list
+            /\n\n\d+\.\s+/,                // Numbered list
+            /\n\nHallo[,!]/i,              // German greeting
+            /\n\nDie\s+/,                  // German article start
+            /\n\nDas\s+/,
+            /\n\nDer\s+/,
+        ];
+
+        let splitIndex = -1;
+        for (const pattern of answerPatterns) {
+            const match = merged.match(pattern);
+            if (match && match.index !== undefined) {
+                if (splitIndex === -1 || match.index < splitIndex) {
+                    splitIndex = match.index;
+                }
+            }
+        }
+
+        if (splitIndex > 50) { // Ensure we have meaningful thinking content
+            const thought = merged.substring(0, splitIndex).trim();
+            const answer = merged.substring(splitIndex).trim();
+            return { thought, answer };
+        }
+    }
+
     return { thought: null, answer: merged };
 };
 
@@ -1017,7 +1072,8 @@ export default function VAFDashboard() {
 
                                             {isBot && thought && <ThinkingDetails thought={thought} />}
 
-                                            {(answer || !isBot) && (
+                                            {/* Show answer bubble: always for user, for bot if there's an answer OR if there's no thought (fallback) */}
+                                            {(answer || !isBot || (isBot && !thought)) && (
                                                 <div className="relative group flex items-end">
                                                     <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed",
                                                         isBot ? "bg-white text-gray-800 rounded-tl-none border border-gray-200" : "bg-gray-800 text-white rounded-tr-none")}>

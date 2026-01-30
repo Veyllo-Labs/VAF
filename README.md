@@ -72,6 +72,12 @@ VAF runs a persistent background service (Gateway) to handle WebUI and multi-cha
 For troubleshooting the background service, check the startup trace:
 `logs/startup_trace.txt`
 
+WebUI debug logs are written to the first available location:
+1. `VAF_LOG_DIR` (if set)
+2. `Platform.data_dir()/logs`
+3. `Platform.vaf_dir()/logs`
+4. Repo `logs/` (dev fallback)
+
 ### 2. Connect Discord (Bridge)
 Once VAF is running (Tray or CLI), you can connect it to Discord.
 ```bash

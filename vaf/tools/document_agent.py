@@ -113,6 +113,7 @@ Handles documents of any size using section-by-section generation (no context ov
                 return f"[SUBAGENT_ASYNC:{task_id}:document_agent] Sub-Agent running in separate terminal. Task: {task[:80]}..."
             else:
                 UI.warning("Failed to open new terminal, running in current window")
+                ipc.cancel_task(task_id)
         
         # ═══════════════════════════════════════════════════════════════════════
         # EXECUTE DOCUMENT GENERATION

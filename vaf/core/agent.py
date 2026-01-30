@@ -1607,6 +1607,16 @@ class Agent:
         if any(cue in t for cue in english_cues):
             return "en"
 
+        # Short acknowledgements are often ambiguous; keep prior language to avoid spurious flips.
+        try:
+            import re
+            words = re.findall(r'\b\w+\b', t)
+        except Exception:
+            words = t.split()
+        if len(t) <= 24 and len(words) <= 3:
+            if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
+                return self.prompt_manager.user_language
+
         # 2. Fallback to langid (Probabilistic / General Purpose) - Supports 97 languages
         try:
             # langid is pure-Python and supports many languages (offline).
@@ -1818,6 +1828,13 @@ class Agent:
             "content": warning
         })
         
+        # Store details for retry logging (used when we trigger immediate retry)
+        self._last_language_mismatch = {
+            "user": user_lang_name,
+            "response": response_lang_name,
+            "target": user_lang_name,
+        }
+
         from vaf.cli.ui import UI
         UI.event("Language", f"Mismatch: User={user_lang_name}, Response={response_lang_name} - Auto-correction requested", style="warning")
         
@@ -3403,6 +3420,26 @@ class Agent:
                             
                         tool_calls_detected.append(tc_data)
                     
+                    # Validate tool calls (guard against missing tool names)
+                    if tool_calls_detected:
+                        valid_tool_calls = []
+                        for tc in tool_calls_detected:
+                            func = tc.get("function") or {}
+                            name = func.get("name") or tc.get("name")
+                            if name:
+                                func["name"] = name
+                                tc["function"] = func
+                                valid_tool_calls.append(tc)
+                        if len(valid_tool_calls) != len(tool_calls_detected):
+                            UI.event("System", "API returned tool calls with missing names. Dropping invalid entries.", style="warning")
+                        tool_calls_detected = valid_tool_calls
+                        if not tool_calls_detected:
+                            err_msg = "[Error] API returned tool calls without a function name. Please retry."
+                            UI.error(err_msg)
+                            if stream_callback:
+                                stream_callback(err_msg)
+                            return err_msg
+
                     if stream_callback: stream_callback("\n")
                     
                 except Exception as e:
@@ -3736,8 +3773,8 @@ class Agent:
             # 0. FALSE PROMISE DETECTION (Anti-Hallucination)
             # Check if model claimed to use a tool but didn't emit a tool call
             # Only check if we have content and NO tools
-            if not streaming_tools and full_content.strip():
-                if self._detect_false_tool_promise(full_content, []):
+            if not streaming_tools and not tool_calls_detected and full_content.strip():
+                if self._detect_false_tool_promise(full_content, tool_calls_detected):
                     self._false_promise_retries += 1
                     
                     if self._false_promise_retries > self._max_false_promise_retries:
@@ -3946,8 +3983,10 @@ class Agent:
                                 })
 
             if tool_calls_detected:
-                content_for_history = full_response if full_response else "Thinking..." 
-                if self.use_server and not full_response: content_for_history = None 
+                cleaned_response = self._strip_tool_calls_text(full_response) if full_response else full_response
+                content_for_history = cleaned_response if cleaned_response else "Thinking..."
+                if self.use_server and not cleaned_response:
+                    content_for_history = None
                 
                 msg = {"role": "assistant", "content": content_for_history, "tool_calls": tool_calls_detected}
                 if not content_for_history: del msg["content"]
@@ -4422,25 +4461,39 @@ class Agent:
 
             self.history.append({"role": "assistant", "content": history_content})
             
+            # NOTE: Language mismatch auto-retry is currently disabled.
+            # To re-enable, uncomment the block below.
+            #
             # Check for language mismatch: Did the model respond in a different language than the user?
             # This helps catch cases where LANGUAGE_HINT was ignored (e.g., user asks in Turkish, model responds in English)
             # CRITICAL: Do NOT check if tools were called (tool syntax "web_search" looks English but is valid)
-            if not skip_input and user_input and history_content and not tool_calls_detected:
-                if self._check_language_mismatch(user_input, history_content):
-                    # Mismatch detected! The warning is already in history (as system msg).
-                    # Now we must REMOVE the bad response and RETRY immediately.
-                    
-                    # 1. Remove the bad response, keep the system warning for the retry.
-                    # The history is [..., assistant_response, system_warning], so we remove the item at -2.
-                    del self.history[-2]
-                    
-                    # 2. Treat as a retry (reuses logic for patience/backoff if needed)
-                    empty_retry_count += 1
-                    
-                    UI.event("System", "Triggering immediate retry for language correction...", style="warning")
-                    
-                    # 3. Restart loop - model will see the system warning and try again
-                    continue
+            # if not skip_input and user_input and history_content and not tool_calls_detected:
+            #     if self._check_language_mismatch(user_input, history_content):
+            #         # Mismatch detected! The warning is already in history (as system msg).
+            #         # Now we must REMOVE the bad response and RETRY immediately.
+            #
+            #         # 1. Remove the bad response, keep the system warning for the retry.
+            #         # The history is [..., assistant_response, system_warning], so we remove the item at -2.
+            #         del self.history[-2]
+            #
+            #         # 2. Treat as a retry (reuses logic for patience/backoff if needed)
+            #         empty_retry_count += 1
+            #
+            #         mismatch = getattr(self, "_last_language_mismatch", None) or {}
+            #         if mismatch:
+            #             UI.event(
+            #                 "System",
+            #                 "Triggering retry for language."
+            #                 f" User={mismatch.get('user', 'unknown')},"
+            #                 f" Response={mismatch.get('response', 'unknown')},"
+            #                 f" Retry={mismatch.get('target', 'unknown')}",
+            #                 style="warning",
+            #             )
+            #         else:
+            #             UI.event("System", "Triggering immediate retry for language correction...", style="warning")
+            #
+            #         # 3. Restart loop - model will see the system warning and try again
+            #         continue
             
             # Context Management: Check after adding assistant response
             # Long reasoning phases can push us over the limit
@@ -4810,6 +4863,76 @@ class Agent:
             shutil.move(res_src, res_dst)
             return f"Moved {src} to {dst}"
         except Exception as e: return str(e)
+
+    def _strip_tool_calls_text(self, response_text: str) -> str:
+        """
+        Remove raw tool call JSON blocks from the assistant text response.
+        This prevents API tool call payloads from appearing in user-visible output.
+        """
+        if not response_text:
+            return response_text
+
+        import json
+        import re
+
+        cleaned = response_text
+
+        # Strip fenced JSON blocks that contain tool_calls
+        cleaned = re.sub(
+            r"```json\s*\{[^`]*\"tool_calls\"[^`]*\}\s*```",
+            "",
+            cleaned,
+            flags=re.DOTALL,
+        )
+
+        # Strip leading raw JSON object that contains tool_calls
+        stripped = cleaned.lstrip()
+        if stripped.startswith("{") and "\"tool_calls\"" in stripped[:2000]:
+            json_obj, end_idx = self._extract_json_object(stripped)
+            if json_obj:
+                try:
+                    data = json.loads(json_obj)
+                    if isinstance(data, dict) and "tool_calls" in data:
+                        cleaned = stripped[end_idx:].lstrip()
+                except Exception:
+                    pass
+
+        return cleaned.strip()
+
+    def _extract_json_object(self, text: str) -> tuple[str, int]:
+        """
+        Extract the first JSON object from text starting at '{'.
+        Returns (json_text, end_index) or ("", -1) if not found.
+        """
+        if not text or not text.startswith("{"):
+            return "", -1
+
+        depth = 0
+        in_string = False
+        escape = False
+
+        for idx, ch in enumerate(text):
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+                continue
+
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[: idx + 1], idx + 1
+
+        return "", -1
 
     def _detect_false_tool_promise(self, response_text: str, tool_calls: list) -> bool:
         """

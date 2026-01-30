@@ -3,7 +3,8 @@ log("WebServer", "Module load started")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import HTTPException, Query
 import asyncio
 import uvicorn
 import threading
@@ -223,6 +224,36 @@ async def get_tool_source(name: str):
         print(f"[DEBUG] General error in get_tool_source: {e}")
         return {"error": str(e)}
     return {"error": "Tool not found"}
+
+@app.get("/api/file")
+async def download_file(path: str = Query(..., description="Absolute path to local file")):
+    from vaf.core.platform import Platform
+    from pathlib import Path
+    import mimetypes
+
+    try:
+        target = Platform.normalize_path(path)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    allowed_roots = [
+        Platform.documents_dir().resolve(),
+        Platform.downloads_dir().resolve(),
+        Platform.data_dir().resolve(),
+    ]
+
+    if not any(target.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    mime_type, _ = mimetypes.guess_type(str(target))
+    return FileResponse(
+        path=str(target),
+        media_type=mime_type or "application/octet-stream",
+        filename=target.name,
+    )
 
 @app.get("/api/workflows/{wf_id}")
 async def get_workflow_details(wf_id: str):

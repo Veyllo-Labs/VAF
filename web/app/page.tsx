@@ -119,6 +119,63 @@ const parseContent = (content: string): { thought: string | null; answer: string
     return { thought: null, answer: merged, isThinkingComplete: true };
 };
 
+const backendBaseUrl = "http://localhost:8001";
+
+const normalizeDownloadHref = (rawHref: string): string => {
+    if (!rawHref) return rawHref;
+
+    if (rawHref.startsWith('sandbox:/')) {
+        const path = rawHref.replace(/^sandbox:\/*/, '');
+        return `${backendBaseUrl}/api/file?path=${encodeURIComponent(path)}`;
+    }
+
+    const looksLikeWindowsPath = /^[a-zA-Z]:[\\/]/.test(rawHref);
+    const looksLikeUnixPath = rawHref.startsWith('/');
+    if (looksLikeWindowsPath || looksLikeUnixPath) {
+        return `${backendBaseUrl}/api/file?path=${encodeURIComponent(rawHref)}`;
+    }
+
+    return rawHref;
+};
+
+const renderMarkdownLinks = (text: string): React.ReactNode[] => {
+    const nodes: React.ReactNode[] = [];
+    if (!text) return nodes;
+
+    const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = linkRegex.exec(text)) !== null) {
+        if (match.index > lastIndex) {
+            nodes.push(text.slice(lastIndex, match.index));
+        }
+
+        const label = match[1];
+        const rawHref = match[2];
+        const href = normalizeDownloadHref(rawHref);
+        nodes.push(
+            <a
+                key={`link-${match.index}`}
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 underline break-all hover:text-blue-700"
+            >
+                {label}
+            </a>
+        );
+
+        lastIndex = match.index + match[0].length;
+    }
+
+    if (lastIndex < text.length) {
+        nodes.push(text.slice(lastIndex));
+    }
+
+    return nodes.length > 0 ? nodes : [text];
+};
+
 // Component: Thinking Accordion
 // Open while incomplete, auto-close when complete
 const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isComplete?: boolean }) => {
@@ -206,7 +263,7 @@ const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isCo
 };
 
 // Component: System Step Log
-const SystemStep = ({ message, isLoading, onClick }: { message: string, isLoading?: boolean, onClick?: () => void }) => {
+const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { message: string, isLoading?: boolean, onClick?: () => void, useBotIcon?: boolean }) => {
     const isRouter = message.includes('Router');
     const isWorkflow = message.includes('Step') || message.includes('Workflow');
     const isSafety = message.includes('Safety');
@@ -228,7 +285,7 @@ const SystemStep = ({ message, isLoading, onClick }: { message: string, isLoadin
     }, []);
 
     return (
-        <div 
+        <div
             className={cn(
                 "flex gap-4 w-full my-1 transition-all duration-500 ease-out",
                 isVisible ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-2",
@@ -245,20 +302,29 @@ const SystemStep = ({ message, isLoading, onClick }: { message: string, isLoadin
             } : undefined}
         >
             <div className="w-9 shrink-0 flex justify-center">
-                <div className="w-0.5 h-full bg-gray-100 relative">
+                {useBotIcon ? (
                     <div className={cn(
-                        "absolute top-1/2 -translate-y-1/2 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full border bg-white flex items-center justify-center z-10",
-                        isLoading ? "border-gray-300 text-gray-700 shadow-sm" :
-                            isRouter ? "border-orange-200 text-orange-500" :
-                                isSafety ? "border-red-200 text-red-500" :
-                                    isWorkflow ? "border-blue-200 text-blue-500" : "border-gray-200 text-gray-400"
+                        "w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0",
+                        isLoading && "animate-pulse"
                     )}>
-                        {isLoading ? <Loader2 size={10} className="animate-spin" /> :
-                            isRouter ? <GitBranch size={10} /> :
-                                isSafety ? <ShieldAlert size={10} /> :
-                                    isWorkflow ? <Workflow size={10} /> : <CheckCircle2 size={10} />}
+                        <Bot size={18} />
                     </div>
-                </div>
+                ) : (
+                    <div className="w-0.5 h-full bg-gray-100 relative">
+                        <div className={cn(
+                            "absolute top-1/2 -translate-y-1/2 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full border bg-white flex items-center justify-center z-10",
+                            isLoading ? "border-gray-300 text-gray-700 shadow-sm" :
+                                isRouter ? "border-orange-200 text-orange-500" :
+                                    isSafety ? "border-red-200 text-red-500" :
+                                        isWorkflow ? "border-blue-200 text-blue-500" : "border-gray-200 text-gray-400"
+                        )}>
+                            {isLoading ? <Loader2 size={10} className="animate-spin" /> :
+                                isRouter ? <GitBranch size={10} /> :
+                                    isSafety ? <ShieldAlert size={10} /> :
+                                        isWorkflow ? <Workflow size={10} /> : <CheckCircle2 size={10} />}
+                        </div>
+                    </div>
+                )}
             </div>
             <div className="flex-1 py-1">
                 <div className={cn("text-xs text-gray-500 flex items-center gap-2", onClick && "hover:text-gray-800")}>
@@ -501,6 +567,29 @@ export default function VAFDashboard() {
     const [showSubAgentPanel, setShowSubAgentPanel] = useState(true);
     const subAgentUnmountRef = useRef<NodeJS.Timeout | null>(null);
 
+    const preserveChatScroll = (update: () => void) => {
+        const container = containerRef.current;
+        if (!container) {
+            update();
+            return;
+        }
+        const prevScrollTop = container.scrollTop;
+        const prevScrollHeight = container.scrollHeight;
+        const wasAtBottom = prevScrollTop + container.clientHeight >= prevScrollHeight - 8;
+        update();
+        requestAnimationFrame(() => {
+            const nextContainer = containerRef.current;
+            if (!nextContainer) return;
+            if (wasAtBottom) {
+                nextContainer.scrollTop = nextContainer.scrollHeight;
+                return;
+            }
+            const nextScrollHeight = nextContainer.scrollHeight;
+            const scrollDelta = nextScrollHeight - prevScrollHeight;
+            nextContainer.scrollTop = prevScrollTop + scrollDelta;
+        });
+    };
+
     const appendSubAgentLine = (line: string) => {
         if (!line) return;
         if (subAgentLogSetRef.current.has(line)) return;
@@ -532,14 +621,18 @@ export default function VAFDashboard() {
         } else {
             subAgentManualOpenRef.current = false;
         }
-        setSubAgentState(prev => ({ ...prev, isOpen: true }));
+        preserveChatScroll(() => {
+            setSubAgentState(prev => ({ ...prev, isOpen: true }));
+        });
     };
 
     const closeSubAgentWindow = (manual: boolean) => {
         if (manual) {
             subAgentManualOpenRef.current = false;
         }
-        setSubAgentState(prev => ({ ...prev, isOpen: false }));
+        preserveChatScroll(() => {
+            setSubAgentState(prev => ({ ...prev, isOpen: false }));
+        });
     };
 
     // Cache State
@@ -1631,6 +1724,7 @@ export default function VAFDashboard() {
                                             key={i}
                                             message={msg.content}
                                             isLoading={loading && isLast}
+                                            useBotIcon={loading && isLast}
                                             onClick={isSubAgentMessage ? () => openSubAgentWindow(true) : undefined}
                                         />
                                     );
@@ -1650,6 +1744,7 @@ export default function VAFDashboard() {
                                             args={msg.toolArgs}
                                             startTime={msg.toolStartTime}
                                             endTime={msg.toolEndTime}
+                                            onToggleScroll={preserveChatScroll}
                                             onToggle={isSubAgentTool ? (nextExpanded) => {
                                                 if (nextExpanded) {
                                                     openSubAgentWindow(true);
@@ -1697,7 +1792,7 @@ export default function VAFDashboard() {
                                                 <div className="relative group flex items-end">
                                                     <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed",
                                                         isBot ? "bg-white text-gray-800 rounded-tl-none border border-gray-200" : "bg-gray-800 text-white rounded-tr-none")}>
-                                                        <p className="whitespace-pre-wrap">{answer}</p>
+                                                        <p className="whitespace-pre-wrap">{renderMarkdownLinks(answer)}</p>
                                                     </div>
                                                     {isBot && (
                                                         <button
@@ -1823,7 +1918,7 @@ export default function VAFDashboard() {
                             <div className={cn(chatWidthClass, "mx-auto mb-1 flex justify-end")}>
                                 <span className="text-[10px] sm:text-xs font-mono text-gray-400 opacity-80 select-none">
                                     {tokenStats.api ? (
-                                        <>Tokens: In: {tokenStats.used.toLocaleString()} | Out: {tokenStats.total.toLocaleString()}</>
+                                        <>Tokens: In: {(tokenStats.input_tokens ?? tokenStats.used).toLocaleString()} | Out: {(tokenStats.output_tokens ?? 0).toLocaleString()}</>
                                     ) : (
                                         <>
                                             Tokens:

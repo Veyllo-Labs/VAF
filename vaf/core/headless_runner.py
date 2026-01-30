@@ -60,11 +60,21 @@ def run_headless_agent():
                 get_web_interface().log("Headless agent initialized and ready.", level="info", source="System")
                 # Send initial token stats so WebUI shows context usage immediately
                 used, total = agent.get_token_usage()
+                api_backend = getattr(agent, 'api_backend', None)
+                input_tokens = 0
+                output_tokens = 0
+                if api_backend:
+                    usage = api_backend.session_usage
+                    input_tokens = int(usage.get("input_tokens", 0))
+                    output_tokens = int(usage.get("output_tokens", 0))
+                    used = input_tokens + output_tokens
                 stats = {
                     "used": used,
                     "total": total,
                     "percent": (used / total) if total else 0.0,
-                    "api": bool(getattr(agent, 'api_backend', False))
+                    "api": bool(api_backend),
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens
                 }
                 get_web_interface().emit_stats(stats)
             except Exception:
@@ -141,11 +151,21 @@ def run_headless_agent():
                 # Send initial token stats to WebUI (before processing)
                 try:
                     used, total = agent.get_token_usage()
+                    api_backend = getattr(agent, 'api_backend', None)
+                    input_tokens = 0
+                    output_tokens = 0
+                    if api_backend:
+                        usage = api_backend.session_usage
+                        input_tokens = int(usage.get("input_tokens", 0))
+                        output_tokens = int(usage.get("output_tokens", 0))
+                        used = input_tokens + output_tokens
                     stats = {
                         "used": used,
                         "total": total,
                         "percent": (used / total) if total else 0.0,
-                        "api": bool(getattr(agent, 'api_backend', False))
+                        "api": bool(api_backend),
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens
                     }
                     get_web_interface().emit_stats(stats, session_id=task.session_id)
                 except Exception:
@@ -234,11 +254,21 @@ def run_headless_agent():
                     # Send token/context stats to WebUI
                     try:
                         used, total = agent.get_token_usage()
+                        api_backend = getattr(agent, 'api_backend', None)
+                        input_tokens = 0
+                        output_tokens = 0
+                        if api_backend:
+                            usage = api_backend.session_usage
+                            input_tokens = int(usage.get("input_tokens", 0))
+                            output_tokens = int(usage.get("output_tokens", 0))
+                            used = input_tokens + output_tokens
                         stats = {
                             "used": used,
                             "total": total,
                             "percent": (used / total) if total else 0.0,
-                            "api": bool(getattr(agent, 'api_backend', False))
+                            "api": bool(api_backend),
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens
                         }
                         get_web_interface().emit_stats(stats, session_id=task.session_id)
                     except Exception:

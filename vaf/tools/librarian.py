@@ -203,6 +203,7 @@ You have access to this filesystem map for fast navigation:
             else:
                 # Fallback: run normally if terminal opening fails
                 UI.warning("Failed to open new terminal, running in current window")
+                ipc.cancel_task(task_id)
         
         # ═══════════════════════════════════════════════════════════════════════
         # FAST PATH: Try to handle simple tasks DIRECTLY (no LLM needed)

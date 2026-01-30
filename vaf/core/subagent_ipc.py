@@ -267,6 +267,28 @@ class SubAgentIPC:
         self._write_json(self.pending_file, pending)
         self._write_json(self.active_file, active)
     
+    def cancel_task(self, task_id: str) -> bool:
+        """
+        Remove a task from pending/active without recording a result.
+        
+        Used when falling back to in-process execution after a terminal spawn fails,
+        so we don't later report a false startup timeout.
+        """
+        removed = False
+        pending = self._read_json(self.pending_file)
+        pending_after = [task for task in pending if task.get('task_id') != task_id]
+        if len(pending_after) != len(pending):
+            removed = True
+            self._write_json(self.pending_file, pending_after)
+        
+        active = self._read_json(self.active_file)
+        active_after = [task for task in active if task.get('task_id') != task_id]
+        if len(active_after) != len(active):
+            removed = True
+            self._write_json(self.active_file, active_after)
+        
+        return removed
+
     def get_pending_results(self, session_id: str = None) -> List[SubAgentTask]:
         """
         Get all completed sub-agent results that haven't been processed yet.

@@ -1789,6 +1789,7 @@ Thumbs.db
             else:
                 # Fallback: run normally if terminal opening fails
                 UI.warning("Failed to open new terminal, running in current window")
+                ipc.cancel_task(task_id)
         
         # ═══════════════════════════════════════════════════════════════════
         # PREVENT MULTIPLE INSTANCES - Stop previous instance if running

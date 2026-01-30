@@ -72,6 +72,21 @@ Key rules:
 
 ## Troubleshooting Checklist
 
+### 0) Log Locations (Debug Builds)
+
+WebUI debug traces are written to the first writable location in this order:
+
+1. `VAF_LOG_DIR` (if set)
+2. `Platform.data_dir()/logs` (OS-specific app data dir)
+3. `Platform.vaf_dir()/logs` (user home)
+4. Repo `logs/` (dev fallback)
+
+Useful files when debugging WebUI responses:
+- `callback_debug.txt` (stream callback activity)
+- `emit_debug.txt` (emit_agent_message entry)
+- `webui_push_debug.txt` (session-scoped push)
+- `api_chunks_debug.txt` (provider stream chunks)
+
 ### 1) WebSocket Connected, But No Answer
 
 **Expected logs in WebUI timeline:**
@@ -106,6 +121,13 @@ If only `stats` or `new_log` arrives:
 - The agent likely failed before streaming.
 - Check for `Chat_step failed` log in the WebUI timeline.
 
+### 3b) API Tool Calls Loop / “False promise detected”
+
+If OpenAI/Anthropic/DeepSeek responses loop with `False promise detected`:
+- The API may be emitting tool-call chunks without a function name.
+- The agent should drop invalid tool calls and fail fast instead of retrying.
+- Check `api_chunks_debug.txt` for `tool_calls` entries where `name` is missing.
+
 ### 4) Sub-Agent Panel Does Not Open
 
 Expected triggers for the docked panel:
@@ -126,6 +148,7 @@ If the tool card expands but the panel does not open:
 | Messages appear in CLI only | Headless agent not running | Ensure tray starts `run_headless_agent()` |
 | WebUI shows only system logs | `agent_message_update` filtered by session | Fix session sync and auto-load `history_update` |
 | Sub-agent window never appears | No `subagent_update` emitted | Send periodic sub-agent status updates from headless loop |
+| `False promise detected` loop in API mode | Tool calls missing function name in stream | Drop invalid tool calls; do not retry |
 
 ## Key Files
 

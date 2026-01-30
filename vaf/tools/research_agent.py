@@ -509,6 +509,7 @@ class ResearchAgentTool(BaseTool):
             else:
                 # Fallback: run normally if terminal opening fails
                 UI.warning("Failed to open new terminal, running in current window")
+                ipc.cancel_task(task_id)
 
         max_results = max(1, min(max_results, 10))
         lang = forced_lang if forced_lang in ("de", "en") else _detect_language(topic)

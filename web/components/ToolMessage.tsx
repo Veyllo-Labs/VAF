@@ -14,6 +14,7 @@ export interface ToolMessageProps {
     endTime?: number;
     args?: string; // Arguments passed to the tool
     onToggle?: (nextExpanded: boolean) => void;
+    onToggleScroll?: (update: () => void) => void;
 }
 
 export const ToolMessage: React.FC<ToolMessageProps> = ({
@@ -23,7 +24,8 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     startTime,
     endTime,
     args,
-    onToggle
+    onToggle,
+    onToggleScroll
 }) => {
     const [isExpanded, setIsExpanded] = useState(false);
 
@@ -35,7 +37,6 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
             <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
-                layout
                 className={cn(
                     "overflow-hidden rounded-lg border bg-background/95 backdrop-blur shadow-sm transition-colors",
                     status === 'running' ? "border-primary/50 shadow-primary/5" : "border-border",
@@ -48,7 +49,11 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                     onClick={() => {
                         const nextExpanded = !isExpanded;
                         if (onToggle) onToggle(nextExpanded);
-                        setIsExpanded(nextExpanded);
+                        if (onToggleScroll) {
+                            onToggleScroll(() => setIsExpanded(nextExpanded));
+                        } else {
+                            setIsExpanded(nextExpanded);
+                        }
                     }}
                 >
                     <div className="flex items-center gap-3">

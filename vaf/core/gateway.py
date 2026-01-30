@@ -2,7 +2,8 @@ import asyncio
 import json
 import logging
 from typing import Dict, List, Optional
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 import uvicorn
 import concurrent.futures
@@ -136,6 +137,36 @@ app = FastAPI(title="VAF Gateway", lifespan=lifespan)
 @app.get("/")
 async def root():
     return {"status": "online", "system": "VAF Agentic Gateway", "version": "0.1.0"}
+
+@app.get("/api/file")
+async def download_file(path: str = Query(..., description="Absolute path to local file")):
+    from vaf.core.platform import Platform
+    from pathlib import Path
+    import mimetypes
+
+    try:
+        target = Platform.normalize_path(path)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    allowed_roots = [
+        Platform.documents_dir().resolve(),
+        Platform.downloads_dir().resolve(),
+        Platform.data_dir().resolve(),
+    ]
+
+    if not any(target.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    mime_type, _ = mimetypes.guess_type(str(target))
+    return FileResponse(
+        path=str(target),
+        media_type=mime_type or "application/octet-stream",
+        filename=target.name,
+    )
 
 def run_agent_step(agent: Agent, text: str, context: dict):
     """Blocking function to run the agent step."""

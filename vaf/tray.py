@@ -1,6 +1,9 @@
 
 import os
 import sys
+import socket
+import subprocess
+from pathlib import Path
 
 # CRITICAL FIX: Patch stdout/stderr/stdin IMMEDIATELY for pythonw (no console)
 # This prevents crashes in logging/uvicorn which assume sys.stdout exists.
@@ -11,12 +14,19 @@ if sys.stderr is None:
 if sys.stdin is None:
     sys.stdin = open(os.devnull, 'r')
 
+# Force a stable log location inside the repo unless explicitly overridden.
+try:
+    repo_log_dir = Path(__file__).resolve().parents[1] / "logs"
+    repo_log_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("VAF_LOG_DIR", str(repo_log_dir))
+except Exception:
+    pass
+
 import time
 import threading
 import signal
 import platform
 import webbrowser
-from pathlib import Path
 from vaf.core.config import Config
 from vaf.core.backend import ServerManager
 from vaf.core.web_server import app

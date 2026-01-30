@@ -9,6 +9,24 @@ from vaf.core.task_queue import TaskQueue
 from vaf.core.session import SessionManager
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
+from vaf.core.platform import Platform
+from pathlib import Path
+
+def _get_debug_log_dir():
+    candidates = []
+    env_dir = os.environ.get("VAF_LOG_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir))
+    candidates.append(Platform.data_dir() / "logs")
+    candidates.append(Platform.vaf_dir() / "logs")
+    candidates.append(Path(__file__).resolve().parents[1] / "logs")
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        except Exception:
+            continue
+    return Path.cwd()
 
 def run_headless_agent():
     """
@@ -107,8 +125,6 @@ def run_headless_agent():
                     if agent.provider == "local" and not agent.api_backend and not agent.llm and not agent.use_server:
                         agent.load_model(skip_download_check=True)
                         if agent.llm or agent.use_server:
-                            from vaf.core.tray_context import TrayContext
-                            from vaf.core.web_interface import get_web_interface
                             tray_ctx = TrayContext()
                             tray_ctx.set_model_loaded(True)
                             get_web_interface().push_update({
@@ -164,14 +180,29 @@ def run_headless_agent():
                     response_parts = []
                     def webui_stream_callback(text):
                         response_parts.append(text)
+                        # DEBUG: Log callback invocation
+                        try:
+                            log_dir = _get_debug_log_dir()
+                            with open(log_dir / "callback_debug.txt", "a", encoding="utf-8") as f:
+                                f.write(f"[CALLBACK] text_len={len(text)} parts={len(response_parts)} session={task.session_id}\n")
+                        except: pass
                         # Construct full text so far and send to WebUI
                         full_text = "".join(response_parts)
                         if full_text.strip():
-                            get_web_interface().emit_agent_message(
-                                role="assistant",
-                                content=full_text,
-                                session_id=task.session_id
-                            )
+                            try:
+                                get_web_interface().emit_agent_message(
+                                    role="assistant",
+                                    content=full_text,
+                                    session_id=task.session_id
+                                )
+                                # DEBUG: Confirm emit was called
+                                log_dir = _get_debug_log_dir()
+                                with open(log_dir / "callback_debug.txt", "a", encoding="utf-8") as f:
+                                    f.write(f"[EMIT_DONE] session={task.session_id}\n")
+                            except Exception as e:
+                                log_dir = _get_debug_log_dir()
+                                with open(log_dir / "callback_debug.txt", "a", encoding="utf-8") as f:
+                                    f.write(f"[EMIT_ERROR] {e}\n")
 
                     response = agent.chat_step(
                         user_input=input_text,
@@ -192,12 +223,13 @@ def run_headless_agent():
                     else:
                         # Final response broadcast (in case streaming missed the final state)
                         final_text = "".join(response_parts) if response_parts else response_text
-                        if final_text:
-                            get_web_interface().emit_agent_message(
-                                role="assistant",
-                                content=final_text,
-                                session_id=task.session_id
-                            )
+                        if not final_text or not str(final_text).strip():
+                            final_text = "[Error] No response was produced by the API backend."
+                        get_web_interface().emit_agent_message(
+                            role="assistant",
+                            content=str(final_text),
+                            session_id=task.session_id
+                        )
 
                     # Send token/context stats to WebUI
                     try:
@@ -481,6 +513,39 @@ def _handle_command(cmd_str, agent, session_mgr):
             from vaf.core.config import Config
             new_cfg = Config.load()
             agent.config = new_cfg
+            # Ensure provider changes take effect for the running agent
+            new_provider = new_cfg.get("provider", "local")
+            old_provider = getattr(agent, "provider", "local")
+            print(f"[Headless] RELOAD_CONFIG: old={old_provider} new={new_provider}")
+            if old_provider != new_provider:
+                agent.provider = new_provider
+                if new_provider != "local":
+                    try:
+                        from vaf.core.api_backend import APIBackendManager
+                        agent.api_backend = APIBackendManager(new_provider)
+                        print(f"[Headless] API backend created for {new_provider}")
+                    except Exception as e:
+                        agent.api_backend = None
+                        print(f"[Headless] API backend creation failed: {e}")
+                    agent.use_server = False
+                    agent.llm = None
+                else:
+                    agent.api_backend = None
+                    print("[Headless] Switched to local provider")
+                
+                # Send updated stats to reflect provider change in UI
+                try:
+                    used, total = agent.get_token_usage()
+                    stats = {
+                        "used": used,
+                        "total": total,
+                        "percent": (used / total) if total else 0.0,
+                        "api": bool(getattr(agent, 'api_backend', False))
+                    }
+                    get_web_interface().emit_stats(stats)
+                    print(f"[Headless] Stats updated: api={stats['api']}")
+                except Exception:
+                    pass
             
     except Exception as e:
         print(f"[Headless] Command error: {e}")

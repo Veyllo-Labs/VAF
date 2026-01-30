@@ -1,10 +1,29 @@
 import asyncio
 import json
 import logging
+import os
 from typing import List, Dict, Any, Optional
 from fastapi import WebSocket
+from vaf.core.platform import Platform
+from pathlib import Path
 
 import queue
+
+def _resolve_log_dir() -> Path:
+    candidates = []
+    env_dir = os.environ.get("VAF_LOG_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir))
+    candidates.append(Platform.data_dir() / "logs")
+    candidates.append(Platform.vaf_dir() / "logs")
+    candidates.append(Path(__file__).resolve().parents[1] / "logs")
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        except Exception:
+            continue
+    return Path.cwd()
 
 class WebInterfaceManager:
     """
@@ -31,6 +50,7 @@ class WebInterfaceManager:
         self.tools_cache: List[Dict[str, str]] = []
         # Queue for incoming chat messages from Web UI -> Main Loop
         self.input_queue = queue.Queue()
+        self.log_dir = _resolve_log_dir()
         
         self.latest_state = {
             "status": "idle", # idle, thinking, tool_use
@@ -173,6 +193,11 @@ class WebInterfaceManager:
         
     def emit_agent_message(self, role: str, content: str, session_id: str = None):
         """Emit a message update. Content is the FULL message so far."""
+        # DEBUG: Log entry into this function
+        try:
+            with open(self.log_dir / "emit_debug.txt", "a", encoding="utf-8") as f:
+                f.write(f"[EMIT] role={role} content_len={len(content)} session={session_id}\n")
+        except: pass
         self._push_session_update(session_id, {
             "type": "agent_message_update", 
             "role": role, 
@@ -226,7 +251,7 @@ class WebInterfaceManager:
         """
         # DEBUG: Log every update to file
         try:
-            with open("D:/VAF/logs/webui_push_debug.txt", "a", encoding="utf-8") as f:
+            with open(self.log_dir / "webui_push_debug.txt", "a", encoding="utf-8") as f:
                 content_preview = str(data.get('content', ''))[:50] if data.get('content') else 'N/A'
                 f.write(f"[PUSH] type={data.get('type')} | sess={session_id} | loop={self._server_loop is not None} | content={content_preview}\n")
         except: pass
@@ -241,7 +266,7 @@ class WebInterfaceManager:
             else:
                 # WARNING: No server loop means messages are silently dropped!
                 try:
-                    with open("D:/VAF/logs/webui_push_debug.txt", "a", encoding="utf-8") as f:
+                    with open(self.log_dir / "webui_push_debug.txt", "a", encoding="utf-8") as f:
                         f.write(f"[WARNING] No server loop! Message dropped for session {session_id}\n")
                 except: pass
         else:

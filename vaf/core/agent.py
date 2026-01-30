@@ -13,6 +13,7 @@ import re
 from typing import List, Dict, Any
 from rich import print
 from rich.markup import escape
+from pathlib import Path
 
 # Dependency imports will be handled in setup or assumed present if requirements are installed
 from huggingface_hub import hf_hub_download
@@ -23,16 +24,35 @@ try:
 except ImportError:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        from duckduckgo_search import DDGS
+        import importlib
+        duck_module = importlib.import_module("duckduckgo_search")
+        DDGS = getattr(duck_module, "DDGS")
 
 from vaf.core.config import Config
 from vaf.core.backend import ServerManager
+from vaf.core.platform import Platform
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.tools.search import WebSearchTool
 from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, MoveFileTool
 
 import atexit
 import signal
+
+def _get_debug_log_dir():
+    candidates = []
+    env_dir = os.environ.get("VAF_LOG_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir))
+    candidates.append(Platform.data_dir() / "logs")
+    candidates.append(Platform.vaf_dir() / "logs")
+    candidates.append(Path(__file__).resolve().parents[1] / "logs")
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        except Exception:
+            continue
+    return Path.cwd()
 
 class Agent:
     # Language names mapping (ISO 639-1 codes to native names)
@@ -3253,6 +3273,8 @@ class Agent:
                     # json, sys, escape already imported globally
                     tool_call_accumulator = {}
 
+                    # DEBUG: Track chunks received from API
+                    _chunk_count = 0
                     for chunk in self.api_backend.chat_completion(
                         messages=prepared_messages,
                         temperature=current_temp,
@@ -3261,7 +3283,16 @@ class Agent:
                         tools=current_tools,
                         tool_choice=tool_choice  # Pass tool_choice if set
                     ):
+                        _chunk_count += 1
                         if not chunk: continue
+                        
+                        # DEBUG: Log chunk to file for troubleshooting
+                        try:
+                            log_dir = _get_debug_log_dir()
+                            with open(log_dir / "api_chunks_debug.txt", "a", encoding="utf-8") as f:
+                                chunk_preview = str(chunk)[:100].replace('\n', '\\n')
+                                f.write(f"[CHUNK {_chunk_count}] {chunk_preview}\n")
+                        except: pass
                         
                         # Check for error/warning messages from backend
                         if isinstance(chunk, str) and chunk.startswith("[Error]"):
@@ -3315,6 +3346,13 @@ class Agent:
                         if not is_control_msg:
                             full_response += chunk
                             
+                            # DEBUG: Log content chunk
+                            try:
+                                log_dir = _get_debug_log_dir()
+                                with open(log_dir / "api_chunks_debug.txt", "a", encoding="utf-8") as f:
+                                    f.write(f"[CONTENT] len={len(chunk)} callback={stream_callback is not None}\n")
+                            except: pass
+                            
                             # Live Update (TUI)
                             if first_token:
                                 UI.event("Response", "", style="bold green", end="")
@@ -3333,6 +3371,28 @@ class Agent:
                             # Also populate full_content for downstream checks
                             full_content += chunk
 
+                    # Fallback: Some API streams emit no content (tool-only or SDK quirk)
+                    # Ensure WebUI still receives a response when streaming yields nothing.
+                    if not full_response and not tool_calls_detected:
+                        try:
+                            fallback_chunks = list(self.api_backend.chat_completion(
+                                messages=prepared_messages,
+                                temperature=current_temp,
+                                max_tokens=8192,
+                                stream=False,
+                                tools=current_tools,
+                                tool_choice=tool_choice
+                            ))
+                            fallback_text = "".join(str(c) for c in fallback_chunks)
+                            if fallback_text:
+                                full_response += fallback_text
+                                full_content += fallback_text
+                                if stream_callback:
+                                    stream_callback(fallback_text)
+                        except Exception as e:
+                            UI.error(f"API Backend Error (fallback): {e}")
+                            return
+
                     # POST-LOOP: Convert accumulator to list
                     for idx, tc_data in sorted(tool_call_accumulator.items()):
                         # Ensure ID and Type
@@ -3346,8 +3406,11 @@ class Agent:
                     if stream_callback: stream_callback("\n")
                     
                 except Exception as e:
-                    UI.error(f"API Backend Error: {e}")
-                    return
+                    err_msg = f"[Error] API backend failure: {e}"
+                    UI.error(err_msg)
+                    if stream_callback:
+                        stream_callback(err_msg)
+                    return err_msg
             
             elif self.use_server:
                 # Proactive Context Management: Compress before request to prevent overflow
@@ -4319,6 +4382,13 @@ class Agent:
                 current_temp = max(0.1, min(0.9, current_temp))
                 
                 UI.event("Adaptive", f"Tuning creativity: {current_temp:.1f} (attempt {empty_retry_count})", style="info")
+
+                # API guard: avoid infinite silent retries in WebUI
+                if self.api_backend and empty_retry_count >= 3:
+                    fallback_msg = "[Error] API returned empty responses repeatedly. Please try again."
+                    if stream_callback:
+                        stream_callback(fallback_msg)
+                    return fallback_msg
                 
                 continue
 

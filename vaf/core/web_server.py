@@ -407,7 +407,9 @@ async def websocket_endpoint(websocket: WebSocket):
                         manager.subscribe_to_session(websocket, sid)
                         
                         # Push command to main loop to switch session
-                        manager.input_queue.put(f"__CMD__:LOAD_SESSION:{sid}")
+                        from vaf.core.task_queue import TaskQueue
+                        tq = TaskQueue()
+                        tq.add(session_id="system", input_text=f"__CMD__:LOAD_SESSION:{sid}", source="web")
                         
                         # 1. Load from disk (just to send history to frontend immediately)
                         loaded = session_mgr.load(sid)
@@ -511,7 +513,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 elif type == "new_session":
                     # Push command to main loop to create new session
-                    manager.input_queue.put("__CMD__:NEW_SESSION")
+                    from vaf.core.task_queue import TaskQueue
+                    tq = TaskQueue()
+                    tq.add(session_id="system", input_text="__CMD__:NEW_SESSION", source="web")
                     
                     # Create new session object AND SAVE IT IMMEDIATELY (temp, main loop will take over)
                     new_sess = session_mgr.new()
@@ -540,7 +544,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     if sid and new_name:
                         session_mgr.rename(sid, new_name)
                         # Notify Main Loop to update in-memory object
-                        manager.input_queue.put(f"__CMD__:RENAME_SESSION:{sid}:{new_name}")
+                        from vaf.core.task_queue import TaskQueue
+                        tq = TaskQueue()
+                        tq.add(session_id="system", input_text=f"__CMD__:RENAME_SESSION:{sid}:{new_name}", source="web")
                         
                         # Broadcast update
                         sessions = session_mgr.list(limit=20)
@@ -657,7 +663,10 @@ async def websocket_endpoint(websocket: WebSocket):
                                 Platform.set_tray_autostart(bool(new_config.get("tray_autostart")))
                         except Exception as e:
                             log("WebServer", f"Tray autostart update failed: {e}")
-                        manager.input_queue.put("__CMD__:RELOAD_CONFIG")
+                        # Use TaskQueue for commands (headless_runner only reads from TaskQueue)
+                        from vaf.core.task_queue import TaskQueue
+                        tq = TaskQueue()
+                        tq.add(session_id="system", input_text="__CMD__:RELOAD_CONFIG", source="web")
                         await websocket.send_json({
                             "type": "config_saved",
                             "status": "success"
@@ -870,7 +879,9 @@ async def websocket_endpoint(websocket: WebSocket):
                             # OFFLINE STT: faster-whisper
                             try:
                                 print("DEBUG: Using faster-whisper (OFFLINE)...") # DEBUG
-                                from faster_whisper import WhisperModel
+                                import importlib
+                                whisper_module = importlib.import_module("faster_whisper")
+                                WhisperModel = getattr(whisper_module, "WhisperModel")
                                 
                                 # Initialize model (base = good speed/accuracy balance)
                                 print("DEBUG: Initializing WhisperModel (base, offline)...") # DEBUG

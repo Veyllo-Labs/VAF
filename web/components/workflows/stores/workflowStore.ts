@@ -26,11 +26,13 @@ interface WorkflowState {
   workflow: VAFWorkflow | null;
   nodes: Node[];
   edges: Edge[];
+  consoleLines: string[];
 
   // Actions
   setIsOpen: (isOpen: boolean) => void;
   loadWorkflow: (workflow: VAFWorkflow) => void;
   updateStepStatus: (stepId: string, status: VAFStep['status'], progress?: number, result?: string) => void;
+  appendWorkflowLine: (line: string) => void;
   openWorkflow: () => void;
   closeWorkflow: () => void;
   clearWorkflow: () => void;
@@ -41,6 +43,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   workflow: null,
   nodes: [],
   edges: [],
+  consoleLines: [],
 
   setIsOpen: (isOpen) => set({ isOpen }),
 
@@ -65,7 +68,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       isOpen: true,
       workflow,
       nodes,
-      edges
+      edges,
+      consoleLines: []
     });
   },
 
@@ -101,7 +105,16 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     });
   },
 
+  appendWorkflowLine: (line) => {
+    if (!line && line !== '') return;
+    set(state => {
+      const next = [...state.consoleLines, line];
+      const capped = next.length > 400 ? next.slice(-400) : next;
+      return { consoleLines: capped };
+    });
+  },
+
   openWorkflow: () => set({ isOpen: true }),
   closeWorkflow: () => set({ isOpen: false }), // Keep data
-  clearWorkflow: () => set({ isOpen: false, workflow: null, nodes: [], edges: [] }),
+  clearWorkflow: () => set({ isOpen: false, workflow: null, nodes: [], edges: [], consoleLines: [] }),
 }));

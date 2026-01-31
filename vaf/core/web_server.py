@@ -637,14 +637,21 @@ async def websocket_endpoint(websocket: WebSocket):
                                         if "gpt" in m["id"] or "o1" in m["id"] or "o3" in m["id"]
                                     ])
                         elif provider == "anthropic":
-                            # Anthropic doesn't have a public models endpoint, use hardcoded list
-                            models = [
-                                "claude-3-5-sonnet-20241022",
-                                "claude-3-5-haiku-20241022", 
-                                "claude-3-opus-20240229",
-                                "claude-3-sonnet-20240229",
-                                "claude-3-haiku-20240307",
-                            ]
+                            # Anthropic models list (requires API key)
+                            if api_key:
+                                import httpx
+                                async with httpx.AsyncClient() as client:
+                                    resp = await client.get(
+                                        "https://api.anthropic.com/v1/models",
+                                        headers={
+                                            "X-Api-Key": api_key,
+                                            "anthropic-version": "2023-06-01"
+                                        },
+                                        timeout=10.0
+                                    )
+                                    if resp.status_code == 200:
+                                        data = resp.json()
+                                        models = [m["id"] for m in data.get("data", []) if m.get("id")]
                         elif provider == "deepseek" and api_key:
                             import httpx
                             async with httpx.AsyncClient() as client:
@@ -656,14 +663,29 @@ async def websocket_endpoint(websocket: WebSocket):
                                 if resp.status_code == 200:
                                     data = resp.json()
                                     models = [m["id"] for m in data.get("data", [])]
-                                else:
-                                    models = ["deepseek-chat", "deepseek-coder"]
                         elif provider == "google":
-                            models = [
-                                "gemini-1.5-pro-latest",
-                                "gemini-1.5-flash-latest",
-                                "gemini-1.0-pro",
-                            ]
+                            if api_key:
+                                import httpx
+                                async with httpx.AsyncClient() as client:
+                                    resp = await client.get(
+                                        "https://generativelanguage.googleapis.com/v1beta/models",
+                                        params={"key": api_key, "pageSize": 1000},
+                                        timeout=10.0
+                                    )
+                                    if resp.status_code == 200:
+                                        data = resp.json()
+                                        raw_models = data.get("models", [])
+                                        unique_models = []
+                                        for model in raw_models:
+                                            methods = model.get("supportedGenerationMethods", [])
+                                            if "generateContent" not in methods:
+                                                continue
+                                            model_id = model.get("baseModelId") or model.get("name", "")
+                                            if model_id.startswith("models/"):
+                                                model_id = model_id.split("/", 1)[1]
+                                            if model_id and model_id not in unique_models:
+                                                unique_models.append(model_id)
+                                        models = sorted(unique_models)
                         elif provider == "openrouter" and api_key:
                             import httpx
                             async with httpx.AsyncClient() as client:

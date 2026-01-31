@@ -375,7 +375,15 @@ export default function VAFDashboard() {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Stats state
-    const [tokenStats, setTokenStats] = useState<{ used: number; total: number; percent: number; api: boolean } | null>(null);
+    type TokenStats = {
+        used: number;
+        total: number;
+        percent: number;
+        api: boolean;
+        input_tokens?: number;
+        output_tokens?: number;
+    };
+    const [tokenStats, setTokenStats] = useState<TokenStats | null>(null);
 
     // Sub-Agent Window State
     const [subAgentState, setSubAgentState] = useState<{
@@ -501,7 +509,7 @@ export default function VAFDashboard() {
     };
 
     // Workflow Store
-    const { loadWorkflow, updateStepStatus } = useWorkflowStore();
+    const { loadWorkflow, updateStepStatus, appendWorkflowLine } = useWorkflowStore();
 
     // TTS State
     const [playingMessageId, setPlayingMessageId] = useState<number | null>(null);
@@ -546,6 +554,7 @@ export default function VAFDashboard() {
     const [volume, setVolume] = useState(0);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
+    const mediaStreamRef = useRef<MediaStream | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const analyserRef = useRef<AnalyserNode | null>(null);
     const silenceStartRef = useRef<number | null>(null);
@@ -975,7 +984,15 @@ export default function VAFDashboard() {
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
                     updateStepStatus(data.stepId, data.status, data.progress, data.result);
                 }
+                else if (data.type === 'workflow_output_stream') {
+                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+                    const line = typeof data.line === 'string' ? data.line : '';
+                    appendWorkflowLine(line);
+                }
                 else if (data.type === 'subagent_update') {
+                    const statusText = String(data.status || '').trim();
+                    const modelLabel = data.model ? `• ${String(data.model)}` : '';
+                    const statusLine = `${statusText}${modelLabel ? ` ${modelLabel}` : ''}`.trim();
                     const newSteps = data.steps || [];
                     const prevSteps = subAgentStepsRef.current;
                     const prevMap = new Map(prevSteps.map(step => [step.id, step.status]));
@@ -1004,7 +1021,7 @@ export default function VAFDashboard() {
                         ...prev,
                         isOpen: true,
                         agentName: data.agentName || prev.agentName,
-                        status: data.status || prev.status,
+                        status: statusLine || prev.status,
                         currentFile: data.file || prev.currentFile,
                         codeContent: data.code || prev.codeContent,
                         steps: data.steps || prev.steps,
@@ -1144,7 +1161,7 @@ export default function VAFDashboard() {
                 else if (data.type === 'models_list') {
                     setAvailableModels(data.models || []);
                 }
-                else if (data.type === 'api_models') {
+                else if (data.type === 'api_models' || data.type === 'api_models_list') {
                     setApiModels(prev => ({ ...prev, [data.provider]: data.models }));
                 }
                 else if (data.type === 'tools_list') {
@@ -1329,6 +1346,27 @@ export default function VAFDashboard() {
         }
     };
 
+    const getMicErrorMessage = (error: unknown) => {
+        if (!(error instanceof DOMException)) {
+            return 'Could not access microphone. Please try again.';
+        }
+
+        switch (error.name) {
+            case 'NotAllowedError':
+                return 'Microphone permission denied. Please allow access in your browser settings.';
+            case 'NotFoundError':
+                return 'No microphone found. Please connect a microphone and try again.';
+            case 'NotReadableError':
+                return 'Microphone is busy or unavailable. Close other apps using it and try again.';
+            case 'OverconstrainedError':
+                return 'Microphone constraints could not be satisfied. Try a different device.';
+            case 'SecurityError':
+                return 'Microphone access blocked by browser security settings.';
+            default:
+                return `Could not access microphone (${error.name}). Please try again.`;
+        }
+    };
+
     const startRecording = async () => {
         if (!sttEnabled) {
             const confirmEnable = confirm("Voice Input is currently disabled. Would you like to open Settings to enable it?");
@@ -1338,8 +1376,24 @@ export default function VAFDashboard() {
             return;
         }
 
+        if (!navigator.mediaDevices?.getUserMedia) {
+            alert('Microphone access is not supported by this browser.');
+            return;
+        }
+
+        if (!window.isSecureContext) {
+            alert('Microphone access requires a secure context (HTTPS or localhost).');
+            return;
+        }
+
         try {
+            if (mediaStreamRef.current) {
+                mediaStreamRef.current.getTracks().forEach(track => track.stop());
+                mediaStreamRef.current = null;
+            }
+
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaStreamRef.current = stream;
 
             // Audio Context for VAD (Voice Activity Detection)
             const audioContext = new AudioContext();
@@ -1378,6 +1432,9 @@ export default function VAFDashboard() {
 
                 // Stop all tracks
                 stream.getTracks().forEach(track => track.stop());
+                if (mediaStreamRef.current === stream) {
+                    mediaStreamRef.current = null;
+                }
 
                 // Cleanup AudioContext
                 if (audioContextRef.current) {
@@ -1435,7 +1492,7 @@ export default function VAFDashboard() {
             setIsRecording(true);
         } catch (error) {
             console.error('Error accessing microphone:', error);
-            alert('Could not access microphone. Please grant permission.');
+            alert(getMicErrorMessage(error));
         }
     };
 

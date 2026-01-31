@@ -18,7 +18,7 @@ const nodeTypes = {
 };
 
 const VAFWorkflowRuntime = () => {
-  const { isOpen, nodes: initialNodes, edges: initialEdges, closeWorkflow, workflow } = useWorkflowStore();
+  const { isOpen, nodes: initialNodes, edges: initialEdges, closeWorkflow, workflow, consoleLines } = useWorkflowStore();
   
   // Local state for React Flow (synced with store)
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -70,35 +70,56 @@ const VAFWorkflowRuntime = () => {
         </div>
       </div>
 
-      {/* Workflow Canvas */}
-      <div className="flex-1 bg-gray-50 relative">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          fitView
-          attributionPosition="bottom-right"
-          nodesDraggable={false} // Lock layout for vertical list feel
-          nodesConnectable={false}
-          zoomOnScroll={true}
-          panOnDrag={true}
-          minZoom={0.5}
-          maxZoom={1.5}
-          defaultEdgeOptions={{
-            type: 'smoothstep',
-            animated: true,
-            style: { stroke: '#cbd5e1', strokeWidth: 2 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#cbd5e1' },
-          }}
-        >
-          <Background color="#e2e8f0" gap={20} size={1} />
-          <Controls 
-            showInteractive={false} 
-            className="!bg-white !shadow-sm !border !border-gray-200 !m-4 !rounded-lg overflow-hidden" 
-          />
-        </ReactFlow>
+      {/* Workflow Canvas + Terminal Split */}
+      <div className="flex-1 bg-gray-50 relative flex flex-col min-h-0">
+        <div className="flex-1 min-h-0 border-b border-gray-200">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            fitView
+            attributionPosition="bottom-right"
+            nodesDraggable={false} // Lock layout for vertical list feel
+            nodesConnectable={false}
+            zoomOnScroll={true}
+            panOnDrag={true}
+            minZoom={0.5}
+            maxZoom={1.5}
+            defaultEdgeOptions={{
+              type: 'smoothstep',
+              animated: true,
+              style: { stroke: '#cbd5e1', strokeWidth: 2 },
+              markerEnd: { type: MarkerType.ArrowClosed, color: '#cbd5e1' },
+            }}
+          >
+            <Background color="#e2e8f0" gap={20} size={1} />
+            <Controls 
+              showInteractive={false} 
+              className="!bg-white !shadow-sm !border !border-gray-200 !m-4 !rounded-lg overflow-hidden" 
+            />
+          </ReactFlow>
+        </div>
+        <div className="flex-1 min-h-0 bg-white">
+          <div className="flex h-10 items-center border-b border-gray-100 bg-gray-50 px-4 text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Terminal Output
+          </div>
+          <div className="flex-1 min-h-0 overflow-auto px-4 py-4 font-mono text-xs text-gray-900 whitespace-pre-wrap">
+            {consoleLines.length > 0 ? (
+              <div className="space-y-1">
+                {consoleLines.map((line, index) => (
+                  <div key={`${index}-${line}`}>{line}</div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-gray-300">
+                <Activity size={14} className="opacity-60" />
+                <span className="text-xs">Waiting for workflow output...</span>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Footer / Status */}

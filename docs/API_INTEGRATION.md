@@ -126,6 +126,17 @@ All API providers support **streaming responses** for real-time output.
 - ⚠️ **DeepSeek** - Limited support
 - ⚠️ **Google** - Limited support
 
+### Multi-Tool Wrapper Compatibility
+
+Some models emit a wrapper call named `multi_tool_use.parallel` with a `tool_uses` array.
+VAF accepts this wrapper and executes each entry as a normal tool call.
+
+**Accepted fields per entry:**
+- `recipient_name` (example: `functions.web_search`)
+- `parameters` (arguments passed to the tool)
+
+Execution is sequential to preserve tool gating and interactive prompts.
+
 ### Context Windows
 
 Provider context limits are respected:

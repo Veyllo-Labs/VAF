@@ -792,7 +792,6 @@ class ResearchAgentTool(BaseTool):
                 
                 # Save to user's Documents/VAF_Research (or Downloads/VAF_Research as fallback)
                 # This is OS-independent and user-friendly
-                from pathlib import Path
                 output_dir = Platform.get_research_dir()
                 output_path = output_dir / filename
                 

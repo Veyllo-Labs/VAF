@@ -98,6 +98,19 @@ def run_headless_agent():
     open_subagent_sessions = set()
     subagent_last_activity = {}
     subagent_last_steps = {}
+    from vaf.core.config import Config
+
+    def _get_subagent_model_info():
+        cfg = Config.load()
+        main_provider = cfg.get("provider", "local")
+        subagent_provider = cfg.get("subagent_provider", "inherit")
+        use_separate = cfg.get("subagent_use_separate_provider", False)
+        effective_provider = subagent_provider if use_separate and subagent_provider != "inherit" else main_provider
+        if effective_provider != "local":
+            model = cfg.get(f"api_model_{effective_provider}", "") or cfg.get("model", "")
+        else:
+            model = cfg.get("model", "")
+        return effective_provider, model
     while True:
         try:
             # check for tasks
@@ -323,6 +336,8 @@ def run_headless_agent():
                                         status_label = "Failed"
                                     elif result_task.status == "timeout":
                                         status_label = "Timed out"
+                                    presence = "error" if result_task.status in ("failed", "timeout") else "idle"
+                                    provider, model = _get_subagent_model_info()
                                     step_status = "completed" if result_task.status in ("completed", "failed", "timeout") else "running"
                                     steps = [{
                                         "id": result_task.task_id,
@@ -338,6 +353,9 @@ def run_headless_agent():
                                         "type": "subagent_update",
                                         "agentName": "Sub-Agent",
                                         "status": status_label,
+                                        "presence": presence,
+                                        "provider": provider,
+                                        "model": model,
                                         "file": "",
                                         "code": "",
                                         "steps": steps
@@ -466,6 +484,7 @@ def run_headless_agent():
                             for sid, tasks in tasks_by_session.items():
                                 subagent_last_activity[sid] = now
                                 open_subagent_sessions.add(sid)
+                                provider, model = _get_subagent_model_info()
                                 steps = []
                                 for task in tasks:
                                     status = "running"
@@ -486,6 +505,9 @@ def run_headless_agent():
                                     "type": "subagent_update",
                                     "agentName": "Sub-Agent",
                                     "status": "Running sub-agent tasks...",
+                                    "presence": "online",
+                                    "provider": provider,
+                                    "model": model,
                                     "file": "",
                                     "code": "",
                                     "steps": steps
@@ -495,11 +517,15 @@ def run_headless_agent():
                             now_ts = time.time()
                             for sid in list(open_subagent_sessions):
                                 last_seen = subagent_last_activity.get(sid, 0.0)
+                                provider, model = _get_subagent_model_info()
                                 if now_ts - last_seen <= 15.0:
                                     get_web_interface()._push_session_update(sid, {
                                         "type": "subagent_update",
                                         "agentName": "Sub-Agent",
                                         "status": "Completed",
+                                        "presence": "idle",
+                                        "provider": provider,
+                                        "model": model,
                                         "file": "",
                                         "code": "",
                                         "steps": subagent_last_steps.get(sid, [])
@@ -509,6 +535,9 @@ def run_headless_agent():
                                         "type": "subagent_update",
                                         "agentName": "Sub-Agent",
                                         "status": "Idle",
+                                        "presence": "idle",
+                                        "provider": provider,
+                                        "model": model,
                                         "file": "",
                                         "code": "",
                                         "steps": []

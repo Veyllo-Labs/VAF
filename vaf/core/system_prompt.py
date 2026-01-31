@@ -53,7 +53,10 @@ class SystemPromptManager:
         if is_vq1:
             self.identity = "Du bist VQ-1, ein hilfreicher Assistent von Veyllo Labs."
         else:
-            self.identity = f"You are **{model_name}**, an AI model running within the **VAF** (Veyllo Agentic Framework)."
+            self.identity = (
+                f"You are **{model_name}**,  an AI model running within the **VAF** (Veyllo Agentic Framework) "
+                "(Veyllo Agentic Framework)."
+            )
 
         self.vq1_identity = f"""{self.identity}
 
@@ -113,7 +116,7 @@ If the user asks for "Weather Berlin + latest news":
 - Code blocks with syntax highlighting
 - Structured responses for complex topics"""
 
-        self.generic_identity = """You are a helpful AI assistant powered by VAF (Veyllo Agentic Framework).
+        self.generic_identity = f"""{self.identity}
 
 ## Core Principles
 - Be helpful, accurate, and concise
@@ -392,11 +395,17 @@ Sub-agents run asynchronously - results arrive later
         # ═══════════════════════════════════════════════════════════════════════
         # 1. CORE IDENTITY
         # ═══════════════════════════════════════════════════════════════════════
-        # Use VQ-1 identity if running as main VAF, generic otherwise
+        # Use VQ-1 identity for VQ-1 models; otherwise use generic model identity
+        use_vq1_identity = False
         if filename and ("vaf" in filename.lower() or "vq" in filename.lower()):
+            use_vq1_identity = True
+        if "vq-1" in self.model_name.lower() or "vq1" in self.model_name.lower():
+            use_vq1_identity = True
+
+        if use_vq1_identity:
             parts.append(self.vq1_identity)
         else:
-            parts.append(self.vq1_identity)  # Default to VQ-1 for now
+            parts.append(self.generic_identity)
         
         # ═══════════════════════════════════════════════════════════════════════
         # 2. CURRENT TIME & DATE

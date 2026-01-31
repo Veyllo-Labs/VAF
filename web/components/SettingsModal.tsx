@@ -1053,29 +1053,35 @@ interface SelectProps {
     options: { value: string; label: string }[];
 }
 
-const Select = ({ label, value, onChange, options }: SelectProps) => (
-    <div className="flex flex-col gap-1.5 w-full">
-        <label className="text-sm font-medium text-gray-700 ml-1">{label}</label>
-        <div className="relative">
-            <select
-                value={value}
-                onChange={(e) => onChange(e.target.value)}
-                className="w-full h-10 appearance-none px-4 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-gray-700 pr-10"
-            >
-                {/* Default option if current value is not in options (e.g. custom input previously saved) */}
-                {!options.some(o => o.value === value) && value && (
-                    <option value={value}>{value} (Current)</option>
-                )}
-                {options.map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-            </select>
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
-                <ChevronRight size={16} className="rotate-90" />
+const Select = ({ label, value, onChange, options }: SelectProps) => {
+    const uniqueOptions = options.filter((option, index) => {
+        return options.findIndex((candidate) => candidate.value === option.value) === index;
+    });
+
+    return (
+        <div className="flex flex-col gap-1.5 w-full">
+            <label className="text-sm font-medium text-gray-700 ml-1">{label}</label>
+            <div className="relative">
+                <select
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                    className="w-full h-10 appearance-none px-4 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-gray-700 pr-10"
+                >
+                    {/* Default option if current value is not in options (e.g. custom input previously saved) */}
+                    {!uniqueOptions.some(o => o.value === value) && value && (
+                        <option value={value}>{value} (Current)</option>
+                    )}
+                    {uniqueOptions.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                </select>
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+                    <ChevronRight size={16} className="rotate-90" />
+                </div>
             </div>
         </div>
-    </div>
-);
+    );
+};
 
 interface SwitchProps {
     label: string;

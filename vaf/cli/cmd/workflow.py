@@ -141,6 +141,7 @@ def run_workflow(
         # Web UI Reporting Setup
         import requests
         session_id = os.environ.get("VAF_SESSION_ID")
+        workflow_output_enabled = False
         
         def send_web_update(data):
             if not session_id: return
@@ -149,6 +150,53 @@ def run_workflow(
                 data["sessionId"] = session_id
                 requests.post("http://127.0.0.1:8001/api/workflow/update", json=data, timeout=0.2)
             except: pass
+
+        def send_web_line(line: str):
+            if not session_id: return
+            try:
+                send_web_update({
+                    "type": "workflow_output_stream",
+                    "workflowId": workflow_id,
+                    "line": line
+                })
+            except:
+                pass
+
+        class WebStreamWriter:
+            def __init__(self, stream):
+                self.stream = stream
+                self._buffer = ""
+
+            def write(self, data):
+                try:
+                    self.stream.write(data)
+                    self.stream.flush()
+                except Exception:
+                    pass
+
+                if not session_id:
+                    return
+                self._buffer += data
+                while "\n" in self._buffer:
+                    line, self._buffer = self._buffer.split("\n", 1)
+                    send_web_line(line)
+
+            def flush(self):
+                try:
+                    self.stream.flush()
+                except Exception:
+                    pass
+
+            def isatty(self):
+                return getattr(self.stream, "isatty", lambda: False)()
+
+            def fileno(self):
+                return getattr(self.stream, "fileno", lambda: -1)()
+
+        if session_id:
+            workflow_output_enabled = True
+            sys.stdout = WebStreamWriter(sys.stdout)
+            sys.stderr = WebStreamWriter(sys.stderr)
 
         # Send initial workflow structure
         if session_id:
@@ -273,6 +321,15 @@ def run_workflow(
         if ipc and task_id:
             ipc.fail_task(task_id, error_msg)
     
+    if workflow_output_enabled:
+        try:
+            stdout_writer = sys.stdout
+            if getattr(stdout_writer, "_buffer", ""):
+                send_web_line(stdout_writer._buffer)
+                stdout_writer._buffer = ""
+        except Exception:
+            pass
+
     # Auto-close terminal after completion
     if not no_auto_close:
         _auto_close_countdown()

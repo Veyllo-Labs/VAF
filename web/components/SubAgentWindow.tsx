@@ -4,7 +4,7 @@ import React, { useMemo } from 'react';
 import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-interface SubAgentWindowProps {
+export type SubAgentWindowProps = {
     isOpen: boolean;
     onClose: () => void;
     canClose?: boolean;
@@ -25,7 +25,8 @@ interface SubAgentWindowProps {
         status: 'pending' | 'running' | 'completed';
         actions: Array<{ type: string; details: string }>;
     }>;
-}
+    [key: string]: any;
+};
 
 const actionTone = (type: string) => {
     const normalized = type.toLowerCase();
@@ -56,6 +57,18 @@ export default function SubAgentWindow({
     const displayCode = artifactCode ?? codeContent;
     const displayStatus = status;
     const artifactStateLabel = artifactStatus ?? '';
+    const statusLower = (status || '').toLowerCase();
+    const inferredPresence = statusLower.includes('error') || statusLower.includes('fail') || statusLower.includes('timeout')
+        ? 'error'
+        : statusLower.includes('online') || statusLower.includes('running')
+            ? 'online'
+            : 'idle';
+    const presenceLabel = inferredPresence === 'online' ? 'Online' : inferredPresence === 'error' ? 'Error' : 'Idle';
+    const presenceTone = inferredPresence === 'online'
+        ? 'bg-emerald-500'
+        : inferredPresence === 'error'
+            ? 'bg-red-500'
+            : 'bg-gray-400';
     const hasWorkflow = false;
     const codeLines = useMemo(() => (displayCode ? displayCode.split('\n') : []), [displayCode]);
 
@@ -146,8 +159,12 @@ export default function SubAgentWindow({
                             <div>
                                 <div className="text-xs font-semibold text-gray-900">{agentName}</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
-                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                                    {displayStatus}
+                                    <span className={cn("h-1.5 w-1.5 rounded-full", presenceTone)} />
+                                    {displayStatus ? (
+                                        <span className="text-gray-500">{displayStatus}</span>
+                                    ) : (
+                                        <span className="uppercase">{presenceLabel}</span>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -283,8 +300,12 @@ export default function SubAgentWindow({
                             <div>
                                 <div className="text-sm font-semibold text-gray-900">{agentName}</div>
                                 <div className="flex items-center gap-2 text-xs text-gray-500">
-                                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
-                                    {status}
+                                    <span className={cn("h-1.5 w-1.5 rounded-full", presenceTone)} />
+                                    {status ? (
+                                        <span className="text-gray-500">{status}</span>
+                                    ) : (
+                                        <span className="uppercase">{presenceLabel}</span>
+                                    )}
                                 </div>
                             </div>
                         </div>

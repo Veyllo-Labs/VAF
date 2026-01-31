@@ -146,6 +146,8 @@ class Agent:
         self.history = []
         self._tokenizer_instance = None
         self._active_tools = None
+        self._recent_tools = {}
+        self._recent_tool_keep_turns = 2
 
         # Trust gating state (session-only)
         self._allow_once_tools = set()
@@ -188,7 +190,19 @@ class Agent:
         
         # Extract model name for identity
         self.model_display_name = "VQ-1"
-        if hasattr(self, 'filename'):
+        if self.provider != "local":
+            api_model = self.config.get(f"api_model_{self.provider}")
+            if not api_model:
+                api_defaults = {
+                    "openai": "gpt-4o",
+                    "anthropic": "claude-3-5-sonnet-20241022",
+                    "deepseek": "deepseek-chat",
+                    "google": "gemini-1.5-flash",
+                    "openrouter": "anthropic/claude-3.5-sonnet",
+                }
+                api_model = api_defaults.get(self.provider, self.provider)
+            self.model_display_name = api_model
+        elif hasattr(self, 'filename'):
             fname = self.filename.lower()
             if "gemma" in fname: self.model_display_name = "Gemma"
             elif "llama" in fname: self.model_display_name = "Llama"
@@ -321,19 +335,19 @@ class Agent:
             if not tts_text.strip():
                 return
 
-            # 2. Determine language (Prioritize Config > PromptManager > Auto-Detect)
+            # 2. Determine language (Prioritize Config > Detect from response > PromptManager fallback)
             tts_lang = "auto"
             
             # Check Config first
             config_lang = self.config.get("language", "auto")
             if config_lang and config_lang != "auto":
                 tts_lang = config_lang
-            # Check PromptManager
-            elif hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
-                tts_lang = self.prompt_manager.user_language
-            # Fallback to detection on CLEANED text
             else:
+                # Detect language from the actual assistant response
                 tts_lang = self._detect_user_language(tts_text)
+                # If detection is unclear, fall back to current user language
+                if tts_lang == "auto" and hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
+                    tts_lang = self.prompt_manager.user_language
             
             # 3. Speak
             sm.speak(tts_text, lang=tts_lang)
@@ -1053,6 +1067,14 @@ class Agent:
         except Exception as e:
             if self.verbose:
                 print(f"[WARN] Failed to load context tools: {e}")
+
+        # Provide tool registry to tools that expect it (e.g., list_tools)
+        for tool in self.tools.values():
+            if hasattr(tool, "available_tools"):
+                try:
+                    tool.available_tools = self.tools
+                except Exception:
+                    pass
 
         # DEBUG: Always print active tools during this debugging session
         print(f"[DEBUG] Active Tools: {list(self.tools.keys())}")
@@ -2409,6 +2431,15 @@ class Agent:
             # Check if workflows are enabled (can be disabled in config)
             if not self.config.get("workflows_enabled", True):
                 return None
+
+            explicit_workflow_id, cleaned_input = self._extract_explicit_workflow(user_input)
+            if explicit_workflow_id:
+                user_input = cleaned_input or user_input
+                workflow_id = explicit_workflow_id
+                self._workflow_selection_tier = 0
+                msg_analyzing = f"Step 1/2: Analyzing workflow match... (User selected: {workflow_id})"
+                if lang == "de":
+                    msg_analyzing = f"Schritt 1/2: Analysiere Workflow-Übereinstimmung... (User-Auswahl: {workflow_id})"
             
             # BRAIN-BASED WORKFLOW SELECTION (multi-language support!)
             # Instead of hardcoded pattern matching, use LLM to understand intent in ANY language
@@ -2432,7 +2463,8 @@ class Agent:
             
             UI_Class.event("Info", msg_analyzing, style="dim")
             with UI_Class.console.status(f"[bold cyan](O_O)  {msg_analyzing}[/bold cyan]", spinner="dots"):
-                workflow_id = self.analyze_workflow(user_input)
+                if not explicit_workflow_id:
+                    workflow_id = self.analyze_workflow(user_input)
             
             if not workflow_id:
                 # No workflow match - give agent brief hint (not full list!)
@@ -2467,6 +2499,7 @@ class Agent:
             # Show workflow selection status with tier information
             tier = getattr(self, '_workflow_selection_tier', 1)
             tier_names = {
+                0: "Explicit",
                 1: "LLM Reasoning",
                 2: "Agent Choice", 
                 3: "Pattern Matching"
@@ -2870,6 +2903,75 @@ class Agent:
             if not (msg.get("role") == "system" and 
                     "Available workflows:" in msg.get("content", ""))
         ]
+
+    def _extract_explicit_workflow(self, user_input: str) -> tuple[str | None, str]:
+        """
+        Detect explicit @workflow_id hints in user input.
+        Returns (workflow_id, cleaned_input).
+        """
+        try:
+            from vaf.workflows.templates import WORKFLOW_TEMPLATES
+            if not WORKFLOW_TEMPLATES:
+                return None, user_input
+            workflow_ids = list(WORKFLOW_TEMPLATES.keys())
+        except Exception:
+            return None, user_input
+
+        # Build a case-insensitive lookup with normalization
+        def normalize(token: str) -> str:
+            return token.lower().replace("-", "_")
+
+        workflow_lookup = {wf_id.lower(): wf_id for wf_id in workflow_ids}
+        normalized_lookup = {normalize(wf_id): wf_id for wf_id in workflow_ids}
+        token_match = re.search(r'@([a-zA-Z0-9_-]+)', user_input)
+        if not token_match:
+            return None, user_input
+
+        token = token_match.group(1).strip()
+        workflow_id = workflow_lookup.get(token.lower()) or normalized_lookup.get(normalize(token))
+        if not workflow_id:
+            return None, user_input
+
+        cleaned = re.sub(r'@' + re.escape(token), "", user_input, count=1).strip()
+        cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        return workflow_id, cleaned
+
+    def _decay_recent_tools(self) -> None:
+        """
+        Reduce TTL counters for recently used tools.
+        """
+        for name in list(self._recent_tools.keys()):
+            self._recent_tools[name] -= 1
+            if self._recent_tools[name] <= 0:
+                del self._recent_tools[name]
+
+    def _record_tool_used(self, name: str | None) -> None:
+        """
+        Remember a tool for the next N user turns.
+        """
+        if not name or name not in self.tools:
+            return
+        # Move to end to preserve recency ordering
+        if name in self._recent_tools:
+            self._recent_tools.pop(name)
+        # +1 because we decay at the start of each user turn
+        self._recent_tools[name] = self._recent_tool_keep_turns + 1
+
+    def _get_recent_tools(self) -> list[str]:
+        return [name for name in self._recent_tools.keys() if name in self.tools]
+
+    def _merge_tool_lists(self, primary: list[str] | None, extra: list[str] | None) -> list[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for name in (primary or []):
+            if name in self.tools and name not in seen:
+                merged.append(name)
+                seen.add(name)
+        for name in (extra or []):
+            if name in self.tools and name not in seen:
+                merged.append(name)
+                seen.add(name)
+        return merged
     
     def _route_tools(self, user_input: str) -> List[str]:
         """
@@ -3195,12 +3297,30 @@ class Agent:
         # Dynamic Tool Selection (Tool Router)
         # Only route tools on a new, non-empty input
         if not auto_retry and not skip_input and user_input:
+            from vaf.cli.ui import UI
+            self._decay_recent_tools()
             selected_tools = self._route_tools(user_input)
+            
+            if selected_tools:
+                recent_tools = self._get_recent_tools()
+                if recent_tools:
+                    selected_tools = self._merge_tool_lists(selected_tools, recent_tools)
+
+            # If router returned only one tool, include list_tools as a fallback helper.
+            if (
+                selected_tools
+                and len(selected_tools) == 1
+                and "list_tools" in self.tools
+                and "list_tools" not in selected_tools
+            ):
+                selected_tools = list(selected_tools) + ["list_tools"]
+
+            if selected_tools:
+                UI.event("Router", f"Final tools: {', '.join(selected_tools)}", style="dim")
             
             # SAFETY NET: If router returns empty list, fallback to ALL tools
             # Otherwise the model gets 0 tools and hallucinates using them.
             if not selected_tools:
-                from vaf.cli.ui import UI
                 UI.event("Router", "Safety Net: Using ALL tools (Router found none)", style="dim")
                 self._active_tools = None
             else:
@@ -4651,6 +4771,61 @@ class Agent:
             else:
                 return obj
 
+        def normalize_tool_name(raw_name: str | None) -> str | None:
+            if not raw_name:
+                return None
+            cleaned = raw_name.strip()
+            if cleaned.startswith("functions."):
+                cleaned = cleaned[len("functions."):]
+            return cleaned or None
+
+        def run_multi_tool_use(call_args: dict | None) -> str:
+            tool_uses = (call_args or {}).get("tool_uses", [])
+            if not tool_uses:
+                return "Error: No tool_uses provided."
+
+            results = []
+            for item in tool_uses:
+                if not isinstance(item, dict):
+                    results.append({"tool": "?", "success": False, "result": "Invalid tool entry (not a dict)."})
+                    continue
+
+                raw_tool_name = item.get("recipient_name") or item.get("tool") or item.get("name")
+                tool_name = normalize_tool_name(raw_tool_name)
+                if not tool_name or tool_name == "multi_tool_use.parallel":
+                    results.append({"tool": raw_tool_name or "?", "success": False, "result": "Invalid tool name."})
+                    continue
+
+                tool_args = item.get("parameters") or item.get("args") or {}
+                if isinstance(tool_args, str):
+                    try:
+                        tool_args = json.loads(tool_args)
+                    except Exception:
+                        tool_args = {}
+
+                # Run sequentially to preserve tool gating/UI prompts.
+                result = self.execute_tool(tool_name, tool_args)
+                is_err = isinstance(result, str) and result.lower().startswith(("error", "tool error"))
+                results.append({"tool": tool_name, "success": not is_err, "result": result})
+
+            output = ["==== MULTI TOOL RESULTS ====", ""]
+            for i, res in enumerate(results, 1):
+                status = "OK" if res.get("success") else "ERR"
+                output.append(f"[{i}] {status} {res.get('tool')}")
+                result_text = str(res.get("result", ""))
+                if len(result_text) > 200:
+                    result_text = result_text[:200] + "..."
+                output.append(f"    {result_text}")
+                output.append("")
+
+            return "\n".join(output).strip()
+
+        if name == "multi_tool_use.parallel":
+            emit({"type": "tool_start", "tool": name, "args": make_json_serializable(args or {})})
+            result = run_multi_tool_use(args if isinstance(args, dict) else {})
+            emit({"type": "tool_end", "tool": name})
+            return result
+
         # Gate risky tools with once/always/cancel (no persistent deny)
         if should_gate_tool(name):
             policy = get_tool_policy(name)
@@ -4731,9 +4906,11 @@ class Agent:
                     except Exception as e:
                         unsafe_result = f"Tool Error: {e}"
                     emit({"type": "tool_end", "tool": "python_exec"})
+                    self._record_tool_used("python_exec")
                     result = unsafe_result
 
         emit({"type": "tool_end", "tool": name})
+        self._record_tool_used(name)
         # Log system reaction (result summary only)
         try:
             from vaf.core.subagent_debug import get_subagent_logger_from_env, summarize_result

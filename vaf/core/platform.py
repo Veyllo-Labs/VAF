@@ -507,12 +507,22 @@ class Platform:
                 )
                 try:
                     from vaf.core.web_interface import get_web_interface
+                    from vaf.core.config import Config
                     session_id = os.environ.get("VAF_SESSION_ID", "").strip()
                     task_id = os.environ.get("VAF_TASK_ID", "").strip()
                     agent_type = os.environ.get("VAF_AGENT_TYPE", "").strip()
                     
                     if session_id and (task_id or agent_type):
                         title = (agent_type or "Sub-Agent").replace("_", " ").title()
+                        cfg = Config.load()
+                        main_provider = cfg.get("provider", "local")
+                        subagent_provider = cfg.get("subagent_provider", "inherit")
+                        use_separate = cfg.get("subagent_use_separate_provider", False)
+                        effective_provider = subagent_provider if use_separate and subagent_provider != "inherit" else main_provider
+                        if effective_provider != "local":
+                            model = cfg.get(f"api_model_{effective_provider}", "") or cfg.get("model", "")
+                        else:
+                            model = cfg.get("model", "")
                         steps = [{
                             "id": task_id or "subagent",
                             "title": title,
@@ -524,6 +534,9 @@ class Platform:
                             "type": "subagent_update",
                             "agentName": title,
                             "status": "Running sub-agent task...",
+                            "presence": "online",
+                            "provider": effective_provider,
+                            "model": model,
                             "file": "",
                             "code": "",
                             "steps": steps

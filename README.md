@@ -10,7 +10,9 @@ O))         O))       O))))))))
 ```
 VAF is a comprehensive agent suite designed to transform LLMs like VQ-1 into autonomous powerhouses. It features a modular plug-and-play architecture, allowing you to extend agent capabilities with custom Python workflows. Built for Python 3.10+, VAF offers a terminal UI, cross-platform support (Windows, Linux, macOS), session management, and powerful automation tools.
 
-**New in VAF 2.0:**
+**New in VAF 2.5:**
+*   **Memory System (RAG):** Encrypted memory storage with semantic search, graph visualization, and AI-powered retrieval.
+*   **Auto-Installer:** Cross-platform installation scripts with Docker detection (`install.sh`, `install.ps1`).
 *   **System Tray:** Persistent background server for instant agent availability.
 *   **Gateway Architecture:** A persistent control plane for concurrent multi-channel access.
 *   **Docker Sandboxing:** Secure code execution in isolated containers.
@@ -21,37 +23,75 @@ VAF is a comprehensive agent suite designed to transform LLMs like VQ-1 into aut
 ## 📥 Installation & Setup
 
 ### Prerequisites
-- **Python 3.13 or higher**
-- **pip** (Python package installer)
+- **Python 3.10+** (3.12 recommended)
 - **Git** (for cloning the repository)
-- **Docker Desktop** (Optional, but required for Sandboxing and safe code execution)
+- **Docker** (Optional - required for Memory System and Sandboxing)
+- **Node.js 18+** (Optional - for Web UI development)
 
-Dependencies are automatically handled during installation.
+### Quick Install (Recommended)
 
-### 1. Clone & Install
+**🪟 Windows:**
+```powershell
+# Clone the repository
+git clone https://github.com/Veyllo-Labs/VAF.git
+cd VAF
 
-**All Platforms (Windows, macOS, Linux):**
+# Run the installer (double-click install.bat or run in PowerShell)
+.\install.ps1
+```
+
+**🍎 macOS / 🐧 Linux:**
 ```bash
 # Clone the repository
 git clone https://github.com/Veyllo-Labs/VAF.git
 cd VAF
 
-# Install in editable mode
-# This now AUTOMATICALLY detects your OS and runs the setup scripts!
-pip install -e .
+# Run the installer
+chmod +x install.sh
+./install.sh
 ```
 
-### 2. Platform-Specific Setup (Triggered Automatically)
+### What the Installer Does
 
-**🪟 Windows:**
-`pip install -e .` will automatically run `scripts\setup_win.ps1`.
-*(This creates a virtual environment, installs all dependencies, and generates shortcuts).*
+The auto-installer handles everything:
 
-For manual setup or troubleshooting, see [docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md).
+1. ✅ **System Detection** - OS, GPU (NVIDIA/AMD/Apple Silicon), package manager
+2. ✅ **Python Setup** - Virtual environment, all dependencies
+3. ✅ **Docker Check** - Detection for Memory System database
+4. ✅ **Node.js Check** - For Web UI
+5. ✅ **Shortcuts** - Desktop/Start Menu (Windows), App Bundle (macOS), Desktop Entry (Linux)
+6. ✅ **Shell Alias** - `vaf` command added to your shell
 
-**🐧 Linux & 🍎 macOS:**
-`pip install -e .` will automatically run `./scripts/setup_mac.sh` on macOS.
-*(This installs dependencies, creates a virtual environment, and generates the **VAF.app** bundle).*
+### Installation Options
+
+```bash
+# Skip Docker setup
+./install.sh --skip-docker        # macOS/Linux
+.\install.ps1 -SkipDocker         # Windows
+
+# Force recreate virtual environment
+.\install.ps1 -Force              # Windows
+
+# Show help
+./install.sh --help
+```
+
+### Alternative: Manual Install
+
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # or venv\Scripts\activate on Windows
+
+# Install dependencies
+pip install -e .
+pip install -r requirements.txt
+
+# (Optional) Start Memory System database
+docker compose -f docker-compose.memory.yml up -d
+```
+
+For platform-specific troubleshooting, see [docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md).
 
 ### 3. Run VAF
 
@@ -95,6 +135,7 @@ See [docs/SANDBOXING.md](docs/SANDBOXING.md).
 
 ## ✨ Highlights
 
+- 🧠 **Memory System (RAG)** - Persistent encrypted memory with semantic search and graph visualization
 - 🌐 **Web UI Dashboard** - Browser-based interface with real-time updates and session management
 - 🎨 **Modern TUI** - Beautiful input box with smart autocomplete and themes
 - ⌨️ **Smart AutoSuggest** - Inline word completion like Google Search
@@ -113,6 +154,47 @@ See [docs/SANDBOXING.md](docs/SANDBOXING.md).
 ---
 
 ## Features
+
+### 🧠 Memory System (RAG)
+
+Persistent, encrypted memory storage with RAG (Retrieval-Augmented Generation) for intelligent information retrieval.
+
+**Key Features:**
+- **Encrypted Storage**: AES-256-GCM encryption for all memory content at rest
+- **Vector Search**: Semantic similarity search using pgvector (PostgreSQL)
+- **RAG Pipeline**: Query memories with AI-powered answer generation and source citations
+- **Graph Visualization**: Interactive ReactFlow-based memory graph
+- **Auto-Connections**: Automatically links related memories based on semantic similarity
+
+**Quick Start:**
+```bash
+# Start the Memory System database (requires Docker)
+docker compose -f docker-compose.memory.yml up -d
+
+# Access the Memory Graph UI
+# Open: http://localhost:3000/memory
+# Or via Settings → Advanced → System → Memory System
+```
+
+**API Example:**
+```bash
+# Create a memory
+curl -X POST http://localhost:8000/api/memory \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Important project notes...", "metadata": {"title": "Project Notes"}}'
+
+# RAG Query
+curl -X POST http://localhost:8000/api/memory/rag/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are the project notes?", "k": 5}'
+```
+
+**Configuration (Settings → Advanced → System):**
+- Enable/Disable Memory System
+- Chunk Size (tokens)
+- Auto-Connect Threshold
+
+**Documentation:** See [docs/MEMORY_SYSTEM.md](docs/MEMORY_SYSTEM.md) for full API reference and configuration.
 
 ### 🌐 Web UI Dashboard
 

@@ -305,15 +305,24 @@ def check_activity_loop(update_icon_callback):
         time_since_last = time.time() - tray_context.last_heartbeat
         time_since_disconnect = time.time() - tray_context.last_websocket_disconnect
         time_since_ws_activity = time.time() - tray_context.last_websocket_activity
+        has_websocket = tray_context.active_websockets > 0
+        
+        # Check provider type - cloud providers don't need local model loading
+        provider = Config.get("provider", "local")
+        is_cloud_provider = provider in ("openai", "anthropic", "google", "openrouter", "mistral", "groq", "deepseek")
+        
+        # For cloud providers, "ready" means we have a WebSocket connection
+        # For local providers, "ready" means model is loaded
+        is_ready = has_websocket if is_cloud_provider else is_loaded
         
         if is_persistent:
-            if not is_loaded:
+            if not is_loaded and not is_cloud_provider:
                 print("Persistent mode enabled. Loading model...")
                 log("Tray", "Persistent mode enabled. Loading model...")
                 start_model_async("Persistent")
             update_icon_callback("persistent")
         elif is_active:
-            if not is_loaded:
+            if not is_loaded and not is_cloud_provider:
                 print("Activity detected. Loading model...")
                 log("Tray", "Activity detected. Loading model...")
                 start_model_async("Activity")
@@ -321,6 +330,7 @@ def check_activity_loop(update_icon_callback):
         else:
             if (
                 is_loaded and
+                not is_cloud_provider and
                 tray_context.active_websockets == 0 and
                 time_since_last > tray_context.idle_timeout and
                 time_since_ws_activity > tray_context.idle_timeout and
@@ -333,7 +343,8 @@ def check_activity_loop(update_icon_callback):
                 log("Tray", "Model unloaded.")
                 update_icon_callback("idle")
             else:
-                update_icon_callback("active" if is_loaded else "idle")
+                # Show "active" if ready (cloud: websocket connected, local: model loaded)
+                update_icon_callback("active" if is_ready else "idle")
 
         if time.time() - last_log_ts >= 5:
             last_log_ts = time.time()
@@ -374,20 +385,40 @@ def open_webui(_):
         try:
             import win32gui
             import win32con
+            import win32process
+            import ctypes
             
             def window_enum_handler(hwnd, ctx):
                 title = win32gui.GetWindowText(hwnd)
-                # Check for "VAF" and browser indicators
-                if "VAF" in title and ("Google Chrome" in title or "Firefox" in title or "Edge" in title or "Browser" in title):
-                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                    win32gui.SetForegroundWindow(hwnd)
-                    ctx['found'] = True
+                # Check for "VAF" or "localhost:3000" in browser windows
+                browser_keywords = ["Google Chrome", "Firefox", "Edge", "Browser", "Chromium", "Opera", "Brave"]
+                is_browser = any(kw in title for kw in browser_keywords)
+                has_vaf = "VAF" in title or "localhost:3000" in title or "127.0.0.1:3000" in title
+                
+                if is_browser and has_vaf and win32gui.IsWindowVisible(hwnd):
+                    try:
+                        # Minimize first then restore - workaround for Windows focus issue
+                        win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+                        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                        
+                        # Force foreground window
+                        try:
+                            # Allow this process to set foreground window
+                            ctypes.windll.user32.AllowSetForegroundWindow(-1)
+                        except:
+                            pass
+                        
+                        win32gui.SetForegroundWindow(hwnd)
+                        ctx['found'] = True
+                        ctx['hwnd'] = hwnd
+                    except Exception as e:
+                        log("Tray", f"open_webui: Focus window failed: {e}")
 
-            context = {'found': False}
+            context = {'found': False, 'hwnd': None}
             win32gui.EnumWindows(window_enum_handler, context)
             
             if context['found']:
-                log("Tray", "open_webui: Existing window found and focused")
+                log("Tray", f"open_webui: Existing window found and focused (hwnd={context['hwnd']})")
                 return
         except Exception as e:
             log("Tray", f"open_webui: Windows focus check failed: {e}")
@@ -396,21 +427,35 @@ def open_webui(_):
         # ... (macOS logic stays same) ...
         pass
 
-    # Fallback: Open new tab
+    # Fallback: Open new tab using the most reliable method
     log("Tray", "open_webui: Opening new browser tab...")
+    if platform.system() == "Windows":
+        # On Windows, use shell start command - most reliable for background processes
+        try:
+            # Use os.startfile which is the most reliable for URLs on Windows
+            import os
+            os.startfile(url)
+            log("Tray", "open_webui: Opened via os.startfile")
+            return
+        except Exception as e:
+            log("Tray", f"open_webui: os.startfile failed: {e}")
+        
+        try:
+            # Fallback to start command
+            subprocess.Popen(["cmd", "/c", "start", "", url], shell=False, 
+                           creationflags=subprocess.CREATE_NO_WINDOW)
+            log("Tray", "open_webui: Opened via cmd /c start")
+            return
+        except Exception as e2:
+            log("Tray", f"open_webui: cmd start failed: {e2}")
+    
+    # Final fallback: webbrowser module
     try:
         import webbrowser
-        # Try standard way
-        if not webbrowser.open(url):
-            raise Exception("webbrowser.open returned False")
+        webbrowser.open(url)
+        log("Tray", "open_webui: Opened via webbrowser.open")
     except Exception as e:
-        log("Tray", f"open_webui: Standard webbrowser.open failed: {e}. Trying shell fallback...")
-        if platform.system() == "Windows":
-            try:
-                # Most reliable way on Windows to open a URL from background process
-                subprocess.Popen(["cmd", "/c", "start", url], shell=True)
-            except Exception as e2:
-                log("Tray", f"open_webui: Shell fallback failed: {e2}")
+        log("Tray", f"open_webui: webbrowser.open failed: {e}")
 
 def toggle_persistence(item):
     new_state = not tray_context.is_persistent()

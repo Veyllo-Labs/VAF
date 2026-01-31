@@ -1,60 +1,68 @@
 """
-VAF Python Sandbox - Safe Python Code Execution
-Executes Python code in a restricted environment for mathematical calculations and data processing.
+VAF Python Sandbox - Secure Docker-based Code Execution
 
-OS-Independent: Uses only Python standard library modules (math, random, datetime, json, re, etc.)
-No external dependencies required - works on Windows, Linux, and macOS.
+Executes Python code in an isolated Docker container for security.
+Uses a PERSISTENT container (vaf-sandbox) for fast execution.
+
+Security features:
+- Process isolation via Docker
+- Memory limit: 512MB
+- CPU limit: 0.5 cores
+- Workspace isolation between executions
+- Auto-cleanup of workspace after each run
 """
-import io
-import contextlib
-from typing import Dict, Any, Tuple
-from pathlib import Path
+import base64
+import subprocess
+import logging
+import uuid
+from typing import Tuple
 from vaf.tools.base import BaseTool
 
-# Blocked modules and functions for security
-BLOCKED_MODULES = {
-    'os', 'sys', 'subprocess', 'shutil', 'socket', 'urllib', 'http',
-    'importlib', '__import__', 'eval', 'exec', 'compile', 'open',
-    'file', 'input', 'raw_input', 'exit', 'quit', 'help'
-}
+logger = logging.getLogger("vaf.python_sandbox")
 
-BLOCKED_ATTRIBUTES = {
-    '__import__', '__builtins__', '__file__', '__name__', '__doc__',
-    '__package__', '__loader__', '__spec__', '__path__', '__cached__'
-}
+# Persistent container name (from docker-compose.memory.yml)
+SANDBOX_CONTAINER = "vaf-sandbox"
 
 
 class PythonSandboxTool(BaseTool):
     """
-    Safe Python Sandbox for executing Python code.
+    Secure Python Sandbox using a persistent Docker container.
+    
+    Uses the pre-started 'vaf-sandbox' container for instant execution.
+    Falls back to creating an ephemeral container if not available.
     
     Use for:
     - Mathematical calculations
     - Data processing
     - Algorithm implementations
     - Scientific computations
-    
-    Security: Restricted environment, no file system access, no network access.
+    - Running untrusted code safely
     """
     
     name = "python_sandbox"
-    description = """Execute Python code safely in a sandboxed environment.
-Use for mathematical calculations, data processing, algorithms, and scientific computations.
-The code runs in a restricted environment without file system or network access.
+    description = """Execute Python code safely in a Docker-isolated sandbox.
+Runs code in a secure container with limited resources (512MB RAM, 0.5 CPU).
+Use for calculations, data processing, algorithms, and running untrusted code.
 
-Available modules: math, random, statistics, decimal, fractions, collections, itertools, 
-functools, operator, re, json, datetime, time, string, textwrap, copy, hashlib, base64, 
-uuid, secrets, heapq, bisect.
-
-Returns the result automatically for expressions (e.g., '1+1' returns '2'), 
-or output from print statements, or the 'result' variable."""
+REQUIRES Docker to be installed and running.
+Returns stdout/stderr from the execution."""
 
     parameters = {
         "type": "object",
         "properties": {
             "code": {
                 "type": "string",
-                "description": "Python code to execute (e.g., '1 + 1', 'math.sqrt(16)', or 'print(sum(range(10)))')"
+                "description": "Python code to execute in the sandbox"
+            },
+            "timeout": {
+                "type": "integer",
+                "description": "Timeout in seconds (default: 30)",
+                "default": 30
+            },
+            "packages": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional: pip packages to install before running (e.g., ['numpy', 'pandas'])"
             }
         },
         "required": ["code"]
@@ -62,210 +70,156 @@ or output from print statements, or the 'result' variable."""
     
     def __init__(self):
         super().__init__()
-        # Blocked builtins - only block dangerous operations
-        self.blocked_builtins = {
-            'open', 'file', 'input', 'raw_input', 'exec', 'eval', 'compile',
-            '__import__', 'exit', 'quit', 'help', 'license', 'credits',
-            'copyright', 'vars', 'dir', 'globals', 'locals', 'reload',
-        }
+        self._ephemeral_sandbox = None
     
-    def _is_safe_code(self, code: str) -> Tuple[bool, str]:
-        """Check if code contains dangerous operations."""
-        code_lower = code.lower()
-        
-        # Check for blocked imports
-        for blocked in BLOCKED_MODULES:
-            if f'import {blocked}' in code_lower or f'from {blocked}' in code_lower:
-                return False, f"Blocked module: {blocked}"
-        
-        # Check for dangerous function calls
-        dangerous_patterns = [
-            'eval(', 'exec(', '__import__', 'open(', 'file(',
-            'input(', 'raw_input(', 'exit(', 'quit(',
-            'subprocess', 'os.', 'sys.', 'shutil', 'socket'
+    def _is_persistent_sandbox_running(self) -> bool:
+        """Check if the persistent sandbox container is running."""
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", SANDBOX_CONTAINER],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            return result.returncode == 0 and "true" in result.stdout.lower()
+        except Exception:
+            return False
+    
+    def _ensure_docker_available(self) -> Tuple[bool, str]:
+        """Check if Docker is available. Returns (success, error_message)."""
+        try:
+            result = subprocess.run(
+                ["docker", "info"],
+                capture_output=True,
+                timeout=10
+            )
+            if result.returncode != 0:
+                return False, "Docker daemon is not running. Please start Docker Desktop."
+            return True, ""
+        except FileNotFoundError:
+            return False, "Docker is not installed. Please install Docker Desktop from https://docker.com"
+        except subprocess.TimeoutExpired:
+            return False, "Docker daemon is not responding. Please restart Docker Desktop."
+        except Exception as e:
+            return False, f"Docker check failed: {e}"
+    
+    def _execute_in_persistent(self, command: str, timeout: int, workdir: str = "/workspace") -> Tuple[int, str, str]:
+        """Execute command in the persistent sandbox container."""
+        exec_cmd = [
+            "docker", "exec",
+            "-w", workdir,
+            SANDBOX_CONTAINER,
+            "sh", "-c", command
         ]
         
-        for pattern in dangerous_patterns:
-            if pattern in code_lower:
-                return False, f"Blocked operation: {pattern}"
-        
-        # Check for attribute access to blocked attributes
-        for attr in BLOCKED_ATTRIBUTES:
-            if f'.{attr}' in code or f'[{attr}]' in code:
-                return False, f"Blocked attribute access: {attr}"
-        
-        return True, ""
+        try:
+            result = subprocess.run(
+                exec_cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            return result.returncode, result.stdout, result.stderr
+        except subprocess.TimeoutExpired:
+            return -1, "", f"Execution timed out after {timeout}s"
+        except Exception as e:
+            return -1, "", str(e)
     
-    def _create_safe_namespace(self) -> Dict[str, Any]:
-        """Create a safe namespace with normal Python builtins (except dangerous ones)."""
-        import math
-        import random
-        import datetime
-        import json
-        import re
-        import statistics
-        import decimal
-        import fractions
-        import collections
-        import itertools
-        import functools
-        import operator
-        import builtins
-        import time
-        import hashlib
-        import base64
-        import uuid
-        import string
-        import copy
-        import heapq
-        import bisect
-        import secrets
-        import textwrap
+    def _execute_in_ephemeral(self, command: str, timeout: int) -> Tuple[int, str, str]:
+        """Execute in an ephemeral container (fallback if persistent not available)."""
+        if self._ephemeral_sandbox is None:
+            from vaf.tools.sandbox import DockerSandbox
+            self._ephemeral_sandbox = DockerSandbox(image="python:3.11-slim")
+            self._ephemeral_sandbox.start()
         
-        # Get all builtins and filter out dangerous ones
-        safe_builtins_dict = {}
-        for name in dir(builtins):
-            # Skip private attributes (except a few allowed ones)
-            if name.startswith('_') and name not in ['__name__', '__doc__', '__package__']:
-                continue
-            # Skip blocked builtins
-            if name in self.blocked_builtins:
-                continue
-            
-            try:
-                attr = getattr(builtins, name)
-                # Include everything except modules (we'll add safe modules separately)
-                # This ensures print, len, range, etc. are all included
-                safe_builtins_dict[name] = attr
-            except:
-                pass
-        
-        # Create namespace with normal Python environment
-        namespace = {
-            '__builtins__': safe_builtins_dict,
-            # Math and scientific modules
-            'math': math,
-            'random': random,
-            'statistics': statistics,
-            'decimal': decimal,
-            'fractions': fractions,
-            # Data structures
-            'collections': collections,
-            'itertools': itertools,
-            'functools': functools,
-            'operator': operator,
-            # String and data processing
-            're': re,
-            'json': json,
-            'datetime': datetime,
-            'string': string,
-            'textwrap': textwrap,
-            # Utilities
-            'time': time,
-            'copy': copy,
-            # Cryptography (safe - no network)
-            'hashlib': hashlib,
-            'base64': base64,
-            'uuid': uuid,
-            'secrets': secrets,
-            # Algorithms
-            'heapq': heapq,
-            'bisect': bisect,
-            # Common types (already in builtins, but explicit for clarity)
-            'int': int,
-            'float': float,
-            'str': str,
-            'list': list,
-            'dict': dict,
-            'tuple': tuple,
-            'set': set,
-            'bool': bool,
-            'None': None,
-            'True': True,
-            'False': False,
-        }
-        
-        # Add all safe builtins directly to namespace for normal Python experience
-        namespace.update(safe_builtins_dict)
-        
-        return namespace
+        return self._ephemeral_sandbox.execute(command, timeout=timeout)
     
     def run(self, **kwargs) -> str:
-        """Execute Python code safely."""
-        # Convert Path objects to strings (OS-independent defensive handling)
-        # str() works for both strings and Path objects
-        code = str(kwargs.get("code", ""))
+        """Execute Python code in Docker sandbox."""
+        code = str(kwargs.get("code", "")).strip()
+        timeout = int(kwargs.get("timeout", 30))
+        packages = kwargs.get("packages", [])
         
         if not code:
-            return "Error: No code provided."
+            return "[ERROR] python_sandbox: No code provided."
         
-        # Security check
-        is_safe, error_msg = self._is_safe_code(code)
-        if not is_safe:
-            return f"Security Error: {error_msg}. This operation is not allowed in the sandbox."
+        # Step 1: Verify Docker is available (NO FALLBACK TO HOST)
+        docker_ok, docker_error = self._ensure_docker_available()
+        if not docker_ok:
+            logger.error(f"Docker not available: {docker_error}")
+            return f"[SECURITY] Sandbox requires Docker: {docker_error}\n\nCode execution blocked for security reasons."
         
-        # Create safe namespace
-        namespace = self._create_safe_namespace()
+        # Step 2: Choose execution method (persistent vs ephemeral)
+        use_persistent = self._is_persistent_sandbox_running()
         
-        # Capture stdout
-        stdout_capture = io.StringIO()
-        stderr_capture = io.StringIO()
+        if use_persistent:
+            logger.debug("Using persistent sandbox (fast)")
+            execute_fn = self._execute_in_persistent
+        else:
+            logger.info("Persistent sandbox not running, using ephemeral container")
+            execute_fn = self._execute_in_ephemeral
         
         try:
-            # Capture stdout/stderr
-            with contextlib.redirect_stdout(stdout_capture), \
-                 contextlib.redirect_stderr(stderr_capture):
-                # Try to evaluate as a single expression first (like IPython/Jupyter)
-                # This allows "1 + 1" to return "2" automatically
-                last_expr_result = None
-                is_expression = False
-                
-                try:
-                    # Compile as 'eval' to check if it's a single expression
-                    compile(code, '<string>', 'eval')
-                    is_expression = True
-                except SyntaxError:
-                    # Not a single expression, will execute as statements
-                    is_expression = False
-                
-                if is_expression:
-                    # Evaluate as expression (both globals and locals set to namespace)
-                    last_expr_result = eval(code, namespace, namespace)
+            # Step 3: Create unique workspace for this execution
+            exec_id = uuid.uuid4().hex[:8]
+            workdir = f"/tmp/vaf_{exec_id}"
+            
+            # Create workspace directory
+            exit_code, _, err = execute_fn(f"mkdir -p {workdir}", timeout=5)
+            if exit_code != 0:
+                return f"[ERROR] Failed to create workspace: {err}"
+            
+            # Step 4: Install packages if requested
+            if packages:
+                pkg_list = " ".join(packages)
+                logger.info(f"Installing packages: {pkg_list}")
+                exit_code, out, err = execute_fn(
+                    f"pip install --quiet --disable-pip-version-check {pkg_list}",
+                    timeout=120
+                )
+                if exit_code != 0:
+                    return f"[ERROR] Failed to install packages: {err or out}"
+            
+            # Step 5: Execute code
+            # Base64 encode to avoid shell escaping issues
+            b64_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
+            safe_cmd = f"cd {workdir} && echo {b64_code} | base64 -d | python3"
+            
+            logger.debug(f"Executing: {code[:100]}...")
+            exit_code, stdout, stderr = execute_fn(safe_cmd, timeout=timeout)
+            
+            # Step 6: Cleanup workspace
+            execute_fn(f"rm -rf {workdir}", timeout=5)
+            
+            # Step 7: Format result
+            if exit_code != 0:
+                error_output = stderr or stdout or f"Exit code: {exit_code}"
+                return f"[ERROR] Sandbox execution failed (exit={exit_code}):\n{error_output}"
+            
+            result = ""
+            if stdout:
+                result += stdout
+            if stderr:
+                if result:
+                    result += f"\n[stderr]\n{stderr}"
                 else:
-                    # Execute as statements
-                    exec(code, namespace, namespace)
+                    result = f"[stderr]\n{stderr}"
             
-            # Get output
-            stdout_output = stdout_capture.getvalue()
-            stderr_output = stderr_capture.getvalue()
-            
-            # Check for errors
-            if stderr_output:
-                return f"Error: {stderr_output}"
-            
-            # Priority 1: If there's print output, return it
-            if stdout_output:
-                return stdout_output.strip()
-            
-            # Priority 2: If we evaluated a single expression, return its result
-            if last_expr_result is not None:
-                return str(last_expr_result)
-            
-            # Priority 3: Try to find a result variable
-            if 'result' in namespace:
-                return str(namespace['result'])
-            
-            # Priority 4: Return success message (only for statement-only code with no output)
-            return "Code executed successfully. (No output or result variable found. Use 'print()' or assign to 'result' variable.)"
+            return result.strip() or "[OK] Code executed successfully (no output)."
             
         except Exception as e:
-            error_type = type(e).__name__
-            error_msg = str(e)
-            return f"Execution Error ({error_type}): {error_msg}"
-        except SystemExit:
-            return "Error: exit() or quit() calls are not allowed."
-        except KeyboardInterrupt:
-            return "Error: Execution was interrupted."
-        except BaseException as e:
-            return f"Unexpected Error: {type(e).__name__}: {str(e)}"
-
+            logger.error(f"Sandbox execution error: {e}")
+            return f"[ERROR] Sandbox execution failed: {e}"
+    
+    def cleanup(self):
+        """Stop ephemeral sandbox if used."""
+        if self._ephemeral_sandbox:
+            try:
+                self._ephemeral_sandbox.stop()
+            except Exception as e:
+                logger.warning(f"Sandbox cleanup failed: {e}")
+            self._ephemeral_sandbox = None
+    
+    def __del__(self):
+        """Cleanup on destruction."""
+        self.cleanup()

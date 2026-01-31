@@ -1,11 +1,13 @@
 """
-Python Exec Tool (Host)
+Python Exec Tool (HOST - UNSAFE)
 
-Runs Python code via the host interpreter (sys.executable).
-This is intentionally "risky" compared to python_sandbox because it can access
-filesystem/network depending on the code.
+WARNING: This tool executes Python code directly on the host system.
+It should ONLY be used when:
+1. The user explicitly requests host execution
+2. The code is from a trusted source
+3. Docker sandbox is not suitable (e.g., needs host filesystem access)
 
-It must be gated by Trust/Capability rules (once/always/cancel).
+For safe code execution, use python_sandbox instead.
 """
 
 from __future__ import annotations
@@ -13,16 +15,21 @@ from __future__ import annotations
 import os
 import sys
 import subprocess
+import logging
 from pathlib import Path
 
 from vaf.tools.base import BaseTool
+from vaf.core.trust import get_tool_policy
+
+logger = logging.getLogger("vaf.python_exec")
 
 
 class PythonExecTool(BaseTool):
     name = "python_exec"
     description = (
-        "Run Python code using the host interpreter (UNSANDBOXED). "
-        "RISKY: code may access files/network. Use only with explicit user approval."
+        "⚠️ UNSAFE: Run Python code directly on the HOST system (no sandbox). "
+        "Only use when you need host filesystem/network access. "
+        "Requires explicit user approval. Prefer 'python_sandbox' for safe execution."
     )
 
     parameters = {
@@ -35,42 +42,23 @@ class PythonExecTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
-        # Convert Path objects to strings (OS-independent defensive handling)
-        # str() works for both strings and Path objects
         code = str(kwargs.get("code") or "").strip()
         timeout = int(kwargs.get("timeout") or 30)
 
         if not code:
             return "[ERROR] python_exec: missing code"
+        
+        # Check if this tool is explicitly allowed
+        policy = get_tool_policy("python_exec")
+        if policy not in ("allow", "once"):
+            logger.warning("python_exec called without explicit trust policy")
+            return (
+                "[SECURITY] python_exec runs code UNSANDBOXED on your host system.\n"
+                "This is blocked by default for security.\n\n"
+                "Use 'python_sandbox' for safe execution, or configure trust policy to allow python_exec."
+            )
 
-        # Try to use Docker Sandbox first
-        try:
-            from vaf.tools.sandbox import DockerSandbox
-            import base64
-            
-            with DockerSandbox() as sandbox:
-                # Wrap code to handle I/O correctly inside container
-                # We simply pass it to python3 -c "..."
-                # Escaping quotes for shell is tricky, so we base64 encode the script
-                # and decode it inside the container to avoid syntax errors.
-                
-                b64_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
-                safe_cmd = f"echo {b64_code} | base64 -d | python3"
-                
-                exit_code, out, err = sandbox.execute(safe_cmd, timeout=timeout)
-                
-                if exit_code != 0:
-                     if err: return f"[ERROR] python_exec (SANDBOX exit={exit_code}):\n{err}"
-                     return f"[ERROR] python_exec (SANDBOX exit={exit_code})"
-                
-                res_str = ""
-                if out: res_str += out
-                if err: res_str += f"\n[stderr]\n{err}"
-                return res_str.strip() or "OK"
-
-        except (ImportError, RuntimeError):
-             # Fallback to Host Execution
-             pass
+        logger.warning(f"⚠️ Executing Python code on HOST (unsandboxed): {code[:50]}...")
 
         try:
             proc = subprocess.run(
@@ -88,18 +76,19 @@ class PythonExecTool(BaseTool):
         out = (proc.stdout or "").strip()
         err = (proc.stderr or "").strip()
 
+        # Add warning to output
+        warning = "⚠️ [HOST EXECUTION - No Sandbox]\n\n"
+
         if proc.returncode != 0:
             if err:
-                return f"[ERROR] python_exec (exit={proc.returncode}):\n{err}"
-            return f"[ERROR] python_exec (exit={proc.returncode})"
+                return f"{warning}[ERROR] (exit={proc.returncode}):\n{err}"
+            return f"{warning}[ERROR] (exit={proc.returncode})"
 
         if out and err:
-            return f"{out}\n\n[stderr]\n{err}"
+            return f"{warning}{out}\n\n[stderr]\n{err}"
         if out:
-            return out
+            return f"{warning}{out}"
         if err:
-            return f"[stderr]\n{err}"
+            return f"{warning}[stderr]\n{err}"
 
-        return "OK"
-
-
+        return f"{warning}OK"

@@ -1,0 +1,117 @@
+# VAF Memory System - Docker Compose
+# PostgreSQL with pgvector + Redis for caching
+#
+# Usage:
+#   docker compose -f docker-compose.memory.yml up -d
+#
+# This creates:
+#   - PostgreSQL 16 with pgvector extension (vector similarity search)
+#   - Redis 7 (caching for embeddings, RAG queries, sessions)
+#   - Persistent volumes for data
+#   - Health checks for reliability
+
+services:
+  # ==========================================================================
+  # PostgreSQL + pgvector (Vector Database)
+  # ==========================================================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: vaf-memory-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vaf_memory}
+      POSTGRES_USER: ${POSTGRES_USER:-vaf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vaf_dev_secret}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - vaf_pgdata:/var/lib/postgresql/data
+      - ./scripts/init-memory-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vaf} -d ${POSTGRES_DB:-vaf_memory}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - vaf-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  # ==========================================================================
+  # Redis (Caching Layer)
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: vaf-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - vaf_redis:/data
+    # Enable persistence with AOF (Append Only File)
+    command: >
+      redis-server 
+      --appendonly yes 
+      --maxmemory 256mb 
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vaf-network
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+        reservations:
+          memory: 64M
+
+  # ==========================================================================
+  # Python Sandbox (Persistent, always-ready)
+  # ==========================================================================
+  sandbox:
+    image: python:3.11-slim
+    container_name: vaf-sandbox
+    restart: unless-stopped
+    command: sleep infinity
+    working_dir: /workspace
+    volumes:
+      - vaf_sandbox:/workspace
+    healthcheck:
+      test: ["CMD", "python3", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - vaf-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 64M
+
+volumes:
+  vaf_pgdata:
+    name: vaf_memory_pgdata
+    driver: local
+  vaf_redis:
+    name: vaf_redis_data
+    driver: local
+  vaf_sandbox:
+    name: vaf_sandbox_workspace
+    driver: local
+
+networks:
+  vaf-network:
+    name: vaf-network
+    driver: bridge

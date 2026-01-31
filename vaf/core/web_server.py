@@ -43,6 +43,28 @@ session_mgr = SessionManager()
 log("WebServer", "SmartAutoSuggest will be lazy loaded...")
 autosuggest = None
 tray_context = TrayContext()
+
+# Mount Memory System routes if enabled
+if Config.get("memory_enabled", True):
+    try:
+        from vaf.memory.routes import memory_router
+        app.include_router(memory_router, prefix="/api/memory", tags=["memory"])
+        log("WebServer", "Memory system routes mounted at /api/memory")
+    except ImportError as e:
+        log("WebServer", f"Memory system not available: {e}")
+    except Exception as e:
+        log("WebServer", f"Failed to mount memory routes: {e}")
+
+# Mount Discord Integration routes
+try:
+    from vaf.api.discord_routes import router as discord_router
+    app.include_router(discord_router)
+    log("WebServer", "Discord integration routes mounted at /api/discord")
+except ImportError as e:
+    log("WebServer", f"Discord integration not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount Discord routes: {e}")
+
 log("WebServer", "Module initialization complete")
 
 def _scan_tool_modules() -> List[dict]:

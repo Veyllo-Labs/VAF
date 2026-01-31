@@ -1,0 +1,602 @@
+"""
+RAG (Retrieval-Augmented Generation) pipeline for VAF Memory System.
+
+Provides:
+- Memory ingestion (encrypt, chunk, embed, store)
+- Semantic search with pgvector
+- Context building for LLM queries
+- Streaming responses via VAF providers
+"""
+
+import asyncio
+from typing import List, Optional, Dict, Any, AsyncGenerator, Tuple
+from uuid import UUID, uuid4
+from datetime import datetime
+from dataclasses import dataclass
+from sqlalchemy import select, and_, func, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from vaf.memory.models import Memory, Chunk, Connection, EMBEDDING_DIM
+from vaf.memory.crypto import get_crypto, MemoryCrypto
+from vaf.memory.embeddings import get_embedding_service, get_chunker, EmbeddingService, TextChunker
+from vaf.memory.graph import GraphManager
+from vaf.memory.database import get_db
+from vaf.core.config import Config
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RagSource:
+    """A source memory/chunk used in RAG retrieval."""
+    memory_id: str
+    chunk_id: str
+    text: str
+    score: float  # Similarity score (0-1)
+    metadata: Dict[str, Any]
+
+
+@dataclass
+class RagResult:
+    """Result of a RAG query."""
+    answer: str
+    sources: List[RagSource]
+    context_tokens: int
+    query_embedding: List[float]
+
+
+class RagPipeline:
+    """
+    Main RAG pipeline for memory retrieval and generation.
+    
+    Workflow:
+    1. Ingest: encrypt → chunk → embed → store → auto-connect
+    2. Query: embed → search → decrypt → context → LLM → stream
+    """
+    
+    def __init__(
+        self,
+        db: AsyncSession,
+        crypto: Optional[MemoryCrypto] = None,
+        embedding_service: Optional[EmbeddingService] = None,
+        chunker: Optional[TextChunker] = None
+    ):
+        """
+        Initialize RAG pipeline.
+        
+        Args:
+            db: Async database session
+            crypto: Encryption handler (default from singleton)
+            embedding_service: Embedding service (default from singleton)
+            chunker: Text chunker (default from config)
+        """
+        self.db = db
+        self.crypto = crypto or get_crypto()
+        self.embeddings = embedding_service or get_embedding_service()
+        self.chunker = chunker or get_chunker()
+        self.graph = GraphManager(db)
+    
+    async def ingest(
+        self,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        parent_id: Optional[UUID] = None,
+        auto_connect: bool = True
+    ) -> Memory:
+        """
+        Ingest content into the memory system.
+        
+        Steps:
+        1. Encrypt full content
+        2. Chunk text for RAG retrieval
+        3. Embed chunks
+        4. Store memory and chunks
+        5. Auto-connect to similar memories
+        
+        Args:
+            content: Text content to store
+            metadata: Optional metadata (title, tags, type, etc.)
+            parent_id: Optional parent memory for tree hierarchy
+            auto_connect: Whether to auto-connect to similar memories
+            
+        Returns:
+            Created Memory object
+        """
+        if not content or not content.strip():
+            raise ValueError("Cannot ingest empty content")
+        
+        metadata = metadata or {}
+        
+        # Set default title if not provided
+        if "title" not in metadata:
+            # Use first 50 chars as title
+            metadata["title"] = content[:50].strip().replace('\n', ' ')
+            if len(content) > 50:
+                metadata["title"] += "..."
+        
+        # Store a preview in metadata (unencrypted, for display)
+        metadata["preview"] = content[:200].strip().replace('\n', ' ')
+        if len(content) > 200:
+            metadata["preview"] += "..."
+        
+        metadata["type"] = metadata.get("type", "note")
+        metadata["created_at"] = datetime.utcnow().isoformat()
+        
+        # 1. Encrypt content
+        encrypted_content, nonce = self.crypto.encrypt(content)
+        
+        # 2. Create memory embedding (from title/summary)
+        summary = f"{metadata.get('title', '')} {' '.join(metadata.get('tags', []))}"
+        memory_embedding = await self.embeddings.embed(summary)
+        
+        # 3. Create memory record
+        memory = Memory(
+            id=uuid4(),
+            encrypted_content=encrypted_content,
+            nonce=nonce,
+            metadata=metadata,
+            embedding=memory_embedding,
+            parent_id=parent_id
+        )
+        self.db.add(memory)
+        await self.db.flush()
+        
+        # 4. Chunk and embed
+        chunks_data = self.chunker.chunk(content)
+        
+        if chunks_data:
+            chunk_texts = [c["text"] for c in chunks_data]
+            chunk_embeddings = await self.embeddings.embed_batch(chunk_texts)
+            
+            for chunk_data, embedding in zip(chunks_data, chunk_embeddings):
+                chunk = Chunk(
+                    id=uuid4(),
+                    memory_id=memory.id,
+                    text=chunk_data["text"],
+                    embedding=embedding,
+                    chunk_index=chunk_data["index"],
+                    start_char=chunk_data["start_char"],
+                    end_char=chunk_data["end_char"]
+                )
+                self.db.add(chunk)
+        
+        await self.db.flush()
+        
+        # 5. Auto-connect to similar memories
+        if auto_connect:
+            await self.graph.auto_connect_memory(memory)
+        
+        logger.info(f"Ingested memory {memory.id} with {len(chunks_data)} chunks")
+        
+        return memory
+    
+    async def search(
+        self,
+        query: str,
+        k: int = 5,
+        threshold: float = 0.5,
+        metadata_filter: Optional[Dict[str, Any]] = None
+    ) -> List[RagSource]:
+        """
+        Search for relevant memories using vector similarity.
+        
+        Args:
+            query: Search query
+            k: Number of results to return
+            threshold: Minimum similarity threshold (0-1)
+            metadata_filter: Optional metadata filter (e.g., {"tags": ["work"]})
+            
+        Returns:
+            List of RagSource objects
+        """
+        # Embed query
+        query_embedding = await self.embeddings.embed(query)
+        
+        # Convert threshold to distance (cosine distance = 1 - similarity)
+        max_distance = 1.0 - threshold
+        
+        # Build query with pgvector cosine distance
+        # Lower distance = more similar
+        stmt = select(
+            Chunk,
+            Chunk.embedding.cosine_distance(query_embedding).label("distance"),
+            Memory
+        ).join(Memory, Chunk.memory_id == Memory.id).where(
+            and_(
+                Memory.is_deleted == False,
+                Chunk.embedding.cosine_distance(query_embedding) < max_distance
+            )
+        ).order_by("distance").limit(k)
+        
+        result = await self.db.execute(stmt)
+        rows = result.all()
+        
+        sources = []
+        seen_memories = set()
+        
+        for chunk, distance, memory in rows:
+            # Apply metadata filter if provided
+            if metadata_filter:
+                skip = False
+                for key, value in metadata_filter.items():
+                    mem_value = memory.meta.get(key) if memory.meta else None
+                    if isinstance(value, list):
+                        if not mem_value or not any(v in mem_value for v in value):
+                            skip = True
+                            break
+                    elif mem_value != value:
+                        skip = True
+                        break
+                if skip:
+                    continue
+            
+            score = 1.0 - distance  # Convert distance to similarity
+            
+            source = RagSource(
+                memory_id=str(memory.id),
+                chunk_id=str(chunk.id),
+                text=chunk.text,
+                score=score,
+                metadata=memory.meta or {}
+            )
+            sources.append(source)
+            seen_memories.add(str(memory.id))
+        
+        logger.info(f"Search found {len(sources)} relevant chunks from {len(seen_memories)} memories")
+        
+        return sources
+    
+    async def query(
+        self,
+        query: str,
+        k: int = 5,
+        system_prompt: Optional[str] = None,
+        metadata_filter: Optional[Dict[str, Any]] = None
+    ) -> RagResult:
+        """
+        Perform RAG query: search, build context, generate answer.
+        
+        Args:
+            query: User query
+            k: Number of chunks to retrieve
+            system_prompt: Optional custom system prompt
+            metadata_filter: Optional metadata filter
+            
+        Returns:
+            RagResult with answer and sources
+        """
+        # Search for relevant chunks
+        sources = await self.search(query, k=k, metadata_filter=metadata_filter)
+        
+        if not sources:
+            return RagResult(
+                answer="I couldn't find any relevant memories to answer your question.",
+                sources=[],
+                context_tokens=0,
+                query_embedding=await self.embeddings.embed(query)
+            )
+        
+        # Build context from sources
+        context_parts = []
+        for i, source in enumerate(sources):
+            context_parts.append(f"[Source {i+1}] (Relevance: {source.score:.0%})\n{source.text}")
+        
+        context = "\n\n---\n\n".join(context_parts)
+        context_tokens = self.chunker.estimate_tokens(context)
+        
+        # Build prompt
+        default_system = """You are a helpful assistant with access to a memory database. 
+Answer the user's question based on the provided context from relevant memories.
+If the context doesn't contain enough information to answer, say so.
+Always cite which source(s) you used in your answer."""
+        
+        full_prompt = f"""{system_prompt or default_system}
+
+## Relevant Context from Memory:
+
+{context}
+
+## User Question:
+{query}
+
+## Instructions:
+- Answer based on the provided context
+- Cite sources using [Source N] notation
+- If uncertain, acknowledge it"""
+        
+        # Generate answer using VAF's API backend
+        answer = await self._generate_answer(full_prompt)
+        
+        return RagResult(
+            answer=answer,
+            sources=sources,
+            context_tokens=context_tokens,
+            query_embedding=await self.embeddings.embed(query)
+        )
+    
+    async def query_stream(
+        self,
+        query: str,
+        k: int = 5,
+        system_prompt: Optional[str] = None,
+        metadata_filter: Optional[Dict[str, Any]] = None
+    ) -> AsyncGenerator[Tuple[str, Optional[List[RagSource]]], None]:
+        """
+        Perform RAG query with streaming response.
+        
+        Yields:
+            Tuples of (token, sources) where sources is set once at start
+        """
+        # Search for relevant chunks
+        sources = await self.search(query, k=k, metadata_filter=metadata_filter)
+        
+        # Yield sources first
+        if not sources:
+            yield ("I couldn't find any relevant memories to answer your question.", sources)
+            return
+        
+        # Build context
+        context_parts = []
+        for i, source in enumerate(sources):
+            context_parts.append(f"[Source {i+1}] (Relevance: {source.score:.0%})\n{source.text}")
+        
+        context = "\n\n---\n\n".join(context_parts)
+        
+        # Build prompt
+        default_system = """You are a helpful assistant with access to a memory database. 
+Answer the user's question based on the provided context from relevant memories.
+Always cite which source(s) you used."""
+        
+        full_prompt = f"""{system_prompt or default_system}
+
+## Context:
+{context}
+
+## Question:
+{query}"""
+        
+        # Stream answer
+        first_chunk = True
+        async for token in self._stream_answer(full_prompt):
+            if first_chunk:
+                yield (token, sources)
+                first_chunk = False
+            else:
+                yield (token, None)
+    
+    async def _generate_answer(self, prompt: str) -> str:
+        """Generate answer using VAF's API backend."""
+        try:
+            from vaf.core.api_backend import APIBackendManager
+            
+            backend = APIBackendManager()
+            provider = Config.get("provider", "local")
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: backend.chat_completion(
+                    provider=provider,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    max_tokens=1024
+                )
+            )
+            
+            return response.get("choices", [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            logger.error(f"Error generating answer: {e}")
+            return f"Error generating answer: {str(e)}"
+    
+    async def _stream_answer(self, prompt: str) -> AsyncGenerator[str, None]:
+        """Stream answer tokens using VAF's API backend."""
+        try:
+            from vaf.core.api_backend import APIBackendManager
+            
+            backend = APIBackendManager()
+            provider = Config.get("provider", "local")
+            
+            # Use streaming API
+            for chunk in backend.chat_completion_stream(
+                provider=provider,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=1024
+            ):
+                if chunk:
+                    content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    if content:
+                        yield content
+        except Exception as e:
+            logger.error(f"Error streaming answer: {e}")
+            yield f"Error: {str(e)}"
+    
+    async def get_memory(self, memory_id: UUID, decrypt: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        Get a memory by ID.
+        
+        Args:
+            memory_id: Memory UUID
+            decrypt: Whether to decrypt content
+            
+        Returns:
+            Memory dict with optional decrypted content
+        """
+        result = await self.db.execute(
+            select(Memory).where(Memory.id == memory_id)
+        )
+        memory = result.scalar_one_or_none()
+        
+        if not memory:
+            return None
+        
+        data = memory.to_dict()
+        
+        if decrypt:
+            try:
+                data["content"] = self.crypto.decrypt(memory.encrypted_content, memory.nonce)
+            except Exception as e:
+                logger.error(f"Failed to decrypt memory {memory_id}: {e}")
+                data["content"] = "[Decryption failed]"
+        
+        return data
+    
+    async def update_memory(
+        self,
+        memory_id: UUID,
+        content: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Memory:
+        """
+        Update a memory's content and/or metadata.
+        
+        Args:
+            memory_id: Memory UUID
+            content: New content (re-encrypted, re-chunked)
+            metadata: New metadata (merged with existing)
+            
+        Returns:
+            Updated Memory object
+        """
+        result = await self.db.execute(
+            select(Memory).where(Memory.id == memory_id)
+        )
+        memory = result.scalar_one_or_none()
+        
+        if not memory:
+            raise ValueError(f"Memory {memory_id} not found")
+        
+        if metadata:
+            memory.meta = {**(memory.meta or {}), **metadata}
+        
+        if content:
+            # Re-encrypt content
+            encrypted_content, nonce = self.crypto.encrypt(content)
+            memory.encrypted_content = encrypted_content
+            memory.nonce = nonce
+            
+            # Update preview
+            if not memory.meta:
+                memory.meta = {}
+            memory.meta["preview"] = content[:200].strip().replace('\n', ' ')
+            if len(content) > 200:
+                memory.meta["preview"] += "..."
+            
+            # Delete old chunks
+            await self.db.execute(
+                Chunk.__table__.delete().where(Chunk.memory_id == memory_id)
+            )
+            
+            # Re-chunk and embed
+            chunks_data = self.chunker.chunk(content)
+            if chunks_data:
+                chunk_texts = [c["text"] for c in chunks_data]
+                chunk_embeddings = await self.embeddings.embed_batch(chunk_texts)
+                
+                for chunk_data, embedding in zip(chunks_data, chunk_embeddings):
+                    chunk = Chunk(
+                        id=uuid4(),
+                        memory_id=memory.id,
+                        text=chunk_data["text"],
+                        embedding=embedding,
+                        chunk_index=chunk_data["index"],
+                        start_char=chunk_data["start_char"],
+                        end_char=chunk_data["end_char"]
+                    )
+                    self.db.add(chunk)
+            
+            # Update memory embedding
+            meta = memory.meta or {}
+            summary = f"{meta.get('title', '')} {' '.join(meta.get('tags', []))}"
+            memory.embedding = await self.embeddings.embed(summary)
+        
+        memory.updated_at = datetime.utcnow()
+        await self.db.flush()
+        
+        logger.info(f"Updated memory {memory_id}")
+        
+        return memory
+    
+    async def delete_memory(self, memory_id: UUID, soft: bool = True) -> bool:
+        """
+        Delete a memory.
+        
+        Args:
+            memory_id: Memory UUID
+            soft: If True, soft delete (set is_deleted flag)
+            
+        Returns:
+            True if deleted, False if not found
+        """
+        result = await self.db.execute(
+            select(Memory).where(Memory.id == memory_id)
+        )
+        memory = result.scalar_one_or_none()
+        
+        if not memory:
+            return False
+        
+        if soft:
+            memory.is_deleted = True
+        else:
+            await self.db.delete(memory)
+        
+        logger.info(f"Deleted memory {memory_id} (soft={soft})")
+        
+        return True
+    
+    async def list_memories(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        include_deleted: bool = False,
+        tag_filter: Optional[List[str]] = None,
+        type_filter: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        List memories with pagination and filters.
+        
+        Args:
+            limit: Maximum number of results
+            offset: Offset for pagination
+            include_deleted: Include soft-deleted memories
+            tag_filter: Filter by tags
+            type_filter: Filter by type
+            
+        Returns:
+            List of memory dicts (without content)
+        """
+        query = select(Memory).where(Memory.is_deleted == include_deleted)
+        
+        if type_filter:
+            query = query.where(Memory.meta["type"].astext == type_filter)
+        
+        # Note: Tag filtering with JSONB requires specific operators
+        # For simplicity, we filter in Python after fetching
+        
+        query = query.order_by(Memory.updated_at.desc()).offset(offset).limit(limit)
+        
+        result = await self.db.execute(query)
+        memories = result.scalars().all()
+        
+        # Apply tag filter if specified
+        if tag_filter:
+            memories = [
+                m for m in memories
+                if any(tag in (m.meta or {}).get("tags", []) for tag in tag_filter)
+            ]
+        
+        return [m.to_dict() for m in memories]
+
+
+# Helper function for creating pipeline instance
+async def get_rag_pipeline() -> RagPipeline:
+    """
+    Get a RAG pipeline with fresh database session.
+    
+    Usage:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+            result = await pipeline.query("...")
+    """
+    # This is a convenience function; actual usage should use get_db() context
+    raise NotImplementedError("Use get_db() context manager directly")

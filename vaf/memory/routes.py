@@ -1,0 +1,504 @@
+"""
+FastAPI routes for VAF Memory System.
+
+Provides REST API endpoints for:
+- Memory CRUD operations
+- RAG queries with streaming
+- Graph visualization data
+- Semantic search
+"""
+
+from typing import List, Optional, Dict, Any
+from uuid import UUID
+from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from vaf.memory.database import get_db, init_db, check_db_connection, get_db_stats
+from vaf.memory.rag import RagPipeline, RagSource
+from vaf.memory.graph import GraphManager
+from vaf.core.config import Config
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Create router
+memory_router = APIRouter()
+
+
+# Pydantic models for request/response
+class MemoryCreate(BaseModel):
+    """Request model for creating a memory."""
+    content: str = Field(..., min_length=1, description="Memory content text")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Optional metadata")
+    parent_id: Optional[str] = Field(default=None, description="Parent memory ID for hierarchy")
+    auto_connect: bool = Field(default=True, description="Auto-connect to similar memories")
+
+
+class MemoryUpdate(BaseModel):
+    """Request model for updating a memory."""
+    content: Optional[str] = Field(default=None, description="New content")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Metadata to merge")
+
+
+class ConnectionUpdate(BaseModel):
+    """Request model for updating connections."""
+    related_ids: List[str] = Field(..., description="List of related memory IDs")
+    connection_type: str = Field(default="manual", description="Connection type")
+
+
+class RagQueryRequest(BaseModel):
+    """Request model for RAG queries."""
+    query: str = Field(..., min_length=1, description="Query text")
+    k: int = Field(default=5, ge=1, le=20, description="Number of sources to retrieve")
+    metadata_filter: Optional[Dict[str, Any]] = Field(default=None, description="Metadata filter")
+    stream: bool = Field(default=False, description="Enable streaming response")
+
+
+class SemanticSearchRequest(BaseModel):
+    """Request model for semantic search."""
+    query: str = Field(..., min_length=1, description="Search query")
+    k: int = Field(default=10, ge=1, le=50, description="Number of results")
+    threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="Similarity threshold")
+    metadata_filter: Optional[Dict[str, Any]] = Field(default=None, description="Metadata filter")
+
+
+class MemoryResponse(BaseModel):
+    """Response model for a single memory."""
+    id: str
+    metadata: Dict[str, Any]
+    parent_id: Optional[str]
+    created_at: Optional[str]
+    updated_at: Optional[str]
+    chunk_count: int
+    content: Optional[str] = None
+
+
+class SourceResponse(BaseModel):
+    """Response model for a RAG source."""
+    memory_id: str
+    chunk_id: str
+    text: str
+    score: float
+    metadata: Dict[str, Any]
+
+
+class RagQueryResponse(BaseModel):
+    """Response model for RAG queries."""
+    answer: str
+    sources: List[SourceResponse]
+    context_tokens: int
+
+
+class GraphResponse(BaseModel):
+    """Response model for graph data."""
+    nodes: List[Dict[str, Any]]
+    edges: List[Dict[str, Any]]
+
+
+class StatsResponse(BaseModel):
+    """Response model for memory stats."""
+    memories: int
+    chunks: int
+    connections: int
+    db_connected: bool
+
+
+# Health check
+@memory_router.get("/health")
+async def health_check():
+    """Check memory system health."""
+    try:
+        db_ok = await check_db_connection()
+        return {
+            "status": "healthy" if db_ok else "degraded",
+            "db_connected": db_ok,
+            "memory_enabled": Config.get("memory_enabled", True)
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "db_connected": False
+        }
+
+
+# Database initialization (admin)
+@memory_router.post("/init")
+async def initialize_database(drop_existing: bool = False):
+    """
+    Initialize the memory database.
+    
+    WARNING: drop_existing=True will delete all data!
+    """
+    try:
+        await init_db(drop_existing=drop_existing)
+        return {"status": "success", "message": "Database initialized"}
+    except Exception as e:
+        logger.error(f"Database init failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Stats
+@memory_router.get("/stats", response_model=StatsResponse)
+async def get_stats():
+    """Get memory system statistics."""
+    try:
+        stats = await get_db_stats()
+        db_ok = await check_db_connection()
+        return StatsResponse(
+            memories=stats["memories"],
+            chunks=stats["chunks"],
+            connections=stats["connections"],
+            db_connected=db_ok
+        )
+    except Exception as e:
+        logger.error(f"Failed to get stats: {e}")
+        return StatsResponse(
+            memories=0,
+            chunks=0,
+            connections=0,
+            db_connected=False
+        )
+
+
+# CRUD operations
+@memory_router.post("", response_model=MemoryResponse)
+async def create_memory(request: MemoryCreate):
+    """
+    Create a new memory.
+    
+    - Encrypts content at rest
+    - Chunks text for RAG retrieval
+    - Generates embeddings
+    - Auto-connects to similar memories (optional)
+    """
+    try:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+            
+            parent_uuid = UUID(request.parent_id) if request.parent_id else None
+            
+            memory = await pipeline.ingest(
+                content=request.content,
+                metadata=request.metadata,
+                parent_id=parent_uuid,
+                auto_connect=request.auto_connect
+            )
+            
+            return MemoryResponse(
+                id=str(memory.id),
+                metadata=memory.meta or {},
+                parent_id=str(memory.parent_id) if memory.parent_id else None,
+                created_at=memory.created_at.isoformat() if memory.created_at else None,
+                updated_at=memory.updated_at.isoformat() if memory.updated_at else None,
+                chunk_count=len(memory.chunks) if memory.chunks else 0
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to create memory: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@memory_router.get("", response_model=List[MemoryResponse])
+async def list_memories(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    type_filter: Optional[str] = Query(default=None),
+    tag: Optional[str] = Query(default=None),
+    include_deleted: bool = Query(default=False)
+):
+    """List memories with pagination and filters."""
+    try:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+            
+            tag_filter = [tag] if tag else None
+            
+            memories = await pipeline.list_memories(
+                limit=limit,
+                offset=offset,
+                include_deleted=include_deleted,
+                tag_filter=tag_filter,
+                type_filter=type_filter
+            )
+            
+            return [MemoryResponse(**m) for m in memories]
+    except Exception as e:
+        logger.error(f"Failed to list memories: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@memory_router.get("/{memory_id}", response_model=MemoryResponse)
+async def get_memory(memory_id: str, include_content: bool = Query(default=True)):
+    """Get a memory by ID."""
+    try:
+        memory_uuid = UUID(memory_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid memory ID")
+    
+    try:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+            memory = await pipeline.get_memory(memory_uuid, decrypt=include_content)
+            
+            if not memory:
+                raise HTTPException(status_code=404, detail="Memory not found")
+            
+            return MemoryResponse(**memory)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get memory: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@memory_router.put("/{memory_id}", response_model=MemoryResponse)
+async def update_memory(memory_id: str, request: MemoryUpdate):
+    """Update a memory's content and/or metadata."""
+    try:
+        memory_uuid = UUID(memory_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid memory ID")
+    
+    try:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+            memory = await pipeline.update_memory(
+                memory_uuid,
+                content=request.content,
+                metadata=request.metadata
+            )
+            
+            return MemoryResponse(
+                id=str(memory.id),
+                metadata=memory.meta or {},
+                parent_id=str(memory.parent_id) if memory.parent_id else None,
+                created_at=memory.created_at.isoformat() if memory.created_at else None,
+                updated_at=memory.updated_at.isoformat() if memory.updated_at else None,
+                chunk_count=len(memory.chunks) if memory.chunks else 0
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to update memory: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@memory_router.delete("/{memory_id}")
+async def delete_memory(memory_id: str, hard: bool = Query(default=False)):
+    """
+    Delete a memory.
+    
+    - Default: soft delete (set is_deleted flag)
+    - hard=True: permanent deletion
+    """
+    try:
+        memory_uuid = UUID(memory_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid memory ID")
+    
+    try:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+            deleted = await pipeline.delete_memory(memory_uuid, soft=not hard)
+            
+            if not deleted:
+                raise HTTPException(status_code=404, detail="Memory not found")
+            
+            return {"status": "deleted", "id": memory_id, "hard": hard}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete memory: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Graph endpoints
+@memory_router.get("/graph", response_model=GraphResponse)
+async def get_graph(
+    limit: int = Query(default=100, ge=1, le=500),
+    highlight: Optional[str] = Query(default=None, description="Comma-separated memory IDs to highlight")
+):
+    """
+    Get memory graph data for ReactFlow visualization.
+    
+    Returns nodes and edges formatted for ReactFlow.
+    """
+    try:
+        async with get_db() as db:
+            graph_manager = GraphManager(db)
+            
+            highlight_ids = highlight.split(",") if highlight else None
+            
+            graph_data = await graph_manager.get_graph_data(
+                limit=limit,
+                highlight_ids=highlight_ids
+            )
+            
+            return GraphResponse(**graph_data)
+    except Exception as e:
+        logger.error(f"Failed to get graph: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@memory_router.put("/{memory_id}/connections")
+async def update_connections(memory_id: str, request: ConnectionUpdate):
+    """Update manual connections for a memory."""
+    try:
+        memory_uuid = UUID(memory_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid memory ID")
+    
+    try:
+        async with get_db() as db:
+            graph_manager = GraphManager(db)
+            
+            connections = await graph_manager.update_connections(
+                memory_uuid,
+                request.related_ids,
+                request.connection_type
+            )
+            
+            return {
+                "status": "updated",
+                "memory_id": memory_id,
+                "connection_count": len(connections)
+            }
+    except Exception as e:
+        logger.error(f"Failed to update connections: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# RAG endpoints
+@memory_router.post("/rag/query", response_model=RagQueryResponse)
+async def rag_query(request: RagQueryRequest):
+    """
+    Perform a RAG query.
+    
+    1. Embeds the query
+    2. Retrieves relevant memory chunks
+    3. Builds context from sources
+    4. Generates answer using LLM
+    
+    For streaming responses, use /rag/query/stream endpoint.
+    """
+    try:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+            
+            result = await pipeline.query(
+                query=request.query,
+                k=request.k,
+                metadata_filter=request.metadata_filter
+            )
+            
+            sources = [
+                SourceResponse(
+                    memory_id=s.memory_id,
+                    chunk_id=s.chunk_id,
+                    text=s.text,
+                    score=s.score,
+                    metadata=s.metadata
+                )
+                for s in result.sources
+            ]
+            
+            return RagQueryResponse(
+                answer=result.answer,
+                sources=sources,
+                context_tokens=result.context_tokens
+            )
+    except Exception as e:
+        logger.error(f"RAG query failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@memory_router.post("/rag/query/stream")
+async def rag_query_stream(request: RagQueryRequest):
+    """
+    Perform a RAG query with streaming response.
+    
+    Returns Server-Sent Events (SSE) stream:
+    - First event: sources array
+    - Subsequent events: answer tokens
+    - Final event: done signal
+    """
+    async def generate():
+        try:
+            async with get_db() as db:
+                pipeline = RagPipeline(db)
+                
+                first = True
+                async for token, sources in pipeline.query_stream(
+                    query=request.query,
+                    k=request.k,
+                    metadata_filter=request.metadata_filter
+                ):
+                    if first and sources is not None:
+                        # Send sources first
+                        sources_data = [
+                            {
+                                "memory_id": s.memory_id,
+                                "chunk_id": s.chunk_id,
+                                "text": s.text,
+                                "score": s.score,
+                                "metadata": s.metadata
+                            }
+                            for s in sources
+                        ]
+                        yield f"data: {json.dumps({'type': 'sources', 'sources': sources_data})}\n\n"
+                        first = False
+                    
+                    # Send token
+                    yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+                
+                # Send done signal
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except Exception as e:
+            logger.error(f"Streaming RAG query failed: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+# Semantic search (no LLM)
+@memory_router.post("/search", response_model=List[SourceResponse])
+async def semantic_search(request: SemanticSearchRequest):
+    """
+    Semantic search without LLM generation.
+    
+    Returns relevant memory chunks ranked by similarity.
+    """
+    try:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+            
+            sources = await pipeline.search(
+                query=request.query,
+                k=request.k,
+                threshold=request.threshold,
+                metadata_filter=request.metadata_filter
+            )
+            
+            return [
+                SourceResponse(
+                    memory_id=s.memory_id,
+                    chunk_id=s.chunk_id,
+                    text=s.text,
+                    score=s.score,
+                    metadata=s.metadata
+                )
+                for s in sources
+            ]
+    except Exception as e:
+        logger.error(f"Semantic search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

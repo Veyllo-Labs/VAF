@@ -72,6 +72,20 @@ class Config:
         "server_persistence_enabled": False,   # Keep server running after exit
         "tray_autostart": False,               # Auto-start tray on OS login
         "server_idle_timeout": 15,             # Unload local model after idle seconds
+        
+        # Memory System Settings (RAG + Vector Search)
+        "memory_enabled": True,                                    # Enable memory system
+        "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",  # PostgreSQL connection URL
+        "memory_encryption_key": "",                               # AES-256 key (Base64, auto-generated if empty)
+        "memory_embedding_model": "all-MiniLM-L6-v2",             # Sentence-transformers model
+        "memory_auto_connect_threshold": 0.7,                      # Cosine similarity threshold for auto-connections
+        "memory_chunk_size": 512,                                  # Chunk size in tokens
+        "memory_chunk_overlap": 50,                                # Chunk overlap in tokens
+        "memory_db_echo": False,                                   # Enable SQL query logging (debug)
+        
+        # Redis Cache Settings
+        "redis_url": "redis://localhost:6379/0",                   # Redis connection URL
+        "redis_enabled": True,                                     # Enable Redis caching
     }
 
     @classmethod

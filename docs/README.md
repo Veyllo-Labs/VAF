@@ -4,14 +4,30 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 
 ## Contents
 
-- **API_INTEGRATION.md**: Details on how to integrate with various LLM providers and APIs.
+### Core Systems
+- **MEMORY_SYSTEM.md**: RAG-powered memory storage with encryption, vector search, and graph visualization.
+- **CONTEXT_MANAGEMENT.md**: Dynamic system prompt and token optimization strategies.
+- **GATEWAY.md**: Persistent gateway server and multi-channel access.
+- **WEB_UI.md**: Browser-based dashboard and WebSocket API.
+
+### Sub-Agents
 - **CODER_ARCHITECTURE.md**: Deep dive into the Coder sub-agent's design and logic.
-- **CONTEXT_MANAGEMENT.md**: Explains the dynamic system prompt and token optimization strategies.
-- **GATEWAY.md**: Documentation for the persistent gateway server and multi-channel access.
-- **SANDBOXING.md**: Information on secure code execution using Docker.
-- **WEB_UI.md**: Details about the browser-based dashboard and its WebSocket API.
+- **SUBAGENT_IPC.md**: Inter-process communication between agents.
+- **SUBAGENT_FILE_EXTRACTION.md**: File handling in sub-agents.
+
+### Integration & APIs
+- **API_INTEGRATION.md**: Integration with various LLM providers and APIs.
 - **WEBUI_WEBSOCKET_FLOW.md**: WebSocket flow, session scoping, and debugging.
-- ... and more specialized documentation for various features.
+
+### Security & Execution
+- **SANDBOXING.md**: Secure code execution using Docker.
+- **SANDBOX_MODULES.md**: Sandboxed module system.
+
+### Platform & Setup
+- **WINDOWS_SETUP.md**: Windows-specific setup and troubleshooting.
+- **DESIGN.md**: UI design tokens and component styles.
+
+See individual files for detailed documentation.
 
 ## Usage for Developers
 

@@ -58,6 +58,16 @@ python-docx>=1.1.0  # Word document reading
 openpyxl>=3.1.0  # Excel file reading
 python-pptx>=0.6.21  # PowerPoint reading
 
+# Memory System (RAG + Vector Search)
+sqlalchemy[asyncio]>=2.0.0  # Async ORM for database operations
+asyncpg>=0.29.0  # Async PostgreSQL driver
+pgvector>=0.2.0  # pgvector SQLAlchemy integration
+sentence-transformers>=2.2.0  # Text embeddings (all-MiniLM-L6-v2)
+cryptography>=41.0.0  # AES-256-GCM encryption
+
+# Caching (Redis)
+redis>=5.0.0  # Redis client for caching embeddings, RAG queries, sessions
+
 # System Requirements (must be installed separately)
 # Git: Required for version control in coding projects
 # - Windows: https://git-scm.com/download/win or `winget install Git.Git`

@@ -2954,8 +2954,8 @@ class Agent:
         # Move to end to preserve recency ordering
         if name in self._recent_tools:
             self._recent_tools.pop(name)
-        # +1 because we decay at the start of each user turn
-        self._recent_tools[name] = self._recent_tool_keep_turns + 1
+        # Tool stays available for exactly _recent_tool_keep_turns after this turn
+        self._recent_tools[name] = self._recent_tool_keep_turns
 
     def _get_recent_tools(self) -> list[str]:
         return [name for name in self._recent_tools.keys() if name in self.tools]
@@ -3298,13 +3298,15 @@ class Agent:
         # Only route tools on a new, non-empty input
         if not auto_retry and not skip_input and user_input:
             from vaf.cli.ui import UI
-            self._decay_recent_tools()
             selected_tools = self._route_tools(user_input)
-            
+
             if selected_tools:
                 recent_tools = self._get_recent_tools()
                 if recent_tools:
                     selected_tools = self._merge_tool_lists(selected_tools, recent_tools)
+
+            # Decay AFTER merge so tools stay for the full N turns
+            self._decay_recent_tools()
 
             # If router returned only one tool, include list_tools as a fallback helper.
             if (

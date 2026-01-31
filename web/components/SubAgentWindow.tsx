@@ -11,6 +11,7 @@ export type SubAgentWindowProps = {
     mode?: 'overlay' | 'dock';
     agentName: string;
     status: string;
+    presence?: 'online' | 'idle' | 'error';  // Direct presence from backend
     currentFile: string;
     codeContent: string;
     artifactFile?: string;
@@ -44,6 +45,7 @@ export default function SubAgentWindow({
     mode = 'overlay',
     agentName,
     status,
+    presence,
     currentFile,
     codeContent,
     artifactFile,
@@ -57,13 +59,18 @@ export default function SubAgentWindow({
     const displayCode = artifactCode ?? codeContent;
     const displayStatus = status;
     const artifactStateLabel = artifactStatus ?? '';
+
+    // Use presence from backend if available, otherwise infer from status text
     const statusLower = (status || '').toLowerCase();
-    const inferredPresence = statusLower.includes('error') || statusLower.includes('fail') || statusLower.includes('timeout')
-        ? 'error'
-        : statusLower.includes('online') || statusLower.includes('running')
-            ? 'online'
-            : 'idle';
-    const presenceLabel = inferredPresence === 'online' ? 'Online' : inferredPresence === 'error' ? 'Error' : 'Idle';
+    const hasRunningStep = steps.some(step => step.status === 'running');
+    const inferredPresence = presence
+        ? presence  // Use backend presence directly
+        : statusLower.includes('error') || statusLower.includes('fail') || statusLower.includes('timeout')
+            ? 'error'
+            : hasRunningStep || statusLower.includes('online') || statusLower.includes('running')
+                ? 'online'
+                : 'idle';
+    const presenceLabel = inferredPresence === 'online' ? 'Running' : inferredPresence === 'error' ? 'Error' : 'Idle';
     const presenceTone = inferredPresence === 'online'
         ? 'bg-emerald-500'
         : inferredPresence === 'error'

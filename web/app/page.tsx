@@ -390,6 +390,7 @@ export default function VAFDashboard() {
         isOpen: boolean;
         agentName: string;
         status: string;
+        presence: 'online' | 'idle' | 'error';
         currentFile: string;
         codeContent: string;
         artifactFile: string;
@@ -401,6 +402,7 @@ export default function VAFDashboard() {
         isOpen: false,
         agentName: "Sub-Agent",
         status: "Idle",
+        presence: "idle",
         currentFile: "",
         codeContent: "",
         artifactFile: "",
@@ -1022,6 +1024,7 @@ export default function VAFDashboard() {
                         isOpen: true,
                         agentName: data.agentName || prev.agentName,
                         status: statusLine || prev.status,
+                        presence: data.presence || prev.presence,
                         currentFile: data.file || prev.currentFile,
                         codeContent: data.code || prev.codeContent,
                         steps: data.steps || prev.steps,
@@ -2073,6 +2076,7 @@ export default function VAFDashboard() {
                                 canClose={subAgentCanClose}
                                 agentName={subAgentState.agentName}
                                 status={subAgentState.status}
+                                presence={subAgentState.presence}
                                 currentFile={subAgentState.currentFile}
                                 codeContent={subAgentState.codeContent}
                                 artifactFile={subAgentState.artifactFile || subAgentState.currentFile}

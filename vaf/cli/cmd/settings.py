@@ -420,12 +420,15 @@ def show_tools_menu(agent):
     
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("Name", style="cyan")
-    table.add_column("Description", style="white")
+    table.add_column("Use this to...", style="white")
     table.add_column("Available To", style="dim")
     
-    # 1. Main Agent tools
+    # 1. Main Agent tools (exclude update_intent and other internal tools from list)
+    TOOLS_HIDDEN_FROM_CLI = frozenset({"update_intent"})
     if agent and hasattr(agent, "tools"):
         for name, tool in agent.tools.items():
+            if name in TOOLS_HIDDEN_FROM_CLI:
+                continue
             t_type = "Main Agent"
             if "CodingAgent" in str(type(tool)) or "Librarian" in str(type(tool)): 
                 t_type = "Sub-Agent Delegator"
@@ -437,8 +440,8 @@ def show_tools_menu(agent):
             desc = tool.description[:55] + "..." if len(tool.description) > 55 else tool.description
             table.add_row(name, desc, t_type)
     
-    # 2. Sub-Agent only tools (manually list them)
-    sub_agent_tools = [
+    # 2. Coder Sub-Agent only tools (not given to Main Agent; shown for reference)
+    CODER_SUBAGENT_TOOLS = [
         ("write_file", "Write content to a file", "Coder Sub-Agent"),
         ("read_file", "Read a file's contents", "Coder Sub-Agent"),
         ("list_files", "List files in directory", "Coder Sub-Agent"),
@@ -446,8 +449,7 @@ def show_tools_menu(agent):
         ("codesearch", "Search for code patterns/symbols", "Coder Sub-Agent"),
         ("batch", "Execute multiple tools in parallel", "Coder Sub-Agent"),
     ]
-    
-    for name, desc, available_to in sub_agent_tools:
+    for name, desc, available_to in CODER_SUBAGENT_TOOLS:
         table.add_row(f"[dim]{name}[/dim]", f"[dim]{desc}[/dim]", f"[yellow]{available_to}[/yellow]")
     
     UI.console.print(table)

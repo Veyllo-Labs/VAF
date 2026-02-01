@@ -22,6 +22,7 @@ export interface MemoryMetadata {
 
 export interface Memory {
     id: string;
+    user_scope_id?: string | null;
     metadata: MemoryMetadata;
     parent_id: string | null;
     created_at: string | null;
@@ -225,13 +226,16 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
     fetchMemory: async (id) => {
         try {
             const response = await fetch(`${getMemoryApiBase()}/api/memory/${id}?include_content=true`);
-            if (!response.ok) throw new Error('Failed to fetch memory');
-            
+            if (!response.ok) {
+                const body = await response.json().catch(() => ({}));
+                const detail = (body as { detail?: string })?.detail;
+                throw new Error(detail && typeof detail === 'string' ? detail : `Failed to fetch memory (${response.status})`);
+            }
             const memory = await response.json();
-            set({ selectedMemory: memory });
+            set({ selectedMemory: memory, error: null });
             return memory;
         } catch (error) {
-            set({ error: (error as Error).message });
+            set({ error: (error as Error).message, selectedMemory: null });
             return null;
         }
     },

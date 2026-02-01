@@ -32,12 +32,15 @@ from vaf.core.main_persistence import MainPersistenceManager
 
 class UpdateIntentTool(BaseTool):
     """
-    Update the User Intent (The North Star). 
-    Use this when the user clarifies or changes their main goal.
-    This persists across the entire session and is always visible.
+    Update the User Intent (the session goal/task). 
+    Use when the user states or changes their main goal for this session (e.g. "I want to build a website").
+    Do NOT use for preferences like language or "remember that..." – use memory_save for long-term facts.
     """
     name = "update_intent"
-    description = "Update the primary User Intent that guides the entire session."
+    description = (
+        "Update the primary User Intent (session goal/task). Use for the user's current objective, not for preferences "
+        "(e.g. language) or 'remember that...' – use memory_save for those."
+    )
     
     parameters = {
         "type": "object",
@@ -172,16 +175,69 @@ class RequestClarificationTool(BaseTool):
             return f"❌ Error requesting clarification: {e}"
 
 
-class MemoryStoreTool(BaseTool):
+class MemorySearchTool(BaseTool):
     """
-    Store a fact, note, or preference in long-term memory (RAG).
-    Use when the user says to remember something, or when storing preferences or decisions.
-    Stored content is searchable and injected into context on future turns.
+    Search long-term memory for facts about the user or system.
+    Use when the user asks 'who am I?', 'what do you remember about me?', or similar.
+    Do NOT use memory_save for lookup – memory_save only saves new facts.
     """
-    name = "memory_store"
+    name = "memory_search"
     description = (
-        "Store information in long-term memory. Use when the user asks to remember something, "
-        "or for preferences, decisions, or important facts. Stored content is retrieved automatically in future turns."
+        "Search long-term memory for facts about the user or system. "
+        "Call this when the user asks 'who am I?', 'what do you remember about me?', 'was hast du über mich gespeichert?', or similar. "
+        "Returns matching snippets or a message that no memories were found. Use the result to answer. "
+        "Do NOT use memory_save for lookup – memory_save only saves NEW facts when the user asks to remember something."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query (e.g. 'user identity', 'who is this user', 'facts about user')."
+            },
+            "k": {
+                "type": "integer",
+                "description": "Max number of snippets to return (default 5).",
+                "default": 5
+            }
+        },
+        "required": ["query"]
+    }
+
+    def run(self, **kwargs) -> str:
+        query = (kwargs.get("query") or "").strip()
+        if not query:
+            return "Error: query is required."
+        k = int(kwargs.get("k") or 5)
+        k = max(1, min(k, 20))
+        user_scope_id = kwargs.get("user_scope_id")
+        if user_scope_id is not None and isinstance(user_scope_id, str):
+            try:
+                user_scope_id = UUID(user_scope_id)
+            except (ValueError, TypeError):
+                user_scope_id = None
+        try:
+            from vaf.memory.rag import run_memory_search_sync
+            result = run_memory_search_sync(query=query, k=k, user_scope_id=user_scope_id)
+            if not result or not result.strip():
+                return "No memories found for this query. You can tell the user you don't have stored information and offer to remember things from now on."
+            return result
+        except Exception as e:
+            return f"Error searching memory: {e}"
+
+
+class MemorySaveTool(BaseTool):
+    """
+    Save a NEW fact, note, or preference in long-term memory (RAG).
+    Use ONLY when the user explicitly asks to remember or save something.
+    Do NOT use for 'who am I?' or 'what do you remember?' – use memory_search or the Memory context block for that.
+    """
+    name = "memory_save"
+    description = (
+        "Save NEW information in long-term memory. Use ONLY when the user explicitly asks to remember or save something "
+        "(e.g. 'remember that...', 'speichere...', 'merke dir...'). "
+        "Do NOT use for 'who am I?', 'what do you remember about me?', or to look up facts – use memory_search for that, "
+        "or use the 'Memory context' block injected in this turn. memory_save only saves new facts."
     )
     parameters = {
         "type": "object",
@@ -218,7 +274,7 @@ class MemoryStoreTool(BaseTool):
         tags = kwargs.get("tags")
         if tags is not None and not isinstance(tags, list):
             tags = None
-        metadata = {"source": "memory_store", "type": "note"}
+        metadata = {"source": "memory_save", "type": "note"}
         if title:
             metadata["title"] = title
         if tags:

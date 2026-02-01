@@ -90,7 +90,7 @@ Admins can refine the agent at any time via **Settings > Persona & Memory**.
 - **Wizard Reset**: Re-run the Soul Wizard to overwrite the existing personality.
 
 ### RAG Maintenance
-Long-term facts are stored via the **memory_store** tool and auto-capture; they are indexed in the RAG database. Use the **Memory** page (or Settings > Persona > View Graph) to inspect and manage memories. There is no separate MEMORY.md file; RAG is populated from tool usage and optional auto-capture.
+Long-term facts are stored via the **memory_save** tool and auto-capture; they are indexed in the RAG database. Use the **Memory** page (or Settings > Persona > View Graph) to inspect and manage memories. There is no separate MEMORY.md file; RAG is populated from tool usage and optional auto-capture.
 
 ---
 

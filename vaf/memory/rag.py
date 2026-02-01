@@ -15,6 +15,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from sqlalchemy import select, and_, func, text, delete
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from vaf.memory.models import Memory, Chunk, Connection, EMBEDDING_DIM
 from vaf.memory.crypto import get_crypto, MemoryCrypto
 from vaf.memory.embeddings import get_embedding_service, get_chunker, EmbeddingService, TextChunker
@@ -438,7 +439,9 @@ Always cite which source(s) you used."""
             Memory dict with optional decrypted content
         """
         result = await self.db.execute(
-            select(Memory).where(Memory.id == memory_id)
+            select(Memory)
+            .where(Memory.id == memory_id)
+            .options(selectinload(Memory.chunks))
         )
         memory = result.scalar_one_or_none()
         
@@ -455,7 +458,14 @@ Always cite which source(s) you used."""
                 data["content"] = "[Decryption failed]"
         
         return data
-    
+
+    async def get_chunk_count(self, memory_id: UUID) -> int:
+        """Return chunk count for a memory without touching relationship (async-safe)."""
+        result = await self.db.execute(
+            select(func.count()).select_from(Chunk).where(Chunk.memory_id == memory_id)
+        )
+        return result.scalar() or 0
+
     async def update_memory(
         self,
         memory_id: UUID,
@@ -579,18 +589,18 @@ Always cite which source(s) you used."""
         Returns:
             List of memory dicts (without content)
         """
-        query = select(Memory).where(Memory.is_deleted == include_deleted)
-        
+        query = (
+            select(Memory)
+            .where(Memory.is_deleted == include_deleted)
+            .options(selectinload(Memory.chunks))
+        )
         if type_filter:
             query = query.where(Memory.meta["type"].astext == type_filter)
-        
         # Note: Tag filtering with JSONB requires specific operators
         # For simplicity, we filter in Python after fetching
-        
         query = query.order_by(Memory.updated_at.desc()).offset(offset).limit(limit)
-        
         result = await self.db.execute(query)
-        memories = result.scalars().all()
+        memories = result.unique().scalars().all()
         
         # Apply tag filter if specified
         if tag_filter:
@@ -744,6 +754,7 @@ def run_session_compaction_sync(
     if not memories:
         state[session_id] = current_turn_count
         _save_compaction_state(state)
+        refresh_user_profile_summary(user_scope_id)
         return
     async def _ingest_all() -> None:
         async with get_db() as db:
@@ -767,6 +778,31 @@ def run_session_compaction_sync(
         logger.warning("Compaction ingest failed: %s", e)
     state[session_id] = current_turn_count
     _save_compaction_state(state)
+    refresh_user_profile_summary(user_scope_id)
+
+
+def refresh_user_profile_summary(user_scope_id: Optional[UUID]) -> None:
+    """
+    After compaction: run RAG search for user profile facts and write result to cache.
+    Cache is read by build_prompt() for the "User identity (current user)" block.
+    """
+    if user_scope_id is None:
+        return
+    if not Config.get("memory_enabled", True):
+        return
+    try:
+        from pathlib import Path
+        summary = run_memory_search_sync(
+            "user profile facts preferences about this user",
+            k=8,
+            user_scope_id=user_scope_id,
+        )
+        cache_dir = Path(Config.APP_DIR) / "user_profile_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / f"{user_scope_id}.txt"
+        cache_file.write_text(summary or "", encoding="utf-8")
+    except Exception as e:
+        logger.warning("User profile summary refresh failed: %s", e)
 
 
 def run_auto_capture_sync(

@@ -262,7 +262,19 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
         if not user or not user.totp_secret or not user.totp_nonce:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="2FA not set up")
 
-        secret = decrypt_totp_secret(user.totp_secret, user.totp_nonce)
+        try:
+            secret = decrypt_totp_secret(user.totp_secret, user.totp_nonce)
+        except Exception:
+            # Wrong key (e.g. config/restart changed JWT secret) or corrupted data
+            user.totp_secret = None
+            user.totp_nonce = None
+            user.requires_2fa_setup = True
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="2FA was reset (e.g. after config or restart). Please log in again and set up 2FA with the new QR code.",
+            )
+
         if not verify_totp(secret, code):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid code")
 

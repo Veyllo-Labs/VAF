@@ -117,26 +117,32 @@ def run_headless_agent():
             task = tq.get()
             if task:
                 print(f"[Headless] Processing task for session {task.session_id}...")
-                try:
-                    get_web_interface().log(
-                        f"Processing task for session {task.session_id}...",
-                        level="info",
-                        source="System",
-                        session_id=task.session_id
-                    )
-                except Exception:
-                    pass
-                
+                # Do not log "Processing task..." to Web UI – redundant after every user message
+
+                # Set current user from task metadata before load_session_context so init_chat/build_prompt get User identity
+                meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                agent._current_user_scope_id = meta.get("user_scope_id")
+                agent._current_username = meta.get("username")
+
                 # Load Session Context
                 try:
                     agent.load_session_context(task.session_id)
-                    
+                    # Persist user to session metadata so load_session_context gets it on next load
+                    if meta.get("user_scope_id") is not None or meta.get("username") is not None:
+                        try:
+                            session = session_mgr.load(task.session_id)
+                            if meta.get("user_scope_id") is not None:
+                                session.metadata["user_scope_id"] = meta.get("user_scope_id")
+                            if meta.get("username") is not None:
+                                session.metadata["username"] = meta.get("username")
+                            session_mgr.save(session)
+                        except Exception:
+                            pass
                     # Sync internal session ID
                     if hasattr(agent, '_session_id') and agent._session_id != task.session_id:
                         agent._unregister_session()
                         agent._session_id = task.session_id
                         agent._register_session()
-                        
                 except Exception as e:
                     print(f"[Headless] Failed to load session context: {e}")
                     # Create fallback session?
@@ -294,9 +300,6 @@ def run_headless_agent():
                                 log_dir = _get_debug_log_dir()
                                 with open(log_dir / "callback_debug.txt", "a", encoding="utf-8") as f:
                                     f.write(f"[EMIT_ERROR] {e}\n")
-
-                    # Set current user scope so memory_store tool can use it
-                    agent._current_user_scope_id = (task.metadata or {}).get("user_scope_id") if getattr(task, "metadata", None) else None
 
                     response = agent.chat_step(
                         user_input=input_text,

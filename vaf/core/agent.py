@@ -1050,12 +1050,13 @@ class Agent:
         
         # Manually register Context Tools for Main Agent
         try:
-            from vaf.tools.context_tools import UpdateIntentTool, UpdateWorkingMemoryTool, RequestClarificationTool, MemoryStoreTool
+            from vaf.tools.context_tools import UpdateIntentTool, UpdateWorkingMemoryTool, RequestClarificationTool, MemorySaveTool, MemorySearchTool
             
             # UpdateIntent and UpdateWorkingMemory are for Main Agent
             self.tools["update_intent"] = UpdateIntentTool()
             self.tools["update_working_memory"] = UpdateWorkingMemoryTool()
-            self.tools["memory_store"] = MemoryStoreTool()
+            self.tools["memory_save"] = MemorySaveTool()
+            self.tools["memory_search"] = MemorySearchTool()
             
             # RequestClarification is strictly for Sub-Agents (via coder_only flag),
             # but we register it here so it's available in the system (even if filtered out later for Main Agent).
@@ -1489,8 +1490,12 @@ class Agent:
         self.prompt_manager = SystemPromptManager(list(self.tools.values()), model_name=self.model_display_name, agent_instance=self)
                 
         # Build initial prompt (Core + Base Rules)
-        # We pass self.filename to determine identity (VQ-1 vs Generic)
-        system_prompt = self.prompt_manager.build_prompt(self.filename)
+        # We pass self.filename to determine identity (VQ-1 vs Generic), and current user for User identity block
+        system_prompt = self.prompt_manager.build_prompt(
+            self.filename,
+            username=getattr(self, "_current_username", None),
+            user_scope_id=getattr(self, "_current_user_scope_id", None),
+        )
         
         # Optional: Load Project Context (VAF.md)
         # Limit to 25% of total context or max 12k chars (whichever is smaller)
@@ -1530,7 +1535,12 @@ class Agent:
         sm = SessionManager()
         try:
             session = sm.load(session_id)
-            
+            # Set current user from session metadata so build_prompt() can show User identity block (only override if session has them)
+            meta = getattr(session, "metadata", None) or {}
+            if meta.get("user_scope_id") is not None:
+                self._current_user_scope_id = meta.get("user_scope_id")
+            if meta.get("username") is not None:
+                self._current_username = meta.get("username")
             # Reset Context (System Prompt)
             self.init_chat() 
             
@@ -2150,9 +2160,11 @@ class Agent:
         """
         Single non-streaming LLM call for session compaction. Does not modify history.
         Returns raw reply text (e.g. MEMORY: "..." or NO_REPLY).
+        While this runs, empty-response filters in chat_step must not treat short/NO_REPLY as empty.
         """
         temp_history = [{"role": "user", "content": user_prompt}]
         content = ""
+        self._compaction_in_progress = True
         try:
             if self.use_server:
                 import requests
@@ -2188,6 +2200,8 @@ class Agent:
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning("Compaction LLM call failed: %s", e)
+        finally:
+            self._compaction_in_progress = False
         return (content or "").strip()
 
     def manage_context(self):
@@ -3116,7 +3130,7 @@ class Agent:
             f"Tools with descriptions:\n{tool_list_str}\n\n"
             f"{context_str}"
             f"User request: \"{user_input}\"\n\n"
-            f"CRITICAL: Reply with ONLY tool names from the list above (e.g. web_search, memory_store). No greeting, no 'How can I help', no explanation. Any other text is invalid.\n"
+            f"CRITICAL: Reply with ONLY tool names from the list above (e.g. web_search, memory_save). No greeting, no 'How can I help', no explanation. Any other text is invalid.\n"
             f"Tools:"
         )
 
@@ -3308,7 +3322,11 @@ class Agent:
             self.prompt_manager.analyze_context(user_input, language=lang)
             
             # Rebuild system prompt
-            new_prompt = self.prompt_manager.build_prompt(self.filename)
+            new_prompt = self.prompt_manager.build_prompt(
+                self.filename,
+                username=getattr(self, "_current_username", None),
+                user_scope_id=getattr(self, "_current_user_scope_id", None),
+            )
         
         # ------------------------------------------------------------------
         # Context Compression: Check threshold and compress if needed
@@ -3407,7 +3425,7 @@ class Agent:
             # Memory tools are ALWAYS included when we have a restricted set (so model can remember user/system).
             # Only skipped when Safety Net = ALL tools (would be redundant).
             if selected_tools:
-                for name in ("update_intent", "update_working_memory", "memory_store"):
+                for name in ("update_intent", "update_working_memory", "memory_search", "memory_save"):
                     if name in self.tools and name not in selected_tools:
                         selected_tools = list(selected_tools) + [name]
 
@@ -3498,8 +3516,16 @@ class Agent:
                     
                     # Prepare messages
                     prepared_messages = self._prepare_messages(self.history)
-                    if prepared_messages and memory_context and memory_context.strip():
-                        memory_msg = {"role": "system", "content": "## Memory context (relevant to this query)\n\nUse when relevant; you may cite briefly (e.g. from memory).\n\n" + memory_context.strip()}
+                    if prepared_messages:
+                        if memory_context and memory_context.strip():
+                            memory_msg = {"role": "system", "content": "## Memory context (relevant to this query)\n\nUse when relevant; you may cite briefly (e.g. from memory).\n\n" + memory_context.strip()}
+                        else:
+                            memory_msg = {"role": "system", "content": (
+                                "## Memory context (relevant to this query)\n\n"
+                                "(No memories found for this query.) "
+                                "Use this section to answer 'who am I?' or 'what do you remember?'; if none, say so and offer to remember. "
+                                "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
+                            )}
                         prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
                     # Disable tools if requested
                     current_tools = self.TOOLS if not disable_tools else None
@@ -3714,8 +3740,16 @@ class Agent:
                         # CRITICAL: Rebuild payload with current history (may have been compressed)
                         # Prepare messages for specific model quirks (e.g. Gemma)
                         prepared_messages = self._prepare_messages(self.history)
-                        if prepared_messages and memory_context and memory_context.strip():
-                            memory_msg = {"role": "system", "content": "## Memory context (relevant to this query)\n\nUse when relevant; you may cite briefly (e.g. from memory).\n\n" + memory_context.strip()}
+                        if prepared_messages:
+                            if memory_context and memory_context.strip():
+                                memory_msg = {"role": "system", "content": "## Memory context (relevant to this query)\n\nUse when relevant; you may cite briefly (e.g. from memory).\n\n" + memory_context.strip()}
+                            else:
+                                memory_msg = {"role": "system", "content": (
+                                    "## Memory context (relevant to this query)\n\n"
+                                    "(No memories found for this query.) "
+                                    "Use this section to answer 'who am I?' or 'what do you remember?'; if none, say so and offer to remember. "
+                                    "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
+                                )}
                             prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
                         # Disable tools if requested (forces text response)
                         current_tools = self.TOOLS if not disable_tools else None
@@ -4539,38 +4573,21 @@ class Agent:
                 continue
             
             # 2. Handle Empty / Think-Only Responses
-            # CRITICAL: First check if response is truly empty (BEFORE cleaning)
-            # This is for tool-intent detection - we need to check the original response
-            is_truly_empty = (not full_response) or (len(full_response.strip()) < 3)
-            
-            # Now perform cleaning for other purposes (empty response handler, etc.)
-            # A truly empty content means NO final answer was given to the user.
-            # We must strip XML tags, filler words, and common "empty" patterns.
-            # NOTE: For reasoning models (VQ-1, DeepSeek R1), content may be empty but reasoning_content
-            # contains the actual response. In this case, use reasoning as the content.
-            effective_content = full_content if full_content.strip() else full_reasoning
-            clean_content = re.sub(r'<[^>]*>', '', effective_content)  # Remove XML tags
-            clean_content = re.sub(r'```[\s\S]*?```', '', clean_content)  # Remove code blocks
-            clean_content = clean_content.replace(".", "").replace("\n", "").replace(":", "").strip()
-            
-            # Also strip common "empty answer" patterns
+            # CRITICAL: We must detect whether we received an ANSWER for the user, not just thinking.
+            # Some models output long reasoning (full_reasoning) but no final answer (full_content).
+            # Empty = no meaningful final answer – we do NOT count reasoning as the answer.
+            clean_final = re.sub(r'<[^>]*>', '', (full_content or ""))  # Remove XML (e.g. <think>)
+            clean_final = re.sub(r'```[\s\S]*?```', '', clean_final)  # Remove code blocks
+            clean_final = clean_final.replace(".", "").replace("\n", "").replace(":", "").strip()
             empty_patterns = ["answer", "antwort", "response", "here", "hier", "ok", "okay"]
-            temp_content = clean_content.lower()
+            temp_final = clean_final.lower()
             for pattern in empty_patterns:
-                temp_content = temp_content.replace(pattern, "")
-            temp_content = temp_content.strip()
+                temp_final = temp_final.replace(pattern, "")
+            temp_final = temp_final.strip()
+            # Has final answer = user-facing content (full_content only), not just thinking
+            has_final_answer = len(temp_final) >= 3
             
-            # Consider empty if: no final answer OR only filler words (< 3 real chars after cleaning)
-            # NOTE: This checks full_content (final answer), NOT full_reasoning (thinking)
-            # The model can think as much as it wants, but must provide a final answer
-            is_effectively_empty = len(temp_content) < 3
-            
-            # Empty Response Handler: Remove responses without final answer and restart from snapshot
-            # NO RETRY LIMITS - will loop until we get a response
-            # IMPORTANT: This removes assistant messages that have NO final answer (even if they have reasoning)
-            # CRITICAL: At this point, the stream is COMPLETE (finish_reason="stop" equivalent)
-            # We can immediately check for tool-intent without waiting, as the model has finished generating
-            # Empty Response Handler: Remove responses without final answer and restart from snapshot
+            # Empty Response Handler: No answer for the user (thinking only counts as empty)
             # NO RETRY LIMITS - will loop until we get a response
             # SKIP if user stopped generation manually
             if _generation_stopped:
@@ -4583,9 +4600,22 @@ class Agent:
                     })
                 return full_content.strip() or "[Generation stopped by user]"
 
-            if (not full_response or is_effectively_empty) and not tool_calls_detected:
+            # Skip empty-response filter during compaction (every ~15 msgs); compaction reply is short (NO_REPLY / MEMORY:)
+            if (not has_final_answer) and not tool_calls_detected and not getattr(self, "_compaction_in_progress", False):
                 UI.event("System", "Empty response detected. Applying snapshot and retry...", style="warning")
-                
+                # Ensure Web UI shows retry message (UI.event may be no-op in headless/Docker)
+                try:
+                    from vaf.core.web_interface import get_web_interface
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    get_web_interface().log(
+                        "Empty response detected. Applying snapshot and retry...",
+                        level="warning",
+                        source="System",
+                        session_id=get_current_session_id(),
+                    )
+                except Exception:
+                    pass
+
                 # Check for tool results that occurred during this turn (after original snapshot)
                 # If we executed tools but got no final answer, we must PRESERVE the tools!
                 # Otherwise we loop forever: Call Tool -> Empty Ans -> Reset -> Call Tool -> ...
@@ -4667,8 +4697,8 @@ class Agent:
                 MAX_RETRIES_BEFORE_EMERGENCY = 10
                 HARD_LIMIT = 15
 
-                # Wait 2 seconds before retry to avoid hammering the model (use global time module)
-                time.sleep(2)
+                # Wait 1 second before retry to avoid hammering the model (use global time module)
+                time.sleep(1)
 
                 if empty_retry_count == MAX_RETRIES_BEFORE_EMERGENCY:
                     UI.event("System", f"High retry count ({empty_retry_count}) - Triggering Emergency Context Clearing", style="bold yellow")
@@ -4858,8 +4888,9 @@ class Agent:
         for pattern in ["answer", "antwort", "response", "here", "hier", "ok", "okay"]:
             temp_final = temp_final.replace(pattern, "")
         is_final_empty = len(temp_final.strip()) < 3
-        
-        if is_final_empty and not tool_calls_detected:
+
+        # Skip final empty check during compaction (short NO_REPLY/MEMORY: replies are expected)
+        if is_final_empty and not tool_calls_detected and not getattr(self, "_compaction_in_progress", False):
              
              if not auto_retry:
                  # NUCLEAR OPTION: Rollback and Try Fresh
@@ -5022,7 +5053,7 @@ class Agent:
         try:
             if name in self.tools:
                 tool_args = dict(args) if args else {}
-                if name == "memory_store":
+                if name in ("memory_save", "memory_search"):
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 result = self.tools[name].run(**tool_args)
             else:

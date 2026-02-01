@@ -576,6 +576,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     
                     user_context = {
                         "user_id": payload.get("sub"),
+                        "user_scope_id": payload.get("user_scope_id"),
                         "username": payload.get("username"),
                         "role": payload.get("role"),
                         "session_id": payload.get("session_id"),
@@ -608,8 +609,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     
     try:
         await manager.connect(websocket)
-        if user_context and user_context.get("user_id"):
-            manager.set_connection_user(websocket, user_context.get("user_id"))
+        # Store user_scope_id for RAG/task metadata (memory_save, memory search). Fallback to user_id if no scope in token.
+        if user_context and (user_context.get("user_scope_id") or user_context.get("user_id")):
+            manager.set_connection_user(
+                websocket,
+                user_context.get("user_scope_id") or user_context.get("user_id"),
+                username=user_context.get("username"),
+            )
         os.environ["VAF_WEBUI_ACTIVE"] = "1"
         print(f"[WebSocket] Connected! Active: {len(manager.active_connections)}")
         log("API", f"WebSocket connected! Active: {len(manager.active_connections)}")
@@ -1131,9 +1137,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if not session_id:
                             # Fallback if not subscribed yet (should be rare)
                             session_id = "web-default"
-                        # user_scope_id is required for correct RAG scope (Auto-Recall and memory_store)
+                        # user_scope_id is required for correct RAG scope (Auto-Recall and memory_save)
                         user_scope_id = manager.get_connection_user(websocket)
-                        metadata = {"user_scope_id": user_scope_id} if user_scope_id else {}
+                        username = manager.get_connection_username(websocket)
+                        metadata = {}
+                        if user_scope_id:
+                            metadata["user_scope_id"] = user_scope_id
+                        if username:
+                            metadata["username"] = username
                         # Add to queue
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)
                         

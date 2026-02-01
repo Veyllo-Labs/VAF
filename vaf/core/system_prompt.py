@@ -8,7 +8,7 @@ The SystemPromptManager provides:
 - Tool documentation injection
 - Dynamic context adjustment per conversation turn
 """
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 import re
 import os
 import logging
@@ -16,6 +16,7 @@ from pathlib import Path
 from datetime import datetime
 from vaf.core.main_persistence import MainPersistenceManager
 from vaf.core.platform import Platform
+from vaf.core.config import Config
 
 
 class SystemPromptManager:
@@ -353,13 +354,20 @@ Sub-agents run asynchronously - results arrive later
             ],
         }
     
-    def build_prompt(self, filename: str = None) -> str:
+    def build_prompt(
+        self,
+        filename: str = None,
+        username: Optional[str] = None,
+        user_scope_id: Optional[Union[str, Any]] = None,
+    ) -> str:
         """
         Build the complete system prompt.
-        
+
         Args:
             filename: Script filename (used to determine VQ-1 vs Generic identity)
-            
+            username: Current user's username (for identity.json and User identity block)
+            user_scope_id: Current user's scope ID (for cached profile summary from RAG)
+
         Returns:
             Complete system prompt string
         """
@@ -432,11 +440,41 @@ Sub-agents run asynchronously - results arrive later
         parts.append("""
 ## Memory & What You Remember (RAG)
 You have **long-term memory** (RAG). Use it to remember things about the user and the system:
-- **memory_store**: Save facts about the user, preferences, decisions, or context. Stored content is searchable and injected automatically in future turns.
-- When the user asks "what do you remember about me?" or "was hast du dir über mich gemerkt?", use the **Memory context** injected in this turn (if any) and answer from that. If none is shown, say so and offer to remember things from now on.
-- **add_memory** / **update_working_memory**: Short-term notes and plan. **memory_store**: Long-term facts about the user/system (RAG). Use both; memory_store is for persistent personal/system facts.
+- **memory_search**: Search memory for facts about the user. Use when the user asks "who am I?", "what do you remember about me?", "was hast du über mich gespeichert?", or similar. Returns snippets or "No memories found". Do NOT use memory_save for lookup.
+- **memory_save**: Save NEW facts only when the user explicitly asks to remember something (e.g. "remember that...", "merke dir..."). Do NOT use for "who am I?" or "what do you remember?" – use memory_search or the **Memory context** block below for that.
+- When the user asks "who am I?" or "what do you remember?", use the **Memory context** injected in this turn (if any) or call **memory_search**; then answer from that. If none is shown, say so and offer to remember things from now on.
+- **add_memory** / **update_working_memory**: Short-term notes and plan. **memory_save**: Long-term facts (save only). **memory_search**: Look up facts. Use both; memory_save is for saving, memory_search for looking up.
 """)
-        
+
+        # User identity (current user): static identity + cached RAG summary (refreshed after compaction)
+        if username or user_scope_id:
+            user_identity_parts = ["\n## User identity (current user)\n"]
+            if username:
+                try:
+                    from vaf.auth.user_workspace import get_user_workspace
+                    ws = get_user_workspace(username)
+                    identity = ws.get_identity()
+                    user_identity_parts.append(f"- [NAME] {identity.get('name', username)}")
+                    if identity.get("preferred_language"):
+                        user_identity_parts.append(f"- [LANGUAGE] {identity.get('preferred_language')}")
+                except Exception:
+                    user_identity_parts.append(f"- [NAME] {username}")
+            if user_scope_id:
+                try:
+                    scope_str = str(user_scope_id)
+                    cache_dir = Path(Config.APP_DIR) / "user_profile_cache"
+                    cache_file = cache_dir / f"{scope_str}.txt"
+                    if cache_file.exists():
+                        cached = cache_file.read_text(encoding="utf-8").strip()
+                        if cached:
+                            user_identity_parts.append("\nKnown facts from memory:\n")
+                            user_identity_parts.append(cached)
+                    else:
+                        user_identity_parts.append("\nKnown facts from memory: (None yet)")
+                except Exception:
+                    user_identity_parts.append("\nKnown facts from memory: (unavailable)")
+            parts.append("\n".join(user_identity_parts))
+
         # ═══════════════════════════════════════════════════════════════════════
         # 2. CURRENT TIME & DATE
         # ═══════════════════════════════════════════════════════════════════════

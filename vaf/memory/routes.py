@@ -83,6 +83,7 @@ class SemanticSearchRequest(BaseModel):
 class MemoryResponse(BaseModel):
     """Response model for a single memory."""
     id: str
+    user_scope_id: Optional[str] = None
     metadata: Dict[str, Any]
     parent_id: Optional[str]
     created_at: Optional[str]
@@ -206,14 +207,15 @@ async def create_memory(
                 auto_connect=request.auto_connect,
                 user_scope_id=user_scope_id
             )
-            
+            chunk_count = await pipeline.get_chunk_count(memory.id)
             return MemoryResponse(
                 id=str(memory.id),
+                user_scope_id=str(memory.user_scope_id) if memory.user_scope_id else None,
                 metadata=memory.meta or {},
                 parent_id=str(memory.parent_id) if memory.parent_id else None,
                 created_at=memory.created_at.isoformat() if memory.created_at else None,
                 updated_at=memory.updated_at.isoformat() if memory.updated_at else None,
-                chunk_count=len(memory.chunks) if memory.chunks else 0
+                chunk_count=chunk_count
             )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -312,14 +314,15 @@ async def update_memory(memory_id: str, request: MemoryUpdate):
                 content=request.content,
                 metadata=request.metadata
             )
-            
+            chunk_count = await pipeline.get_chunk_count(memory.id)
             return MemoryResponse(
                 id=str(memory.id),
+                user_scope_id=str(memory.user_scope_id) if memory.user_scope_id else None,
                 metadata=memory.meta or {},
                 parent_id=str(memory.parent_id) if memory.parent_id else None,
                 created_at=memory.created_at.isoformat() if memory.created_at else None,
                 updated_at=memory.updated_at.isoformat() if memory.updated_at else None,
-                chunk_count=len(memory.chunks) if memory.chunks else 0
+                chunk_count=chunk_count
             )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

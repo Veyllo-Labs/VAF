@@ -21,9 +21,10 @@ import { cn } from '@/lib/utils';
 interface MemoryDetailPanelProps {
     className?: string;
     onClose?: () => void;
+    onToggleExpand?: (expanded: boolean) => void;
 }
 
-export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPanelProps) {
+export default function MemoryDetailPanel({ className, onClose, onToggleExpand }: MemoryDetailPanelProps) {
     const { 
         selectedMemory, 
         selectMemory,
@@ -39,6 +40,12 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
     const [editTags, setEditTags] = useState('');
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [expanded, setExpanded] = useState(true);
+
+    const toggleExpand = () => {
+        const next = !expanded;
+        setExpanded(next);
+        onToggleExpand?.(next);
+    };
     
     // Update local state when selected memory changes
     useEffect(() => {
@@ -48,6 +55,8 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
             setEditTags(selectedMemory.metadata?.tags?.join(', ') || '');
             setIsEditing(false);
             setShowDeleteConfirm(false);
+            setExpanded(true);
+            onToggleExpand?.(true);
         }
     }, [selectedMemory]);
     
@@ -85,6 +94,11 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
                 <div className="text-center text-gray-500">
                     <FileText className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                     <p className="text-sm">Select a memory to view details</p>
+                    {error && (
+                        <p className="mt-2 text-sm text-amber-600" title={error}>
+                            {error}
+                        </p>
+                    )}
                 </div>
             </div>
         );
@@ -96,14 +110,14 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
                 <div className="flex items-center gap-2">
                     <button
-                        onClick={() => setExpanded(!expanded)}
+                        onClick={toggleExpand}
                         className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                         title={expanded ? 'Collapse' : 'Expand'}
                     >
                         {expanded ? (
-                            <ChevronDown className="w-4 h-4 text-gray-500" />
+                            <ChevronDown className="w-4 h-4 text-gray-50" />
                         ) : (
-                            <ChevronUp className="w-4 h-4 text-gray-500" />
+                            <ChevronUp className="w-4 h-4 text-gray-50" />
                         )}
                     </button>
                     <h3 className="font-medium text-gray-800">Memory Details</h3>
@@ -175,13 +189,35 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
             
             {/* Content */}
             {expanded && (
-                <div className="p-4 space-y-4 max-h-[500px] overflow-y-auto">
+                <div className="flex-1 p-4 space-y-4 overflow-y-auto">
                     {/* Error display */}
                     {error && (
                         <div className="p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
                             {error}
                         </div>
                     )}
+
+                    {/* IDs (Memory ID and User scope – for verifying RAG scope consistency) */}
+                    <div className="grid grid-cols-1 gap-3 pb-3 border-b border-gray-200">
+                        <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">
+                                Memory ID
+                            </label>
+                            <p className="text-xs font-mono text-gray-700 break-all" title={selectedMemory.id}>
+                                {selectedMemory.id}
+                            </p>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">
+                                User scope ID
+                            </label>
+                            <p className="text-xs font-mono text-gray-700 break-all" title={selectedMemory.user_scope_id ?? '(none)'}>
+                                {selectedMemory.user_scope_id && selectedMemory.user_scope_id !== ''
+                                    ? selectedMemory.user_scope_id
+                                    : '(none – global scope)'}
+                            </p>
+                        </div>
+                    </div>
                     
                     {/* Title */}
                     <div>

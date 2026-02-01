@@ -73,7 +73,7 @@ async def _run_schema_migrations(engine: AsyncEngine) -> None:
 async def get_engine() -> AsyncEngine:
     """
     Get or create the async database engine for the current event loop.
-    Cached per-loop so tools (e.g. memory_store) running in another thread's loop get their own engine.
+    Cached per-loop so tools (e.g. memory_save) running in another thread's loop get their own engine.
     """
     loop = asyncio.get_running_loop()
     if loop not in _engine_by_loop:

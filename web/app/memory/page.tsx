@@ -201,6 +201,7 @@ export default function MemoryPage() {
     
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [isInitialized, setIsInitialized] = useState(false);
+    const [detailsExpanded, setDetailsExpanded] = useState(true);
     
     // Initialize on mount
     useEffect(() => {
@@ -333,8 +334,12 @@ export default function MemoryPage() {
                         />
                         {selectedNodeId && (
                             <MemoryDetailPanel 
-                                className="h-[40%] shrink-0"
-                                onClose={() => {}}
+                                className={cn(
+                                    "shrink-0 flex flex-col transition-all duration-300",
+                                    detailsExpanded ? "h-[60%]" : "h-[52px]"
+                                )}
+                                onToggleExpand={setDetailsExpanded}
+                                onClose={() => setDetailsExpanded(true)}
                             />
                         )}
                     </div>

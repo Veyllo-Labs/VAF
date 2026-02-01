@@ -15,7 +15,7 @@ import {
     X, Globe, Cpu, Volume2, Monitor, Shield, Save, RotateCcw,
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch,
     Brain, Database, Link2, MessageSquare, Network, Users, Lock, Server, Laptop, Smartphone,
-    Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2
+    Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig } from './connections';
@@ -34,6 +34,8 @@ export interface SettingsModalProps {
     workflows?: Array<{ id: string; name: string; description: string; steps: number }>;
     automations?: Array<{ id: string; name: string; description: string; frequency: string; time: string; enabled: boolean }>;
     currentUser?: { id: string; username: string; role: string };
+    onLogout?: () => void;
+    apiBase?: string;
 }
 
 const CATEGORIES = [
@@ -64,7 +66,7 @@ const WAKE_WORDS = [
     { value: 'hey_rhasspy', label: 'Hey Rhasspy' },
 ];
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], automations = [], currentUser }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], automations = [], currentUser, onLogout, apiBase }: SettingsModalProps) {
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [activeTab, setActiveTab] = useState('general');
     const [changed, setChanged] = useState(false);
@@ -98,6 +100,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // Local network: real host/port from browser (no dummy)
     const [displayHost, setDisplayHost] = useState('');
     const [displayPort, setDisplayPort] = useState('3000');
+
+    // Logout flow
+    const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+    const [isLoggingOut, setIsLoggingOut] = useState(false);
+    const [logoutBarProgress, setLogoutBarProgress] = useState(0);
 
     // Network Topology: server node only; devices from API when available
     const [networkNodes, setNetworkNodes, onNetworkNodesChange] = useNodesState([
@@ -306,6 +313,36 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isOpen, codeModal, workflowModal, showMemoryModal, showToolsModal, showWorkflowsModal, onClose]);
+
+    const handleLogoutYes = useCallback(() => {
+        setShowLogoutConfirm(false);
+        setLogoutBarProgress(0);
+        setIsLoggingOut(true);
+        const base = apiBase || (typeof window !== 'undefined' ? '' : 'http://localhost:8001');
+        fetch(`${base}/api/auth/logout`, { method: 'POST', credentials: 'include' })
+            .then(() => {
+                setTimeout(() => {
+                    setIsLoggingOut(false);
+                    setLogoutBarProgress(0);
+                    onLogout?.();
+                }, 1500);
+            })
+            .catch(() => {
+                setIsLoggingOut(false);
+                setLogoutBarProgress(0);
+                onLogout?.();
+            });
+    }, [apiBase, onLogout]);
+
+    // Animate logout progress bar 0 → 100% over 1500ms while token is invalidated
+    useEffect(() => {
+        if (!isLoggingOut) return;
+        setLogoutBarProgress(0);
+        const start = requestAnimationFrame(() => {
+            setLogoutBarProgress(100);
+        });
+        return () => cancelAnimationFrame(start);
+    }, [isLoggingOut]);
 
     if (!isOpen) return null;
 
@@ -575,6 +612,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             {cat.label}
                         </button>
                     )})}
+
+                    {/* Log out – bottom left (only when logged in) */}
+                    {currentUser && (
+                        <div className="mt-auto pt-4 border-t border-gray-200">
+                            <button
+                                type="button"
+                                onClick={() => setShowLogoutConfirm(true)}
+                                className="flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-all text-gray-600 hover:bg-red-50 hover:text-red-600 w-full"
+                            >
+                                <LogOut size={18} />
+                                Log out
+                            </button>
+                        </div>
+                    )}
                 </div>
 
                 {/* Content Area */}
@@ -1370,6 +1421,46 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         </button>
                     </div>
                 </div>
+
+                {/* Logout confirm / Have a nice day overlay */}
+                {(showLogoutConfirm || isLoggingOut) && (
+                    <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/95 backdrop-blur-sm rounded-2xl">
+                        {showLogoutConfirm && (
+                            <div className="bg-white rounded-2xl border border-gray-200 shadow-xl p-6 w-full max-w-sm">
+                                <p className="text-sm font-medium text-gray-800 text-center mb-6">
+                                    Are you sure you want to log out?
+                                </p>
+                                <div className="flex gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowLogoutConfirm(false)}
+                                        className="flex-1 py-2.5 rounded-xl font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+                                    >
+                                        No
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleLogoutYes}
+                                        className="flex-1 py-2.5 rounded-xl font-medium bg-gray-900 hover:bg-gray-800 text-white transition-colors"
+                                    >
+                                        Yes
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                        {isLoggingOut && (
+                            <div className="bg-white rounded-2xl border border-gray-200 shadow-xl p-8 w-full max-w-sm flex flex-col items-center gap-4">
+                                <p className="text-lg font-medium text-gray-800">Have a nice day</p>
+                                <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                    <div
+                                        className="h-full bg-gray-900 rounded-full transition-[width] duration-[1500ms] ease-out"
+                                        style={{ width: `${logoutBarProgress}%` }}
+                                    />
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Tools Modal */}

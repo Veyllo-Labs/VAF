@@ -92,6 +92,7 @@ class Memory(Base):
         """Convert to dictionary for API responses."""
         result = {
             "id": str(self.id),
+            "user_scope_id": str(self.user_scope_id) if self.user_scope_id else None,
             "metadata": self.meta,  # Return as 'metadata' in API for consistency
             "parent_id": str(self.parent_id) if self.parent_id else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,

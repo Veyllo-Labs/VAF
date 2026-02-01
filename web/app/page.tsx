@@ -1829,7 +1829,7 @@ export default function VAFDashboard() {
                             <div className="w-6 flex justify-center shrink-0">
                                 <Settings size={20} />
                             </div>
-                            <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap">Settings</span>
+                            <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap text-sm">Settings</span>
                         </div>
                     </div>
                 </aside>
@@ -2197,6 +2197,11 @@ export default function VAFDashboard() {
                 workflows={workflows}
                 automations={automations}
                 currentUser={currentUser}
+                onLogout={() => {
+                    setIsSettingsOpen(false);
+                    router.replace('/login');
+                }}
+                apiBase={getApiBase()}
             />
         </main>
     );

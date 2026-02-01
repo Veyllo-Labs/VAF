@@ -231,5 +231,5 @@ Plan: {json.dumps(memory.get('plan', []), ensure_ascii=False)}
 
 Use the update_working_memory tool to save notes and plan; they persist across turns and appear here. Use notes/plan to set the full list, or add_notes/add_plan to append without replacing.
 
-Long-term memories about the user/system (from memory_store/RAG) are injected as "Memory context" when relevant to the query; use them to answer questions like "what do you remember about me?" and use memory_store to save new facts.
+Long-term memories about the user/system (from memory_save/RAG) are injected as "Memory context" when relevant to the query; use them to answer questions like "what do you remember about me?" and use memory_save to save new facts.
 """

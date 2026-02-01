@@ -223,9 +223,9 @@ export default function MemoryPage() {
     };
     
     return (
-        <div className="min-h-screen bg-gray-50">
+        <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
             {/* Header */}
-            <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
+            <header className="bg-white border-b border-gray-200 shrink-0 z-40">
                 <div className="max-w-screen-2xl mx-auto px-4 py-3">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4">
@@ -294,7 +294,7 @@ export default function MemoryPage() {
             
             {/* Error Banner (DESIGN: status error) */}
             {error && (
-                <div className="bg-red-100 border-b border-red-500 px-4 py-3">
+                <div className="bg-red-100 border-b border-red-500 px-4 py-3 shrink-0">
                     <div className="max-w-screen-2xl mx-auto flex items-center justify-between">
                         <div className="flex items-center gap-2 text-red-600">
                             <AlertTriangle className="w-5 h-5 flex-shrink-0" />
@@ -311,8 +311,8 @@ export default function MemoryPage() {
             )}
             
             {/* Main Content: Graph links, Memory Search komplett rechts */}
-            <main className="w-full px-4">
-                <div className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-140px)]">
+            <main className="flex-1 w-full p-4 overflow-hidden">
+                <div className="flex flex-col lg:flex-row gap-4 h-full">
                     {/* Graph – nimmt restlichen Platz */}
                     <div className="flex-1 min-w-0 h-full">
                         <MemoryGraph 
@@ -326,14 +326,14 @@ export default function MemoryPage() {
                     {/* Right Panel – feste Breite, am rechten Rand */}
                     <div className="lg:w-[420px] lg:flex-shrink-0 flex flex-col gap-4 h-full overflow-hidden">
                         <RagQueryPanel 
-                            className="flex-1 min-h-[300px]"
+                            className="flex-1 min-h-0"
                             onSourceClick={(memoryId) => {
                                 // Highlight and select in graph
                             }}
                         />
                         {selectedNodeId && (
                             <MemoryDetailPanel 
-                                className="max-h-[40%]"
+                                className="h-[40%] shrink-0"
                                 onClose={() => {}}
                             />
                         )}

@@ -28,7 +28,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { useMemoryStore, MemoryNode, MemoryEdge } from './stores/memoryStore';
-import { FileText, Tag, Calendar, Link2 } from 'lucide-react';
+import { FileText, Tag, Calendar, Link2, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // Custom Memory Node Component
@@ -154,7 +154,9 @@ export default function MemoryGraph({ className, onNodeSelect }: MemoryGraphProp
         selectedNodeId,
         setSelectedNodeId,
         selectMemory,
-        isLoading 
+        isLoading,
+        stats,
+        fetchGraph,
     } = useMemoryStore();
     
     // Convert store nodes to ReactFlow format
@@ -231,14 +233,35 @@ export default function MemoryGraph({ className, onNodeSelect }: MemoryGraphProp
     }
     
     if (nodes.length === 0) {
+        const graphFailed = (stats?.memories ?? 0) > 0;
         return (
             <div className={cn('flex items-center justify-center bg-gray-50 rounded-xl', className)}>
                 <div className="text-center p-8">
                     <FileText className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                    <h3 className="text-lg font-medium text-gray-700 mb-1">No memories yet</h3>
-                    <p className="text-sm text-gray-500">
-                        Create your first memory to see the graph
-                    </p>
+                    {graphFailed ? (
+                        <>
+                            <h3 className="text-lg font-medium text-gray-700 mb-1">Graph couldn&apos;t load memories</h3>
+                            <p className="text-sm text-gray-500 mb-4">
+                                Check the connection and try Refresh.
+                            </p>
+                            <button
+                                type="button"
+                                onClick={() => fetchGraph()}
+                                disabled={isLoading}
+                                className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                            >
+                                <RefreshCw className={cn('w-4 h-4', isLoading && 'animate-spin')} />
+                                Refresh
+                            </button>
+                        </>
+                    ) : (
+                        <>
+                            <h3 className="text-lg font-medium text-gray-700 mb-1">No memories yet</h3>
+                            <p className="text-sm text-gray-500">
+                                Create your first memory to see the graph
+                            </p>
+                        </>
+                    )}
                 </div>
             </div>
         );

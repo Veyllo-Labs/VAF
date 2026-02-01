@@ -25,9 +25,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Global engine and session factory
-_engine: Optional[AsyncEngine] = None
-_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+# Engine and session factory per event loop (avoids "attached to a different loop" when tools run in another thread)
+_engine_by_loop: dict = {}
+_session_factory_by_loop: dict = {}
 
 
 def get_database_url() -> str:
@@ -47,17 +47,38 @@ def get_database_url() -> str:
     return url
 
 
+async def _run_schema_migrations(engine: AsyncEngine) -> None:
+    """
+    Add missing columns/indexes to existing DBs (e.g. user_scope_id added later).
+    Safe to run multiple times (IF NOT EXISTS / IF NOT EXISTS).
+    """
+    try:
+        async with engine.begin() as conn:
+            # PostgreSQL: add user_scope_id if table exists but column was added in a later model
+            await conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'memories')
+                       AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'memories' AND column_name = 'user_scope_id')
+                    THEN
+                        ALTER TABLE memories ADD COLUMN user_scope_id UUID NULL;
+                        CREATE INDEX ix_memories_user_scope_id ON memories (user_scope_id);
+                    END IF;
+                END $$;
+            """))
+    except Exception as e:
+        logger.warning("Schema migration (user_scope_id) skipped or failed: %s", e)
+
+
 async def get_engine() -> AsyncEngine:
     """
-    Get or create the async database engine.
-    
-    Uses connection pooling for performance.
+    Get or create the async database engine for the current event loop.
+    Cached per-loop so tools (e.g. memory_store) running in another thread's loop get their own engine.
     """
-    global _engine
-    
-    if _engine is None:
+    loop = asyncio.get_running_loop()
+    if loop not in _engine_by_loop:
         url = get_database_url()
-        _engine = create_async_engine(
+        _engine_by_loop[loop] = create_async_engine(
             url,
             echo=Config.get("memory_db_echo", False),
             pool_size=5,
@@ -65,24 +86,22 @@ async def get_engine() -> AsyncEngine:
             pool_timeout=30,
             pool_recycle=1800,  # Recycle connections after 30 minutes
         )
-    
-    return _engine
+        await _run_schema_migrations(_engine_by_loop[loop])
+    return _engine_by_loop[loop]
 
 
 async def get_session_factory() -> async_sessionmaker[AsyncSession]:
-    """Get or create the async session factory."""
-    global _session_factory
-    
-    if _session_factory is None:
+    """Get or create the async session factory for the current event loop."""
+    loop = asyncio.get_running_loop()
+    if loop not in _session_factory_by_loop:
         engine = await get_engine()
-        _session_factory = async_sessionmaker(
+        _session_factory_by_loop[loop] = async_sessionmaker(
             engine,
             class_=AsyncSession,
             expire_on_commit=False,
             autoflush=False,
         )
-    
-    return _session_factory
+    return _session_factory_by_loop[loop]
 
 
 @asynccontextmanager
@@ -173,14 +192,16 @@ async def check_db_connection() -> bool:
 
 
 async def close_db():
-    """Close database connections and clean up."""
-    global _engine, _session_factory
-    
-    if _engine:
-        await _engine.dispose()
-        _engine = None
-        _session_factory = None
-        logger.info("Database connections closed")
+    """Close database connections and clean up (all loops)."""
+    global _engine_by_loop, _session_factory_by_loop
+    for loop, engine in list(_engine_by_loop.items()):
+        try:
+            await engine.dispose()
+        except Exception:
+            pass
+    _engine_by_loop.clear()
+    _session_factory_by_loop.clear()
+    logger.info("Database connections closed")
 
 
 async def get_db_stats() -> dict:

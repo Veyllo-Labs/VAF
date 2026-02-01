@@ -296,7 +296,7 @@ class Agent:
             return self._tokenizer_instance
 
         try:
-            from llama_cpp import Llama
+            from llama_cpp import Llama  # type: ignore[import-untyped]
         except ImportError:
             # llama-cpp-python not installed - this is OK when using server mode
             # Return None and let caller handle it gracefully
@@ -1369,6 +1369,8 @@ class Agent:
         if is_py313 or is_mac or self.config.get("force_server", False):
             UI.event("System", f"Initializing Standalone Server (Py3.13 / Mac / GPU Mode)...", style="warning")
             # If the server is already running (or still loading), reuse it to avoid duplicates.
+            # CRITICAL: When Tray is running, it starts the server on activity. Wait for it first
+            # so we never start a SECOND llama-server (would crash PC / double VRAM).
             try:
                 response = requests.get("http://127.0.0.1:8080/health", timeout=1)
                 if response.status_code in (200, 503):
@@ -1378,6 +1380,18 @@ class Agent:
                     return
             except Exception:
                 pass
+            # Wait up to 30s for Tray (or another process) to start the server before we start ourselves.
+            for _ in range(30):
+                try:
+                    r = requests.get("http://127.0.0.1:8080/health", timeout=2)
+                    if r.status_code in (200, 503):
+                        self.server = ServerManager()
+                        self.use_server = True
+                        UI.event("System", "Reusing existing HTTP backend on :8080 (waited).", style="dim")
+                        return
+                except Exception:
+                    pass
+                time.sleep(1)
             self.server = ServerManager()
             if self.server.start_server(self.model_path, n_gpu_layers=n_gpu, n_ctx=n_ctx):
                 self.use_server = True
@@ -1393,9 +1407,9 @@ class Agent:
             else:
                 UI.error("Server backend failed. Falling back to internal library (CPU).")
         
-        # Fallback to Local Library
+        # Fallback to Local Library (optional dep: pip install llama-cpp-python)
         try:
-            from llama_cpp import Llama
+            from llama_cpp import Llama  # type: ignore[import-untyped]
         except ImportError:
             UI.error("llama-cpp-python not found. Run 'vaf install-gpu' to fix.")
             sys.exit(1)
@@ -2253,8 +2267,8 @@ class Agent:
             
             content = ""
             if self.use_server:
-                 # Sub-Agent Mode: Full thinking capacity with 120s timeout
-                 payload = {"messages": messages, "max_tokens": 1024, "temperature": 0.2}
+                 # Router-style: short output only (number), no chat
+                 payload = {"messages": messages, "max_tokens": 32, "temperature": 0.0}
                  try:
                      res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=120).json()
                      content = res['choices'][0]['message']['content']
@@ -3050,12 +3064,15 @@ class Agent:
         tool_list_str = "\n".join(tool_info)
 
         # 2. Build the prompt for the router WITH CONTEXT
-        # NOTE: For reasoning models, we need to be very direct to avoid long thinking
+        # CRITICAL: Router must NEVER chat - only output tool names or nothing. No greeting, no explanation.
+        tool_names_list = ", ".join(sorted(self.tools.keys()))
         prompt = (
-            f"Tool Router - select tools for user request. Output ONLY tool names, comma-separated. No explanation.\n\n"
-            f"Tools:\n{tool_list_str}\n\n"
+            f"You are a tool router. Your ONLY output must be a comma-separated list of tool names from this exact list, or nothing.\n"
+            f"Allowed names: {tool_names_list}\n\n"
+            f"Tools with descriptions:\n{tool_list_str}\n\n"
             f"{context_str}"
-            f"Request: \"{user_input}\"\n\n"
+            f"User request: \"{user_input}\"\n\n"
+            f"CRITICAL: Reply with ONLY tool names from the list above (e.g. web_search, memory_store). No greeting, no 'How can I help', no explanation. Any other text is invalid.\n"
             f"Tools:"
         )
 
@@ -3097,7 +3114,7 @@ class Agent:
                      output = self.llm.create_chat_completion(
                          messages=messages,
                          max_tokens=1224,
-                         temperature=0.1
+                         temperature=0.0
                      )
                      selected_tools_str = output['choices'][0]['message']['content']
                 elif self.api_backend:
@@ -3105,7 +3122,7 @@ class Agent:
                     response_chunks = list(self.api_backend.chat_completion(
                         messages=messages,
                         max_tokens=1224,
-                        temperature=0.1,
+                        temperature=0.0,
                         stream=False
                     ))
                     selected_tools_str = "".join(str(c) for c in response_chunks)
@@ -3141,16 +3158,25 @@ class Agent:
         # Then remove common prefixes
         clean_str = re.sub(r'^(answer|result|selected|tools|relevant|output):\s*', '', clean_str, flags=re.IGNORECASE).strip()
         tool_names = [name.strip() for name in clean_str.split(',') if name.strip()]
+        # Only accept parsed tokens that are actual tool names (never show chat as "LLM-based")
+        valid_from_llm = [n for n in tool_names if n in self.tools]
+        # Fallback: if LLM chatted instead of listing, scan response for tool name substrings
+        if not valid_from_llm and clean_str:
+            for t in sorted(self.tools.keys(), key=len, reverse=True):
+                if t in clean_str and t not in valid_from_llm:
+                    valid_from_llm.append(t)
         
         from vaf.cli.ui import UI
         if forced_tools:
             UI.event("Router", f"Script-based: {', '.join(forced_tools)}", style="dim")
-        if tool_names:
-            UI.event("Router", f"LLM-based: {', '.join(tool_names)}", style="dim")
+        if valid_from_llm:
+            UI.event("Router", f"LLM-based: {', '.join(valid_from_llm)}", style="dim")
+        elif tool_names and not valid_from_llm:
+            UI.event("Router", "No tools selected (Router response was not a valid tool list)", style="dim")
         elif not forced_tools:
             UI.event("Router", "No tools selected", style="dim")
         
-        combined_tools = set(tool_names) | forced_tools
+        combined_tools = set(valid_from_llm) | forced_tools
         valid_tools = [name for name in combined_tools if name in self.tools]
         
         return valid_tools
@@ -3333,6 +3359,13 @@ class Agent:
                 and "list_tools" not in selected_tools
             ):
                 selected_tools = list(selected_tools) + ["list_tools"]
+
+            # Memory tools are ALWAYS included when we have a restricted set (so model can remember user/system).
+            # Only skipped when Safety Net = ALL tools (would be redundant).
+            if selected_tools:
+                for name in ("update_intent", "update_working_memory", "memory_store"):
+                    if name in self.tools and name not in selected_tools:
+                        selected_tools = list(selected_tools) + [name]
 
             if selected_tools:
                 UI.event("Router", f"Final tools: {', '.join(selected_tools)}", style="dim")
@@ -3563,7 +3596,8 @@ class Agent:
                                     stream_callback(fallback_text)
                         except Exception as e:
                             UI.error(f"API Backend Error (fallback): {e}")
-                            return
+                            # Do not return: let execution continue so the empty-response
+                            # handler runs (cooldown + retry) instead of exiting chat_step.
 
                     # POST-LOOP: Convert accumulator to list
                     for idx, tc_data in sorted(tool_call_accumulator.items()):
@@ -4589,8 +4623,7 @@ class Agent:
                 MAX_RETRIES_BEFORE_EMERGENCY = 10
                 HARD_LIMIT = 15
 
-                # Wait 2 seconds before retry to avoid hammering the model
-                import time
+                # Wait 2 seconds before retry to avoid hammering the model (use global time module)
                 time.sleep(2)
 
                 if empty_retry_count == MAX_RETRIES_BEFORE_EMERGENCY:

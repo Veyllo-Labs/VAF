@@ -130,7 +130,7 @@ class RagPipeline:
         
         # 2. Create memory embedding (from title/summary)
         summary = f"{metadata.get('title', '')} {' '.join(metadata.get('tags', []))}"
-        memory_embedding = await self.embeddings.embed(summary)
+        memory_embedding = await self.embeddings.embed(summary, prefix="passage")
         
         # 3. Create memory record
         memory = Memory(
@@ -150,7 +150,7 @@ class RagPipeline:
         
         if chunks_data:
             chunk_texts = [c["text"] for c in chunks_data]
-            chunk_embeddings = await self.embeddings.embed_batch(chunk_texts)
+            chunk_embeddings = await self.embeddings.embed_batch(chunk_texts, prefix="passage")
             
             for chunk_data, embedding in zip(chunks_data, chunk_embeddings):
                 chunk = Chunk(
@@ -215,8 +215,8 @@ class RagPipeline:
         Returns:
             List of RagSource objects
         """
-        # Embed query
-        query_embedding = await self.embeddings.embed(query)
+        # Embed query (E5: use "query" prefix for best retrieval)
+        query_embedding = await self.embeddings.embed(query, prefix="query")
         
         # Convert threshold to distance (cosine distance = 1 - similarity)
         max_distance = 1.0 - threshold
@@ -300,7 +300,7 @@ class RagPipeline:
                 answer="I couldn't find any relevant memories to answer your question.",
                 sources=[],
                 context_tokens=0,
-                query_embedding=await self.embeddings.embed(query)
+                query_embedding=await self.embeddings.embed(query, prefix="query"),
             )
         
         # Build context
@@ -336,7 +336,7 @@ Always cite which source(s) you used in your answer."""
             answer=answer,
             sources=sources,
             context_tokens=context_tokens,
-            query_embedding=await self.embeddings.embed(query)
+            query_embedding=await self.embeddings.embed(query, prefix="query"),
         )
     
     async def query_stream(
@@ -506,8 +506,7 @@ Always cite which source(s) you used."""
             chunks_data = self.chunker.chunk(content)
             if chunks_data:
                 chunk_texts = [c["text"] for c in chunks_data]
-                chunk_embeddings = await self.embeddings.embed_batch(chunk_texts)
-                
+                chunk_embeddings = await self.embeddings.embed_batch(chunk_texts, prefix="passage")
                 for chunk_data, embedding in zip(chunks_data, chunk_embeddings):
                     chunk = Chunk(
                         id=uuid4(),
@@ -519,11 +518,10 @@ Always cite which source(s) you used."""
                         end_char=chunk_data["end_char"]
                     )
                     self.db.add(chunk)
-            
             # Update memory embedding
             meta = memory.meta or {}
             summary = f"{meta.get('title', '')} {' '.join(meta.get('tags', []))}"
-            memory.embedding = await self.embeddings.embed(summary)
+            memory.embedding = await self.embeddings.embed(summary, prefix="passage")
         
         memory.updated_at = datetime.utcnow()
         await self.db.flush()

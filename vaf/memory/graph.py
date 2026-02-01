@@ -12,6 +12,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from uuid import UUID
 from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from vaf.memory.models import Memory, Connection, Chunk, EMBEDDING_DIM
 from vaf.core.config import Config
 import logging
@@ -59,13 +60,18 @@ class GraphManager:
         Returns:
             Dict with 'nodes' and 'edges' arrays for ReactFlow
         """
-        # Query memories
-        query = select(Memory).where(Memory.is_deleted == include_deleted)
-        query = query.order_by(Memory.updated_at.desc()).limit(limit)
-        
+        # Query memories (eager-load chunks so async session doesn't lazy-load)
+        query = (
+            select(Memory)
+            .where(Memory.is_deleted == include_deleted)
+            .options(selectinload(Memory.chunks))
+            .order_by(Memory.updated_at.desc())
+            .limit(limit)
+        )
         result = await self.db.execute(query)
-        memories = result.scalars().all()
-        
+        memories = result.unique().scalars().all()
+        logger.debug("get_graph_data memories count: %s", len(memories))
+
         if not memories:
             return {"nodes": [], "edges": []}
         

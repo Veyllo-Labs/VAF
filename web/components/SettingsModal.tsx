@@ -87,6 +87,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [memoryNodes, setMemoryNodes] = useState<any[]>([]);
     const [memoryEdges, setMemoryEdges] = useState<any[]>([]);
     const [memoryLoading, setMemoryLoading] = useState(false);
+    const [memoryGraphError, setMemoryGraphError] = useState<string | null>(null);
     
     // Workflow Visualization State
     const [workflowModal, setWorkflowModal] = useState<any>(null);
@@ -214,29 +215,48 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setFetchingProvider(null);
     }, [apiModels]);
 
+    // Same-origin /api so Next.js rewrite proxies to backend (no CORS)
+    const memoryApiBase = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001');
+
     // Fetch memory stats when modal opens
     useEffect(() => {
         if (isOpen && localConfig.memory_enabled) {
-            fetch('http://localhost:8001/api/memory/stats')
+            fetch(`${memoryApiBase}/api/memory/stats`)
                 .then(res => res.json())
                 .then(data => setMemoryStats(data))
                 .catch(() => setMemoryStats(null));
         }
-    }, [isOpen, localConfig.memory_enabled]);
+    }, [isOpen, localConfig.memory_enabled, memoryApiBase]);
 
     // Fetch memory graph when memory modal opens
     const fetchMemoryGraph = useCallback(async () => {
         setMemoryLoading(true);
+        setMemoryGraphError(null);
         try {
-            const res = await fetch('http://localhost:8001/api/memory/graph?limit=100');
+            const res = await fetch(`${memoryApiBase}/api/memory/graph?limit=100`);
+            if (!res.ok) {
+                let detail = `HTTP ${res.status}`;
+                try {
+                    const errBody = await res.json();
+                    if (errBody && typeof errBody.detail === 'string') detail = errBody.detail;
+                    else if (errBody && typeof errBody.detail === 'object') detail = (errBody.detail as unknown[]).map((d: unknown) => (d as { msg?: string }).msg ?? String(d)).join('; ');
+                } catch {
+                    // ignore parse error
+                }
+                setMemoryGraphError(detail);
+                throw new Error(`Failed to fetch graph: ${detail}`);
+            }
             const data = await res.json();
             setMemoryNodes(data.nodes || []);
             setMemoryEdges(data.edges || []);
         } catch (e) {
             console.error('Failed to fetch memory graph:', e);
+            setMemoryNodes([]);
+            setMemoryEdges([]);
+            setMemoryGraphError((e as Error).message);
         }
         setMemoryLoading(false);
-    }, []);
+    }, [memoryApiBase]);
 
     useEffect(() => {
         if (showMemoryModal) {
@@ -1708,19 +1728,44 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         <div className="w-20 h-20 rounded-xl bg-gray-200 flex items-center justify-center mx-auto mb-4">
                                             <Brain size={40} className="text-gray-500" />
                                         </div>
-                                        <h3 className="text-lg font-semibold text-gray-900 mb-1">No memories yet</h3>
-                                        <p className="text-sm text-gray-500 max-w-sm">
-                                            Create your first memory to see the graph visualization.
-                                            Memories are auto-connected based on semantic similarity.
-                                        </p>
-                                        <a 
-                                            href="/memory"
-                                            target="_blank"
-                                            className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors text-sm"
-                                        >
-                                            Create Memory
-                                            <ChevronRight size={16} />
-                                        </a>
+                                        {(memoryStats?.memories ?? 0) > 0 ? (
+                                            <>
+                                                <h3 className="text-lg font-semibold text-gray-900 mb-1">Graph couldn&apos;t load memories</h3>
+                                                {memoryGraphError && (
+                                                    <p className="text-sm text-red-600 max-w-sm mb-2 font-mono">
+                                                        {memoryGraphError}
+                                                    </p>
+                                                )}
+                                                <p className="text-sm text-gray-500 max-w-sm mb-4">
+                                                    Check the connection and try Refresh.
+                                                </p>
+                                                <button
+                                                    type="button"
+                                                    onClick={fetchMemoryGraph}
+                                                    disabled={memoryLoading}
+                                                    className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white font-medium rounded-lg transition-colors text-sm"
+                                                >
+                                                    <RefreshCw size={16} className={memoryLoading ? 'animate-spin' : ''} />
+                                                    Refresh
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <h3 className="text-lg font-semibold text-gray-900 mb-1">No memories yet</h3>
+                                                <p className="text-sm text-gray-500 max-w-sm">
+                                                    Create your first memory to see the graph visualization.
+                                                    Memories are auto-connected based on semantic similarity.
+                                                </p>
+                                                <a 
+                                                    href="/memory"
+                                                    target="_blank"
+                                                    className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors text-sm"
+                                                >
+                                                    Create Memory
+                                                    <ChevronRight size={16} />
+                                                </a>
+                                            </>
+                                        )}
                                     </div>
                                 </div>
                             ) : (

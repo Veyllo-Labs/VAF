@@ -151,7 +151,12 @@ interface MemoryActions {
     clearError: () => void;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+// Use relative /api in browser so Next.js rewrite proxies to backend (same-origin, no CORS).
+// Resolve at call time so browser requests use '' and SSR can use absolute URL.
+function getMemoryApiBase(): string {
+  if (typeof window !== 'undefined') return '';
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+}
 
 export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => ({
     // Initial state
@@ -178,7 +183,8 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
             const { ragSources } = get();
             const highlightParam = ragSources.length > 0 ? `&highlight=${ragSources.join(',')}` : '';
             
-            const response = await fetch(`${API_BASE}/api/memory/graph?limit=${limit}${highlightParam}`);
+            const base = getMemoryApiBase();
+            const response = await fetch(`${base}/api/memory/graph?limit=${limit}${highlightParam}`);
             if (!response.ok) throw new Error('Failed to fetch graph');
             
             const data = await response.json();
@@ -218,7 +224,7 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
     // Memory CRUD
     fetchMemory: async (id) => {
         try {
-            const response = await fetch(`${API_BASE}/api/memory/${id}?include_content=true`);
+            const response = await fetch(`${getMemoryApiBase()}/api/memory/${id}?include_content=true`);
             if (!response.ok) throw new Error('Failed to fetch memory');
             
             const memory = await response.json();
@@ -233,7 +239,7 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
     createMemory: async (content, metadata) => {
         set({ isLoading: true, error: null });
         try {
-            const response = await fetch(`${API_BASE}/api/memory`, {
+            const response = await fetch(`${getMemoryApiBase()}/api/memory`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content, metadata, auto_connect: true })
@@ -258,7 +264,7 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
     updateMemory: async (id, content, metadata) => {
         set({ isLoading: true, error: null });
         try {
-            const response = await fetch(`${API_BASE}/api/memory/${id}`, {
+            const response = await fetch(`${getMemoryApiBase()}/api/memory/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content, metadata })
@@ -282,7 +288,7 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
     deleteMemory: async (id, hard = false) => {
         set({ isLoading: true, error: null });
         try {
-            const response = await fetch(`${API_BASE}/api/memory/${id}?hard=${hard}`, {
+            const response = await fetch(`${getMemoryApiBase()}/api/memory/${id}?hard=${hard}`, {
                 method: 'DELETE'
             });
             
@@ -325,7 +331,7 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
     queryRag: async (query, k = 5) => {
         set({ isQuerying: true, error: null, ragQuery: query });
         try {
-            const response = await fetch(`${API_BASE}/api/memory/rag/query`, {
+            const response = await fetch(`${getMemoryApiBase()}/api/memory/rag/query`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ query, k })
@@ -362,7 +368,7 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
         });
         
         try {
-            const response = await fetch(`${API_BASE}/api/memory/rag/query/stream`, {
+            const response = await fetch(`${getMemoryApiBase()}/api/memory/rag/query/stream`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ query, k, stream: true })
@@ -419,7 +425,7 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
     // Stats
     fetchStats: async () => {
         try {
-            const response = await fetch(`${API_BASE}/api/memory/stats`);
+            const response = await fetch(`${getMemoryApiBase()}/api/memory/stats`);
             if (!response.ok) throw new Error('Failed to fetch stats');
             
             const stats = await response.json();

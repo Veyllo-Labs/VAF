@@ -251,6 +251,27 @@ async def list_memories(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Must be before /{memory_id} or "graph" is matched as memory_id
+@memory_router.get("/graph", response_model=GraphResponse)
+async def get_graph(
+    limit: int = Query(default=100, ge=1, le=500),
+    highlight: Optional[str] = Query(default=None, description="Comma-separated memory IDs to highlight")
+):
+    """Get memory graph data for ReactFlow visualization."""
+    try:
+        async with get_db() as db:
+            graph_manager = GraphManager(db)
+            highlight_ids = highlight.split(",") if highlight else None
+            graph_data = await graph_manager.get_graph_data(
+                limit=limit,
+                highlight_ids=highlight_ids
+            )
+            return GraphResponse(**graph_data)
+    except Exception as e:
+        logger.error(f"Failed to get graph: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @memory_router.get("/{memory_id}", response_model=MemoryResponse)
 async def get_memory(memory_id: str, include_content: bool = Query(default=True)):
     """Get a memory by ID."""
@@ -333,34 +354,6 @@ async def delete_memory(memory_id: str, hard: bool = Query(default=False)):
         raise
     except Exception as e:
         logger.error(f"Failed to delete memory: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# Graph endpoints
-@memory_router.get("/graph", response_model=GraphResponse)
-async def get_graph(
-    limit: int = Query(default=100, ge=1, le=500),
-    highlight: Optional[str] = Query(default=None, description="Comma-separated memory IDs to highlight")
-):
-    """
-    Get memory graph data for ReactFlow visualization.
-    
-    Returns nodes and edges formatted for ReactFlow.
-    """
-    try:
-        async with get_db() as db:
-            graph_manager = GraphManager(db)
-            
-            highlight_ids = highlight.split(",") if highlight else None
-            
-            graph_data = await graph_manager.get_graph_data(
-                limit=limit,
-                highlight_ids=highlight_ids
-            )
-            
-            return GraphResponse(**graph_data)
-    except Exception as e:
-        logger.error(f"Failed to get graph: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

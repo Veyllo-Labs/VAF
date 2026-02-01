@@ -1,9 +1,33 @@
 import asyncio
 import os
+import threading
 from typing import Optional, List
 from uuid import UUID
 
 from vaf.tools.base import BaseTool
+
+
+def _run_async_in_new_loop(coro):
+    """Run a coroutine in a new thread with its own event loop. Avoids 'attached to a different loop' when called from sync/other loop."""
+    result = [None]
+    exception = [None]
+
+    def _thread_run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result[0] = loop.run_until_complete(coro)
+        except Exception as e:
+            exception[0] = e
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_thread_run)
+    t.start()
+    t.join()
+    if exception[0]:
+        raise exception[0]
+    return result[0]
 from vaf.core.main_persistence import MainPersistenceManager
 
 class UpdateIntentTool(BaseTool):
@@ -184,9 +208,8 @@ class MemoryStoreTool(BaseTool):
         if not content:
             return "Error: content is required and cannot be empty."
         user_scope_id = kwargs.get("user_scope_id")
-        if user_scope_id is None:
-            return "Error: Login required to store memory (user scope not set)."
-        if isinstance(user_scope_id, str):
+        # Allow None = global scope (e.g. Web UI without login); memories still stored and visible on /memory
+        if user_scope_id is not None and isinstance(user_scope_id, str):
             try:
                 user_scope_id = UUID(user_scope_id)
             except (ValueError, TypeError):
@@ -215,6 +238,6 @@ class MemoryStoreTool(BaseTool):
             return "Memory stored."
 
         try:
-            return asyncio.run(_ingest())
+            return _run_async_in_new_loop(_ingest())
         except Exception as e:
             return f"Error storing memory: {e}"

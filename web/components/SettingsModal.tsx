@@ -59,12 +59,6 @@ const PROVIDERS = [
     { id: 'openrouter', label: 'OpenRouter', defaultModel: 'anthropic/claude-3.5-sonnet' },
 ];
 
-const WAKE_WORDS = [
-    { value: 'hey_jarvis', label: 'Hey Jarvis' },
-    { value: 'alexa', label: 'Alexa' },
-    { value: 'hey_mycroft', label: 'Hey Mycroft' },
-    { value: 'hey_rhasspy', label: 'Hey Rhasspy' },
-];
 
 export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], automations = [], currentUser, onLogout, apiBase }: SettingsModalProps) {
     const [localConfig, setLocalConfig] = useState<any>(config || {});
@@ -876,45 +870,74 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={localConfig.stt_enabled || false}
                                         onChange={(v: boolean) => handleChange('stt_enabled', v)}
                                     />
-                                    <p className="text-xs text-gray-500 mt-2">Requires faster-whisper and ffmpeg installed locally.</p>
-                                </Section>
-
-                                <Section title="Wake Word">
-                                    <Switch
-                                        label="Enable Wake Word"
-                                        checked={localConfig.stt_wake_word_enabled || false}
-                                        onChange={(v: boolean) => handleChange('stt_wake_word_enabled', v)}
-                                    />
-                                    <div className="mt-4">
-                                        <Select
-                                            label="Wake Word Pattern"
-                                            value={localConfig.stt_wake_word || 'hey_jarvis'}
-                                            onChange={(v: string) => handleChange('stt_wake_word', v)}
-                                            options={WAKE_WORDS}
-                                        />
-                                    </div>
+                                    {localConfig.stt_enabled && (
+                                        <div className="mt-4 space-y-4">
+                                            <Select
+                                                label="STT Engine"
+                                                value={localConfig.speech_stt_engine ?? 'docker'}
+                                                onChange={(v: string) => handleChange('speech_stt_engine', v)}
+                                                options={[
+                                                    { value: 'docker', label: 'Docker (HTTP STT service)' },
+                                                    { value: 'local', label: 'Local (faster-whisper + ffmpeg)' },
+                                                ]}
+                                            />
+                                            {(localConfig.speech_stt_engine ?? 'docker') === 'docker' && (
+                                                <Input
+                                                    label="Docker STT URL"
+                                                    placeholder="http://localhost:5003"
+                                                    value={localConfig.speech_stt_docker_url || 'http://localhost:5003'}
+                                                    onChange={(v: string) => handleChange('speech_stt_docker_url', v)}
+                                                />
+                                            )}
+                                            <p className="text-xs text-gray-500">
+                                                Docker: STT service in container (no local model). Local: requires faster-whisper and ffmpeg.
+                                            </p>
+                                        </div>
+                                    )}
                                 </Section>
 
                                 <Section title="Text to Speech">
                                     <Switch
                                         label="Enable Voice Output (TTS)"
-                                        description="Agent speaks responses aloud"
+                                        description="Agent speaks responses aloud in your browser"
                                         checked={localConfig.speech_tts_enabled || false}
-                                        onChange={(v: boolean) => handleChange('speech_tts_enabled', v)}
+                                        onChange={(v: boolean) => {
+                                            handleChange('speech_tts_enabled', v);
+                                            if (v) handleChange('speech_tts_engine', 'docker');
+                                        }}
                                     />
                                     {localConfig.speech_tts_enabled && (
                                         <div className="mt-4 space-y-4">
-                                            <Select
-                                                label="TTS Engine"
-                                                value={localConfig.speech_tts_engine || 'piper'}
-                                                onChange={(v: string) => handleChange('speech_tts_engine', v)}
-                                                options={[
-                                                    { value: 'piper', label: 'Piper (Neural, High Quality)' },
-                                                    { value: 'system', label: 'System (Native OS Voice)' },
-                                                ]}
+                                            <Input
+                                                label="Docker TTS URL (default / fallback)"
+                                                placeholder="http://localhost:5002"
+                                                value={localConfig.speech_tts_docker_url || 'http://localhost:5002'}
+                                                onChange={(v: string) => {
+                                                    handleChange('speech_tts_docker_url', v);
+                                                    handleChange('speech_tts_engine', 'docker');
+                                                }}
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">Multi-language: set URLs per language so German/English/French text use the right voice.</p>
+                                            <Input
+                                                label="Docker TTS URL (German, optional)"
+                                                placeholder="http://localhost:5002"
+                                                value={localConfig.speech_tts_docker_url_de ?? 'http://localhost:5002'}
+                                                onChange={(v: string) => handleChange('speech_tts_docker_url_de', v)}
+                                            />
+                                            <Input
+                                                label="Docker TTS URL (English, optional)"
+                                                placeholder="http://localhost:5004"
+                                                value={localConfig.speech_tts_docker_url_en ?? 'http://localhost:5004'}
+                                                onChange={(v: string) => handleChange('speech_tts_docker_url_en', v)}
+                                            />
+                                            <Input
+                                                label="Docker TTS URL (French, optional)"
+                                                placeholder="http://localhost:5006"
+                                                value={localConfig.speech_tts_docker_url_fr ?? 'http://localhost:5006'}
+                                                onChange={(v: string) => handleChange('speech_tts_docker_url_fr', v)}
                                             />
                                             <p className="text-xs text-gray-500">
-                                                Piper provides natural-sounding neural voices. System uses your OS's built-in TTS.
+                                                Web UI streams audio from server to your browser. Run <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">docker compose -f docker-compose.memory.yml up -d</code> for tts, tts-en, tts-fr.
                                             </p>
                                             <Switch
                                                 label="Auto-Speak Responses"

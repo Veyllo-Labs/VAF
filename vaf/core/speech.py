@@ -126,7 +126,7 @@ class SpeechManager:
         return self.config.get("speech_tts_enabled", False)
 
     def is_stt_enabled(self) -> bool:
-        return self.config.get("speech_stt_enabled", False)
+        return bool(self.config.get("speech_stt_enabled") or self.config.get("stt_enabled", False))
 
     def _get_piper_binary(self) -> Optional[Path]:
         """Get path to piper binary depending on OS."""
@@ -452,16 +452,58 @@ $player.Close()
         except:
             pass  # Silently fail - sound is optional
 
-    def synthesize_audio(self, text: str, lang: str = "auto") -> Optional[bytes]:
-        """Synthesize text to audio bytes (WAV) without playing. Used for Web UI streaming."""
+    def synthesize_audio(self, text: str, lang: str = "auto", force_engine: Optional[str] = None) -> Optional[bytes]:
+        """Synthesize text to audio bytes (WAV) without playing. Used for Web UI streaming.
+        When force_engine is set (e.g. 'docker'), use that engine; otherwise use config.
+        Web UI always uses force_engine='docker' so audio is streamed to the client, never played on server."""
         if not self.is_tts_enabled(): return None
         
         clean_text = self._clean_markdown(text)
         if not clean_text.strip(): return None
         
-        # Only Piper supported for streaming currently (pyttsx3 doesn't easily output to bytes)
-        preferred_engine = self.config.get("speech_tts_engine", "piper")
-        
+        preferred_engine = (force_engine or self.config.get("speech_tts_engine", "docker")).lower()
+        lang_short = (lang or "en")[:2].lower()
+
+        # Docker TTS: HTTP service (e.g. Piper in Docker). Multi-language: URL per lang (de/en/fr) or fallback.
+        if preferred_engine == "docker":
+            url_by_lang = {
+                "de": self.config.get("speech_tts_docker_url_de"),
+                "en": self.config.get("speech_tts_docker_url_en"),
+                "fr": self.config.get("speech_tts_docker_url_fr"),
+            }
+            url = (url_by_lang.get(lang_short) or self.config.get("speech_tts_docker_url") or "").strip().rstrip("/")
+            if url:
+                try:
+                    import urllib.request
+                    import json as json_module
+                    data = json_module.dumps({"text": clean_text, "lang": lang_short}).encode("utf-8")
+                    req = urllib.request.Request(
+                        url,
+                        data=data,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        body = resp.read()
+                    # Response can be raw WAV bytes or JSON with "audio_base64"
+                    if body[:4] == b"RIFF":
+                        return body
+                    try:
+                        out = json_module.loads(body.decode("utf-8"))
+                        if isinstance(out.get("audio_base64"), str):
+                            import base64
+                            return base64.b64decode(out["audio_base64"])
+                        if isinstance(out.get("audio"), str):
+                            import base64
+                            return base64.b64decode(out["audio"])
+                    except (ValueError, KeyError, TypeError):
+                        pass
+                    return None
+                except Exception as e:
+                    from vaf.cli.ui import UI
+                    UI.event("Debug", f"Docker TTS failed: {e}", style="dim")
+            return None
+
         if preferred_engine == "piper" and self._check_piper():
             model_path = self._ensure_voice_model(lang)
             if model_path:
@@ -538,6 +580,15 @@ $player.Close()
             except:
                 pass
 
+    def release_tts_resources(self):
+        """
+        Release TTS-related resources to free memory (e.g. during emergency cleanup).
+        Stops any playback, kills Piper subprocess, and drops pyttsx3 engine reference.
+        Next TTS use will re-initialize as needed.
+        """
+        self.stop()
+        self.tts_engine = None
+
     def speak(self, text: str, lang: str = "auto"):
         """Speak text using Piper (High Quality Offline) or pyttsx3 (Fallback)."""
         if not self.is_tts_enabled(): return
@@ -564,9 +615,34 @@ $player.Close()
                     return
 
                 # Check user's preferred TTS engine
-                preferred_engine = self.config.get("speech_tts_engine", "piper")
+                preferred_engine = self.config.get("speech_tts_engine", "docker")
                 
-                # 1. Try Piper (High Quality) - only if user prefers it
+                # 1a. Docker TTS (HTTP service – no local model, good for Docker stack)
+                if preferred_engine == "docker":
+                    audio_bytes = self.synthesize_audio(clean_text, lang)
+                    if audio_bytes:
+                        try:
+                            import tempfile
+                            fd, wav_path = tempfile.mkstemp(suffix=".wav")
+                            os.close(fd)
+                            with open(wav_path, "wb") as f:
+                                f.write(audio_bytes)
+                            if self.on_speech_start:
+                                try: self.on_speech_start(clean_text)
+                                except: pass
+                            self._play_audio(wav_path)
+                            if self.on_speech_end:
+                                try: self.on_speech_end()
+                                except: pass
+                            try: os.remove(wav_path)
+                            except: pass
+                            return
+                        except Exception as e:
+                            from vaf.cli.ui import UI
+                            UI.event("Debug", f"Docker TTS play failed: {e}", style="dim")
+                    # Fall through to system/piper
+                
+                # 1b. Piper (High Quality) - local binary
                 if preferred_engine == "piper" and self._check_piper():
                     # Attempt to get voice for requested language
                     model_path = self._ensure_voice_model(lang)
@@ -859,6 +935,35 @@ $player.Close()
         t = re.sub(r'<think>.*?</think>', '', t, flags=re.DOTALL)
         t = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', t, flags=re.DOTALL)
         
+        # 2a. Strip filler phrases (Web UI TTS: don't read "Einen Moment", "Just a moment" etc.)
+        try:
+            from vaf.core.speech_fillers import THINKING_FILLERS
+            all_fillers = []
+            for lang_fillers in THINKING_FILLERS.values():
+                all_fillers.extend(f for f in lang_fillers if f and isinstance(f, str))
+            all_fillers = sorted(set(all_fillers), key=len, reverse=True)
+            # Strip leading fillers
+            changed = True
+            while changed and t.strip():
+                changed = False
+                t_stripped = t.strip()
+                for phrase in all_fillers:
+                    if not phrase:
+                        continue
+                    if t_stripped.lower().startswith(phrase.lower()):
+                        rest = t_stripped[len(phrase):].lstrip(".,;: ")
+                        t = rest
+                        changed = True
+                        break
+            # Remove filler phrases anywhere (standalone)
+            for phrase in all_fillers:
+                if not phrase:
+                    continue
+                esc = re.escape(phrase)
+                t = re.sub(r'(?:^|[\s.])\s*' + esc + r'\s*(?=[\s.]|$)', ' ', t, flags=re.IGNORECASE)
+            t = re.sub(r' +', ' ', t).strip()
+        except Exception:
+            pass
         # 2. Remove VQ-1 specific thinking patterns
         thought_patterns = [
             r'^Okay, the user.*?(?:\n\n|\n|\Z)',
@@ -997,204 +1102,21 @@ $player.Close()
         # Collapse multiple newlines to avoid too long silence
         t = re.sub(r'\n{3,}', '\n\n', t)
         
+        # 8. Don't send literal backslash sequences to TTS (e.g. \n, \66 read aloud as "backslash n", "backslash 66")
+        t = t.replace('\\n', '\n').replace('\\t', ' ').replace('\\r', ' ')
+        t = re.sub(r'\\[0-7]{1,3}', ' ', t)   # octal \66 etc. -> space
+        t = re.sub(r'\\x[0-9a-fA-F]{2}', ' ', t)  # \x41 etc. -> space
+        t = re.sub(r'\\[a-zA-Z]', ' ', t)     # \n \t \s \d etc. (single letter) -> space
+        t = re.sub(r'\\+', ' ', t)            # any remaining backslashes -> space
+        # 9. Remove literal word "backslash" and "backslash X" so TTS doesn't say "backslash n", "backslash backslash"
+        t = re.sub(r'\bbackslash\s+backslash\b', ' ', t, flags=re.IGNORECASE)
+        t = re.sub(r'\bbackslash\s+(?:n|t|r|d|s|a|b|f|v)\b', ' ', t, flags=re.IGNORECASE)
+        t = re.sub(r'\bbackslash\s+[0-9]+\b', ' ', t, flags=re.IGNORECASE)
+        t = re.sub(r'\bbackslash\s+[a-z]\b', ' ', t, flags=re.IGNORECASE)
+        t = re.sub(r'\bbackslash\b', ' ', t, flags=re.IGNORECASE)
+        t = re.sub(r' +', ' ', t).strip()
+        
         return t.strip()
 
 def get_speech_manager() -> SpeechManager:
     return SpeechManager.get_instance()
-
-
-class WakeWordManager:
-    """
-    Manages "Wake Word" detection using openWakeWord (100% local & free).
-    Runs in a background thread and triggers a callback when the keyword is detected.
-
-    Available wake words: hey_jarvis, alexa, hey_mycroft, hey_rhasspy
-    """
-    _instance = None
-    _lock = threading.Lock()
-
-    def __init__(self):
-        self.config = Config.load()
-        self.oww_model = None
-        self.audio_stream = None
-        self._is_listening = False
-        self._thread = None
-        self._stop_event = threading.Event()
-        self._callback = None
-        
-        # Ensure models are downloaded (fixes NO_SUCHFILE error)
-        if self.is_available():
-            try:
-                import openwakeword.utils
-                # This ensures default models (hey_jarvis etc.) are in the package dir
-                openwakeword.utils.download_models()
-            except Exception:
-                pass  # Ignore download errors (offline mode or already exists)
-
-    @classmethod
-    def get_instance(cls):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = cls()
-        return cls._instance
-
-    def is_available(self) -> bool:
-        """Check if openWakeWord dependencies are available."""
-        try:
-            import openwakeword
-            import pyaudio
-            return True
-        except ImportError:
-            return False
-
-    def get_available_models(self) -> list:
-        """Get list of available wake word models."""
-        return [
-            "hey_jarvis",
-            "alexa",
-            "hey_mycroft",
-            "hey_rhasspy"
-        ]
-
-    def start_listening(self, callback):
-        """
-        Start listening for the wake word in a background thread.
-
-        Args:
-            callback: Function to call when wake word is detected.
-        """
-        if self._is_listening:
-            return
-
-        if not self.is_available():
-            UI.warning("Wake Word requires 'openwakeword' and 'pyaudio'. Install: pip install openwakeword pyaudio")
-            return
-
-        self._callback = callback
-        self._stop_event.clear()
-        self._is_listening = True
-
-        self._thread = threading.Thread(target=self._listen_loop, daemon=True)
-        self._thread.start()
-
-    def stop_listening(self):
-        """Stop the background listening thread."""
-        if not self._is_listening:
-            return
-
-        self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=2.0)
-
-        self._is_listening = False
-        self._cleanup()
-
-    def is_listening(self) -> bool:
-        return self._is_listening
-
-    def _cleanup(self):
-        """Release resources."""
-        if self.audio_stream:
-            try:
-                self.audio_stream.stop_stream()
-                self.audio_stream.close()
-            except: pass
-            self.audio_stream = None
-
-        self.oww_model = None
-
-    def _listen_loop(self):
-        """Background loop for wake word detection."""
-        try:
-            from openwakeword.model import Model
-            import pyaudio
-            import numpy as np
-        except ImportError as e:
-            UI.error(f"Missing dependency: {e}. Install: pip install openwakeword pyaudio")
-            self._is_listening = False
-            return
-
-        wake_word = self.config.get("stt_wake_word", "hey_jarvis")
-
-        # Validate wake word
-        available_models = self.get_available_models()
-        if wake_word not in available_models:
-            UI.warning(f"Invalid wake word '{wake_word}'. Defaulting to 'hey_jarvis'.")
-            wake_word = "hey_jarvis"
-
-        try:
-            # Initialize openWakeWord model (silent - no UI spam)
-            self.oww_model = Model(wakeword_models=[wake_word], inference_framework="onnx")
-
-            # Initialize PyAudio stream
-            mic_index = self.config.get("speech_mic_index", None)
-            audio = pyaudio.PyAudio()
-            self.audio_stream = audio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=16000,  # openWakeWord uses 16kHz
-                input=True,
-                frames_per_buffer=1280,  # 80ms chunks
-                input_device_index=mic_index
-            )
-
-            # Wake word ready - no message needed (shown in status bar)
-
-            while not self._stop_event.is_set():
-                # Read audio chunk
-                audio_data = self.audio_stream.read(1280, exception_on_overflow=False)
-                audio_array = np.frombuffer(audio_data, dtype=np.int16)
-
-                # Process with openWakeWord
-                prediction = self.oww_model.predict(audio_array)
-
-                # Check if wake word detected (threshold: 0.5)
-                if prediction[wake_word] > 0.5:
-                    # Wake word detected - DEBUG: Log it
-                    try:
-                        log_path = os.path.join(os.path.expanduser("~"), "wake_word_debug.log")
-                        with open(log_path, "a", encoding="utf-8") as f:
-                            import datetime
-                            f.write(f"{datetime.datetime.now()}: Wake word detected! Score: {prediction[wake_word]:.2f}\n")
-                            f.write(f"  Callback exists: {self._callback is not None}\n")
-                            f.flush()
-                    except Exception as e:
-                        # If logging fails, at least print to console
-                        print(f"WAKE WORD DEBUG: Detected! Score: {prediction[wake_word]:.2f}, Callback: {self._callback is not None}, Error: {e}")
-
-                    # Trigger callback (CRITICAL for STT start)
-                    if self._callback:
-                        try:
-                            self._callback()
-                            # DEBUG: Log callback success
-                            try:
-                                log_path = os.path.join(os.path.expanduser("~"), "wake_word_debug.log")
-                                with open(log_path, "a", encoding="utf-8") as f:
-                                    f.write(f"  Callback executed successfully!\n")
-                                    f.flush()
-                            except:
-                                pass
-                        except Exception as e:
-                            # DEBUG: Log callback error
-                            try:
-                                log_path = os.path.join(os.path.expanduser("~"), "wake_word_debug.log")
-                                with open(log_path, "a", encoding="utf-8") as f:
-                                    f.write(f"  Callback ERROR: {e}\n")
-                                    f.flush()
-                            except:
-                                pass
-                            print(f"WAKE WORD DEBUG: Callback error: {e}")
-
-                    # Reset model state to avoid immediate re-triggering
-                    self.oww_model.reset()
-
-                    # Pause briefly to avoid self-triggering
-                    import time
-                    time.sleep(1.0)
-
-        except Exception as e:
-            UI.error(f"Wake Word Error: {e}")
-            self._is_listening = False
-        finally:
-            self._cleanup()

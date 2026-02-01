@@ -65,22 +65,23 @@ def get_whisper_model():
                     import importlib
                     import psutil
 
+                    model_size = Config.get("speech_stt_whisper_model", "base")
                     mem_before = psutil.Process().memory_info().rss / (1024 * 1024)
-                    log("WebServer", f"Loading WhisperModel (base, CPU, int8) - Memory before: {mem_before:.0f}MB")
+                    log("WebServer", f"Loading WhisperModel ({model_size}, CPU, int8) - Memory before: {mem_before:.0f}MB")
 
                     whisper_module = importlib.import_module("faster_whisper")
                     WhisperModel = getattr(whisper_module, "WhisperModel")
-                    _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+                    _whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8")
 
                     mem_after = psutil.Process().memory_info().rss / (1024 * 1024)
-                    log("WebServer", f"WhisperModel loaded - Memory after: {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)")
+                    log("WebServer", f"WhisperModel ({model_size}) loaded - Memory after: {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)")
 
-                    # Log to file
+                    # Log to file (helps confirm which model caused memory spikes)
                     try:
                         from datetime import datetime
                         log_dir = Path(__file__).resolve().parents[2] / "logs"
                         with open(log_dir / "whisper_load.log", "a") as f:
-                            f.write(f"{datetime.now().isoformat()} WhisperModel: {mem_before:.0f}MB -> {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)\n")
+                            f.write(f"{datetime.now().isoformat()} WhisperModel({model_size}): {mem_before:.0f}MB -> {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)\n")
                     except:
                         pass
 
@@ -300,13 +301,38 @@ async def startup_event():
             log("WebServer", traceback.format_exc())
 
 def _detect_language_simple(text: str) -> str:
-    """Simple heuristic for language detection (de/en)."""
+    """Detect language for TTS: use langid when available, else simple heuristic (de/en)."""
+    if not (text and text.strip()):
+        return "en"
+    # Prefer langid for reliable detection (e.g. German text -> de)
+    try:
+        import langid
+        import re
+        # Strip thinking/code so we classify on actual spoken content
+        clean = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        if not clean:
+            clean = text.strip()
+        # Use first ~2k chars to avoid slow classify on huge text
+        sample = clean[:2000] if len(clean) > 2000 else clean
+        if sample:
+            code, _ = langid.classify(sample)
+            if code and len(code) >= 2:
+                return code[:2].lower()
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    # Fallback: simple heuristic (de/en)
     t = text.lower()
-    # German indicators
-    de_words = [" das ", " und ", " der ", " die ", " ist ", " nicht ", " ich ", " sie ", " es ", " wie ", " was ", " eine ", " ein ", " mit ", " von "]
-    if any(w in t for w in de_words): return "de"
-    if any(ch in t for ch in ["ä", "ö", "ü", "ß"]): return "de"
-    return "en" # Default fallback
+    de_words = [" das ", " und ", " der ", " die ", " ist ", " nicht ", " ich ", " sie ", " es ", " wie ", " was ", " eine ", " ein ", " mit ", " von ", " für ", " auf ", " sind ", " kann ", " auch ", " dann ", " haben ", " wird "]
+    if any(w in t for w in de_words):
+        return "de"
+    if any(ch in t for ch in ["ä", "ö", "ü", "ß"]):
+        return "de"
+    # "das " / "der " / "die " at start
+    if t.startswith(("das ", "der ", "die ", "den ", "dem ", "ein ", "eine ", "und ", "ist ")):
+        return "de"
+    return "en"
 
 def _build_artifact_payload(session, session_id: str = None):
     if not session:
@@ -669,7 +695,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     await websocket.close(code=4001, reason="Invalid token")
                     return
             elif is_localhost_client:
-                 user_context = {"username": "Local Admin", "role": "admin"}
+                # Localhost without token: use fixed scope so RAG/memory are scoped (not global)
+                local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
+                user_context = {"username": "Local Admin", "role": "admin", "user_scope_id": local_admin_scope}
             
         except ImportError:
             # Auth modules not available - still block non-localhost when disabled
@@ -1322,110 +1350,120 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         })
                 
                 elif type == "process_audio":
-                    # Process audio for STT - OFFLINE ONLY (faster-whisper)
+                    # Process audio for STT: Docker (HTTP) or local (faster-whisper)
                     import base64
                     import tempfile
                     
-                    print(f"DEBUG: process_audio request received (OFFLINE MODE)") # DEBUG
                     temp_path = None
                     try:
                         audio_b64 = cmd.get("audio")
                         if not audio_b64:
-                            print("DEBUG: No audio data provided") # DEBUG
                             await websocket.send_json({
                                 "type": "stt_error",
                                 "error": "No audio data provided"
                             })
                             continue
-                        
-                        print(f"DEBUG: Audio data length: {len(audio_b64)}") # DEBUG
 
-                        # Decode base64 audio
                         audio_data = base64.b64decode(audio_b64)
-                        
-                        # Save to temp file (WebM from browser)
                         with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as temp_audio:
                             temp_audio.write(audio_data)
                             temp_path = temp_audio.name
-                        print(f"DEBUG: Saved audio to {temp_path}") # DEBUG
-                        
-                        try:
-                            # Check STT enabled
-                            from vaf.core.speech import SpeechManager
-                            sm = SpeechManager.get_instance()
-                            
-                            if not sm.is_stt_enabled():
-                                print("DEBUG: STT disabled in config") # DEBUG
+
+                        from vaf.core.speech import SpeechManager
+                        sm = SpeechManager.get_instance()
+                        if not sm.is_stt_enabled():
+                            await websocket.send_json({
+                                "type": "stt_error",
+                                "error": "STT is disabled in settings"
+                            })
+                            continue
+
+                        stt_engine = Config.get("speech_stt_engine", "docker")
+                        text = ""
+
+                        if stt_engine == "docker":
+                            # Docker STT: POST audio file to whisper-asr-webservice (onerahmet image)
+                            stt_url = (Config.get("speech_stt_docker_url") or "").strip().rstrip("/") or "http://localhost:5003"
+                            try:
+                                import requests
+                                loop = asyncio.get_running_loop()
+                                def _post(endpoint: str):
+                                    with open(temp_path, "rb") as f:
+                                        return requests.post(
+                                            endpoint,
+                                            files={"file": ("audio.webm", f, "audio/webm")},
+                                            timeout=60,
+                                        )
+                                asr_endpoint = f"{stt_url}/asr"
+                                resp = await loop.run_in_executor(None, lambda: _post(asr_endpoint))
+                                if resp.status_code == 404:
+                                    transcribe_endpoint = f"{stt_url}/transcribe"
+                                    resp = await loop.run_in_executor(None, lambda: _post(transcribe_endpoint))
+                                resp.raise_for_status()
+                                data = resp.json()
+                                text = (data.get("text") or data.get("transcript") or "").strip()
+                                if not text and isinstance(data.get("results"), list) and data["results"]:
+                                    text = (data["results"][0].get("transcript") or "").strip()
+                            except Exception as docker_err:
                                 await websocket.send_json({
                                     "type": "stt_error",
-                                    "error": "STT is disabled in settings"
+                                    "error": f"Docker STT failed: {docker_err}. Is the STT container running (e.g. docker compose -f docker-compose.memory.yml up -d)?"
                                 })
                                 continue
-                            
-                            # OFFLINE STT: faster-whisper (SINGLETON - prevents memory leak!)
+                        else:
+                            # Local STT: faster-whisper (SINGLETON)
                             try:
-                                print("DEBUG: Using faster-whisper (OFFLINE, SINGLETON)...") # DEBUG
-
-                                # Use singleton model to prevent memory leak
                                 model = get_whisper_model()
-
-                                # Transcribe
-                                print(f"DEBUG: Transcribing {temp_path}...") # DEBUG
                                 segments, info = model.transcribe(temp_path, beam_size=5)
                                 text = " ".join([segment.text for segment in segments])
-                                print(f"DEBUG: Transcription result: '{text}'") # DEBUG
-
-                                await websocket.send_json({
-                                    "type": "stt_result",
-                                    "text": text.strip()
-                                })
-                            except ImportError as ie:
-                                print(f"DEBUG: faster-whisper not installed: {ie}") # DEBUG
+                            except ImportError:
                                 await websocket.send_json({
                                     "type": "stt_error",
-                                    "error": "faster-whisper not installed. Install with: pip install faster-whisper"
+                                    "error": "faster-whisper not installed. Use STT engine 'Docker' or: pip install faster-whisper"
                                 })
+                                continue
                             except Exception as transcribe_error:
-                                print(f"DEBUG: Transcription error: {transcribe_error}") # DEBUG
                                 await websocket.send_json({
                                     "type": "stt_error",
                                     "error": f"Transcription failed: {str(transcribe_error)}"
                                 })
-                        finally:
-                            # Clean up temp file
-                            if temp_path and os.path.exists(temp_path):
-                                try:
-                                    os.unlink(temp_path)
-                                except:
-                                    pass
-                            
+                                continue
+
+                        await websocket.send_json({
+                            "type": "stt_result",
+                            "text": text.strip()
+                        })
                     except Exception as e:
-                        print(f"DEBUG: General Error in process_audio: {e}") # DEBUG
                         await websocket.send_json({
                             "type": "stt_error",
                             "error": str(e)
                         })
+                    finally:
+                        if temp_path and os.path.exists(temp_path):
+                            try:
+                                os.unlink(temp_path)
+                            except Exception:
+                                pass
                 
                 elif type == "speak":
-                    # TTS Output (Streamed to Browser)
+                    # TTS Output: Web UI always streams to client (Docker TTS). Never local playback on server.
                     text = cmd.get("text")
                     if text:
                         from vaf.core.speech import SpeechManager
                         sm = SpeechManager.get_instance()
                         
-                        # Notify UI: Loading
                         await websocket.send_json({"type": "tts_state", "status": "loading"})
-                        
-                        # Detect Language
                         lang = _detect_language_simple(text)
                         
-                        # Run synthesis in background thread
                         import asyncio
                         import base64
                         loop = asyncio.get_running_loop()
                         
                         try:
-                            audio_bytes = await loop.run_in_executor(None, sm.synthesize_audio, text, lang)
+                            audio_bytes = await loop.run_in_executor(
+                                None,
+                                lambda: sm.synthesize_audio(text, lang, force_engine="docker"),
+                            )
                             
                             if audio_bytes:
                                 # Encode to Base64

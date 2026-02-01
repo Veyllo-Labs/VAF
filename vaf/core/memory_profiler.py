@@ -144,6 +144,22 @@ class MemoryProfiler:
         except Exception as e:
             self._log(f"  - Embedding cleanup failed: {e}")
 
+        # Unload Whisper STT model (can be 1–20GB+; native allocs not freed by gc alone)
+        try:
+            from vaf.core.web_server import unload_whisper_model
+            unload_whisper_model()
+            self._log("  - Unloaded Whisper model")
+        except Exception as e:
+            self._log(f"  - Whisper unload failed: {e}")
+
+        # Release TTS resources (Piper subprocess, pyttsx3 engine; can reduce memory under load)
+        try:
+            from vaf.core.speech import get_speech_manager
+            get_speech_manager().release_tts_resources()
+            self._log("  - Released TTS resources")
+        except Exception as e:
+            self._log(f"  - TTS release failed: {e}")
+
         # Force multiple GC passes
         for i in range(3):
             collected = gc.collect()

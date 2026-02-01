@@ -902,9 +902,9 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
             tui.event("System", "API Backend ready - no warmup needed", style="dim")
         
         # ═══════════════════════════════════════════════════════════════
-        # VOICE RESOURCE PRELOADING - Download/Init TTS/STT/WakeWord
+        # VOICE RESOURCE PRELOADING - Download/Init TTS/STT
         # ═══════════════════════════════════════════════════════════════
-        # If TTS/STT/WakeWord are enabled, preload their resources NOW
+        # If TTS/STT are enabled, preload their resources NOW
         # (instead of lazy-loading mid-chat, which is disruptive)
         
         if agent.config.get("speech_tts_enabled", False):
@@ -937,21 +937,6 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     tui.warning("STT enabled but no microphone detected")
             except Exception as e:
                 tui.warning(f"STT check failed: {e}")
-        
-        
-        if agent.config.get("stt_wake_word_enabled", False):
-            try:
-                tui.event("WakeWord", "Preloading wake word models...", style="dim")
-                from vaf.core.wake_word import WakeWordManager
-                ww = WakeWordManager.get_instance()
-                
-                # Trigger model loading by checking availability
-                if ww.is_available():
-                    tui.event("WakeWord", "Wake word models ready", style="success")
-                else:
-                    tui.warning("Wake word enabled but dependencies missing")
-            except Exception as e:
-                tui.warning(f"Wake word preload failed: {e}")
         
         # Preload Language Identification (if installed) to prevent lag during chat
         try:
@@ -1057,42 +1042,8 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     notifier_thread = threading.Thread(target=result_notifier, daemon=True)
     notifier_thread.start()
 
-    # ═══════════════════════════════════════════════════════════════
-    # WAKE WORD DETECTION (Background) - 100% Local & Free
-    # ═══════════════════════════════════════════════════════════════
-    wake_word_manager = None
+    # Flag used to break from input_box when Web UI sends a message (no wake word)
     wake_word_detected_flag = threading.Event()
-
-    if agent.config.get("stt_wake_word_enabled", False):
-        try:
-            from vaf.core.speech import WakeWordManager
-            wake_word_manager = WakeWordManager.get_instance()
-
-            if wake_word_manager.is_available():
-                def on_wake_word_detected():
-                    """Callback when wake word is detected."""
-                    # DEBUG: Log that flag is being set
-                    try:
-                        with open("C:\\Users\\mert1\\wake_word_debug.log", "a") as f:
-                            f.write(f"{datetime.now()}: Callback: Setting wake_word_detected_flag...\n")
-                    except:
-                        pass
-
-                    wake_word_detected_flag.set()
-
-                    # DEBUG: Confirm flag was set
-                    try:
-                        with open("C:\\Users\\mert1\\wake_word_debug.log", "a") as f:
-                            f.write(f"  Flag is_set: {wake_word_detected_flag.is_set()}\n")
-                    except:
-                        pass
-
-                wake_word_manager.start_listening(on_wake_word_detected)
-                # Wake word active - shown in status bar, no need for message
-            else:
-                tui.warning("Wake Word enabled but dependencies missing. Install: pip install openwakeword pyaudio")
-        except Exception as e:
-            tui.warning(f"Wake Word setup failed: {e}")
 
     # Interactive loop
     console_broken = False
@@ -1131,36 +1082,8 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
             except Exception:
                 pass # Ignore rendering errors in status bar
 
-            # 0. Check for Wake Word Trigger (Early Check - before input box)
-            if wake_word_detected_flag.is_set():
-                # DEBUG: Log early detection
-                try:
-                    with open("C:\\Users\\mert1\\wake_word_debug.log", "a") as f:
-                        f.write(f"{datetime.now()}: Early check detected wake word! Starting STT...\n")
-                except:
-                    pass
-
-                wake_word_detected_flag.clear()
-
-                # CRITICAL: Stop TTS before starting STT
-                try:
-                    from vaf.core.speech import get_speech_manager
-                    sm = get_speech_manager()
-                    sm.stop()
-                except Exception:
-                    pass
-
-                # Give user feedback that wake word was heard
-                tui.console.print("🎤 [bold green]Wake word detected![/] Starting voice input...\n")
-
-                # Start listening UI immediately
-                captured = tui.listen_overlay()
-                if captured:
-                    tui.event("User (Voice)", captured, style="normal")
-                    _process_agent_message(agent, captured, tui, current_session)
-
-                # Loop back immediately to skip normal input prompt
-                continue
+            # Clear input-break flag from previous iteration (used by Web UI message path)
+            wake_word_detected_flag.clear()
 
             # CHECK FOR SUB-AGENT RESULTS before showing input prompt
             # This prevents unnecessary wait for user input when results are ready
@@ -1910,9 +1833,7 @@ Created: {current_session.created_at}
                     continue
                 
                 elif cmd in ("listen", "l"):
-                    # Clear any pending wake word trigger to prevent "ghost" activations later
-                    if 'wake_word_detected_flag' in locals() and wake_word_detected_flag.is_set():
-                        wake_word_detected_flag.clear()
+                    wake_word_detected_flag.clear()
 
                     # CRITICAL: Stop TTS before starting STT to prevent interference
                     try:
@@ -1942,10 +1863,6 @@ Created: {current_session.created_at}
                 
                 elif cmd in ("restart", "reload", "r"):
                     tui.event("System", "Restarting VAF...", style="warning")
-                    
-                    # Stop background threads if possible
-                    if wake_word_manager:
-                        wake_word_manager.stop_listening()
 
                     # Kill Web UI process before restart (Critically important!)
                     if npm_process:
@@ -2009,11 +1926,6 @@ Created: {current_session.created_at}
         except KeyboardInterrupt:
             tui.newline()
             if tui.confirm("Exit?"):
-                # Stop wake word listener if running
-                if wake_word_manager and wake_word_manager.is_listening():
-                    wake_word_manager.stop_listening()
-                    tui.event("WakeWord", "Stopped listening", style="dim")
-
                 _handle_exit(tui, session_mgr, current_session)
                 break
         except Exception as e:
@@ -2036,10 +1948,6 @@ Created: {current_session.created_at}
                 traceback.print_exc()
 
     # Cleanup
-    # Stop wake word listener if still running
-    if wake_word_manager and wake_word_manager.is_listening():
-        wake_word_manager.stop_listening()
-
     # Kill Web UI process if running
     if npm_process:
         try:

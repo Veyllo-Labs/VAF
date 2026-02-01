@@ -66,12 +66,19 @@ class Config:
                 
                 # Voice / STT Settings
                 "stt_enabled": False,                  # Enable Speech-to-Text
-                "stt_wake_word_enabled": False,        # Enable Wake Word detection (Auto Mode)
-                "stt_wake_word": "hey_jarvis",         # Wake Word model name (openWakeWord)
+                "speech_stt_engine": "docker",         # STT engine: "docker" (default) or "local" (faster-whisper)
+                "speech_stt_docker_url": "http://localhost:5003",  # When engine=docker; STT container port 5003 (maps to 9000)
 
-                # TTS Settings
+                # STT (Whisper) - only when engine=local; keep "base" to avoid 20GB+ spikes
+                "speech_stt_whisper_model": "base",    # faster-whisper: tiny, base, small, medium, large-v3
+
+                # TTS Settings (Web UI uses Docker TTS by default; piper=local, system=pyttsx3, docker=HTTP in Docker)
                 "speech_tts_enabled": False,           # Enable Text-to-Speech
-                "speech_tts_engine": "piper",          # TTS engine: "piper" or "system"
+                "speech_tts_engine": "docker",         # TTS engine: "docker" (default), "piper", or "system"
+                "speech_tts_docker_url": "http://localhost:5002",  # Default/fallback TTS URL
+                "speech_tts_docker_url_de": "http://localhost:5002",   # German voice (optional)
+                "speech_tts_docker_url_en": "http://localhost:5004",   # English voice (optional)
+                "speech_tts_docker_url_fr": "http://localhost:5006",   # French voice (optional)
                 "tts_auto_speak": False,               # Auto-speak agent responses in browser
                 
                 # Librarian Agent settings
@@ -135,7 +142,12 @@ class Config:
         try:
             with open(cls.CONFIG_FILE, "r") as f:
                 data = json.load(f)
-                return {**cls.DEFAULTS, **data}
+            result = {**cls.DEFAULTS, **data}
+            # Apply defaults when saved value is missing or empty (so UI/API always get valid URLs)
+            for key in ("speech_tts_docker_url", "speech_tts_docker_url_de", "speech_tts_docker_url_en", "speech_tts_docker_url_fr", "speech_stt_docker_url"):
+                if key in cls.DEFAULTS and not (result.get(key) or "").strip():
+                    result[key] = cls.DEFAULTS[key]
+            return result
         except Exception:
             return cls.DEFAULTS.copy()
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
@@ -1431,7 +1431,7 @@ export default function VAFDashboard() {
             case 'NotFoundError':
                 return 'No microphone found. Please connect a microphone and try again.';
             case 'NotReadableError':
-                return 'Microphone is busy or unavailable. Close other apps using it and try again.';
+                return 'Microphone is busy or unavailable. Close other apps using it, refresh this page, then try again.';
             case 'OverconstrainedError':
                 return 'Microphone constraints could not be satisfied. Try a different device.';
             case 'SecurityError':
@@ -1461,10 +1461,9 @@ export default function VAFDashboard() {
         }
 
         try {
-            if (mediaStreamRef.current) {
-                mediaStreamRef.current.getTracks().forEach(track => track.stop());
-                mediaStreamRef.current = null;
-            }
+            // Release any previous mic/recorder so the device is free (reduces NotReadableError)
+            releaseMic();
+            await new Promise((r) => setTimeout(r, 400));
 
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             mediaStreamRef.current = stream;
@@ -1570,12 +1569,47 @@ export default function VAFDashboard() {
         }
     };
 
+    const releaseMic = useCallback(() => {
+        if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = null;
+        }
+        if (audioContextRef.current) {
+            audioContextRef.current.close().catch(() => {});
+            audioContextRef.current = null;
+        }
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+            try {
+                mediaRecorderRef.current.stop();
+            } catch {
+                // ignore
+            }
+            mediaRecorderRef.current = null;
+        } else {
+            mediaRecorderRef.current = null;
+        }
+        if (mediaStreamRef.current) {
+            mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+            mediaStreamRef.current = null;
+        }
+        setVolume(0);
+        setIsRecording(false);
+    }, []);
+
     const stopRecording = () => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
             mediaRecorderRef.current.stop();
             setIsRecording(false);
+        } else {
+            releaseMic();
         }
     };
+
+    useEffect(() => {
+        return () => {
+            releaseMic();
+        };
+    }, [releaseMic]);
 
     const startEditing = (s: Session) => {
         setEditingId(s.id);

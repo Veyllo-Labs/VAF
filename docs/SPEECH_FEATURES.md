@@ -13,31 +13,19 @@ This document outlines the final architecture for VAF's offline Text-to-Speech (
 ## 🛠️ Technology Stack
 
 ### 1. Text-to-Speech (TTS)
-*   **Primary Engine:** **Piper TTS**
-    *   **Architecture:** Neural (VITS) based, running locally via ONNX.
-    *   **Quality:** High-fidelity human-like voices (e.g., "Thorsten" for German).
-    *   **Distribution:** Managed as an OS-independent binary in `bin/piper/`.
-*   **Fallback Engine:** `pyttsx3` (SAPI5/nsss/espeak)
-    *   Used as a robotic fallback if Piper is unavailable or setup is pending.
+*   **Piper (local):** Neural (VITS) via ONNX binary in `bin/piper/`; high-quality voices (e.g. Thorsten for German).
+*   **System:** `pyttsx3` (SAPI5/nsss/espeak) as fallback.
+*   **Docker:** HTTP TTS service (e.g. Piper in a container). One voice per container (set via `TTS_MODEL_URL` in `.env`). For multi-language (DE + EN) on demand, use **Piper (local)** instead; VAF then downloads and uses the right voice per detected language.
 
 ### 2. Speech-to-Text (STT)
-*   **Library:** `SpeechRecognition` + `pyaudio`.
-*   **Trigger:** Manual (`L + Enter` in chat) or Automatic (Wake Word).
-*   **Engine:** Currently using the system default (Google Web Speech as standard wrapper). 
-*   **Future Upgrade:** Integration of local Whisper (OpenAI) or Vosk for 100% offline STT.
-
-### 3. Wake Word Detection
-*   **Primary Engine:** **openWakeWord**
-    *   **Architecture:** 100% Local, neural network based (ONNX).
-    *   **Features:** Extremely low resource usage, runs in a background thread.
-    *   **Privacy:** No audio is sent to the cloud for detection.
-    *   **Available Models:** `hey_jarvis` (default), `alexa`, `hey_mycroft`, `hey_rhasspy`.
+*   **Trigger:** Manual (`L + Enter` in chat) or Web UI voice button.
+*   **Engine:** **Docker** (default): HTTP STT service (e.g. whisper-asr-webservice). Set `speech_stt_engine` to `"docker"` and `speech_stt_docker_url` to `http://localhost:5003`. **Local:** faster-whisper + ffmpeg for Web UI; `SpeechRecognition` for CLI.
 
 ## 🏗️ Core Implementation (`vaf/core/speech.py`)
 
-VAF uses two distinct managers for audio interaction:
+VAF uses **SpeechManager** for TTS and STT.
 
-### 1. SpeechManager (TTS & STT)
+### SpeechManager (TTS & STT)
 Handles the lifecycle of speech operations:
 
 #### Automated Setup
@@ -57,29 +45,24 @@ To ensure the agent doesn't read its "thoughts" aloud, the integration in `vaf/c
     *   Markdown formatting (bold, italic, headers, lists)
     *   Long URLs (shortened to domain only)
 
-### 2. WakeWordManager (Background Detection)
-Runs a continuous background loop to listen for specific keywords.
-
-#### Trigger Mechanism
-1.  **Detection:** When the wake word (e.g., "Hey Jarvis") is recognized, the manager sets a thread-safe `Event` flag.
-2.  **UI Interruption:** The `input_box` in `tui.py` monitors this flag. If set, it **immediately exits** the input prompt.
-3.  **Auto-Start:** `run.py` detects the exit trigger and instantly launches the `listen_overlay()` (STT window).
-4.  **Hands-Free:** This allows the user to trigger a voice command from across the room without touching the keyboard.
-
 ## ⚙️ Configuration
 
 Managed via `vaf settings` or `vaf.config.json`:
 
 ```json
 {
-  "speech_tts_enabled": true,      // Toggle TTS output
-  "speech_stt_enabled": true,      // Toggle STT input via /listen or 'L'
-  "stt_wake_word_enabled": true,   // Enable background wake word detection
-  "stt_wake_word": "hey_jarvis",   // Choice: hey_jarvis, alexa, hey_rhasspy, etc.
-  "speech_language": "de-DE",      // Language for STT (e.g., "en-US", "tr-TR")
-  "speech_mic_index": 0            // Microphone device index (optional)
+  "speech_tts_enabled": true,        // Toggle TTS output
+  "speech_tts_engine": "piper",      // "piper" | "system" | "docker"
+  "speech_tts_docker_url": "",       // When engine=docker: e.g. http://localhost:5002/synthesize
+  "speech_stt_enabled": true,        // STT via /listen or 'L' or Web UI
+  "speech_stt_engine": "docker",    // "docker" (default) or "local"
+  "speech_stt_docker_url": "http://localhost:5003",  // When engine=docker
+  "speech_language": "de-DE",        // Language for STT (e.g., "en-US", "tr-TR")
+  "speech_mic_index": 0              // Microphone device index (optional)
 }
 ```
+
+**Docker TTS API:** POST JSON `{"text": "...", "lang": "de"}` to the URL; response body is raw WAV bytes or JSON with `"audio_base64"`.
 
 ### Available Commands
 *   `l` or `/listen` - Start speech-to-text input (auto-stops TTS)
@@ -96,10 +79,7 @@ Managed via `vaf settings` or `vaf.config.json`:
 6.  **Audio Playback:** Piper generates a temporary WAV and plays it via system tools.
 
 ### Speech Input (STT)
-1.  **Trigger:**
-    *   **Manual:** User types `l` and presses `Enter`.
-    *   **Automatic:** User says "Hey Jarvis".
-2.  **Auto-Exit:** If `input_box` was active, it closes immediately.
+1.  **Trigger:** User types `l` and presses `Enter` (CLI) or uses the voice button (Web UI).
 3.  **TTS Stop:** Any active TTS playback is immediately stopped.
 4.  **Recording:** TUI shows `● Recording` with real-time energy bar visualization.
 5.  **Silence Detection:** After 1.5 seconds of silence, recording ends.
@@ -107,11 +87,6 @@ Managed via `vaf settings` or `vaf.config.json`:
 7.  **Auto-Send:** Transcribed text is automatically sent as the next user message.
 
 ## 🚀 Troubleshooting
-
-### Wake Word Issues
-*   **Wake Word not recognized:** Check if `openwakeword` and `pyaudio` are installed. Speak clearly. Ensure the correct microphone is selected in settings.
-*   **"File doesn't exist" Error:** VAF automatically attempts to download missing models. Ensure you have an internet connection during the first run.
-*   **UI doesn't react:** Ensure `stt_wake_word_enabled` is set to `true` in settings.
 
 ### TTS Issues
 *   **Robotic voice:** VAF might be using the `pyttsx3` fallback. Check if `bin/piper/` contains the binary.
@@ -121,19 +96,17 @@ Managed via `vaf settings` or `vaf.config.json`:
 ```
 vaf/
 ├── core/
-│   ├── speech.py              # SpeechManager & WakeWordManager classes
+│   ├── speech.py              # SpeechManager (TTS/STT)
 │   ├── speech_fillers.py      # Filler phrases configuration
 │   └── agent.py               # Integration: _speak(), _speak_filler()
 ├── cli/
-│   ├── cmd/run.py             # Main loop with wake word flag checking
-│   └── tui.py                 # Input box with wake word monitoring
+│   ├── cmd/run.py             # Main loop, voice via L+Enter
+│   └── tui.py                 # Input box
 bin/
 └── piper/                     # Piper TTS binary (auto-downloaded)
 models/
 └── voices/                    # ONNX voice models (auto-downloaded)
 ```
-
-**Note:** Wake Word models (`.onnx`) are stored within the `openwakeword` package or auto-downloaded to cache. They are **not** committed to the VAF repository.
 
 ## 🌍 Supported Languages
 

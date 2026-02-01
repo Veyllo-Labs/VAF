@@ -927,54 +927,31 @@ def subagent_provider_menu():
 
 
 def voice_settings_menu():
-    """Configure TTS / STT / Wake Word settings."""
-    
-    # Show loading event because openwakeword import can be slow (Model/ONNX init)
+    """Configure TTS / STT settings."""
     UI.event("Loading", "Initializing voice modules...", style="dim")
-    
-    # Check openWakeWord availability ONCE (outside loop)
-    try:
-        import openwakeword
-        has_wake_word = True
-    except ImportError:
-        has_wake_word = False
 
     while True:
         UI.clear()
         
-        stt_enabled = bool(Config.get("speech_stt_enabled", False))
+        stt_enabled = bool(Config.get("speech_stt_enabled") or Config.get("stt_enabled", False))
         tts_enabled = bool(Config.get("speech_tts_enabled", False))
-        wake_word_enabled = bool(Config.get("stt_wake_word_enabled", False))
-        current_wake_word = Config.get("stt_wake_word", "hey_jarvis")
-        tts_engine = Config.get("speech_tts_engine", "piper")  # "piper" or "system"
+        tts_engine = Config.get("speech_tts_engine", "docker")  # "docker" (default), "piper", or "system"
 
-        UI.panel(f"TTS: {'ON' if tts_enabled else 'OFF'} | STT: {'ON' if stt_enabled else 'OFF'} | Wake Word: {'ON' if wake_word_enabled else 'OFF'} ({current_wake_word})",
-                 title="🎤 TTS / STT / Wake Word Settings", style="highlight")
+        UI.panel(f"TTS: {'ON' if tts_enabled else 'OFF'} | STT: {'ON' if stt_enabled else 'OFF'}",
+                 title="🎤 TTS / STT Settings", style="highlight")
 
         choices = [
             (f"Speech Output (TTS) [{'ON' if tts_enabled else 'OFF'}]", 'toggle_tts'),
-            (f"TTS Engine: {tts_engine.upper()} ({'Neural' if tts_engine == 'piper' else 'Native'})", 'tts_engine'),
+            (f"TTS Engine: {tts_engine} (piper/system/docker)", 'tts_engine'),
             ("─────────────────", None),
             (f"Speech-to-Text (STT) [{'ON' if stt_enabled else 'OFF'}]", 'toggle_stt'),
             ("Select Microphone", 'mic'),
             ("Select Input Language", 'lang'),
             ("─────────────────", None),
-        ]
-
-        if has_wake_word:
-            choices.extend([
-                (f"Wake Word Detection (Auto Mode) [{'ON' if wake_word_enabled else 'OFF'}]", 'toggle_wake'),
-                (f"Select Wake Word (Current: {current_wake_word})", 'select_wake'),
-            ])
-        else:
-            choices.append(("[dim]Wake Word (Install openwakeword first)[/dim]", None))
-            
-        choices.extend([
-            ("─────────────────", None),
             ("Back", "back")
-        ])
+        ]
         
-        questions = [inquirer.List('action', message="TTS / STT / Wake Word Settings", choices=choices)]
+        questions = [inquirer.List('action', message="TTS / STT Settings", choices=choices)]
         answers = inquirer.prompt(questions)
         
         if not answers or answers['action'] == 'back':
@@ -988,11 +965,15 @@ def voice_settings_menu():
             UI.event("Settings", f"TTS {'enabled' if new_val else 'disabled'}", style="success")
 
         elif action == 'tts_engine':
-            # Toggle between piper and system
-            new_engine = "system" if tts_engine == "piper" else "piper"
-            Config.set("speech_tts_engine", new_engine)
-            engine_name = "Neural (Piper)" if new_engine == "piper" else "Native (System)"
+            # Cycle: piper -> system -> docker -> piper
+            next_engine = {"docker": "piper", "piper": "system", "system": "docker"}.get(tts_engine, "docker")
+            Config.set("speech_tts_engine", next_engine)
+            engine_name = {"piper": "Piper (local)", "system": "System (pyttsx3)", "docker": "Docker (HTTP)"}.get(next_engine, next_engine)
             UI.event("Settings", f"TTS Engine set to: {engine_name}", style="success")
+            if next_engine == "docker":
+                url = Config.get("speech_tts_docker_url", "")
+                if not url:
+                    UI.warning("Set speech_tts_docker_url in config (e.g. http://localhost:5002/synthesize)")
             time.sleep(1.0)
         
         elif action == 'toggle_stt':
@@ -1030,21 +1011,6 @@ def voice_settings_menu():
             if ans and ans['lang']:
                 Config.set("speech_language", ans['lang'])
                 UI.success(f"Language set to: {ans['lang']}")
-                
-        elif action == 'toggle_wake':
-            new_val = not wake_word_enabled
-            Config.set("stt_wake_word_enabled", new_val)
-            UI.event("Settings", f"Wake Word {'enabled' if new_val else 'disabled'}", style="success")
-
-        elif action == 'select_wake':
-            # Available openWakeWord models (free & local)
-            from vaf.core.speech import WakeWordManager
-            keywords = WakeWordManager.get_instance().get_available_models()
-            q = [inquirer.List('kw', message="Select Wake Word Model", choices=keywords)]
-            ans = inquirer.prompt(q)
-            if ans and ans['kw']:
-                Config.set("stt_wake_word", ans['kw'])
-                UI.success(f"Wake Word set to: {ans['kw']}")
             
         time.sleep(0.5)
 

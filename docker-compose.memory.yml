@@ -1,7 +1,6 @@
 # VAF Memory System - Docker Compose
 # ====================================
-# This is the ONLY compose file for DB, Redis, and Sandbox.
-# Containers: vaf-memory-db (Postgres), vaf-redis (Redis), vaf-sandbox (Python).
+# Containers: postgres (Memory/Auth DB), redis, sandbox, tts, stt.
 #
 # Start (from project root):
 #   docker compose -f docker-compose.memory.yml up -d
@@ -12,10 +11,13 @@
 # See: docs/DOCKER_SERVICES.md
 #
 # Contains:
-#   - PostgreSQL 16 + pgvector (vector DB for Memory/RAG)
+#   - PostgreSQL 16 + pgvector (vector DB for Memory/RAG + Auth/User DB – do not remove/alter)
 #   - Redis 7 (cache for embeddings, sessions)
 #   - Python sandbox (safe code execution)
-#   - Persistent volumes and health checks
+#   - TTS (Piper HTTP) – optional, for speech_tts_engine=docker
+#   - STT (Whisper HTTP) – optional, for local STT via Docker
+#
+# IMPORTANT: Postgres volume vaf_pgdata holds Memory and Auth/User data. Do not replace or wipe it.
 
 services:
   # ==========================================================================
@@ -107,7 +109,65 @@ services:
         reservations:
           memory: 64M
 
+  # ==========================================================================
+  # TTS (Piper HTTP) – optional; use with speech_tts_engine=docker
+  # Set speech_tts_docker_url to http://localhost:5002 (or /synthesize if required by image)
+  # ==========================================================================
+  tts:
+    image: artibex/piper-http:latest
+    container_name: vaf-tts
+    restart: unless-stopped
+    ports:
+      - "${TTS_PORT:-5002}:5000"
+    environment:
+      # Piper voice: German (Thorsten) by default so German text sounds correct. Override with TTS_MODEL_URL for English etc.
+      MODEL_DOWNLOAD_LINK: ${TTS_MODEL_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx}
+    volumes:
+      - vaf_tts_models:/root/.local/share/piper
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5000/health 2>/dev/null || exit 0"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - vaf-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  # ==========================================================================
+  # STT (Whisper HTTP) – optional; for local STT via Docker instead of in-process
+  # VAF uses POST /asr with multipart file (audio/webm). Set speech_stt_engine=docker and speech_stt_docker_url=http://localhost:5003
+  # ==========================================================================
+  stt:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: vaf-stt
+    restart: unless-stopped
+    ports:
+      - "${STT_PORT:-5003}:9000"
+    volumes:
+      - vaf_stt_models:/root/.cache/whisper
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health 2>/dev/null || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - vaf-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
 volumes:
+  # DB volume – holds Memory + Auth/User data; do not remove or replace
   vaf_pgdata:
     name: vaf_memory_pgdata
     driver: local
@@ -116,6 +176,18 @@ volumes:
     driver: local
   vaf_sandbox:
     name: vaf_sandbox_workspace
+    driver: local
+  vaf_tts_models:
+    name: vaf_tts_models
+    driver: local
+  vaf_tts_models_en:
+    name: vaf_tts_models_en
+    driver: local
+  vaf_tts_models_fr:
+    name: vaf_tts_models_fr
+    driver: local
+  vaf_stt_models:
+    name: vaf_stt_models
     driver: local
 
 networks:

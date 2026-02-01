@@ -111,22 +111,84 @@ def check_singleton():
         return None
 
 
-def ensure_memory_stack_up():
-    """Start Docker memory stack (Postgres, Redis, Sandbox) if Docker is available. Non-blocking, fails silently."""
+def _is_docker_daemon_running():
+    """Return True if Docker daemon is reachable (docker info succeeds)."""
     try:
-        project_root = Path(__file__).resolve().parents[1]
-        compose_file = project_root / "docker-compose.memory.yml"
-        if not compose_file.exists():
+        kwargs = {"check": True, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        subprocess.run(["docker", "info"], **kwargs, timeout=5)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _attempt_docker_daemon_start():
+    """Try to start Docker Desktop (Windows/macOS) so the daemon becomes available. Fails silently."""
+    try:
+        if platform.system() == "Darwin":
+            log("Tray", "Starting Docker Desktop (macOS)...")
+            subprocess.run(["open", "-a", "Docker"], check=True)
+        elif platform.system() == "Windows":
+            log("Tray", "Starting Docker Desktop (Windows)...")
+            docker_path = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
+            if os.path.exists(docker_path):
+                subprocess.Popen(
+                    [docker_path],
+                    start_new_session=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                subprocess.Popen(
+                    ["Docker Desktop.exe"],
+                    shell=True,
+                    start_new_session=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+        else:
+            subprocess.run(["docker", "ps"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+    except Exception as e:
+        log("Tray", f"Docker Desktop start attempt failed: {e}")
+
+
+def ensure_memory_stack_up():
+    """Start Docker memory stack (Postgres, Redis, Sandbox, TTS, STT). If Docker daemon is not running, try to start Docker Desktop and wait for it."""
+    try:
+        # If Docker is not running, try to start Docker Desktop and wait for daemon (RAG needs DB)
+        if not _is_docker_daemon_running():
+            _attempt_docker_daemon_start()
+            log("Tray", "Waiting for Docker daemon (max 60s)...")
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                if _is_docker_daemon_running():
+                    log("Tray", "Docker daemon is ready")
+                    break
+                time.sleep(2)
+            else:
+                log("Tray", "Docker daemon did not become ready; memory stack (RAG DB) may be unavailable")
+                return
+
+        # Repo root: compose file in cwd or next to vaf/ (parents[1] from vaf/tray.py)
+        cwd_file = Path.cwd() / "docker-compose.memory.yml"
+        parent_file = Path(__file__).resolve().parents[1] / "docker-compose.memory.yml"
+        if cwd_file.exists():
+            project_root = Path.cwd()
+        elif parent_file.exists():
+            project_root = Path(__file__).resolve().parents[1]
+        else:
             return
-        # Prefer 'docker compose' (v2), fallback to 'docker-compose' (v1)
-        for cmd in (["docker", "compose", "-f", "docker-compose.memory.yml", "up", "-d"],
-                    ["docker-compose", "-f", "docker-compose.memory.yml", "up", "-d"]):
+        compose_file = project_root / "docker-compose.memory.yml"
+        # TTS and STT are default services in docker-compose.memory.yml (no profile)
+        for cmd in (
+            ["docker", "compose", "-f", "docker-compose.memory.yml", "up", "-d"],
+            ["docker-compose", "-f", "docker-compose.memory.yml", "up", "-d"],
+        ):
             try:
                 kwargs = {"cwd": str(project_root), "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
                 if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
                     kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
                 subprocess.Popen(cmd, **kwargs)
-                log("Tray", "Memory stack (DB/Redis/Sandbox) start requested via Docker")
+                log("Tray", "Memory stack (DB/Redis/Sandbox/TTS/STT) start requested via Docker")
                 return
             except FileNotFoundError:
                 continue
@@ -135,24 +197,29 @@ def ensure_memory_stack_up():
 
 
 def stop_memory_stack():
-    """Stop Docker memory stack (Postgres, Redis, Sandbox). Uses 'stop' to preserve containers."""
+    """Stop Docker memory stack (Postgres, Redis, Sandbox, TTS, STT). Uses 'stop' to preserve containers and data."""
     try:
-        project_root = Path(__file__).resolve().parents[1]
-        compose_file = project_root / "docker-compose.memory.yml"
-        if not compose_file.exists():
+        cwd_file = Path.cwd() / "docker-compose.memory.yml"
+        parent_file = Path(__file__).resolve().parents[1] / "docker-compose.memory.yml"
+        if cwd_file.exists():
+            project_root = Path.cwd()
+        elif parent_file.exists():
+            project_root = Path(__file__).resolve().parents[1]
+        else:
             return
+        compose_file = project_root / "docker-compose.memory.yml"
         # Use 'stop' instead of 'down' to preserve containers (faster restart, keeps data)
-        # 'down' removes containers, 'stop' just stops them
-        # Prefer 'docker compose' (v2), fallback to 'docker-compose' (v1)
-        for cmd in (["docker", "compose", "-f", "docker-compose.memory.yml", "stop"],
-                    ["docker-compose", "-f", "docker-compose.memory.yml", "stop"]):
+        for cmd in (
+            ["docker", "compose", "-f", "docker-compose.memory.yml", "stop"],
+            ["docker-compose", "-f", "docker-compose.memory.yml", "stop"],
+        ):
             try:
                 kwargs = {"cwd": str(project_root), "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
                 if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
                     kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                result = subprocess.run(cmd, **kwargs, timeout=30)
+                result = subprocess.run(cmd, **kwargs, timeout=60)
                 if result.returncode == 0:
-                    log("Tray", "Memory stack (DB/Redis/Sandbox) stopped via Docker")
+                    log("Tray", "Memory stack (DB/Redis/Sandbox/TTS/STT) stopped via Docker")
                 return
             except FileNotFoundError:
                 continue

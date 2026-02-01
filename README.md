@@ -87,9 +87,11 @@ source venv/bin/activate  # or venv\Scripts\activate on Windows
 pip install -e .
 pip install -r requirements.txt
 
-# (Optional) Start Memory System database
+# (Optional) Start Memory System database (Postgres + Redis + Sandbox)
 docker compose -f docker-compose.memory.yml up -d
 ```
+
+If you don't see DB/Redis/Sandbox containers in Docker, use the same file—see [docs/DOCKER_SERVICES.md](docs/DOCKER_SERVICES.md).
 
 For platform-specific troubleshooting, see [docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md).
 

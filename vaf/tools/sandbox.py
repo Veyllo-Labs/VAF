@@ -20,7 +20,11 @@ class DockerSandbox:
     def _is_daemon_running(self) -> bool:
         """Checks if the Docker daemon is responding."""
         try:
-            subprocess.run(["docker", "info"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            import platform
+            kwargs = {"check": True, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+            if platform.system() == "Windows":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            subprocess.run(["docker", "info"], **kwargs)
             return True
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
@@ -39,10 +43,10 @@ class DockerSandbox:
                 # Try common installation path
                 docker_path = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
                 if os.path.exists(docker_path):
-                    subprocess.Popen([docker_path], start_new_session=True)
+                    subprocess.Popen([docker_path], start_new_session=True, creationflags=subprocess.CREATE_NO_WINDOW)
                 else:
                     # Fallback: Just try the command if it's in PATH
-                    subprocess.Popen(["Docker Desktop.exe"], shell=True, start_new_session=True)
+                    subprocess.Popen(["Docker Desktop.exe"], shell=True, start_new_session=True, creationflags=subprocess.CREATE_NO_WINDOW)
             elif sys_os == "Linux":
                 # On Linux, we rely on socket activation, but can try a kickstart
                 logger.info("Attempting to trigger docker.socket...")
@@ -73,13 +77,16 @@ class DockerSandbox:
 
         logger.info(f"Starting sandbox container: {self.container_name} ({self.image})")
         
+        import platform
+        _win_flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if platform.system() == "Windows" else {}
+
         try:
             # Check if image exists locally
-            subprocess.run(["docker", "image", "inspect", self.image], 
-                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["docker", "image", "inspect", self.image],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **_win_flags)
         except subprocess.CalledProcessError:
             logger.info(f"Image {self.image} not found locally, pulling...")
-            subprocess.run(["docker", "pull", self.image], check=True)
+            subprocess.run(["docker", "pull", self.image], check=True, **_win_flags)
 
         # Run container with resource limits and auto-remove
         cmd = [
@@ -89,9 +96,9 @@ class DockerSandbox:
             "--cpus", "0.5",     # Limit CPU
             self.image, "sleep", "infinity"
         ]
-        
+
         try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, **_win_flags)
             self.is_running = True
             time.sleep(1)
         except subprocess.CalledProcessError as e:
@@ -101,10 +108,13 @@ class DockerSandbox:
     def stop(self):
         """Kills and removes the container."""
         if self.is_running:
+            import platform
             logger.info(f"Stopping sandbox: {self.container_name}")
             # -f forces removal even if running
-            subprocess.run(["docker", "rm", "-f", self.container_name], 
-                           check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            kwargs = {"check": False, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+            if platform.system() == "Windows":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            subprocess.run(["docker", "rm", "-f", self.container_name], **kwargs)
             self.is_running = False
 
     def execute(self, command: str, timeout: int = 30, workdir: str = "/") -> Tuple[int, str, str]:
@@ -127,12 +137,11 @@ class DockerSandbox:
         ]
         
         try:
-            result = subprocess.run(
-                exec_cmd, 
-                capture_output=True, 
-                text=True, 
-                timeout=timeout
-            )
+            import platform
+            kwargs = {"capture_output": True, "text": True, "timeout": timeout}
+            if platform.system() == "Windows":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            result = subprocess.run(exec_cmd, **kwargs)
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
             logger.warning(f"Command timed out after {timeout}s: {command}")

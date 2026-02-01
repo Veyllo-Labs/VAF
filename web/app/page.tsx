@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
@@ -119,7 +120,8 @@ const parseContent = (content: string): { thought: string | null; answer: string
     return { thought: null, answer: merged, isThinkingComplete: true };
 };
 
-const backendBaseUrl = "http://localhost:8001";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+const backendBaseUrl = API_BASE;
 
 const normalizeDownloadHref = (rawHref: string): string => {
     if (!rawHref) return rawHref;
@@ -160,7 +162,7 @@ const renderMarkdownLinks = (text: string): React.ReactNode[] => {
                 href={href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-600 underline break-all hover:text-blue-700"
+                className="text-gray-700 underline break-all hover:text-gray-900"
             >
                 {label}
             </a>
@@ -241,7 +243,7 @@ const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isCo
             >
                 <span className="flex items-center gap-2">
                     {!isComplete ? (
-                        <Loader2 size={14} className="animate-spin text-blue-500" />
+                        <Loader2 size={14} className="animate-spin text-gray-500" />
                     ) : (
                         <Activity size={14} />
                     )}
@@ -316,7 +318,7 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
                             isLoading ? "border-gray-300 text-gray-700 shadow-sm" :
                                 isRouter ? "border-orange-200 text-orange-500" :
                                     isSafety ? "border-red-200 text-red-500" :
-                                        isWorkflow ? "border-blue-200 text-blue-500" : "border-gray-200 text-gray-400"
+                                        isWorkflow ? "border-gray-200 text-gray-500" : "border-gray-200 text-gray-400"
                         )}>
                             {isLoading ? <Loader2 size={10} className="animate-spin" /> :
                                 isRouter ? <GitBranch size={10} /> :
@@ -337,6 +339,23 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
 };
 
 export default function VAFDashboard() {
+    const router = useRouter();
+    const [authChecking, setAuthChecking] = useState(true);
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+    useEffect(() => {
+        fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' })
+            .then((res) => {
+                if (res.ok) {
+                    setIsAuthenticated(true);
+                } else {
+                    router.replace('/login');
+                }
+            })
+            .catch(() => router.replace('/login'))
+            .finally(() => setAuthChecking(false));
+    }, [router]);
+
     const [input, setInput] = useState('');
     const [suggestion, setSuggestion] = useState('');
     const [messages, setMessages] = useState<Message[]>([]);
@@ -698,9 +717,12 @@ export default function VAFDashboard() {
         ws?.send(JSON.stringify({ type: 'load_session', id }));
     };
 
+    const [reconnectAttempt, setReconnectAttempt] = useState(0);
     useEffect(() => {
         if (typeof window === 'undefined') return;
-        const socket = new WebSocket('ws://localhost:8001/ws');
+        const wsUrl = (API_BASE || 'http://localhost:8001').replace(/^http/, 'ws') + '/ws';
+        const socket = new WebSocket(wsUrl);
+        let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
         socket.onopen = () => {
             setStatus('connected');
             socket.send(JSON.stringify({ type: 'get_sessions' }));
@@ -1160,6 +1182,14 @@ export default function VAFDashboard() {
                 else if (data.type === 'config_saved') {
                     // Refresh config to confirm save
                     ws?.send(JSON.stringify({ type: 'get_config' }));
+                    // If network settings changed, page needs refresh after frontend restart
+                    if (data.requires_refresh) {
+                        // Show notification and reload after servers restart (both frontend and backend)
+                        alert('Network settings changed. Both servers will restart. The page will reload in a few seconds...');
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 8000); // Wait for both frontend and backend to fully restart (2s stop + startup time)
+                    }
                 }
                 else if (data.type === 'models_list') {
                     setAvailableModels(data.models || []);
@@ -1216,12 +1246,27 @@ export default function VAFDashboard() {
                 else if (data.type === 'autosuggest_result') {
                     setSuggestion(data.suggestion || '');
                 }
+                else if (data.type === 'generation_stopped') {
+                    setLoading(false);
+                    setLoadingMessageId(null);
+                }
             } catch (e) { console.error(e); }
         };
-        socket.onclose = () => setStatus('disconnected');
+        socket.onclose = () => {
+            setStatus('disconnected');
+            setWs(null);
+            reconnectTimeout = setTimeout(() => {
+                setStatus('connecting');
+                setReconnectAttempt((a) => a + 1);
+            }, 3000);
+        };
+        socket.onerror = () => setStatus('disconnected');
         setWs(socket);
-        return () => socket.close();
-    }, []);
+        return () => {
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            socket.close();
+        };
+    }, [reconnectAttempt]);
 
     useEffect(() => {
         if (ws && status === 'connected' && input.length >= 2) {
@@ -1242,6 +1287,15 @@ export default function VAFDashboard() {
     useEffect(() => {
         setSttEnabled(config.stt_enabled === true);
     }, [config]);
+
+    const stopGeneration = () => {
+        if (!ws || !currentSessionId) return;
+        ws.send(JSON.stringify({
+            type: 'stop_generation',
+            sessionId: currentSessionId
+        }));
+        setLoading(false);
+    };
 
     const sendMessage = async (e?: React.FormEvent, overrideText?: string) => {
         e?.preventDefault();
@@ -1625,6 +1679,22 @@ export default function VAFDashboard() {
 
     const chatWidthClass = subAgentState.isOpen ? 'max-w-3xl' : 'max-w-4xl';
 
+    if (authChecking) {
+        return (
+            <main className="h-screen flex flex-col items-center justify-center bg-gray-50">
+                <div className="w-10 h-10 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin" />
+                <p className="mt-4 text-sm text-gray-500">Checking session…</p>
+            </main>
+        );
+    }
+    if (!isAuthenticated) {
+        return (
+            <main className="h-screen flex flex-col items-center justify-center bg-gray-50">
+                <p className="text-sm text-gray-500">Redirecting to login…</p>
+            </main>
+        );
+    }
+
     return (
         <main className="h-screen flex flex-col bg-gray-50 text-gray-900 font-sans overflow-hidden">
 
@@ -1664,7 +1734,7 @@ export default function VAFDashboard() {
                                     {editingId === s.id ? (
                                         <input
                                             autoFocus
-                                            className="w-full text-xs border-b border-indigo-500 focus:outline-none bg-transparent"
+                                            className="w-full text-xs border-b border-gray-500 focus:outline-none bg-transparent"
                                             value={editName}
                                             onChange={e => setEditName(e.target.value)}
                                             onKeyDown={e => {
@@ -1719,8 +1789,15 @@ export default function VAFDashboard() {
                     {/* Status Footer - Redesigned */}
                     <div className="p-3 mt-auto mb-2 flex flex-col gap-1 w-full overflow-hidden">
 
-                        {/* Connection Indicator */}
-                        <div className="flex items-center gap-3 p-2 rounded-lg justify-start transition-all duration-300">
+                        {/* Connection Indicator – click to reconnect when disconnected */}
+                        <div
+                            className={cn(
+                                "flex items-center gap-3 p-2 rounded-lg justify-start transition-all duration-300",
+                                !isConnected && "cursor-pointer hover:bg-gray-100"
+                            )}
+                            onClick={() => { if (!isConnected) { setStatus('connecting'); setReconnectAttempt((a) => a + 1); } }}
+                            title={!isConnected ? 'Click to reconnect' : undefined}
+                        >
                             <div className="w-6 flex justify-center shrink-0">
                                 <div
                                     className={cn(
@@ -1954,7 +2031,7 @@ export default function VAFDashboard() {
                                         >
                                             <div className={cn(
                                                 "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200",
-                                                suggestionType === 'tool' ? "bg-orange-100 text-orange-600" : "bg-blue-100 text-blue-600",
+                                                suggestionType === 'tool' ? "bg-orange-100 text-orange-600" : "bg-gray-100 text-gray-600",
                                                 idx === selectedSuggestionIndex && (
                                                     suggestionType === 'tool' 
                                                         ? "shadow-[0_0_12px_rgba(249,115,22,0.5)] scale-105" 
@@ -1991,6 +2068,20 @@ export default function VAFDashboard() {
                                         </>
                                     )}
                                 </span>
+                            </div>
+                        )}
+
+                        {/* Stop Generation Button - centered above message box */}
+                        {loading && (
+                            <div className={cn(chatWidthClass, "mx-auto flex justify-center mb-2")}>
+                                <button
+                                    type="button"
+                                    onClick={stopGeneration}
+                                    className="px-4 py-1.5 rounded-full bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-all shadow-md flex items-center gap-2"
+                                >
+                                    <Square size={12} fill="currentColor" />
+                                    Stop
+                                </button>
                             </div>
                         )}
 

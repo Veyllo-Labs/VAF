@@ -16,6 +16,14 @@ from typing import Optional, Dict, List, Tuple
 from pathlib import Path
 
 
+def _get_subprocess_kwargs() -> dict:
+    """Get platform-specific kwargs for headless subprocess execution."""
+    kwargs = {}
+    if platform.system() == "Windows":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    return kwargs
+
+
 class GPUInfo:
     """Information about a detected GPU."""
     def __init__(self, vendor: str, model: str = "", vram_mb: int = 0, 
@@ -40,7 +48,8 @@ def detect_nvidia_gpu() -> Optional[GPUInfo]:
             ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            **_get_subprocess_kwargs()
         )
         
         if result.returncode != 0:
@@ -128,7 +137,8 @@ def detect_amd_gpu() -> Optional[GPUInfo]:
                 ["rocm-smi", "--showid", "--showproductname", "--showmeminfo", "vram"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
+                **_get_subprocess_kwargs()
             )
             
             if result.returncode == 0:
@@ -273,7 +283,8 @@ def detect_intel_gpu() -> Optional[GPUInfo]:
                     ["lspci", "-v"],
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
+                    **_get_subprocess_kwargs()
                 )
                 
                 if result.returncode == 0:
@@ -339,7 +350,8 @@ def _check_rocm_available() -> bool:
             result = subprocess.run(
                 ["rocm-smi", "--version"],
                 capture_output=True,
-                timeout=2
+                timeout=2,
+                **_get_subprocess_kwargs()
             )
             if result.returncode == 0:
                 return True

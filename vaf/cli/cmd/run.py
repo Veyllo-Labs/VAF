@@ -276,12 +276,10 @@ global_agent = None
 def _check_git_installed() -> bool:
     """Check if Git is installed on the system. OS-independent."""
     try:
-        result = subprocess.run(
-            ['git', '--version'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
+        kwargs = {'capture_output': True, 'text': True, 'timeout': 5}
+        if platform.system() == "Windows":
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        result = subprocess.run(['git', '--version'], **kwargs)
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
@@ -333,13 +331,14 @@ def _try_install_git() -> tuple[bool, str]:
                     ['winget', 'install', '--id', 'Git.Git', '--silent', '--accept-package-agreements', '--accept-source-agreements'],
                     capture_output=True,
                     text=True,
-                    timeout=300  # 5 minutes
+                    timeout=300,  # 5 minutes
+                    creationflags=subprocess.CREATE_NO_WINDOW
                 )
                 if result.returncode == 0:
                     return True, "✅ Git installed successfully via winget. Please restart your terminal."
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
-            
+
             # Try chocolatey
             try:
                 result = subprocess.run(
@@ -347,13 +346,13 @@ def _try_install_git() -> tuple[bool, str]:
                     capture_output=True,
                     text=True,
                     timeout=300,
-                    shell=True
+                    creationflags=subprocess.CREATE_NO_WINDOW
                 )
                 if result.returncode == 0:
                     return True, "✅ Git installed successfully via Chocolatey. Please restart your terminal."
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
-            
+
             return False, "❌ Could not install Git automatically. Please install manually."
             
         elif system == "Darwin":  # macOS
@@ -967,8 +966,11 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
         if web_enabled:
             try:
                 # 1. Start Python Backend (FastAPI + WebSocket)
-                tui.event("WebUI", "Starting Backend API (Port 8001)...", style="dim")
-                start_background_server(port=8001)
+                # Respect local_network_enabled setting for host binding
+                local_network_enabled = Config.get("local_network_enabled", False)
+                api_host = "0.0.0.0" if local_network_enabled else "127.0.0.1"
+                tui.event("WebUI", f"Starting Backend API (Port 8001, Host: {api_host})...", style="dim")
+                start_background_server(host=api_host, port=8001)
                 
                 # 2. Start Next.js Frontend
                 from vaf.core.frontend_manager import FrontendManager

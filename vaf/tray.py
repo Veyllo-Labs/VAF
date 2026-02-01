@@ -60,6 +60,8 @@ logging.getLogger().addHandler(fh)
 server_mgr = ServerManager()
 tray_context = TrayContext()
 server_thread = None
+uvicorn_server = None  # Global reference for restart capability
+uvicorn_loop = None    # Event loop for the uvicorn server
 
 def check_singleton():
     """Ensure only one instance runs. If another instance is running, notify it to open browser."""
@@ -96,6 +98,58 @@ def check_singleton():
         print("VAF is already running. Notifying existing instance...")
         return None
 
+
+def ensure_memory_stack_up():
+    """Start Docker memory stack (Postgres, Redis, Sandbox) if Docker is available. Non-blocking, fails silently."""
+    try:
+        project_root = Path(__file__).resolve().parents[1]
+        compose_file = project_root / "docker-compose.memory.yml"
+        if not compose_file.exists():
+            return
+        # Prefer 'docker compose' (v2), fallback to 'docker-compose' (v1)
+        for cmd in (["docker", "compose", "-f", "docker-compose.memory.yml", "up", "-d"],
+                    ["docker-compose", "-f", "docker-compose.memory.yml", "up", "-d"]):
+            try:
+                kwargs = {"cwd": str(project_root), "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+                if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
+                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                subprocess.Popen(cmd, **kwargs)
+                log("Tray", "Memory stack (DB/Redis/Sandbox) start requested via Docker")
+                return
+            except FileNotFoundError:
+                continue
+    except Exception as e:
+        logger.debug("[Tray] Memory stack auto-start skipped: %s", e)
+
+
+def stop_memory_stack():
+    """Stop Docker memory stack (Postgres, Redis, Sandbox). Uses 'stop' to preserve containers."""
+    try:
+        project_root = Path(__file__).resolve().parents[1]
+        compose_file = project_root / "docker-compose.memory.yml"
+        if not compose_file.exists():
+            return
+        # Use 'stop' instead of 'down' to preserve containers (faster restart, keeps data)
+        # 'down' removes containers, 'stop' just stops them
+        # Prefer 'docker compose' (v2), fallback to 'docker-compose' (v1)
+        for cmd in (["docker", "compose", "-f", "docker-compose.memory.yml", "stop"],
+                    ["docker-compose", "-f", "docker-compose.memory.yml", "stop"]):
+            try:
+                kwargs = {"cwd": str(project_root), "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+                if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
+                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                result = subprocess.run(cmd, **kwargs, timeout=30)
+                if result.returncode == 0:
+                    log("Tray", "Memory stack (DB/Redis/Sandbox) stopped via Docker")
+                return
+            except FileNotFoundError:
+                continue
+            except subprocess.TimeoutExpired:
+                log("Tray", "Memory stack stop timed out")
+                return
+    except Exception as e:
+        logger.debug("[Tray] Memory stack stop failed: %s", e)
+
 def command_listener(lock_socket):
     """Listens for 'ACTIVATE' signals from other instances."""
     log("Tray", "Starting command listener thread")
@@ -120,6 +174,7 @@ def command_listener(lock_socket):
 
 def start_uvicorn():
     """Start uvicorn server in a separate thread."""
+    global uvicorn_server, uvicorn_loop
     log("Tray", "start_uvicorn thread started")
     try:
         import asyncio
@@ -140,12 +195,13 @@ def start_uvicorn():
             sys.stdin = open(os.devnull, 'r')
 
         pythoncom.CoInitialize()
-        
+
         # Create a new event loop for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        uvicorn_loop = loop
         log("Tray", "Event loop created for Uvicorn")
-        
+
         # Check if port 8001 is available
         import socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -156,37 +212,69 @@ def start_uvicorn():
         else:
             log("Tray", "Port 8001 is free.")
 
-        print("[Tray] Starting Uvicorn thread on port 8001 (0.0.0.0)...")
-        log("Tray", "Initializing Uvicorn Config (0.0.0.0:8001)...")
-        
-        # Listen on 0.0.0.0 to support both IPv4 (127.0.0.1) and IPv6 (::1/localhost)
+        # When local_network_enabled is False, bind only to localhost (not reachable from LAN)
+        local_network_enabled = Config.get("local_network_enabled", False)
+        host = "0.0.0.0" if local_network_enabled else "127.0.0.1"
+        print(f"[Tray] Starting Uvicorn thread on port 8001 ({host})...")
+        log("Tray", f"Initializing Uvicorn Config ({host}:8001)...")
         # log_level="info" to see startup errors
         # use_colors=False to avoid further isatty checks
-        config = uvicorn.Config(app, host="0.0.0.0", port=8001, log_level="info", use_colors=False)
+        config = uvicorn.Config(app, host=host, port=8001, log_level="info", use_colors=False)
         server = uvicorn.Server(config)
-        
+        uvicorn_server = server
+
         # Manually disable signal handlers to prevent main thread interference
         server.install_signal_handlers = lambda: None
-        
+
         # Force reset exit flag in case it was set by signal handlers during init
         server.should_exit = False
-        
+
         log("Tray", "Running Uvicorn server (serve)...")
         try:
             loop.run_until_complete(server.serve())
         except Exception as serve_error:
             log("Tray", f"Uvicorn serve() failed: {serve_error}")
             raise serve_error
-            
+
         log("Tray", "Uvicorn server stopped gracefully (loop ended)")
         log("Tray", "Uvicorn server stopped gracefully")
-        
+
     except Exception as e:
         print(f"Web server thread failed: {e}")
         logger.error(f"Web server failed: {e}")
         log("Tray", f"CRITICAL: Web server thread crashed: {e}")
         import traceback
         log("Tray", traceback.format_exc())
+
+
+def restart_backend_server():
+    """Restart the backend uvicorn server with new network binding settings."""
+    global uvicorn_server, uvicorn_loop, server_thread
+    log("Tray", "Backend server restart requested")
+
+    try:
+        # Stop the current server
+        if uvicorn_server:
+            log("Tray", "Stopping current uvicorn server...")
+            uvicorn_server.should_exit = True
+            # Give it a moment to shut down
+            time.sleep(1)
+
+        # Wait for old thread to finish
+        if server_thread and server_thread.is_alive():
+            log("Tray", "Waiting for old server thread to finish...")
+            server_thread.join(timeout=5)
+
+        # Start new server thread
+        log("Tray", "Starting new server thread with updated settings...")
+        server_thread = threading.Thread(target=start_uvicorn, daemon=True)
+        server_thread.start()
+        log("Tray", "Backend server restart completed")
+        return True
+    except Exception as e:
+        log("Tray", f"Backend server restart failed: {e}")
+        logger.error(f"Backend server restart failed: {e}")
+        return False
 
 def get_icon_path(status):
     """Generate and return path to an icon for the given status using the VAF logo."""
@@ -466,11 +554,11 @@ def quit_app(icon_or_app):
     """Handle quit action with safety check."""
     # Check if CLI is running (heartbeat active)
     if tray_context.active_websockets > 0 or (time.time() - tray_context.last_heartbeat < 30):
-        pass 
+        pass
 
     print("Shutting down...")
     tray_context.should_exit = True
-    
+
     # Stop Web UI (Next.js)
     try:
         from vaf.core.frontend_manager import FrontendManager
@@ -478,8 +566,74 @@ def quit_app(icon_or_app):
     except Exception as e:
         print(f"Error stopping frontend: {e}")
 
+    # Stop Docker memory stack (Postgres, Redis, Sandbox)
+    try:
+        stop_memory_stack()
+    except Exception as e:
+        print(f"Error stopping memory stack: {e}")
+
     server_mgr.stop_server(force_external=True)
     os._exit(0)
+
+def on_config_changed(key, value):
+    """Handle dynamic config changes."""
+    # We only care about network binding changes for now
+    if key in ["local_network_enabled", "local_network_port"]:
+        def _restart_job():
+            # Delay slightly to allow the config save to complete and response to be sent
+            time.sleep(1)
+            
+            # Re-read config to be sure
+            from vaf.core.config import Config
+            is_enabled = Config.get("local_network_enabled", False)
+            target_host = "0.0.0.0" if is_enabled else "127.0.0.1"
+            
+            msg = f"Config change detected: {key}={value}. Restarting servers with host={target_host}..."
+            log("Tray", msg)
+            try: logger.info(f"[Tray] {msg}")
+            except: pass
+            
+            # Restart Frontend (Next.js)
+            try:
+                from vaf.core.frontend_manager import FrontendManager
+                fm = FrontendManager()
+                
+                # Define callback to capture logs
+                def fe_logger(msg, style):
+                    log("Tray", f"[FE] {msg}")
+                    try: logger.info(f"[Tray] [FE] {msg}")
+                    except: pass
+
+                # Stop waiting for exit to ensure we don't hang if it's stubborn
+                log("Tray", "Stopping frontend...")
+                try: logger.info("[Tray] Stopping frontend...")
+                except: pass
+                
+                fm.stop_frontend(wait_for_exit=True)
+                
+                # Restart
+                log("Tray", f"Starting frontend (host={target_host})...")
+                try: logger.info(f"[Tray] Starting frontend (host={target_host})...")
+                except: pass
+                
+                fm.start_frontend(force_restart=True, host=target_host, log_callback=fe_logger)
+                
+                log("Tray", "Frontend restarted.")
+                try: logger.info("[Tray] Frontend restarted.")
+                except: pass
+            except Exception as e:
+                log("Tray", f"Frontend restart failed: {e}")
+                try: logger.error(f"[Tray] Frontend restart failed: {e}")
+                except: pass
+            
+            # Restart Backend (Uvicorn)
+            # This is defined in tray.py, so we can call it directly
+            try: logger.info("[Tray] Restarting backend...")
+            except: pass
+            restart_backend_server()
+        
+        # Run in separate thread to avoid deadlock (uvicorn thread waiting for itself)
+        threading.Thread(target=_restart_job, daemon=True).start()
 
 # ==========================================
 # macOS Implementation (Rumps)
@@ -594,11 +748,17 @@ if platform.system() == "Darwin":
 
         def run_app():
             logger.info("[Tray] run_app (Rumps) called")
+            # Register config observer
+            Config.add_observer(on_config_changed)
+
             # Singleton Check
             lock_socket = check_singleton()
             if not lock_socket:
                 logger.warning("[Tray] Singleton check failed")
                 return
+
+            # Start Memory stack (Postgres, Redis, Sandbox) automatically if Docker is available
+            threading.Thread(target=ensure_memory_stack_up, daemon=True).start()
 
             # Start Web Server
             logger.info("[Tray] Starting Web Server thread...")
@@ -656,6 +816,9 @@ if platform.system() != "Darwin" or "rumps" not in sys.modules:
     def run_app():
         clear_log()
         log("Tray", "run_app called (Pystray)")
+        # Register config observer
+        Config.add_observer(on_config_changed)
+        
         print("[Tray] run_app called (Pystray)")
         # Singleton Check
         lock_socket = check_singleton()
@@ -666,6 +829,9 @@ if platform.system() != "Darwin" or "rumps" not in sys.modules:
 
         print("[Tray] Singleton check passed")
         log("Tray", "Singleton check passed")
+
+        # Start Memory stack (Postgres, Redis, Sandbox) automatically if Docker is available
+        threading.Thread(target=ensure_memory_stack_up, daemon=True).start()
 
         # Initialize SpeechManager on Main Thread to avoid COM issues
         try:

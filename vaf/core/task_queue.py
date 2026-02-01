@@ -29,7 +29,20 @@ class TaskQueue:
                     cls._instance = super(TaskQueue, cls).__new__(cls)
                     cls._instance.queue = queue.PriorityQueue()
                     cls._instance.active_task = None
+                    cls._instance._stop_requests = set()  # Session IDs that requested stop
         return cls._instance
+
+    def request_stop(self, session_id: str):
+        """Request generation stop for a specific session."""
+        self._stop_requests.add(session_id)
+
+    def should_stop(self, session_id: str) -> bool:
+        """Check if a session has requested stop."""
+        return session_id in self._stop_requests
+
+    def clear_stop(self, session_id: str):
+        """Clear the stop request for a session (called after stopping)."""
+        self._stop_requests.discard(session_id)
 
     def add(self, session_id: str, input_text: str, source: str = "web", callback: Callable = None, priority: int = 10):
         """

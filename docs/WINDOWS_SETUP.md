@@ -1,76 +1,93 @@
-# 🪟 VAF on Windows: Setup & Usage
+# 🪟 VAF on Windows: Setup & Usage Guide
 
-VAF is fully optimized for Windows, providing a seamless background service experience while allowing powerful CLI interactions.
+VAF is optimized for the Windows environment, offering a seamless background service integration while maintaining powerful command-line capabilities.
 
-## 📥 Automated Installation
+## 📥 Installation
 
-The easiest way to set up VAF on Windows is using the provided PowerShell script. This script creates a virtual environment, installs all dependencies (including Windows-specific drivers for GPU and Speech), and creates shortcuts for you.
+The recommended method for setting up VAF on Windows is via the automated PowerShell script. This ensures all dependencies, including system-specific drivers for GPU acceleration and speech synthesis, are correctly configured.
 
-1. Open PowerShell in the project directory.
-2. Run the setup script:
+1. Open PowerShell in the project root directory.
+2. Execute the setup script:
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\setup_win.ps1
    ```
 
-### What this script does:
-- Creates a `venv` (Virtual Environment).
-- Installs `pywin32` and patches it for COM/Background stability.
-- Installs all requirements and the VAF package in editable mode.
-- **Creates Shortcuts**: Adds "VAF Agent" to your **Desktop** and **Start Menu**.
-- **Icon Generation**: Auto-generates high-quality icons from the VAF logo.
+### Installation Actions:
+- **Virtual Environment**: Creates an isolated Python environment (`venv`) to manage dependencies.
+- **System Integration**: Installs and patches `pywin32` for reliable background operation and COM interaction.
+- **Dependency Management**: Installs all required packages in editable mode.
+- **Shortcuts**: Generates "VAF Agent" shortcuts on the **Desktop** and in the **Start Menu**.
+- **Visuals**: Auto-generates high-resolution application icons.
 
 ---
 
-## 🚀 Running VAF
+## 🚀 Operation Modes
 
-There are two primary ways to interact with the framework:
+VAF offers two primary modes of operation:
 
-### 1. Desktop Mode (Recommended for Daily Use)
-Start VAF by double-clicking the **VAF Agent** shortcut on your Desktop.
-- **Behavior**: VAF starts as a silent background process (no console window).
-- **Tray Icon**: A VAF icon appears in your System Tray (near the clock).
-- **Web UI**: Your default browser will automatically open the Dashboard.
-- **Singleton**: If VAF is already running, clicking the shortcut will simply bring the existing browser tab to the foreground.
+### 1. Desktop Mode (Recommended)
+Launch VAF using the **VAF Agent** shortcut.
+- **Background Service**: Runs silently in the background without obstructing your workspace.
+- **System Tray**: A status icon appears in the notification area (system tray).
+- **Dashboard**: The Web UI automatically opens in your default browser.
+- **Smart Launch**: If VAF is already active, using the shortcut focuses the existing dashboard.
 
-### 2. Terminal Mode (For Developers & Power Users)
-Run the agent directly in your command line:
+### 2. Terminal Mode (Advanced)
+For developers requiring direct output access or debugging:
 ```powershell
 vaf run
 ```
-- **Behavior**: Starts the interactive Terminal UI (TUI). 
-- **Note**: This mode **does not** start the Web UI by default to save resources. Use `vaf run --web` if you want both.
+- **Interface**: Launches the interactive Terminal User Interface (TUI).
+- **Web UI**: By default, this mode does not launch the Web UI. Append `--web` to enable it.
 
 ---
 
-## 🎨 Tray Icon States
+## 🎨 System Tray Status
 
-The system tray icon uses the VAF logo with a small status indicator:
-- 🟢 **Green**: Agent is active (processing a request).
-- 🟡 **Yellow**: Idle (ready, model may be unloaded to save VRAM).
-- 🔴 **Red**: Persistent Mode (model is kept in VRAM for instant response).
+The tray icon provides immediate visual feedback on the agent's state:
+- 🟢 **Green (Active)**: The agent is currently processing a request or task.
+- 🟡 **Yellow (Idle)**: The agent is standing by. Resources (VRAM) may be released depending on configuration.
+- 🔴 **Red (Persistent)**: The model remains loaded in memory for instant response times.
+
+---
+
+## 🌐 Local Network Hosting
+
+VAF includes secure capabilities to share the agent within your local network (LAN).
+
+### enabling Network Access
+1. Open **Settings** via the Web UI.
+2. Navigate to the **Local Network** tab.
+3. Toggle **Enable Local Network Hosting**.
+4. Review the security warning and confirm.
+5. Click **Save Changes**. The server will restart automatically to apply the new network bindings.
+
+### Security Features
+- **Firewall Integration**: Automatically configures Windows Firewall to allow access only from private IP ranges (RFC 1918). Public internet access remains blocked.
+- **Authentication**: Non-localhost connections require a username/password or 2FA login.
+- **Connection Tracking**: Real-time monitoring of connected devices via the **Network Topology** map.
+
+### Configuration
+- **Port**: Customizable frontend port (Default: 3000).
+- **Host IP**: Displays your machine's LAN IP address for easy sharing.
 
 ---
 
 ## 🛠️ Troubleshooting
 
-If you encounter issues, especially with the background service, check the following:
-
-### 1. Startup Logs
-VAF writes a detailed trace of the background startup process to:
+### 1. Startup Issues
+If the application fails to launch, consult the startup trace log:
 `logs/startup_trace.txt`
-Check this file if the Web UI shows "Disconnected" or if the tray icon fails to appear.
 
-### 2. Cleaning up "Zombies"
-If you suspect old processes are blocking ports (like Port 3000 or 8001), run these commands in PowerShell:
-```powershell
-# Kill only VAF-related Node/Next.js processes (Safe for your environment)
-netstat -ano | findstr :3000
-# Look for the PID at the end of the line, then:
-taskkill /F /PID <PID> /T
-```
+### 2. Network Port Conflicts
+If VAF cannot bind to the required ports (3000/8001):
+1. The system attempts to automatically kill stale processes.
+2. If issues persist, verify no other applications are using these ports.
+3. **Manual Cleanup**:
+   ```powershell
+   netstat -ano | findstr :3000
+   taskkill /F /PID <PID> /T
+   ```
 
-### 3. Speech/COM Errors
-VAF uses Windows COM for speech. If the server hangs during startup, ensure `pywin32` is correctly initialized by running:
-```powershell
-.\venv\Scripts\python.exe scripts\fix_venv.py
-```
+### 3. Localization Issues
+VAF is designed to handle non-English system locales (e.g., German Windows) correctly. If you experience process management issues, ensure your VAF version is up to date, as robust locale handling has been implemented.

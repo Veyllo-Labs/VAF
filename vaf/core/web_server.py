@@ -28,10 +28,20 @@ log_uvicorn = logging.getLogger("uvicorn")
 
 app = FastAPI(title="VAF Local Server")
 
-# Allow CORS for Next.js dev server
+# CORS: explicit origins required when frontend sends credentials (cookies).
+# Regex + credentials can fail in some browsers; list is reliable.
+_CORS_ORIGINS = [
+    "http://localhost",
+    "http://127.0.0.1",
+] + [
+    f"http://localhost:{p}" for p in range(3000, 3012)
+] + [
+    f"http://127.0.0.1:{p}" for p in range(3000, 3012)
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -64,6 +74,55 @@ except ImportError as e:
     log("WebServer", f"Discord integration not available: {e}")
 except Exception as e:
     log("WebServer", f"Failed to mount Discord routes: {e}")
+
+# Mount Auth routes (Local Network Authentication)
+try:
+    from vaf.api.auth_routes import router as auth_router
+    app.include_router(auth_router)
+    log("WebServer", "Auth routes mounted at /api/auth")
+except ImportError as e:
+    log("WebServer", f"Auth routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount auth routes: {e}")
+
+# Mount User Management routes (Admin only)
+try:
+    from vaf.api.user_routes import router as user_router
+    app.include_router(user_router)
+    log("WebServer", "User management routes mounted at /api/users")
+except ImportError as e:
+    log("WebServer", f"User routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount user routes: {e}")
+
+# Mount Network routes (topology, status)
+try:
+    from vaf.api.network_routes import router as network_router
+    app.include_router(network_router)
+    log("WebServer", "Network routes mounted at /api/network")
+except ImportError as e:
+    log("WebServer", f"Network routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount network routes: {e}")
+
+# Add authentication middleware if local network is enabled
+if Config.get("local_network_enabled", False):
+    try:
+        from vaf.auth.middleware import AuthMiddleware, IPValidationMiddleware
+        from vaf.auth.rate_limit import RateLimitMiddleware
+        
+        # Add rate limiting first (outermost)
+        app.add_middleware(RateLimitMiddleware)
+        # Add IP validation
+        app.add_middleware(IPValidationMiddleware)
+        # Add auth middleware (innermost - closest to route handlers)
+        app.add_middleware(AuthMiddleware)
+        
+        log("WebServer", "Authentication middleware enabled for local network mode")
+    except ImportError as e:
+        log("WebServer", f"Auth middleware not available: {e}")
+    except Exception as e:
+        log("WebServer", f"Failed to add auth middleware: {e}")
 
 log("WebServer", "Module initialization complete")
 
@@ -101,6 +160,14 @@ def get_autosuggest():
 
 @app.on_event("startup")
 async def startup_event():
+    # Initialize auth database tables (creates if not exist)
+    try:
+        from vaf.auth.database import init_auth_db
+        await init_auth_db()
+        log("WebServer", "Auth database tables initialized")
+    except Exception as e:
+        log("WebServer", f"Auth database init warning: {e}")
+    
     # Set the event loop for thread-safe broadcasting
     loop = asyncio.get_running_loop()
     manager.set_server_loop(loop)
@@ -134,6 +201,37 @@ async def startup_event():
     sm.on_speech_loading = on_tts_loading
     sm.on_speech_start = on_tts_start
     sm.on_speech_end = on_tts_end
+    
+    # Setup firewall rules if local network and firewall are enabled
+    if Config.get("local_network_enabled", False) and Config.get("local_network_firewall_enabled", True):
+        try:
+            from vaf.network.firewall import setup_firewall, register_cleanup_on_exit
+            port = Config.get("local_network_port", 8001)
+            port_frontend = Config.get("local_network_port_frontend", 3000)
+            
+            success = setup_firewall(port, port_frontend)
+            if success:
+                register_cleanup_on_exit()
+                log("WebServer", f"Firewall rules created for ports {port}, {port_frontend}")
+            else:
+                log("WebServer", "Firewall setup failed - may need elevated privileges")
+        except Exception as e:
+            log("WebServer", f"Firewall setup error: {e}")
+    
+    # In Docker mode, start the headless agent runner
+    # This handles task processing (chat, tools, etc.) within the container
+    if Config.is_docker_mode():
+        log("WebServer", "Docker mode detected - starting headless agent runner...")
+        try:
+            from vaf.core.headless_runner import run_headless_agent
+            import threading
+            agent_thread = threading.Thread(target=run_headless_agent, daemon=True, name="HeadlessAgent")
+            agent_thread.start()
+            log("WebServer", "Headless agent runner started in background thread")
+        except Exception as e:
+            log("WebServer", f"Failed to start headless agent: {e}")
+            import traceback
+            log("WebServer", traceback.format_exc())
 
 def _detect_language_simple(text: str) -> str:
     """Simple heuristic for language detection (de/en)."""
@@ -190,6 +288,11 @@ async def receive_heartbeat(hb: Heartbeat):
     """Receive heartbeat from CLI clients to keep server active."""
     tray_context.register_activity()
     return {"status": "ok", "active": True}
+
+@app.get("/api/heartbeat")
+async def healthcheck():
+    """Health check endpoint for Docker/monitoring."""
+    return {"status": "ok", "healthy": True}
 
 @app.post("/api/workflow/update")
 async def receive_workflow_update(update: WorkflowUpdate):
@@ -318,11 +421,175 @@ async def get_workflow_details(wf_id: str):
         return {"error": str(e)}
 
 @app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
+    """
+    WebSocket endpoint with optional token authentication.
+    
+    When local_network_enabled=True, requires valid JWT token via query param.
+    Token can be passed as: ws://host:8001/ws?token=<jwt>
+    
+    When local_network_enabled=False, only localhost connections are allowed.
+    """
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    print(f"[WebSocket] Connection attempt from {client_ip}")
+    log("API", f"WebSocket connection attempt from {client_ip}")
+    
+    # First: check if client is localhost or Docker internal network
+    try:
+        from vaf.network.binding import is_localhost, is_allowed_ip
+        import ipaddress
+        
+        # Check if localhost OR Docker internal network
+        is_localhost_client = is_localhost(client_ip)
+        
+        # In Docker mode, also treat Docker bridge network as "local"
+        # This is safe because Docker network is internal to the host
+        if not is_localhost_client:
+            try:
+                ip_obj = ipaddress.ip_address(client_ip)
+                docker_network = ipaddress.ip_network("172.16.0.0/12")
+                if ip_obj in docker_network:
+                    is_localhost_client = True
+                    log("API", f"WebSocket: Docker network IP {client_ip} treated as localhost")
+            except ValueError:
+                pass
+                
+    except ImportError:
+        # Fallback localhost check (including Docker network range)
+        is_localhost_client = (
+            client_ip in ["127.0.0.1", "::1", "localhost"] or
+            client_ip.startswith("172.") # Docker bridge network
+        )
+    
+    # Check local network setting
+    local_network_enabled = Config.get("local_network_enabled", False)
+    
+    # --- CONNECTION TRACKING (Before Auth) ---
+    # Register connection immediately to show on map, even if auth fails later
+    connection_id = f"ws_{id(websocket)}"
+    user_context = None # Will be populated if auth succeeds
+    
+    try:
+        from vaf.network.connection_tracker import (
+            get_tracker, ConnectionType, detect_device_type, DeviceType
+        )
+        tracker = get_tracker()
+        
+        # Get user agent
+        user_agent = None
+        if hasattr(websocket, 'headers'):
+            user_agent = websocket.headers.get('user-agent', '')
+        
+        device_type = detect_device_type(user_agent)
+        
+        tracker.register_connection(
+            connection_id=connection_id,
+            connection_type=ConnectionType.WEBSOCKET,
+            ip=client_ip,
+            device_type=device_type,
+            user_agent=user_agent,
+            username="Guest (Connecting...)", # Temporary status
+            metadata={
+                "is_localhost": is_localhost_client,
+                "status": "handshake"
+            }
+        )
+        log("API", f"Connection tracked (pre-auth): {connection_id}")
+    except Exception as e:
+        log("API", f"Could not track connection: {e}")
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    print(f"[WebSocket] Connection attempt from {websocket.client.host}")
-    log("API", f"WebSocket connection attempt from {websocket.client.host}")
+    # If local network is DISABLED, only allow localhost
+    if not local_network_enabled:
+        if not is_localhost_client:
+            log("API", f"WebSocket rejected: Local network disabled, non-localhost IP {client_ip}")
+            # Update tracker if possible
+            try: get_tracker().unregister_connection(connection_id)
+            except: pass
+            
+            await websocket.close(code=4003, reason="Local network feature is disabled")
+            return
+        # Localhost - allow without authentication
+        user_context = {"username": "Local Admin", "role": "admin"}
+    else:
+        # Local network is ENABLED - authenticate network users
+        try:
+            from vaf.network.binding import is_allowed_ip
+            from vaf.auth.crypto import get_jwt_secret
+            import jwt
+            
+            # Validate IP is from local network
+            if not is_allowed_ip(client_ip):
+                log("API", f"WebSocket rejected: Non-local IP {client_ip}")
+                try: get_tracker().unregister_connection(connection_id)
+                except: pass
+                await websocket.close(code=4003, reason="Local network only")
+                return
+            
+            # Non-localhost requires token authentication
+            if not is_localhost_client and not token:
+                log("API", f"WebSocket rejected: No token from {client_ip}")
+                # Keep tracked as Guest/Unauth for map visibility?
+                # Yes, but maybe mark as 'Auth Required'
+                try: 
+                    tracker = get_tracker()
+                    tracker.register_connection(
+                        connection_id=connection_id,
+                        connection_type=ConnectionType.WEBSOCKET,
+                        ip=client_ip,
+                        device_type=device_type,
+                        username="Unauthenticated Device",
+                        metadata={"status": "auth_required"}
+                    )
+                except: pass
+                
+                await websocket.close(code=4001, reason="Authentication required")
+                return
+            
+            if token:
+                try:
+                    secret = get_jwt_secret()
+                    payload = jwt.decode(token, secret, algorithms=["HS256"])
+                    
+                    # Check 2FA status
+                    require_2fa = Config.get("local_network_require_2fa", True)
+                    if require_2fa and not payload.get("is_2fa_verified", False):
+                        if not is_localhost_client or payload.get("role") != "admin":
+                            log("API", f"WebSocket rejected: 2FA not verified for {payload.get('username')}")
+                            await websocket.close(code=4003, reason="2FA verification required")
+                            return
+                    
+                    user_context = {
+                        "user_id": payload.get("sub"),
+                        "username": payload.get("username"),
+                        "role": payload.get("role"),
+                        "session_id": payload.get("session_id"),
+                    }
+                    log("API", f"WebSocket authenticated: {user_context.get('username')}")
+                    
+                except jwt.ExpiredSignatureError:
+                    log("API", f"WebSocket rejected: Expired token from {client_ip}")
+                    await websocket.close(code=4001, reason="Token expired")
+                    return
+                except jwt.InvalidTokenError:
+                    log("API", f"WebSocket rejected: Invalid token from {client_ip}")
+                    await websocket.close(code=4001, reason="Invalid token")
+                    return
+            elif is_localhost_client:
+                 user_context = {"username": "Local Admin", "role": "admin"}
+            
+        except ImportError:
+            # Auth modules not available - still block non-localhost when disabled
+            if not local_network_enabled and not is_localhost_client:
+                log("API", f"WebSocket rejected: Local network disabled (auth module not available)")
+                await websocket.close(code=4003, reason="Local network feature is disabled")
+                return
+        except Exception as e:
+            log("API", f"WebSocket auth error: {e}")
+            # Block non-localhost on error when local network is disabled
+            if not local_network_enabled and not is_localhost_client:
+                await websocket.close(code=4003, reason="Local network feature is disabled")
+                return
+    
     try:
         await manager.connect(websocket)
         os.environ["VAF_WEBUI_ACTIVE"] = "1"
@@ -330,6 +597,28 @@ async def websocket_endpoint(websocket: WebSocket):
         log("API", f"WebSocket connected! Active: {len(manager.active_connections)}")
         tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
         log("API", f"WebSocket count updated: {tray_context.active_websockets}")
+        
+        # Update connection tracker with verified info
+        try:
+            tracker = get_tracker()
+            tracker.register_connection(
+                connection_id=connection_id,
+                connection_type=ConnectionType.WEBSOCKET,
+                ip=client_ip,
+                device_type=device_type,
+                user_agent=user_agent,
+                username=user_context.get("username") if user_context else "Guest",
+                service_name="WebUI",
+                metadata={
+                    "role": user_context.get("role") if user_context else "guest",
+                    "is_localhost": is_localhost_client,
+                    "status": "connected"
+                }
+            )
+            log("API", f"Connection updated: {connection_id}")
+        except Exception as e:
+            log("API", f"Could not track connection: {e}")
+        
         try:
             provider = Config.get("provider", "local")
             await websocket.send_json({
@@ -338,6 +627,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 "persistent": tray_context.is_persistent(),
                 "provider": provider
             })
+            # Send user context if authenticated
+            if user_context:
+                await websocket.send_json({
+                    "type": "auth_state",
+                    "authenticated": True,
+                    "username": user_context.get("username"),
+                    "role": user_context.get("role"),
+                })
         except Exception:
             pass
     except Exception as e:
@@ -731,20 +1028,24 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif type == "save_config":
                     new_config = cmd.get("config")
                     if new_config:
+                        # Save config (Config.save will notify observers if critical keys changed)
                         Config.save(new_config)
+                        
                         try:
                             if "tray_autostart" in new_config:
                                 from vaf.core.platform import Platform
                                 Platform.set_tray_autostart(bool(new_config.get("tray_autostart")))
                         except Exception as e:
                             log("WebServer", f"Tray autostart update failed: {e}")
+
                         # Use TaskQueue for commands (headless_runner only reads from TaskQueue)
                         from vaf.core.task_queue import TaskQueue
                         tq = TaskQueue()
                         tq.add(session_id="system", input_text="__CMD__:RELOAD_CONFIG", source="web")
                         await websocket.send_json({
                             "type": "config_saved",
-                            "status": "success"
+                            "status": "success",
+                            "requires_refresh": False
                         })
 
                 elif type == "get_autosuggest":
@@ -1044,6 +1345,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     sm = SpeechManager.get_instance()
                     sm.stop()
 
+                elif type == "stop_generation":
+                    # Stop the current generation by setting a flag
+                    from vaf.core.task_queue import TaskQueue
+                    tq = TaskQueue()
+                    session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                    if session_id:
+                        tq.request_stop(session_id)
+                        log("WebServer", f"Stop requested for session {session_id}")
+                        await websocket.send_json({"type": "generation_stopped", "sessionId": session_id})
+
             except json.JSONDecodeError:
                 pass
                 
@@ -1051,6 +1362,15 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
         tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
         log("API", f"WebSocket disconnected. Active: {tray_context.active_websockets}")
+        
+        # Unregister from connection tracker
+        try:
+            from vaf.network.connection_tracker import get_tracker
+            tracker = get_tracker()
+            tracker.unregister_connection(connection_id)
+        except Exception:
+            pass
+        
         if len(manager.active_connections) == 0:
             os.environ.pop("VAF_WEBUI_ACTIVE", None)
     except Exception as e:
@@ -1058,6 +1378,15 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
         tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
         log("API", f"WebSocket error; active now {tray_context.active_websockets}")
+        
+        # Unregister from connection tracker
+        try:
+            from vaf.network.connection_tracker import get_tracker
+            tracker = get_tracker()
+            tracker.unregister_connection(connection_id)
+        except Exception:
+            pass
+        
         if len(manager.active_connections) == 0:
             os.environ.pop("VAF_WEBUI_ACTIVE", None)
 

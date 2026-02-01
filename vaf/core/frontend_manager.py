@@ -156,19 +156,36 @@ class FrontendManager:
         if platform.system() != "Windows": return
         try:
             cmd = f"netstat -ano | findstr :{port}"
-            output = subprocess.check_output(cmd, shell=True).decode()
+            # Fix: Handle encoding issues on Windows (e.g. German locale)
+            output = subprocess.check_output(cmd, shell=True).decode(errors='ignore')
             for line in output.splitlines():
-                if "LISTENING" in line:
-                    parts = line.strip().split()
-                    if len(parts) > 4:
-                        pid = parts[-1]
+                parts = line.strip().split()
+                # Line format: TCP  LocalIP:Port  RemoteIP:Port  State  PID
+                # Check for enough parts and that the port matches (to avoid false positives)
+                if len(parts) > 4 and str(port) in parts[1]:
+                    pid = parts[-1]
+                    # Only kill if PID > 0
+                    if pid.isdigit() and int(pid) > 0:
+                        # print(f"[Frontend] Killing PID {pid} on port {port}...")
                         subprocess.run(["taskkill", "/F", "/T", "/PID", pid],
                                      capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-        except:
+        except Exception as e:
             pass
 
-    def start_frontend(self, log_callback=None):
-        """Start the Next.js frontend if not already reachable."""
+    def start_frontend(self, log_callback=None, host=None, force_restart=False):
+        """Start the Next.js frontend if not already reachable.
+
+        Args:
+            log_callback: Optional callback for logging messages
+            host: Host to bind to. If None, uses local_network_enabled config.
+                  "0.0.0.0" = accessible from network, "127.0.0.1" = localhost only
+            force_restart: If True, skip the "already running" check and start fresh
+        """
+        # Determine host binding based on config if not explicitly provided
+        if host is None:
+            local_network_enabled = Config.get("local_network_enabled", False)
+            host = "0.0.0.0" if local_network_enabled else "127.0.0.1"
+
         web_dir = self.get_web_dir()
         pkg_file = os.path.join(web_dir, "package.json")
 
@@ -176,11 +193,12 @@ class FrontendManager:
             self._log("Web directory not found.", "error", log_callback)
             return None
 
-        # Check for existing port
-        active_port = self.get_active_port()
-        if active_port and self.is_port_in_use(active_port):
-            self._log(f"Frontend active on port {active_port}", "success", log_callback)
-            return active_port
+        # Check for existing port (skip if force_restart)
+        if not force_restart:
+            active_port = self.get_active_port()
+            if active_port and self.is_port_in_use(active_port):
+                self._log(f"Frontend active on port {active_port}", "success", log_callback)
+                return active_port
 
         # Not running, need to start
         try:
@@ -191,10 +209,16 @@ class FrontendManager:
             # Install deps if needed
             if not os.path.exists(os.path.join(web_dir, "node_modules")):
                 self._log("Installing npm dependencies...", "warning", log_callback)
-                subprocess.run([npm_path, "install"], cwd=web_dir, capture_output=True)
+                install_kwargs = {"cwd": web_dir, "capture_output": True}
+                if platform.system() == "Windows":
+                    install_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                subprocess.run([npm_path, "install"], **install_kwargs)
 
-            # Find free port starting at 3000
-            port = 3000
+            # Determine starting port from config
+            base_port = Config.get("local_network_port_frontend", 3000)
+            
+            # Find free port starting at base_port
+            port = base_port
             while self.is_port_in_use(port):
                 # If port is in use but no VAF process owns it, try to clean it
                 self._kill_process_on_port(port)
@@ -218,7 +242,13 @@ class FrontendManager:
             log_file = os.path.join(log_dir, "web_debug.log")
 
             # Start Process - avoid shell=True to have direct control over process tree
-            cmd = [npm_path, "run", "dev", "--", "-p", str(port)]
+            # -H specifies the hostname/interface to bind to
+            cmd = [npm_path, "run", "dev", "--", "-p", str(port), "-H", host]
+            
+            # DEBUG LOGGING
+            self._log(f"Starting Frontend with command: {' '.join(cmd)}", "info", log_callback)
+            self._log(f"Binding to host: {host} (Local Network: {Config.get('local_network_enabled', False)})", "info", log_callback)
+            self._log(f"Logging stdout/stderr to: {log_file}", "info", log_callback)
 
             creationflags = 0
             if platform.system() == "Windows":
@@ -248,8 +278,12 @@ class FrontendManager:
             self._log(f"Frontend startup failed: {e}", "error", log_callback)
             return None
 
-    def stop_frontend(self):
-        """Stop the subprocess and its entire tree if we own it."""
+    def stop_frontend(self, wait_for_exit=True):
+        """Stop the subprocess and its entire tree if we own it.
+
+        Args:
+            wait_for_exit: If True, wait for the port to be released before returning
+        """
         stopped_port = self.port  # Save for port cleanup
 
         if platform.system() == "Windows":
@@ -272,9 +306,22 @@ class FrontendManager:
                 except Exception:
                     pass
 
-            # Method 3: Kill any remaining process on the port
+            # Method 3: Kill any remaining process on the port (Robust Loop)
             if stopped_port:
-                self._kill_process_on_port(stopped_port)
+                # Retry loop: Try to kill up to 5 times
+                for attempt in range(5):
+                    if not self.is_port_in_use(stopped_port):
+                        break
+                    
+                    self._kill_process_on_port(stopped_port)
+                    time.sleep(0.5)
+
+            # Wait for port to be released if requested
+            if wait_for_exit and stopped_port:
+                for _ in range(50):  # Wait up to 5 seconds
+                    if not self.is_port_in_use(stopped_port):
+                        break
+                    time.sleep(0.1)
 
         else:
             # Unix: terminate process group
@@ -288,6 +335,13 @@ class FrontendManager:
                     self.process.terminate()
                 except Exception:
                     pass
+
+            # Wait for port to be released if requested (Unix)
+            if wait_for_exit and stopped_port:
+                for _ in range(30):  # Wait up to 3 seconds
+                    if not self.is_port_in_use(stopped_port):
+                        break
+                    time.sleep(0.1)
 
         self.process = None
         self.port = None

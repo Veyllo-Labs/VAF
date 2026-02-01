@@ -61,13 +61,16 @@ class PythonExecTool(BaseTool):
         logger.warning(f"⚠️ Executing Python code on HOST (unsandboxed): {code[:50]}...")
 
         try:
-            proc = subprocess.run(
-                [sys.executable, "-c", code],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-            )
+            import platform
+            run_kwargs = {
+                "capture_output": True,
+                "text": True,
+                "timeout": timeout,
+                "env": {**os.environ, "PYTHONIOENCODING": "utf-8"},
+            }
+            if platform.system() == "Windows":
+                run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            proc = subprocess.run([sys.executable, "-c", code], **run_kwargs)
         except subprocess.TimeoutExpired:
             return f"[ERROR] python_exec: timeout after {timeout}s"
         except Exception as e:

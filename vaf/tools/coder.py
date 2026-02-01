@@ -1392,7 +1392,10 @@ class GitInitTool(BaseTool):
             if os.path.exists(git_dir):
                 return "✅ Git repository already initialized."
             
-            subprocess.run(['git', 'init'], cwd=base_dir, check=True, capture_output=True)
+            kwargs = {'cwd': base_dir, 'check': True, 'capture_output': True}
+            if platform.system() == "Windows":
+                kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            subprocess.run(['git', 'init'], **kwargs)
             return "✅ Git repository initialized successfully."
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             return f"❌ Error initializing Git: {e}"
@@ -1431,16 +1434,20 @@ class GitAddCommitTool(BaseTool):
                 return "❌ Git repository not initialized. Call git_init first."
             
             # Add files
+            run_kwargs = {'cwd': base_dir, 'check': True, 'capture_output': True}
+            if platform.system() == "Windows":
+                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+
             if files:
                 for f in files:
                     file_path = os.path.join(base_dir, f) if not os.path.isabs(f) else f
                     if os.path.exists(file_path):
-                        subprocess.run(['git', 'add', file_path], cwd=base_dir, check=True, capture_output=True)
+                        subprocess.run(['git', 'add', file_path], **run_kwargs)
             else:
-                subprocess.run(['git', 'add', '.'], cwd=base_dir, check=True, capture_output=True)
-            
+                subprocess.run(['git', 'add', '.'], **run_kwargs)
+
             # Commit
-            subprocess.run(['git', 'commit', '-m', message], cwd=base_dir, check=True, capture_output=True)
+            subprocess.run(['git', 'commit', '-m', message], **run_kwargs)
             return f"✅ Committed changes: {message}"
         except subprocess.CalledProcessError as e:
             return f"❌ Error committing: {e}"
@@ -1467,7 +1474,10 @@ class GitStatusTool(BaseTool):
             if not os.path.exists(git_dir):
                 return "❌ Git repository not initialized. Call git_init first."
             
-            result = subprocess.run(['git', 'status', '--short'], cwd=base_dir, capture_output=True, text=True, check=True)
+            run_kwargs = {'cwd': base_dir, 'capture_output': True, 'text': True, 'check': True}
+            if platform.system() == "Windows":
+                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            result = subprocess.run(['git', 'status', '--short'], **run_kwargs)
             if result.stdout.strip():
                 return f"Git Status:\n{result.stdout}"
             else:
@@ -1505,12 +1515,12 @@ class GitLogTool(BaseTool):
             if not os.path.exists(git_dir):
                 return "❌ Git repository not initialized. Call git_init first."
             
+            run_kwargs = {'cwd': base_dir, 'capture_output': True, 'text': True, 'check': True}
+            if platform.system() == "Windows":
+                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
             result = subprocess.run(
                 ['git', 'log', f'--max-count={limit}', '--oneline'],
-                cwd=base_dir,
-                capture_output=True,
-                text=True,
-                check=True
+                **run_kwargs
             )
             if result.stdout.strip():
                 return f"Recent commits:\n{result.stdout}"
@@ -1653,9 +1663,12 @@ class CodingAgentTool(BaseTool):
         
         try:
             import subprocess
+            run_kwargs = {'cwd': base_dir, 'check': True, 'capture_output': True}
+            if platform.system() == "Windows":
+                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
             # Initialize git repo - OS-independent (git works on all platforms)
-            subprocess.run(['git', 'init'], cwd=base_dir, check=True, capture_output=True)
-            
+            subprocess.run(['git', 'init'], **run_kwargs)
+
             # Create .gitignore - OS-independent
             gitignore_path = os.path.join(base_dir, '.gitignore')
             if not os.path.exists(gitignore_path):
@@ -1689,11 +1702,11 @@ Thumbs.db
 """
                 with open(gitignore_path, 'w', encoding='utf-8') as f:
                     f.write(gitignore_content)
-            
+
             # Initial commit if there are files - OS-independent
             try:
-                subprocess.run(['git', 'add', '.'], cwd=base_dir, check=True, capture_output=True)
-                subprocess.run(['git', 'commit', '-m', 'Initial commit'], cwd=base_dir, check=True, capture_output=True)
+                subprocess.run(['git', 'add', '.'], **run_kwargs)
+                subprocess.run(['git', 'commit', '-m', 'Initial commit'], **run_kwargs)
             except:
                 pass  # No files to commit yet
         except (subprocess.CalledProcessError, FileNotFoundError):

@@ -72,6 +72,14 @@ Returns stdout/stderr from the execution."""
         super().__init__()
         self._ephemeral_sandbox = None
     
+    def _get_subprocess_kwargs(self) -> dict:
+        """Get platform-specific subprocess kwargs."""
+        import platform
+        kwargs = {}
+        if platform.system() == "Windows":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        return kwargs
+
     def _is_persistent_sandbox_running(self) -> bool:
         """Check if the persistent sandbox container is running."""
         try:
@@ -79,19 +87,21 @@ Returns stdout/stderr from the execution."""
                 ["docker", "inspect", "-f", "{{.State.Running}}", SANDBOX_CONTAINER],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
+                **self._get_subprocess_kwargs()
             )
             return result.returncode == 0 and "true" in result.stdout.lower()
         except Exception:
             return False
-    
+
     def _ensure_docker_available(self) -> Tuple[bool, str]:
         """Check if Docker is available. Returns (success, error_message)."""
         try:
             result = subprocess.run(
                 ["docker", "info"],
                 capture_output=True,
-                timeout=10
+                timeout=10,
+                **self._get_subprocess_kwargs()
             )
             if result.returncode != 0:
                 return False, "Docker daemon is not running. Please start Docker Desktop."
@@ -102,7 +112,7 @@ Returns stdout/stderr from the execution."""
             return False, "Docker daemon is not responding. Please restart Docker Desktop."
         except Exception as e:
             return False, f"Docker check failed: {e}"
-    
+
     def _execute_in_persistent(self, command: str, timeout: int, workdir: str = "/workspace") -> Tuple[int, str, str]:
         """Execute command in the persistent sandbox container."""
         exec_cmd = [
@@ -111,13 +121,14 @@ Returns stdout/stderr from the execution."""
             SANDBOX_CONTAINER,
             "sh", "-c", command
         ]
-        
+
         try:
             result = subprocess.run(
                 exec_cmd,
                 capture_output=True,
                 text=True,
-                timeout=timeout
+                timeout=timeout,
+                **self._get_subprocess_kwargs()
             )
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:

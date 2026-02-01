@@ -3049,15 +3049,13 @@ class Agent:
         tool_list_str = "\n".join(tool_info)
 
         # 2. Build the prompt for the router WITH CONTEXT
+        # NOTE: For reasoning models, we need to be very direct to avoid long thinking
         prompt = (
-            f"You are an intelligent Tool Router. Your task is to select the correct tools for the user's request.\n"
-            f"IMPORTANT: The user may write in ANY language. Analyze the INTENT and map it to the available tools.\n"
-            f"Consider the CONTEXT of the conversation (previous goals).\n"
-            f"Respond with a comma-separated list of tool names only. Do not add any explanation.\n\n"
-            f"Available Tools:\n{tool_list_str}\n\n"
+            f"Tool Router - select tools for user request. Output ONLY tool names, comma-separated. No explanation.\n\n"
+            f"Tools:\n{tool_list_str}\n\n"
             f"{context_str}"
-            f"User Request: \"{user_input}\"\n\n"
-            f"Relevant Tools (comma-separated):"
+            f"Request: \"{user_input}\"\n\n"
+            f"Tools:"
         )
 
         # 3. Make a lightweight LLM call
@@ -3069,13 +3067,31 @@ class Agent:
             with UI.console.status("[bold cyan] Routing Tools...[/bold cyan]", spinner="dots"):
                 if self.use_server:
                     payload = {
-                        "messages": messages, 
-                        "max_tokens": 1224, 
-                        "temperature": 0.1,
+                        "messages": messages,
+                        "max_tokens": 2048,  # Increased for reasoning models
+                        "temperature": 0.0,  # Deterministic for routing
                         "stream": False
                     }
                     res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=120).json()
-                    selected_tools_str = res['choices'][0]['message']['content']
+                    if 'choices' in res and len(res['choices']) > 0:
+                        msg = res['choices'][0]['message']
+                        # Try content first, then reasoning_content (for reasoning models like VQ-1)
+                        selected_tools_str = msg.get('content') or ''
+                        # If content is empty but reasoning_content exists, extract tool names from it
+                        if not selected_tools_str.strip() and msg.get('reasoning_content'):
+                            reasoning = msg.get('reasoning_content', '')
+                            # Try to find tool names in the reasoning
+                            import re
+                            # Look for comma-separated tool names or individual tool names
+                            for tool_name in self.tools.keys():
+                                if tool_name in reasoning:
+                                    if selected_tools_str:
+                                        selected_tools_str += ", "
+                                    selected_tools_str += tool_name
+                    elif 'error' in res:
+                        raise Exception(f"Server error: {res['error']}")
+                    else:
+                        raise Exception("Invalid server response (no choices)")
                 elif self.llm:
                      output = self.llm.create_chat_completion(
                          messages=messages,
@@ -3379,7 +3395,8 @@ class Agent:
             full_response = ""     # Reset for this turn
             full_content = ""      # Reset for this turn
             full_reasoning = ""    # Reset for this turn
-            
+            _generation_stopped = False  # Track if user stopped generation
+
             streaming_tools = {}
             tool_calls_detected = []
             auto_continue = False  # Track if response was cut off
@@ -3422,9 +3439,22 @@ class Agent:
                         tools=current_tools,
                         tool_choice=tool_choice  # Pass tool_choice if set
                     ):
+                        # Check for stop request
+                        session_id_for_stop = getattr(self, 'current_session_id', None) or self._session_id
+                        if session_id_for_stop:
+                            from vaf.core.task_queue import TaskQueue
+                            tq = TaskQueue()
+                            if tq.should_stop(session_id_for_stop):
+                                tq.clear_stop(session_id_for_stop)
+                                UI.event("System", "Generation stopped by user", style="warning")
+                                if stream_callback:
+                                    stream_callback("\n\n[Generation stopped by user]")
+                                _generation_stopped = True
+                                break
+
                         _chunk_count += 1
                         if not chunk: continue
-                        
+
                         # DEBUG: Log chunk to file for troubleshooting
                         try:
                             log_dir = _get_debug_log_dir()
@@ -3432,7 +3462,7 @@ class Agent:
                                 chunk_preview = str(chunk)[:100].replace('\n', '\\n')
                                 f.write(f"[CHUNK {_chunk_count}] {chunk_preview}\n")
                         except: pass
-                        
+
                         # Check for error/warning messages from backend
                         if isinstance(chunk, str) and chunk.startswith("[Error]"):
                             UI.error(chunk)
@@ -3771,6 +3801,19 @@ class Agent:
                 try:
                     chunk_count = 0
                     for line in response.iter_lines():
+                        # Check for stop request
+                        session_id_for_stop = getattr(self, 'current_session_id', None) or self._session_id
+                        if session_id_for_stop:
+                            from vaf.core.task_queue import TaskQueue
+                            tq = TaskQueue()
+                            if tq.should_stop(session_id_for_stop):
+                                tq.clear_stop(session_id_for_stop)
+                                UI.event("System", "Generation stopped by user", style="warning")
+                                if stream_callback:
+                                    stream_callback("\n\n[Generation stopped by user]")
+                                _generation_stopped = True
+                                break
+
                         chunk_count += 1
                         if not line: continue
                         line_text = line.decode('utf-8')
@@ -3862,6 +3905,19 @@ class Agent:
                     )
                     first_token = True
                     for chunk in stream:
+                        # Check for stop request
+                        session_id_for_stop = getattr(self, 'current_session_id', None) or self._session_id
+                        if session_id_for_stop:
+                            from vaf.core.task_queue import TaskQueue
+                            tq = TaskQueue()
+                            if tq.should_stop(session_id_for_stop):
+                                tq.clear_stop(session_id_for_stop)
+                                UI.event("System", "Generation stopped by user", style="warning")
+                                if stream_callback:
+                                    stream_callback("\n\n[Generation stopped by user]")
+                                _generation_stopped = True
+                                break
+
                         choices = chunk.get('choices', [])
                         if not choices: continue
                         delta = choices[0].get('delta', {})
@@ -4407,7 +4463,10 @@ class Agent:
             # Now perform cleaning for other purposes (empty response handler, etc.)
             # A truly empty content means NO final answer was given to the user.
             # We must strip XML tags, filler words, and common "empty" patterns.
-            clean_content = re.sub(r'<[^>]*>', '', full_content)  # Remove XML tags
+            # NOTE: For reasoning models (VQ-1, DeepSeek R1), content may be empty but reasoning_content
+            # contains the actual response. In this case, use reasoning as the content.
+            effective_content = full_content if full_content.strip() else full_reasoning
+            clean_content = re.sub(r'<[^>]*>', '', effective_content)  # Remove XML tags
             clean_content = re.sub(r'```[\s\S]*?```', '', clean_content)  # Remove code blocks
             clean_content = clean_content.replace(".", "").replace("\n", "").replace(":", "").strip()
             
@@ -4430,6 +4489,17 @@ class Agent:
             # We can immediately check for tool-intent without waiting, as the model has finished generating
             # Empty Response Handler: Remove responses without final answer and restart from snapshot
             # NO RETRY LIMITS - will loop until we get a response
+            # SKIP if user stopped generation manually
+            if _generation_stopped:
+                UI.event("System", "Generation was stopped - skipping retry", style="info")
+                # Add partial content to history if any
+                if full_content.strip() or full_reasoning.strip():
+                    self.history.append({
+                        "role": "assistant",
+                        "content": (full_content.strip() or "[Generation stopped by user]")
+                    })
+                return full_content.strip() or "[Generation stopped by user]"
+
             if (not full_response or is_effectively_empty) and not tool_calls_detected:
                 UI.event("System", "Empty response detected. Applying snapshot and retry...", style="warning")
                 
@@ -4511,16 +4581,20 @@ class Agent:
                 # ═══════════════════════════════════════════════════════════════
                 # CONTEXT OVERFLOW DETECTION (Fix for Issue #VAF-CTX-001)
                 # ═══════════════════════════════════════════════════════════════
-                MAX_RETRIES_BEFORE_EMERGENCY = 50
-                HARD_LIMIT = 70
-                
+                MAX_RETRIES_BEFORE_EMERGENCY = 10
+                HARD_LIMIT = 15
+
+                # Wait 2 seconds before retry to avoid hammering the model
+                import time
+                time.sleep(2)
+
                 if empty_retry_count == MAX_RETRIES_BEFORE_EMERGENCY:
                     UI.event("System", f"High retry count ({empty_retry_count}) - Triggering Emergency Context Clearing", style="bold yellow")
                     self.manage_context()
-                
+
                 elif empty_retry_count >= HARD_LIMIT:
-                    UI.event("Emergency", f"Context overflow detected after {empty_retry_count} retries - emergency fallback!", style="warning")
-                    emergency_summary = "⚠️ **Context Overflow Detected**\n\nThe conversation is too long. Please start a new session."
+                    UI.event("Emergency", f"Model not responding after {empty_retry_count} retries - stopping", style="warning")
+                    emergency_summary = "⚠️ **Model Not Responding**\n\nThe model failed to generate a response after multiple attempts. This may be due to:\n- Model overload\n- Context issues\n- Network problems\n\nPlease try again or start a new session."
                     if stream_callback:
                         stream_callback(emergency_summary)
                     return emergency_summary

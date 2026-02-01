@@ -1,14 +1,21 @@
 # VAF Memory System - Docker Compose
-# PostgreSQL with pgvector + Redis for caching
+# ====================================
+# This is the ONLY compose file for DB, Redis, and Sandbox.
+# Containers: vaf-memory-db (Postgres), vaf-redis (Redis), vaf-sandbox (Python).
 #
-# Usage:
+# Start (from project root):
 #   docker compose -f docker-compose.memory.yml up -d
 #
-# This creates:
-#   - PostgreSQL 16 with pgvector extension (vector similarity search)
-#   - Redis 7 (caching for embeddings, RAG queries, sessions)
-#   - Persistent volumes for data
-#   - Health checks for reliability
+# Stop:
+#   docker compose -f docker-compose.memory.yml down
+#
+# See: docs/DOCKER_SERVICES.md
+#
+# Contains:
+#   - PostgreSQL 16 + pgvector (vector DB for Memory/RAG)
+#   - Redis 7 (cache for embeddings, sessions)
+#   - Python sandbox (safe code execution)
+#   - Persistent volumes and health checks
 
 services:
   # ==========================================================================

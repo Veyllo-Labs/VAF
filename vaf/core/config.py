@@ -5,7 +5,17 @@ from typing import Optional
 import base64
 
 class Config:
-    APP_DIR = Path.home() / ".vaf"
+    # In Docker mode, use dedicated config volume (NOT VAF-Space!)
+    # VAF-Space = User data (NAS-like storage)
+    # VAF-Config = System secrets (encryption keys, JWT) - admin only
+    _docker_mode = os.environ.get("VAF_DOCKER_MODE", "").lower() == "true"
+    _config_dir = os.environ.get("VAF_CONFIG_DIR", "/vaf-config")
+    
+    if _docker_mode and os.path.exists(_config_dir):
+        APP_DIR = Path(_config_dir)
+    else:
+        APP_DIR = Path.home() / ".vaf"
+    
     CONFIG_FILE = APP_DIR / "config.json"
     
     DEFAULTS = {
@@ -86,6 +96,22 @@ class Config:
         # Redis Cache Settings
         "redis_url": "redis://localhost:6379/0",                   # Redis connection URL
         "redis_enabled": True,                                     # Enable Redis caching
+        
+        # Local Network Settings
+        "local_network_enabled": False,                            # Enable local network access (LAN only)
+        "local_network_port": 8001,                                # Backend port for local network
+        "local_network_port_frontend": 3000,                       # Frontend port for local network
+        "local_network_firewall_enabled": True,                    # Enable OS firewall rules
+        "local_network_require_2fa": True,                         # Require 2FA for network users
+        "local_network_jwt_secret": "",                            # JWT secret (auto-generated if empty)
+        "local_network_jwt_expiry_hours": 24,                      # JWT token expiry in hours
+        "local_network_rate_limit_attempts": 5,                    # Max failed login attempts
+        "local_network_rate_limit_window_minutes": 15,             # Rate limit window in minutes
+        
+        # Docker Settings (Desktop Mode only)
+        # Note: CLI mode (vaf run) always runs natively with full host access
+        # Docker mode is only for Desktop/Tray mode for isolation
+        "use_docker": True,                                        # Desktop: Run backend/frontend in Docker
     }
 
     @classmethod
@@ -99,10 +125,23 @@ class Config:
         except Exception:
             return cls.DEFAULTS.copy()
 
+    # Keys that should never be overwritten when saving from frontend
+    # These are auto-generated secrets that would break auth if lost
+    PROTECTED_KEYS = [
+        "local_network_jwt_secret",
+    ]
+
     @classmethod
     def save(cls, config: dict):
         if not cls.APP_DIR.exists():
             cls.APP_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Preserve protected keys from existing config
+        existing_config = cls.load()
+        for key in cls.PROTECTED_KEYS:
+            if key in existing_config and key not in config:
+                config[key] = existing_config[key]
+
         with open(cls.CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=4)
 
@@ -173,4 +212,124 @@ class Config:
         if len(api_key) <= 8:
             return "***"
         
-        return f"{api_key[:8]}...{api_key[-4:]}"
+        return f"{api_key[:8]}...{api_key[-4:]}"    
+    @classmethod
+    def is_docker_mode(cls) -> bool:
+        """
+        Check if running inside Docker container.
+        
+        Returns:
+            True if running in Docker, False otherwise
+        """
+        return os.environ.get("VAF_DOCKER_MODE", "").lower() == "true"
+    
+    @classmethod
+    def get_llama_server_url(cls, endpoint: str = "") -> str:
+        """
+        Get the correct llama-server URL based on environment.
+        
+        In Docker mode, llama-server runs on the HOST (for GPU access),
+        so we need to use 'host.docker.internal' to reach it from the container.
+        
+        In native mode, llama-server runs on localhost.
+        
+        Args:
+            endpoint: Optional API endpoint (e.g., "/v1/chat/completions", "/health")
+            
+        Returns:
+            Full URL to llama-server
+        """
+        # Check environment variables first (highest priority)
+        llama_url = os.environ.get("LLAMA_SERVER_URL")
+        if llama_url:
+            return f"{llama_url.rstrip('/')}{endpoint}"
+        
+        # Build URL from host/port env vars
+        host = os.environ.get("LLAMA_SERVER_HOST")
+        port = os.environ.get("LLAMA_SERVER_PORT", "8080")
+        
+        if host:
+            return f"http://{host}:{port}{endpoint}"
+        
+        # Fallback based on Docker mode
+        if cls.is_docker_mode():
+            # In Docker, use host.docker.internal to reach host machine
+            return f"http://host.docker.internal:8080{endpoint}"
+        else:
+            # Native mode, llama-server runs locally
+            return f"http://127.0.0.1:8080{endpoint}"
+    
+    @classmethod
+    def get_llama_server_host(cls) -> str:
+        """Get just the host portion of llama-server address."""
+        if os.environ.get("LLAMA_SERVER_HOST"):
+            return os.environ.get("LLAMA_SERVER_HOST")
+        return "host.docker.internal" if cls.is_docker_mode() else "127.0.0.1"
+    
+    @classmethod
+    def get_llama_server_port(cls) -> int:
+        """Get the llama-server port."""
+        return int(os.environ.get("LLAMA_SERVER_PORT", "8080"))
+
+    # Observer Pattern Implementation
+    _observers = []
+    _observers_lock = threading.Lock() if 'threading' in globals() else None
+
+    @classmethod
+    def add_observer(cls, callback):
+        """
+        Add a callback function to be notified of configuration changes.
+        Callback signature: callback(key: str, new_value: Any)
+        """
+        # Lazy import threading if needed (though it's usually standard)
+        if cls._observers_lock is None:
+            import threading
+            cls._observers_lock = threading.Lock()
+            
+        with cls._observers_lock:
+            if callback not in cls._observers:
+                cls._observers.append(callback)
+
+    @classmethod
+    def notify_observers(cls, key: str, value):
+        """Notify all observers of a change."""
+        if cls._observers_lock is None:
+            # Should already be init by add_observer or safe execution
+            return
+
+        # Copy observers to avoid issues if callback modifies list
+        with cls._observers_lock:
+            observers_copy = list(cls._observers)
+        
+        for callback in observers_copy:
+            try:
+                callback(key, value)
+            except Exception as e:
+                print(f"[Config] Observer callback failed: {e}")
+
+    @classmethod
+    def save(cls, config: dict):
+        if not cls.APP_DIR.exists():
+            cls.APP_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Load existing to detect changes
+        existing_config = cls.load()
+        
+        # Preserve protected keys from existing config
+        for key in cls.PROTECTED_KEYS:
+            if key in existing_config and key not in config:
+                config[key] = existing_config[key]
+
+        with open(cls.CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=4)
+            
+        # Detect and notify changes for critical keys
+        # We specifically care about local_network_enabled for now
+        critical_keys = ["local_network_enabled", "local_network_port", "local_network_port_frontend"]
+        
+        for key in critical_keys:
+            old_val = existing_config.get(key)
+            new_val = config.get(key)
+            if old_val != new_val:
+                cls.notify_observers(key, new_val)
+

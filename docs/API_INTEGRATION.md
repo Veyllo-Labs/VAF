@@ -323,6 +323,40 @@ Config.set("auto_start_local_server", True)
 - Monitor costs and optimize model selection
 
 For more help, see:
-- Main Documentation: `docs/README.md`
-- Configuration: `docs/CONFIGURATION.md`
-- Sub-Agents: `docs/SUBAGENT_IPC.md`
+
+## Network API Endpoints
+
+These endpoints support the Local Network Hosting feature.
+
+### 1. Get Access URL
+**GET** `/api/network/access-url`
+
+Returns the correct URL for other devices to connect to VAF.
+
+**Response:**
+```json
+{
+  "host": "192.168.1.50",
+  "port": 3000,
+  "url": "http://192.168.1.50:3000"
+}
+```
+
+### 2. Get Active Connections
+**GET** `/api/network/connections`
+
+Returns a list of currently connected devices for the Network Topology map.
+
+**Response:**
+```json
+[
+  {
+    "id": "ws_123456",
+    "type": "websocket",
+    "ip": "192.168.1.102",
+    "device_type": "mobile",
+    "username": "Guest (Connecting...)",
+    "connected_at": 1700000000.0
+  }
+]
+```

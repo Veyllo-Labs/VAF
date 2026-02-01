@@ -15,7 +15,7 @@ import {
     X, Globe, Cpu, Volume2, Monitor, Shield, Save, RotateCcw,
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch,
     Brain, Database, Link2, MessageSquare, Network, Users, Lock, Server, Laptop, Smartphone,
-    Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert
+    Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig } from './connections';
@@ -91,7 +91,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
     
-    // Network Topology State
+    // Local network: real host/port from browser (no dummy)
+    const [displayHost, setDisplayHost] = useState('');
+    const [displayPort, setDisplayPort] = useState('3000');
+
+    // Network Topology: server node only; devices from API when available
     const [networkNodes, setNetworkNodes, onNetworkNodesChange] = useNodesState([
         { 
             id: 'server', 
@@ -99,113 +103,92 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             data: { 
                 label: (
                     <div className="flex flex-col items-center">
-                        <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center mb-2 shadow-lg shadow-blue-200">
+                        <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mb-2 shadow-lg shadow-gray-200">
                             <Server size={24} className="text-white" />
                         </div>
                         <div className="font-bold text-gray-900">VAF Host</div>
-                        <div className="text-[10px] text-gray-500 font-mono">192.168.1.100</div>
+                        <div className="text-[10px] text-gray-500 font-mono">—</div>
                     </div>
                 ) 
             }, 
             position: { x: 300, y: 150 },
             style: { border: 'none', background: 'transparent' }
         },
-        { 
-            id: 'dev1', 
-            data: { 
-                label: (
-                    <div className="flex items-center gap-3 p-2 bg-white rounded-lg border-2 border-green-100 shadow-sm min-w-[180px]">
-                        <div className="w-8 h-8 rounded bg-green-100 text-green-600 flex items-center justify-center">
-                            <Monitor size={16} />
-                        </div>
-                        <div className="text-left">
-                            <div className="font-bold text-xs text-gray-800">admin@Main-Station</div>
-                            <div className="text-[10px] text-green-600 font-medium">● Online</div>
-                        </div>
-                    </div>
-                ) 
-            }, 
-            position: { x: 50, y: 50 },
-            style: { border: 'none', background: 'transparent', width: 'auto' }
-        },
-        { 
-            id: 'dev2', 
-            data: { 
-                label: (
-                    <div className="flex items-center gap-3 p-2 bg-white rounded-lg border-2 border-green-100 shadow-sm min-w-[180px]">
-                        <div className="w-8 h-8 rounded bg-purple-100 text-purple-600 flex items-center justify-center">
-                            <Laptop size={16} />
-                        </div>
-                        <div className="text-left">
-                            <div className="font-bold text-xs text-gray-800">mert@MacBook-Pro</div>
-                            <div className="text-[10px] text-green-600 font-medium">● Online</div>
-                        </div>
-                    </div>
-                ) 
-            }, 
-            position: { x: 550, y: 50 },
-            style: { border: 'none', background: 'transparent', width: 'auto' }
-        },
-        { 
-            id: 'dev3', 
-            data: { 
-                label: (
-                    <div className="flex items-center gap-3 p-2 bg-white rounded-lg border-2 border-green-100 shadow-sm min-w-[180px]">
-                        <div className="w-8 h-8 rounded bg-pink-100 text-pink-600 flex items-center justify-center">
-                            <Smartphone size={16} />
-                        </div>
-                        <div className="text-left">
-                            <div className="font-bold text-xs text-gray-800">guest@iPhone-15</div>
-                            <div className="text-[10px] text-green-600 font-medium">● Online</div>
-                        </div>
-                    </div>
-                ) 
-            }, 
-            position: { x: 100, y: 300 },
-            style: { border: 'none', background: 'transparent', width: 'auto' }
-        },
-        { 
-            id: 'dev4', 
-            data: { 
-                label: (
-                    <div className="flex items-center gap-3 p-2 bg-gray-50 rounded-lg border-2 border-gray-100 opacity-70 min-w-[180px]">
-                        <div className="w-8 h-8 rounded bg-gray-200 text-gray-500 flex items-center justify-center">
-                            <Smartphone size={16} />
-                        </div>
-                        <div className="text-left">
-                            <div className="font-bold text-xs text-gray-600">ipad@Lounge</div>
-                            <div className="text-[10px] text-gray-400 font-medium">Last seen: 2d ago</div>
-                        </div>
-                    </div>
-                ) 
-            }, 
-            position: { x: 500, y: 300 },
-            style: { border: 'none', background: 'transparent', width: 'auto' }
-        },
     ]);
     
-    const [networkEdges, setNetworkEdges, onNetworkEdgesChange] = useEdgesState([
-        { id: 'e1', source: 'server', target: 'dev1', animated: true, style: { stroke: '#22c55e' } },
-        { id: 'e2', source: 'server', target: 'dev2', animated: true, style: { stroke: '#a855f7' } },
-        { id: 'e3', source: 'server', target: 'dev3', animated: true, style: { stroke: '#ec4899' } },
-        { id: 'e4', source: 'server', target: 'dev4', animated: false, style: { stroke: '#9ca3af', strokeDasharray: '5,5' } },
-    ]);
+    const [networkEdges, setNetworkEdges, onNetworkEdgesChange] = useEdgesState([]);
 
-    // User Management State
-    const [users, setUsers] = useState([
-        { id: 1, username: 'john.doe', email: 'john@local', role: 'User', lastActive: '2min ago', status: 'active', tools: ['web_search'], workflows: [], access: 'read' },
-        { id: 2, username: 'admin', email: 'admin@local', role: 'Admin', lastActive: '1h ago', status: 'active', tools: ['all'], workflows: ['all'], access: 'write' },
-        { id: 3, username: 'guest', email: 'guest@local', role: 'Guest', lastActive: '3 days ago', status: 'inactive', tools: [], workflows: [], access: 'restricted' },
-    ]);
+    // User Management: loaded from API when Local Network tab is active (no dummy list)
+    const [users, setUsers] = useState<Array<{ id: number; username: string; email?: string; role: string; lastActive: string; status: string; tools: string[]; workflows: string[]; access: string }>>([]);
+    const [usersLoading, setUsersLoading] = useState(false);
+    const [networkLinkCopied, setNetworkLinkCopied] = useState(false);
+    /** LAN URL for other devices (from backend); e.g. http://192.168.1.100:3000 */
+    const [networkAccessUrl, setNetworkAccessUrl] = useState<string | null>(null);
     const [userSearch, setUserSearch] = useState('');
     const [showAddUserModal, setShowAddUserModal] = useState(false);
     const [editingUser, setEditingUser] = useState<any>(null);
-    const [newUser, setNewUser] = useState({ username: '', email: '', role: 'User', password: '', tools: [], createDb: true });
+    const [newUser, setNewUser] = useState({ username: '', email: '', role: 'User', password: '', tools: [] as string[], workflows: [] as string[], createDb: true });
+
+    // Security Warning & Restart Animation
+    const [showNetworkWarning, setShowNetworkWarning] = useState(false);
+    const [isRestarting, setIsRestarting] = useState(false);
 
     useEffect(() => {
         setLocalConfig(config || {});
         setChanged(false);
     }, [config, isOpen]);
+
+    // Local network: real host/port from browser
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        setDisplayHost(window.location.hostname || '');
+        setDisplayPort(window.location.port || '3000');
+    }, [isOpen]);
+
+    // Update network map server node label with real host:port
+    useEffect(() => {
+        if (!displayHost) return;
+        setNetworkNodes((nds) =>
+            nds.map((n) =>
+                n.id === 'server'
+                    ? {
+                          ...n,
+                          data: {
+                              label: (
+                                  <div className="flex flex-col items-center">
+                                      <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mb-2 shadow-lg shadow-gray-200">
+                                          <Server size={24} className="text-white" />
+                                      </div>
+                                      <div className="font-bold text-gray-900">VAF Host</div>
+                                      <div className="text-[10px] text-gray-500 font-mono">{displayHost}{displayPort && displayPort !== '80' && displayPort !== '443' ? `:${displayPort}` : ''}</div>
+                                  </div>
+                              ),
+                          },
+                      }
+                    : n
+            )
+        );
+    }, [displayHost, displayPort]);
+
+    // Fetch local network users when tab is active
+    useEffect(() => {
+        if (!isOpen || activeTab !== 'local_network') return;
+        setUsersLoading(true);
+        fetch('/api/users')
+            .then((res) => (res.ok ? res.json() : []))
+            .then((data) => (Array.isArray(data) ? setUsers(data) : setUsers([])))
+            .catch(() => setUsers([]))
+            .finally(() => setUsersLoading(false));
+    }, [isOpen, activeTab]);
+
+    // Fetch LAN access URL from backend (IP for other devices)
+    useEffect(() => {
+        if (!isOpen || activeTab !== 'local_network') return;
+        fetch('http://localhost:8001/api/network/access-url')
+            .then((res) => (res.ok ? res.json() : {}))
+            .then((data: { url?: string | null }) => setNetworkAccessUrl(data.url ?? null))
+            .catch(() => setNetworkAccessUrl(null));
+    }, [isOpen, activeTab]);
 
     // Reset fetching state when apiModels update
     useEffect(() => {
@@ -386,8 +369,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     };
 
     const handleSave = () => {
+        const networkChanged = localConfig.local_network_enabled !== (config?.local_network_enabled || false);
         onSave(localConfig);
-        onClose();
+        
+        if (networkChanged) {
+            setIsRestarting(true);
+            setTimeout(() => {
+                setIsRestarting(false);
+                onClose();
+            }, 5000);
+        } else {
+            onClose();
+        }
     };
 
     const handleSearchHF = () => {
@@ -403,6 +396,110 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }
         setFetchingProvider(provider);
         onFetchApiModels(provider, apiKey);
+    };
+
+    const handleCreateUser = async () => {
+        if (!newUser.username) {
+            alert('Username is required');
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: newUser.username,
+                    password: newUser.password,
+                    email: newUser.email,
+                    role: newUser.role,
+                    tools: newUser.tools,
+                    workflows: newUser.workflows,
+                    create_db: newUser.createDb
+                })
+            });
+
+            if (res.ok) {
+                setShowAddUserModal(false);
+                // Refresh users list
+                setUsersLoading(true);
+                fetch('/api/users')
+                    .then((res) => (res.ok ? res.json() : []))
+                    .then((data) => (Array.isArray(data) ? setUsers(data) : setUsers([])))
+                    .catch(() => setUsers([]))
+                    .finally(() => setUsersLoading(false));
+                
+                // Reset form
+                setNewUser({ username: '', email: '', role: 'User', password: '', tools: [], workflows: [], createDb: true });
+            } else {
+                const err = await res.json();
+                alert(`Failed to create user: ${err.detail || 'Unknown error'}`);
+            }
+        } catch (error) {
+            console.error('Error creating user:', error);
+            alert('Error creating user');
+        }
+    };
+
+    const handleUpdateUser = async () => {
+        if (!editingUser) return;
+
+        try {
+            const res = await fetch(`/api/users/${editingUser.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    email: editingUser.email,
+                    role: editingUser.role,
+                    is_active: editingUser.status === 'active',
+                })
+            });
+
+            if (res.ok) {
+                setEditingUser(null);
+                // Refresh users list
+                setUsersLoading(true);
+                fetch('/api/users')
+                    .then((res) => (res.ok ? res.json() : []))
+                    .then((data) => (Array.isArray(data) ? setUsers(data) : setUsers([])))
+                    .catch(() => setUsers([]))
+                    .finally(() => setUsersLoading(false));
+            } else {
+                const err = await res.json();
+                alert(`Failed to update user: ${err.detail || 'Unknown error'}`);
+            }
+        } catch (error) {
+            console.error('Error updating user:', error);
+            alert('Error updating user');
+        }
+    };
+
+    const handleDeleteUser = async () => {
+        if (!editingUser) return;
+        if (!confirm(`Are you sure you want to delete user ${editingUser.username}?`)) return;
+
+        try {
+            const res = await fetch(`/api/users/${editingUser.id}`, {
+                method: 'DELETE'
+            });
+
+            if (res.ok) {
+                setEditingUser(null);
+                // Refresh users list
+                setUsersLoading(true);
+                fetch('/api/users')
+                    .then((res) => (res.ok ? res.json() : []))
+                    .then((data) => (Array.isArray(data) ? setUsers(data) : setUsers([])))
+                    .catch(() => setUsers([]))
+                    .finally(() => setUsersLoading(false));
+            } else {
+                const err = await res.json();
+                alert(`Failed to delete user: ${err.detail || 'Unknown error'}`);
+            }
+        } catch (error) {
+            console.error('Error deleting user:', error);
+            alert('Error deleting user');
+        }
     };
 
     return (
@@ -429,7 +526,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             className={cn(
                                 "flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-all",
                                 activeTab === cat.id
-                                    ? "bg-blue-500 text-white shadow-md"
+                                    ? "bg-gray-900 text-white shadow-md"
                                     : "text-gray-600 hover:bg-gray-200/50"
                             )}
                         >
@@ -705,8 +802,75 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         label="Enable Local Network Hosting"
                                         description="Allow other devices on the network to access this agent"
                                         checked={localConfig.local_network_enabled || false}
-                                        onChange={(v: boolean) => handleChange('local_network_enabled', v)}
+                                        onChange={(v: boolean) => {
+                                            if (v) {
+                                                setShowNetworkWarning(true);
+                                            } else {
+                                                handleChange('local_network_enabled', false);
+                                            }
+                                        }}
                                     />
+                                    {/* Access URL – LAN IP link so other devices can reach VAF (localhost only works on this PC) */}
+                                    {(() => {
+                                        const protocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
+                                        const host = displayHost || '';
+                                        const port = displayPort && displayPort !== '80' && displayPort !== '443' ? displayPort : '';
+                                        const fallbackUrl = host ? `${protocol}//${host}${port ? `:${port}` : ''}` : '';
+                                        const accessUrl = networkAccessUrl || fallbackUrl;
+                                        const isLanUrl = !!networkAccessUrl;
+                                        if (!accessUrl && !fallbackUrl) return null;
+                                        return (
+                                            <div className={cn(
+                                                "mt-4 p-4 rounded-xl border flex flex-col gap-2",
+                                                localConfig.local_network_enabled
+                                                    ? "bg-green-50/50 border-green-200"
+                                                    : "bg-gray-50 border-gray-200"
+                                            )}>
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+                                                            {isLanUrl ? 'Network access link (for other devices)' : 'Network access link'}
+                                                        </div>
+                                                        <div className="font-mono text-sm text-gray-900 break-all">{accessUrl}</div>
+                                                        {!localConfig.local_network_enabled && (
+                                                            <div className="text-xs text-gray-500 mt-1">Enable hosting above so other devices can use this link.</div>
+                                                        )}
+                                                        {localConfig.local_network_enabled && isLanUrl && (
+                                                            <div className="text-xs text-green-700 mt-1">Other devices on your network use this URL (IP address). Share it so they can open VAF.</div>
+                                                        )}
+                                                        {localConfig.local_network_enabled && !isLanUrl && (
+                                                            <div className="text-xs text-amber-700 mt-1">localhost only works on this PC. Other devices need your PC&apos;s IP (e.g. http://192.168.x.x:3000). Backend will show it when available.</div>
+                                                        )}
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            if (accessUrl && navigator.clipboard) {
+                                                                navigator.clipboard.writeText(accessUrl);
+                                                                setNetworkLinkCopied(true);
+                                                                setTimeout(() => setNetworkLinkCopied(false), 2000);
+                                                            }
+                                                        }}
+                                                        disabled={!localConfig.local_network_enabled}
+                                                        className={cn(
+                                                            "shrink-0 p-2.5 rounded-lg border transition-colors flex items-center gap-2",
+                                                            localConfig.local_network_enabled
+                                                                ? "bg-white border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300"
+                                                                : "bg-gray-100 border-gray-100 text-gray-400 cursor-not-allowed"
+                                                        )}
+                                                        title="Copy link"
+                                                    >
+                                                        {networkLinkCopied ? (
+                                                            <Check size={16} className="text-green-600" />
+                                                        ) : (
+                                                            <Copy size={16} />
+                                                        )}
+                                                        <span className="text-xs font-medium hidden sm:inline">{networkLinkCopied ? 'Copied' : 'Copy'}</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
                                 </Section>
                                 
                                 <div className={cn("space-y-6 transition-all duration-300", !localConfig.local_network_enabled && "opacity-50 pointer-events-none grayscale-[0.5]")}>
@@ -721,7 +885,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         placeholder="Search users..." 
                                                         value={userSearch}
                                                         onChange={(e) => setUserSearch(e.target.value)}
-                                                        className="w-full pl-9 pr-4 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                                                        className="w-full pl-9 pr-4 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
                                                     />
                                                 </div>
                                                 <button 
@@ -745,9 +909,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-gray-100">
-                                                        {users.filter(u => 
+                                                        {usersLoading ? (
+                                                            <tr>
+                                                                <td colSpan={5} className="px-4 py-8 text-center text-gray-500">
+                                                                    Loading users…
+                                                                </td>
+                                                            </tr>
+                                                        ) : users.filter(u => 
                                                             u.username.toLowerCase().includes(userSearch.toLowerCase()) || 
-                                                            u.role.toLowerCase().includes(userSearch.toLowerCase())
+                                                            (u.role && u.role.toLowerCase().includes(userSearch.toLowerCase()))
                                                         ).map((user, i) => (
                                                             <tr key={i} className="hover:bg-gray-50 transition-colors group">
                                                                 <td onClick={() => setSelectedUser(user)} className="px-4 py-3 font-medium text-gray-900 flex items-center gap-2 cursor-pointer">
@@ -773,7 +943,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                     <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                                                         <button 
                                                                             onClick={() => setEditingUser(user)}
-                                                                            className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                                                            className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
                                                                             title="Edit User"
                                                                         >
                                                                             <Edit size={16} />
@@ -790,78 +960,84 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         ))}
                                                     </tbody>
                                                 </table>
-                                                {users.filter(u => u.username.toLowerCase().includes(userSearch.toLowerCase())).length === 0 && (
+                                                {!usersLoading && users.filter(u => 
+                                                    u.username.toLowerCase().includes(userSearch.toLowerCase()) || 
+                                                    (u.role && u.role.toLowerCase().includes(userSearch.toLowerCase()))
+                                                ).length === 0 && (
                                                     <div className="p-8 text-center text-gray-500">
-                                                        No users found matching "{userSearch}"
+                                                        {users.length === 0
+                                                            ? 'No users yet. Add a user to allow network access.'
+                                                            : `No users found matching "${userSearch}"`}
                                                     </div>
                                                 )}
                                             </div>
                                         </div>
                                     </Section>
 
-                                    <Section title="Access Configuration">
+                                    <Section title="Connection Details">
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                            <Input
-                                                label="Host IP Address"
-                                                value="192.168.1.100"
-                                                onChange={() => {}}
-                                                placeholder="0.0.0.0"
-                                            />
-                                            <Input
-                                                label="Port"
-                                                value="3000"
-                                                onChange={() => {}}
-                                                placeholder="3000"
-                                            />
+                                            <div className="flex flex-col gap-1.5 w-full">
+                                                <label className="text-sm font-medium text-gray-700 ml-1">Host IP Address</label>
+                                                <div className="px-4 h-10 flex items-center bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 font-mono select-all">
+                                                    {networkAccessUrl ? new URL(networkAccessUrl).hostname : (displayHost || 'localhost')}
+                                                </div>
+                                            </div>
+                                            <div className="flex flex-col gap-1.5 w-full">
+                                                <label className="text-sm font-medium text-gray-700 ml-1">Port</label>
+                                                <input
+                                                    type="number"
+                                                    value={localConfig.local_network_port_frontend || 3000}
+                                                    onChange={(e) => handleChange('local_network_port_frontend', parseInt(e.target.value))}
+                                                    className="px-4 h-10 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all text-gray-700 font-mono"
+                                                />
+                                            </div>
                                         </div>
-                                        <div className="mt-4">
-                                            <Select
-                                                label="Security Level"
-                                                value="standard"
-                                                onChange={() => {}}
-                                                options={[
-                                                    { value: 'strict', label: 'Strict (Allowlist Only)' },
-                                                    { value: 'standard', label: 'Standard (Password)' },
-                                                    { value: 'open', label: 'Open (No Auth)' },
-                                                ]}
-                                            />
+                                        
+                                        {/* Security Status Info */}
+                                        <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-lg flex flex-col gap-2">
+                                            <div className="flex items-center gap-2 text-blue-800 font-medium text-sm">
+                                                <Shield size={16} />
+                                                Security Status: Protected
+                                            </div>
+                                            <div className="grid grid-cols-1 gap-2 pl-6">
+                                                <div className="flex items-center gap-2 text-xs text-blue-700">
+                                                    <CheckCircle size={12} className="text-blue-600" />
+                                                    <span>Firewall Active: accessible only from Local Network (RFC 1918)</span>
+                                                </div>
+                                                <div className="flex items-center gap-2 text-xs text-blue-700">
+                                                    <CheckCircle size={12} className="text-blue-600" />
+                                                    <span>Authentication: 2FA/Password required for new devices</span>
+                                                </div>
+                                                <div className="flex items-center gap-2 text-xs text-blue-700">
+                                                    <CheckCircle size={12} className="text-blue-600" />
+                                                    <span>Internet Exposure: Blocked (No public access)</span>
+                                                </div>
+                                            </div>
                                         </div>
                                     </Section>
 
-                                    <Section title="Server Info">
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                                            <div className="p-4 bg-white border border-gray-200 rounded-lg flex flex-col gap-1 shadow-sm">
-                                                <span className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Status</span>
-                                                <div className="flex items-center gap-2 text-green-600 font-medium">
-                                                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                                                    Running
-                                                </div>
-                                            </div>
-                                            <div className="p-4 bg-white border border-gray-200 rounded-lg flex flex-col gap-1 shadow-sm">
-                                                <span className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Container</span>
-                                                <span className="text-gray-900 font-mono text-sm">vaf-web-1</span>
-                                            </div>
-                                            <div className="p-4 bg-white border border-gray-200 rounded-lg flex flex-col gap-1 shadow-sm">
-                                                <span className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Uptime</span>
-                                                <span className="text-gray-900 font-mono text-sm">2d 4h 12m</span>
-                                            </div>
-                                        </div>
-
+                                    <Section title="Network Topology">
                                         <div className="space-y-3">
-                                            <h4 className="text-sm font-medium text-gray-700 flex items-center gap-2">
-                                                <Network size={16} /> Network Topology
-                                            </h4>
+                                            <p className="text-xs text-gray-500 mb-2">Visualize active devices and connections on your VAF infrastructure.</p>
                                             
                                             <button 
                                                 onClick={() => setShowNetworkModal(true)}
-                                                className="w-full h-32 bg-gray-50 hover:bg-gray-100 border border-gray-200 hover:border-blue-300 rounded-xl transition-all flex flex-col items-center justify-center gap-3 group"
+                                                className="w-full h-48 bg-gray-50 hover:bg-gray-100 border border-gray-200 hover:border-gray-300 rounded-xl transition-all flex flex-col items-center justify-center gap-4 group relative overflow-hidden"
                                             >
-                                                <div className="w-12 h-12 rounded-full bg-white border border-gray-200 flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-                                                    <Network size={24} className="text-blue-500" />
+                                                {/* Visual hint of a map/grid */}
+                                                <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundImage: 'radial-gradient(#000 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
+                                                
+                                                <div className="w-16 h-16 rounded-full bg-white border border-gray-200 flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform z-10">
+                                                    <Network size={32} className="text-gray-600" />
                                                 </div>
-                                                <div className="text-center">
-                                                    <div className="font-medium text-gray-900">Open Network Map</div>
-                                                    <div className="text-xs text-gray-500 mt-1">View active devices and connections</div>
+                                                <div className="text-center z-10">
+                                                    <div className="font-bold text-gray-900 text-lg">View Network Map</div>
+                                                    <div className="text-sm text-gray-500 mt-1">Interactive topology of {networkNodes.length} active device(s)</div>
+                                                </div>
+                                                
+                                                <div className="absolute bottom-4 right-4 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-1 rounded-md border border-blue-100">
+                                                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                                                    Live View
                                                 </div>
                                             </button>
                                         </div>
@@ -1130,7 +1306,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     placeholder="Search tools by name or description..."
                                     value={toolsSearch}
                                     onChange={(e) => setToolsSearch(e.target.value)}
-                                    className="w-full pl-12 pr-4 h-12 bg-white border border-gray-200 rounded-xl text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                                    className="w-full pl-12 pr-4 h-12 bg-white border border-gray-200 rounded-xl text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
                                 />
                             </div>
                         </div>
@@ -1577,79 +1753,187 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setShowAddUserModal(false)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200"
+                        className="relative bg-white w-full max-w-2xl rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-hidden"
                         onClick={(e) => e.stopPropagation()}
                     >
-                        <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gray-50/50 rounded-t-2xl">
-                            <div>
-                                <h2 className="text-xl font-bold text-gray-900">Add New User</h2>
-                                <p className="text-sm text-gray-500">Create a new local account</p>
+                        {/* Header */}
+                        <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-gray-900 flex items-center justify-center">
+                                    <Users className="w-5 h-5 text-white" />
+                                </div>
+                                <div>
+                                    <h2 className="text-xl font-bold text-gray-900">Add New User</h2>
+                                    <p className="text-sm text-gray-500">Create a local network account</p>
+                                </div>
                             </div>
-                            <button onClick={() => setShowAddUserModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors">
-                                <X size={20} />
+                            <button onClick={() => setShowAddUserModal(false)} className="p-2 hover:bg-gray-200 rounded-lg transition-colors">
+                                <X className="w-5 h-5 text-gray-500" />
                             </button>
                         </div>
-                        
-                        <div className="p-6 space-y-6">
-                            <div className="space-y-4">
-                                <Input 
-                                    label="Username *" 
-                                    value={newUser.username} 
-                                    onChange={(v) => setNewUser({...newUser, username: v})} 
+
+                        {/* Content */}
+                        <div className="p-6 space-y-6 overflow-y-auto">
+                            {/* Basic Info */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <Input
+                                    label="Username *"
+                                    value={newUser.username}
+                                    onChange={(v) => setNewUser({...newUser, username: v})}
                                     placeholder="johndoe"
                                 />
-                                <Input 
-                                    label="Email *" 
-                                    value={newUser.email} 
-                                    onChange={(v) => setNewUser({...newUser, email: v})} 
+                                <Input
+                                    label="Email *"
+                                    value={newUser.email}
+                                    onChange={(v) => setNewUser({...newUser, email: v})}
                                     placeholder="john@example.com"
                                 />
-                                <Select 
-                                    label="Role *" 
-                                    value={newUser.role} 
-                                    onChange={(v) => setNewUser({...newUser, role: v})} 
+                                <Select
+                                    label="Role *"
+                                    value={newUser.role}
+                                    onChange={(v) => setNewUser({...newUser, role: v})}
                                     options={[
                                         { value: 'User', label: 'User' },
                                         { value: 'Admin', label: 'Administrator' },
-                                        { value: 'Guest', label: 'Guest' }
+                                        { value: 'Guest', label: 'Guest (Read-only)' }
                                     ]}
                                 />
-                                <Input 
-                                    label="Initial Password" 
-                                    value={newUser.password} 
-                                    onChange={(v) => setNewUser({...newUser, password: v})} 
+                                <Input
+                                    label="Initial Password"
+                                    value={newUser.password}
+                                    onChange={(v) => setNewUser({...newUser, password: v})}
                                     type="password"
                                     placeholder="Auto-generated if empty"
                                 />
                             </div>
 
-                            <div className="space-y-3 pt-2 border-t border-gray-100">
-                                <label className="text-sm font-medium text-gray-700">Tools & Workflows</label>
-                                <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-lg p-2 bg-gray-50/50 grid grid-cols-2 gap-2">
-                                    {['Web Search', 'File System', 'Code Interpreter', 'Memory System', 'Data Analysis', 'Image Gen'].map(tool => (
-                                        <label key={tool} className="flex items-center gap-2 p-2 rounded hover:bg-white cursor-pointer transition-colors">
-                                            <input type="checkbox" className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
-                                            <span className="text-sm text-gray-600">{tool}</span>
-                                        </label>
-                                    ))}
+                            {/* Tools Section */}
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <h4 className="text-sm font-medium text-gray-700">Available Tools</h4>
+                                        <p className="text-xs text-gray-400">Select which tools this user can access</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const allToolNames = tools.map(t => t.name);
+                                            const allSelected = allToolNames.every(name => newUser.tools.includes(name));
+                                            setNewUser({...newUser, tools: allSelected ? [] : allToolNames});
+                                        }}
+                                        className="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
+                                    >
+                                        {tools.length > 0 && tools.every(t => newUser.tools.includes(t.name)) ? 'Deselect All' : 'Select All'}
+                                    </button>
                                 </div>
+                                <div className="max-h-36 overflow-y-auto border border-gray-200 rounded-xl p-3 bg-gray-50 grid grid-cols-3 gap-2">
+                                    {tools.length > 0 ? tools.map(tool => (
+                                        <label key={tool.name} className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer transition-colors border border-transparent hover:border-gray-200">
+                                            <input
+                                                type="checkbox"
+                                                checked={newUser.tools.includes(tool.name)}
+                                                onChange={(e) => {
+                                                    if (e.target.checked) {
+                                                        setNewUser({...newUser, tools: [...newUser.tools, tool.name]});
+                                                    } else {
+                                                        setNewUser({...newUser, tools: newUser.tools.filter(t => t !== tool.name)});
+                                                    }
+                                                }}
+                                                className="rounded border-gray-300 text-gray-900 focus:ring-gray-400 accent-gray-900"
+                                            />
+                                            <span className="text-sm text-gray-700 truncate" title={tool.description}>{tool.name}</span>
+                                        </label>
+                                    )) : (
+                                        <div className="col-span-3 text-center py-4 text-sm text-gray-400">No tools available</div>
+                                    )}
+                                </div>
+                                <p className="text-xs text-gray-400">{newUser.tools.length} of {tools.length} tools selected</p>
                             </div>
 
-                            <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-100 rounded-lg">
-                                <Database size={18} className="text-blue-600" />
-                                <div className="flex-1">
-                                    <div className="text-sm font-medium text-blue-900">Create Memory Database</div>
-                                    <div className="text-xs text-blue-600">Dedicated vector store for this user</div>
+                            {/* Workflows Section */}
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <h4 className="text-sm font-medium text-gray-700">Available Workflows</h4>
+                                        <p className="text-xs text-gray-400">Select which workflows this user can run</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const allWorkflowIds = workflows.map(w => w.id);
+                                            const allSelected = allWorkflowIds.every(id => newUser.workflows.includes(id));
+                                            setNewUser({...newUser, workflows: allSelected ? [] : allWorkflowIds});
+                                        }}
+                                        className="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
+                                    >
+                                        {workflows.length > 0 && workflows.every(w => newUser.workflows.includes(w.id)) ? 'Deselect All' : 'Select All'}
+                                    </button>
                                 </div>
-                                <input type="checkbox" checked={newUser.createDb} onChange={(e) => setNewUser({...newUser, createDb: e.target.checked})} className="rounded border-blue-300 text-blue-600 focus:ring-blue-500 w-5 h-5" />
+                                <div className="max-h-36 overflow-y-auto border border-gray-200 rounded-xl p-3 bg-gray-50 grid grid-cols-2 gap-2">
+                                    {workflows.length > 0 ? workflows.map(workflow => (
+                                        <label key={workflow.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer transition-colors border border-transparent hover:border-gray-200">
+                                            <input
+                                                type="checkbox"
+                                                checked={newUser.workflows.includes(workflow.id)}
+                                                onChange={(e) => {
+                                                    if (e.target.checked) {
+                                                        setNewUser({...newUser, workflows: [...newUser.workflows, workflow.id]});
+                                                    } else {
+                                                        setNewUser({...newUser, workflows: newUser.workflows.filter(w => w !== workflow.id)});
+                                                    }
+                                                }}
+                                                className="rounded border-gray-300 text-gray-900 focus:ring-gray-400 accent-gray-900"
+                                            />
+                                            <div className="flex-1 min-w-0">
+                                                <span className="text-sm text-gray-700 truncate block">{workflow.name}</span>
+                                                <span className="text-xs text-gray-400">{workflow.steps} steps</span>
+                                            </div>
+                                        </label>
+                                    )) : (
+                                        <div className="col-span-2 text-center py-4 text-sm text-gray-400">No workflows available</div>
+                                    )}
+                                </div>
+                                <p className="text-xs text-gray-400">{newUser.workflows.length} of {workflows.length} workflows selected</p>
+                            </div>
+
+                            {/* Memory Database Toggle */}
+                            <div className="flex items-center gap-4 p-4 bg-white border border-gray-200 rounded-xl shadow-sm">
+                                <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center">
+                                    <Database size={20} className="text-gray-600" />
+                                </div>
+                                <div className="flex-1">
+                                    <div className="text-sm font-medium text-gray-900">Enable Memory System</div>
+                                    <div className="text-xs text-gray-500">
+                                        {newUser.createDb
+                                            ? "User gets a personal memory database - VAF remembers conversations and context"
+                                            : "No memory storage - conversations won't be saved between sessions"}
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setNewUser({...newUser, createDb: !newUser.createDb})}
+                                    className={cn(
+                                        "relative w-11 h-6 rounded-full transition-colors",
+                                        newUser.createDb ? "bg-green-500" : "bg-gray-300"
+                                    )}
+                                >
+                                    <div className={cn(
+                                        "absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                                        newUser.createDb ? "translate-x-6" : "translate-x-1"
+                                    )} />
+                                </button>
                             </div>
                         </div>
 
-                        <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
-                            <button onClick={() => setShowAddUserModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-200 font-medium rounded-lg transition-colors">
+                        {/* Footer */}
+                        <div className="flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50">
+                            <button
+                                onClick={() => setShowAddUserModal(false)}
+                                className="text-gray-600 hover:bg-gray-200 px-4 py-2 rounded-lg transition-colors"
+                            >
                                 Cancel
                             </button>
-                            <button className="px-6 py-2 bg-green-500 hover:bg-green-600 text-white font-medium rounded-lg shadow-sm hover:shadow transition-all flex items-center gap-2">
+                            <button onClick={handleCreateUser} className="bg-gray-900 hover:bg-gray-800 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors">
                                 <Plus size={18} />
                                 Create User
                             </button>
@@ -1747,14 +2031,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         </div>
 
                         <div className="flex items-center justify-between p-6 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
-                            <button className="px-4 py-2 text-red-600 hover:bg-red-50 font-medium rounded-lg transition-colors flex items-center gap-2">
+                            <button onClick={handleDeleteUser} className="px-4 py-2 text-red-600 hover:bg-red-50 font-medium rounded-lg transition-colors flex items-center gap-2">
                                 <Trash2 size={16} /> Delete User
                             </button>
                             <div className="flex gap-3">
                                 <button onClick={() => setEditingUser(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-200 font-medium rounded-lg transition-colors">
                                     Cancel
                                 </button>
-                                <button onClick={() => setEditingUser(null)} className="px-6 py-2 bg-gray-900 text-white hover:bg-black font-medium rounded-lg shadow-sm hover:shadow transition-all flex items-center gap-2">
+                                <button onClick={handleUpdateUser} className="px-6 py-2 bg-gray-900 text-white hover:bg-black font-medium rounded-lg shadow-sm hover:shadow transition-all flex items-center gap-2">
                                     <Save size={16} /> Save Changes
                                 </button>
                             </div>
@@ -1888,13 +2172,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {/* Header */}
                         <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
                             <div className="flex items-center gap-4">
-                                <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shadow-sm">
+                                <div className="w-12 h-12 rounded-xl bg-gray-100 text-gray-700 flex items-center justify-center shadow-sm">
                                     <Network size={24} />
                                 </div>
                                 <div>
                                     <h2 className="text-2xl font-bold text-gray-800">Network Map</h2>
                                     <p className="text-sm text-gray-500">
-                                        Real-time device topology • 4 Active Devices
+                                        Real-time device topology{networkNodes.length > 1 ? ` • ${networkNodes.length - 1} device(s)` : ' • No active devices'}
                                     </p>
                                 </div>
                             </div>
@@ -1934,7 +2218,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide">Device Types</h4>
                                 <div className="space-y-2">
                                     <div className="flex items-center gap-2 text-sm text-gray-600">
-                                        <div className="w-6 h-6 rounded bg-blue-600 flex items-center justify-center text-white"><Server size={12} /></div>
+                                        <div className="w-6 h-6 rounded bg-gray-900 flex items-center justify-center text-white"><Server size={12} /></div>
                                         <span>VAF Host</span>
                                     </div>
                                     <div className="flex items-center gap-2 text-sm text-gray-600">
@@ -1951,6 +2235,62 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </div>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Network Security Warning Modal */}
+            {showNetworkWarning && (
+                <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowNetworkWarning(false)} />
+                    <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                        <div className="p-6 text-center space-y-4">
+                            <div className="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-2">
+                                <ShieldAlert size={32} className="text-yellow-600" />
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900">Security Warning</h3>
+                            <p className="text-sm text-gray-600 leading-relaxed">
+                                Are you sure you want to share VAF with your network?
+                                <br/><br/>
+                                <strong className="text-gray-800">Please do not do this if you are in an insecure or public network.</strong>
+                            </p>
+                        </div>
+                        <div className="flex items-center border-t border-gray-100 bg-gray-50/50 p-4 gap-3">
+                            <button 
+                                onClick={() => setShowNetworkWarning(false)}
+                                className="flex-1 py-2.5 bg-white border border-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                onClick={() => {
+                                    handleChange('local_network_enabled', true);
+                                    setShowNetworkWarning(false);
+                                }}
+                                className="flex-1 py-2.5 bg-gray-900 text-white font-medium rounded-lg hover:bg-black transition-colors"
+                            >
+                                Enable Hosting
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Restarting Animation Modal */}
+            {isRestarting && (
+                <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm cursor-wait" />
+                    <div className="relative bg-white rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-4 animate-in fade-in zoom-in-95 duration-300">
+                        <div className="relative">
+                            <div className="w-16 h-16 border-4 border-gray-100 border-t-gray-900 rounded-full animate-spin" />
+                            <div className="absolute inset-0 flex items-center justify-center">
+                                <Network size={24} className="text-gray-900" />
+                            </div>
+                        </div>
+                        <div className="text-center">
+                            <h3 className="text-lg font-bold text-gray-900">Applying Network Settings</h3>
+                            <p className="text-sm text-gray-500 mt-1">Restarting server infrastructure...</p>
                         </div>
                     </div>
                 </div>
@@ -1984,7 +2324,7 @@ const Input = ({ label, value, onChange, type = "text", placeholder }: InputProp
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder={placeholder}
-            className="px-4 h-10 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
+            className="px-4 h-10 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all placeholder:text-gray-400"
         />
     </div>
 );
@@ -2008,7 +2348,7 @@ const Select = ({ label, value, onChange, options }: SelectProps) => {
                 <select
                     value={value}
                     onChange={(e) => onChange(e.target.value)}
-                    className="w-full h-10 appearance-none px-4 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-gray-700 pr-10"
+                    className="w-full h-10 appearance-none px-4 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all text-gray-700 pr-10"
                 >
                     {/* Default option if current value is not in options (e.g. custom input previously saved) */}
                     {!uniqueOptions.some(o => o.value === value) && value && (

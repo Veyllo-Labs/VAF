@@ -4,11 +4,20 @@ Track file changes and revert to previous states
 """
 import subprocess
 import shutil
+import platform
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 import json
 import hashlib
+
+
+def _get_subprocess_kwargs() -> dict:
+    """Get platform-specific kwargs for headless subprocess execution."""
+    kwargs = {}
+    if platform.system() == "Windows":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    return kwargs
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SNAPSHOT CLASS
@@ -36,7 +45,8 @@ class Snapshot:
                 ["git", "rev-parse", "--is-inside-work-tree"],
                 cwd=self.project_path,
                 capture_output=True,
-                text=True
+                text=True,
+                **_get_subprocess_kwargs()
             )
             return result.returncode == 0
         except Exception:
@@ -73,40 +83,46 @@ class Snapshot:
     def _git_snapshot(self, message: str = None) -> Optional[str]:
         """Create a Git-based snapshot (stash or commit)."""
         try:
+            sp_kwargs = _get_subprocess_kwargs()
+
             # Check for changes
             status = subprocess.run(
                 ["git", "status", "--porcelain"],
                 cwd=self.project_path,
                 capture_output=True,
-                text=True
+                text=True,
+                **sp_kwargs
             )
-            
+
             if not status.stdout.strip():
                 return None  # No changes
-            
+
             # Stage all changes
             subprocess.run(
                 ["git", "add", "-A"],
                 cwd=self.project_path,
-                capture_output=True
+                capture_output=True,
+                **sp_kwargs
             )
-            
+
             # Create commit with VAF marker
             msg = message or f"VAF snapshot {datetime.now().isoformat()}"
             result = subprocess.run(
                 ["git", "commit", "-m", f"[VAF] {msg}", "--no-verify"],
                 cwd=self.project_path,
                 capture_output=True,
-                text=True
+                text=True,
+                **sp_kwargs
             )
-            
+
             if result.returncode == 0:
                 # Get commit hash
                 hash_result = subprocess.run(
                     ["git", "rev-parse", "HEAD"],
                     cwd=self.project_path,
                     capture_output=True,
-                    text=True
+                    text=True,
+                    **sp_kwargs
                 )
                 return hash_result.stdout.strip()[:8]
             
@@ -122,24 +138,26 @@ class Snapshot:
                 ["git", "checkout", commit_hash, "--", "."],
                 cwd=self.project_path,
                 capture_output=True,
-                text=True
+                text=True,
+                **_get_subprocess_kwargs()
             )
             return result.returncode == 0
         except Exception:
             return False
-    
+
     def _git_diff(self, commit_hash: str = None) -> str:
         """Get Git diff."""
         try:
             cmd = ["git", "diff"]
             if commit_hash:
                 cmd.append(commit_hash)
-            
+
             result = subprocess.run(
                 cmd,
                 cwd=self.project_path,
                 capture_output=True,
-                text=True
+                text=True,
+                **_get_subprocess_kwargs()
             )
             return result.stdout
         except Exception:

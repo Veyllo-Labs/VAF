@@ -175,14 +175,17 @@ class LinterTool(BaseTool):
 
         try:
             # Run linter
-            proc = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                cwd=target_path.parent if target_path.is_file() else target_path,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8"}
-            )
+            import platform
+            run_kwargs = {
+                "capture_output": True,
+                "text": True,
+                "timeout": 30,
+                "cwd": target_path.parent if target_path.is_file() else target_path,
+                "env": {**os.environ, "PYTHONIOENCODING": "utf-8"}
+            }
+            if platform.system() == "Windows":
+                run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            proc = subprocess.run(command, **run_kwargs)
 
             output_lines = []
             
@@ -233,14 +236,17 @@ class LinterTool(BaseTool):
             command.append(str(directory))
 
             try:
-                proc = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    cwd=str(directory),
-                    env={**os.environ, "PYTHONIOENCODING": "utf-8"}
-                )
+                import platform
+                run_kwargs = {
+                    "capture_output": True,
+                    "text": True,
+                    "timeout": 60,
+                    "cwd": str(directory),
+                    "env": {**os.environ, "PYTHONIOENCODING": "utf-8"}
+                }
+                if platform.system() == "Windows":
+                    run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                proc = subprocess.run(command, **run_kwargs)
 
                 if proc.returncode == 0:
                     results.append(f"✓ {linter_config['name']}: No issues in {len(files)} {ext} files")

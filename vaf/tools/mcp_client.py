@@ -124,14 +124,17 @@ class MCPClientTool(BaseTool):
                     cmd_parts = server_command
                 
                 # Start MCP server process
-                process = subprocess.Popen(
-                    cmd_parts,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1
-                )
+                import platform
+                popen_kwargs = {
+                    "stdin": subprocess.PIPE,
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "text": True,
+                    "bufsize": 1
+                }
+                if platform.system() == "Windows":
+                    popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                process = subprocess.Popen(cmd_parts, **popen_kwargs)
                 self._server_processes[cache_key] = process
                 
                 # Send initialize request

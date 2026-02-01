@@ -7,7 +7,7 @@ import {
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, getApiBase } from '@/lib/utils';
 import SettingsModal from '@/components/SettingsModal';
 import SubAgentWindow from '@/components/SubAgentWindow';
 import { ToolMessage } from '@/components/ToolMessage';
@@ -120,21 +120,18 @@ const parseContent = (content: string): { thought: string | null; answer: string
     return { thought: null, answer: merged, isThinkingComplete: true };
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
-const backendBaseUrl = API_BASE;
-
 const normalizeDownloadHref = (rawHref: string): string => {
     if (!rawHref) return rawHref;
-
+    const base = getApiBase();
     if (rawHref.startsWith('sandbox:/')) {
         const path = rawHref.replace(/^sandbox:\/*/, '');
-        return `${backendBaseUrl}/api/file?path=${encodeURIComponent(path)}`;
+        return `${base}/api/file?path=${encodeURIComponent(path)}`;
     }
 
     const looksLikeWindowsPath = /^[a-zA-Z]:[\\/]/.test(rawHref);
     const looksLikeUnixPath = rawHref.startsWith('/');
     if (looksLikeWindowsPath || looksLikeUnixPath) {
-        return `${backendBaseUrl}/api/file?path=${encodeURIComponent(rawHref)}`;
+        return `${base}/api/file?path=${encodeURIComponent(rawHref)}`;
     }
 
     return rawHref;
@@ -345,7 +342,7 @@ export default function VAFDashboard() {
     const [currentUser, setCurrentUser] = useState<any>(null);
 
     useEffect(() => {
-        fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' })
+        fetch(`${getApiBase()}/api/auth/me`, { credentials: 'include' })
             .then(async (res) => {
                 if (res.ok) {
                     const userData = await res.json();
@@ -723,7 +720,7 @@ export default function VAFDashboard() {
     const [reconnectAttempt, setReconnectAttempt] = useState(0);
     useEffect(() => {
         if (typeof window === 'undefined') return;
-        const wsUrl = (API_BASE || 'http://localhost:8001').replace(/^http/, 'ws') + '/ws';
+        const wsUrl = (getApiBase() || 'http://localhost:8001').replace(/^http/, 'ws') + '/ws';
         const socket = new WebSocket(wsUrl);
         let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
         socket.onopen = () => {

@@ -80,17 +80,13 @@ async def sync_memory(request: Request, username: str = Depends(get_current_user
     try:
         from vaf.memory.database import get_db
         from vaf.memory.rag import RagPipeline
-        from vaf.memory.models import Memory
-        from sqlalchemy import delete
         import uuid
         
+        scope_uuid = uuid.UUID(scope_id) if scope_id else None
         async with get_db() as db:
             pipeline = RagPipeline(db)
-            
-            # 1. Clear existing RAG entries for this file and user
-            # For simplicity, we search for memories with source='MEMORY.md' in metadata
-            # This requires metadata to be set during ingest
-            
+            # 1. Replace: delete existing MEMORY.md entries for this user
+            await pipeline.delete_memories_by_source_scope("MEMORY.md", scope_uuid)
             # 2. Ingest current file content
             await pipeline.ingest(
                 content=content,
@@ -99,7 +95,7 @@ async def sync_memory(request: Request, username: str = Depends(get_current_user
                     "source": "MEMORY.md",
                     "type": "system_memory"
                 },
-                user_scope_id=uuid.UUID(scope_id) if scope_id else None
+                user_scope_id=scope_uuid
             )
             
         return {"status": "success", "message": "Memory synced to RAG index"}

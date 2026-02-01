@@ -669,45 +669,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </Section>
 
                                         <Section title="Long-term Memory (RAG Source)">
-                                            <div className="flex justify-between items-center mb-2">
-                                                <p className="text-xs text-gray-500">Curated facts and knowledge available via semantic search.</p>
-                                                <div className="flex gap-2">
-                                                    <button
-                                                        onClick={() => setShowMemoryModal(true)}
-                                                        disabled={!localConfig.memory_enabled}
-                                                        className={cn(
-                                                            "text-xs px-2 py-1 rounded-lg transition-colors flex items-center gap-1",
-                                                            localConfig.memory_enabled
-                                                                ? "bg-purple-50 text-purple-600 hover:bg-purple-100"
-                                                                : "bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                        )}
-                                                    >
-                                                        <Brain size={12} /> View Graph
-                                                    </button>
-                                                    <button 
-                                                        onClick={() => fetch('/api/user/memory/sync', { method: 'POST' }).then(() => alert('Memory synced!'))}
-                                                        disabled={!localConfig.memory_enabled}
-                                                        className={cn(
-                                                            "text-xs px-2 py-1 rounded-lg transition-colors flex items-center gap-1",
-                                                            localConfig.memory_enabled
-                                                                ? "bg-blue-50 text-blue-600 hover:bg-blue-100"
-                                                                : "bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                        )}
-                                                    >
-                                                        <RefreshCw size={12} /> Sync to RAG
-                                                    </button>
-                                                </div>
-                                            </div>
-                                            <textarea
-                                                className="w-full h-64 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 resize-none"
-                                                value={personaData?.memory || ''}
-                                                onChange={(e) => setPersonaData({ ...personaData!, memory: e.target.value })}
-                                                onBlur={() => fetch('/api/user/memory', {
-                                                    method: 'PUT',
-                                                    headers: { 'Content-Type': 'application/json' },
-                                                    body: JSON.stringify({ content: personaData?.memory })
-                                                })}
-                                            />
+                                            <button
+                                                onClick={() => setShowMemoryModal(true)}
+                                                disabled={!localConfig.memory_enabled}
+                                                className={cn(
+                                                    "text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2",
+                                                    localConfig.memory_enabled
+                                                        ? "bg-purple-50 text-purple-600 hover:bg-purple-100"
+                                                        : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                )}
+                                            >
+                                                <Brain size={16} /> View Graph
+                                            </button>
                                         </Section>
                                     </>
                                 )}
@@ -1684,14 +1657,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         className="relative bg-white w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
                         onClick={(e) => e.stopPropagation()}
                     >
-                        {/* Header */}
-                        <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-gradient-to-r from-indigo-50 to-purple-50 z-10">
-                            <div className="flex items-center gap-4">
-                                <div className="w-12 h-12 rounded-xl bg-indigo-600 flex items-center justify-center shadow-lg">
-                                    <Brain size={24} className="text-white" />
+                        {/* Header (DESIGN: modal header, gray palette) */}
+                        <div className="flex items-center justify-between p-6 border-b border-gray-200 shrink-0 bg-gray-50 z-10">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-gray-900 flex items-center justify-center">
+                                    <Brain size={20} className="text-white" />
                                 </div>
                                 <div>
-                                    <h2 className="text-2xl font-bold text-gray-800">Memory Graph</h2>
+                                    <h2 className="text-xl font-bold text-gray-900">Memory Graph</h2>
                                     <p className="text-sm text-gray-500">
                                         {memoryStats?.memories ?? 0} memories • {memoryStats?.chunks ?? 0} chunks • {memoryStats?.connections ?? 0} connections
                                     </p>
@@ -1701,7 +1674,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <button 
                                     onClick={fetchMemoryGraph}
                                     disabled={memoryLoading}
-                                    className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium text-gray-700"
+                                    className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors text-sm disabled:opacity-50"
                                 >
                                     <RefreshCw size={16} className={memoryLoading ? 'animate-spin' : ''} />
                                     Refresh
@@ -1709,13 +1682,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <a 
                                     href="/memory"
                                     target="_blank"
-                                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-medium"
+                                    className="flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors text-sm"
                                 >
                                     Open Full View
                                     <ChevronRight size={16} />
                                 </a>
-                                <button onClick={() => setShowMemoryModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-white transition-colors">
-                                    <X size={24} />
+                                <button onClick={() => setShowMemoryModal(false)} className="p-2 hover:bg-gray-200 rounded-lg transition-colors text-gray-500 hover:text-gray-700" title="Close">
+                                    <X size={20} />
                                 </button>
                             </div>
                         </div>
@@ -1725,25 +1698,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             {memoryLoading ? (
                                 <div className="flex items-center justify-center h-full">
                                     <div className="text-center">
-                                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4" />
-                                        <p className="text-gray-500">Loading memory graph...</p>
+                                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-400 mx-auto mb-4" />
+                                        <p className="text-sm text-gray-500">Loading memory graph...</p>
                                     </div>
                                 </div>
                             ) : memoryNodes.length === 0 ? (
                                 <div className="flex items-center justify-center h-full">
                                     <div className="text-center">
-                                        <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                                            <Brain size={40} className="text-gray-300" />
+                                        <div className="w-20 h-20 rounded-xl bg-gray-200 flex items-center justify-center mx-auto mb-4">
+                                            <Brain size={40} className="text-gray-500" />
                                         </div>
-                                        <h3 className="text-xl font-semibold text-gray-700 mb-2">No memories yet</h3>
-                                        <p className="text-gray-500 max-w-sm">
+                                        <h3 className="text-lg font-semibold text-gray-900 mb-1">No memories yet</h3>
+                                        <p className="text-sm text-gray-500 max-w-sm">
                                             Create your first memory to see the graph visualization.
                                             Memories are auto-connected based on semantic similarity.
                                         </p>
                                         <a 
                                             href="/memory"
                                             target="_blank"
-                                            className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-medium"
+                                            className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors text-sm"
                                         >
                                             Create Memory
                                             <ChevronRight size={16} />
@@ -1793,7 +1766,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         type: 'smoothstep',
                                         animated: edge.data?.connectionType === 'semantic',
                                         style: {
-                                            stroke: edge.data?.connectionType === 'semantic' ? '#6366f1' : '#9ca3af',
+                                            stroke: edge.data?.connectionType === 'semantic' ? '#6b7280' : '#9ca3af',
                                             strokeWidth: Math.max(1, (edge.data?.strength || 0.5) * 3),
                                             opacity: 0.6,
                                         },
@@ -1807,7 +1780,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <Background color="#e5e7eb" gap={24} />
                                     <Controls className="bg-white rounded-lg shadow-lg" />
                                     <MiniMap 
-                                        nodeColor={(node) => node.style?.background === '#fef3c7' ? '#f59e0b' : '#6366f1'}
+                                        nodeColor={(node) => node.style?.background === '#fef3c7' ? '#eab308' : '#374151'}
                                         maskColor="rgba(0, 0, 0, 0.1)"
                                         className="bg-white rounded-lg shadow-lg"
                                     />
@@ -1815,11 +1788,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             )}
                         </div>
 
-                        {/* Footer Stats */}
-                        <div className="h-14 border-t border-gray-200 flex items-center justify-between px-8 bg-white">
-                            <div className="flex items-center gap-6 text-sm text-gray-500">
+                        {/* Footer Stats (DESIGN: meta text, status badges) */}
+                        <div className="border-t border-gray-200 flex items-center justify-between px-6 py-3 bg-gray-50">
+                            <div className="flex items-center gap-6 text-xs text-gray-500">
                                 <div className="flex items-center gap-2">
-                                    <div className="w-3 h-3 rounded-full bg-indigo-500" />
+                                    <div className="w-3 h-3 rounded-full bg-gray-700" />
                                     <span>Semantic Connection</span>
                                 </div>
                                 <div className="flex items-center gap-2">
@@ -1827,19 +1800,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <span>Manual Connection</span>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <div className="w-3 h-3 rounded bg-yellow-200 border border-yellow-400" />
+                                    <div className="w-3 h-3 rounded bg-yellow-100 border border-yellow-500" />
                                     <span>Highlighted (RAG Source)</span>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
                                 {memoryStats?.db_connected ? (
-                                    <span className="flex items-center gap-1.5 text-xs text-green-600">
-                                        <div className="w-2 h-2 rounded-full bg-green-500" />
+                                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">
                                         Connected
                                     </span>
                                 ) : (
-                                    <span className="flex items-center gap-1.5 text-xs text-red-600">
-                                        <div className="w-2 h-2 rounded-full bg-red-500" />
+                                    <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600">
                                         Disconnected
                                     </span>
                                 )}

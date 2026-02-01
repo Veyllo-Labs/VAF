@@ -1050,11 +1050,12 @@ class Agent:
         
         # Manually register Context Tools for Main Agent
         try:
-            from vaf.tools.context_tools import UpdateIntentTool, UpdateWorkingMemoryTool, RequestClarificationTool
+            from vaf.tools.context_tools import UpdateIntentTool, UpdateWorkingMemoryTool, RequestClarificationTool, MemoryStoreTool
             
             # UpdateIntent and UpdateWorkingMemory are for Main Agent
             self.tools["update_intent"] = UpdateIntentTool()
             self.tools["update_working_memory"] = UpdateWorkingMemoryTool()
+            self.tools["memory_store"] = MemoryStoreTool()
             
             # RequestClarification is strictly for Sub-Agents (via coder_only flag),
             # but we register it here so it's available in the system (even if filtered out later for Main Agent).
@@ -3189,7 +3190,7 @@ class Agent:
             
         return True
 
-    def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False, disable_workflows=False, disable_tools=False):
+    def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False, disable_workflows=False, disable_tools=False, memory_context=None):
         from vaf.cli.ui import UI
         
         self.context_manager.decay_state()
@@ -3420,7 +3421,9 @@ class Agent:
                     
                     # Prepare messages
                     prepared_messages = self._prepare_messages(self.history)
-                    
+                    if prepared_messages and memory_context and memory_context.strip():
+                        memory_msg = {"role": "system", "content": "## Memory context (relevant to this query)\n\nUse when relevant; you may cite briefly (e.g. from memory).\n\n" + memory_context.strip()}
+                        prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
                     # Disable tools if requested
                     current_tools = self.TOOLS if not disable_tools else None
                     tool_choice = "auto" if current_tools else "none" # Default to auto if tools, none otherwise
@@ -3633,7 +3636,9 @@ class Agent:
                         # CRITICAL: Rebuild payload with current history (may have been compressed)
                         # Prepare messages for specific model quirks (e.g. Gemma)
                         prepared_messages = self._prepare_messages(self.history)
-                        
+                        if prepared_messages and memory_context and memory_context.strip():
+                            memory_msg = {"role": "system", "content": "## Memory context (relevant to this query)\n\nUse when relevant; you may cite briefly (e.g. from memory).\n\n" + memory_context.strip()}
+                            prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
                         # Disable tools if requested (forces text response)
                         current_tools = self.TOOLS if not disable_tools else None
                         current_tool_choice = "auto" if not disable_tools else "none"
@@ -4939,7 +4944,10 @@ class Agent:
         emit({"type": "tool_start", "tool": name, "args": dbg_args})
         try:
             if name in self.tools:
-                result = self.tools[name].run(**args)
+                tool_args = dict(args) if args else {}
+                if name == "memory_store":
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                result = self.tools[name].run(**tool_args)
             else:
                 result = f"Error: Unknown tool '{name}'"
         except Exception as e:

@@ -85,6 +85,7 @@ class Config:
         
         # Memory System Settings (RAG + Vector Search)
         "memory_enabled": True,                                    # Enable memory system
+        "memory_auto_capture": True,                                # Auto-store high-value snippets after agent response
         "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",  # PostgreSQL connection URL
         "memory_encryption_key": "",                               # AES-256 key (Base64, auto-generated if empty)
         "memory_embedding_model": "all-MiniLM-L6-v2",             # Sentence-transformers model

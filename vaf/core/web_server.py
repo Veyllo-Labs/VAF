@@ -608,6 +608,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     
     try:
         await manager.connect(websocket)
+        if user_context and user_context.get("user_id"):
+            manager.set_connection_user(websocket, user_context.get("user_id"))
         os.environ["VAF_WEBUI_ACTIVE"] = "1"
         print(f"[WebSocket] Connected! Active: {len(manager.active_connections)}")
         log("API", f"WebSocket connected! Active: {len(manager.active_connections)}")
@@ -1129,9 +1131,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if not session_id:
                             # Fallback if not subscribed yet (should be rare)
                             session_id = "web-default"
-                            
+                        # user_scope_id is required for correct RAG scope (Auto-Recall and memory_store)
+                        user_scope_id = manager.get_connection_user(websocket)
+                        metadata = {"user_scope_id": user_scope_id} if user_scope_id else {}
                         # Add to queue
-                        tq.add(session_id=session_id, input_text=content, source="web")
+                        tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)
                         
                         # Ack to console
                         file_info = f" [{len(files)} file(s)]" if files else ""

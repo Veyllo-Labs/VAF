@@ -143,7 +143,17 @@ def run_headless_agent():
                     # valid session is needed for chat_step to work properly with history
                     pass
 
-                # Lazy-load local model only when a task arrives
+                # Process Input
+                input_text = task.input_text
+                is_cmd = str(input_text).startswith("__CMD__")
+
+                # Check for System Commands (similar to run.py) - do NOT load model for commands
+                if is_cmd:
+                    _handle_command(input_text, agent, session_mgr)
+                    tq.task_done()
+                    continue
+
+                # Lazy-load local model only when we have a real chat task (not for LOAD_SESSION etc.)
                 try:
                     if agent.provider == "local" and not agent.api_backend and not agent.llm and not agent.use_server:
                         agent.load_model(skip_download_check=True)
@@ -158,8 +168,6 @@ def run_headless_agent():
                             })
                 except Exception as e:
                     print(f"[Headless] Lazy model load failed: {e}")
-                
-                # HTTP backend startup is managed by the Tray activity loop.
 
                 # Send initial token stats to WebUI (before processing)
                 try:
@@ -184,15 +192,6 @@ def run_headless_agent():
                 except Exception:
                     pass
 
-                # Process Input
-                input_text = task.input_text
-                
-                # Check for System Commands (similar to run.py)
-                if str(input_text).startswith("__CMD__"):
-                    _handle_command(input_text, agent, session_mgr)
-                    tq.task_done()
-                    continue
-                
                 # Normal Chat Step
                 # usage: chat_step(user_input, ...)
                 try:
@@ -205,9 +204,48 @@ def run_headless_agent():
                         )
                     except Exception:
                         pass
-                    # We pass skip_input=False because we ARE providing input
-                    # We disable workflows for now if they require TUI, or we need to ensure workflows work headless
-                    # Agent.chat_step logic handles tool execution.
+                    # RAG: fetch memory context for this turn (sync helper)
+                    memory_context = ""
+                    try:
+                        def _log_rag(msg: str) -> None:
+                            try:
+                                from datetime import datetime as _dt
+                                log_dir = Platform.get_context_log_dir()
+                                log_dir.mkdir(parents=True, exist_ok=True)
+                                with open(log_dir / "rag_context.log", "a", encoding="utf-8") as f:
+                                    f.write(f"{_dt.now().isoformat()} {msg}\n")
+                            except Exception:
+                                pass
+                        if Config.get("memory_enabled", True):
+                            from vaf.memory.rag import run_memory_search_sync
+                            from uuid import UUID
+                            user_scope_id = None
+                            raw = task.metadata.get("user_scope_id") if getattr(task, "metadata", None) else None
+                            if raw:
+                                try:
+                                    user_scope_id = UUID(str(raw))
+                                except (ValueError, TypeError):
+                                    pass
+                            memory_context = run_memory_search_sync(
+                                task.input_text, k=5, user_scope_id=user_scope_id
+                            )
+                            snippet_count = memory_context.count("[Source ") if memory_context else 0
+                            if snippet_count == 0:
+                                _log_rag(f"RAG snippets=0 (no matching memories or DB empty) query_len={len(task.input_text or '')}")
+                            else:
+                                _log_rag(f"RAG snippets={snippet_count} query_len={len(task.input_text or '')}")
+                        else:
+                            _log_rag("RAG skipped (memory_enabled=False)")
+                    except Exception as e:
+                        memory_context = ""
+                        try:
+                            from datetime import datetime as _dt
+                            log_dir = Platform.get_context_log_dir()
+                            log_dir.mkdir(parents=True, exist_ok=True)
+                            with open(log_dir / "rag_context.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} RAG failed: {e}\n")
+                        except Exception:
+                            pass
 
                     # Streaming callback for WebUI - accumulates chunks and sends updates
                     response_parts = []
@@ -237,10 +275,14 @@ def run_headless_agent():
                                 with open(log_dir / "callback_debug.txt", "a", encoding="utf-8") as f:
                                     f.write(f"[EMIT_ERROR] {e}\n")
 
+                    # Set current user scope so memory_store tool can use it
+                    agent._current_user_scope_id = (task.metadata or {}).get("user_scope_id") if getattr(task, "metadata", None) else None
+
                     response = agent.chat_step(
                         user_input=input_text,
                         stream_callback=webui_stream_callback,  # Stream to WebUI!
-                        skip_input=False
+                        skip_input=False,
+                        memory_context=memory_context or None,
                     )
 
                     # Handle async-ack markers (sub-agent dispatched, no stream output)
@@ -286,6 +328,22 @@ def run_headless_agent():
                         get_web_interface().emit_stats(stats, session_id=task.session_id)
                     except Exception:
                         pass  # Ignore stats errors
+
+                    # Auto-capture: optionally store high-value snippets to Memory-DB
+                    try:
+                        from vaf.memory.rag import run_auto_capture_sync
+                        from uuid import UUID
+                        _scope = (task.metadata or {}).get("user_scope_id") if getattr(task, "metadata", None) else None
+                        if _scope is not None and not isinstance(_scope, UUID):
+                            try:
+                                _scope = UUID(str(_scope))
+                            except (ValueError, TypeError):
+                                _scope = None
+                        if _scope is not None:
+                            _assistant_text = "".join(response_parts) if response_parts else str(response_text or "")
+                            run_auto_capture_sync(input_text or "", _assistant_text, _scope)
+                    except Exception:
+                        pass
 
                     # Result is already added to history and broadcast to WebUI by agent logic
                     print("[Headless] Task complete.")

@@ -44,13 +44,24 @@ class TaskQueue:
         """Clear the stop request for a session (called after stopping)."""
         self._stop_requests.discard(session_id)
 
-    def add(self, session_id: str, input_text: str, source: str = "web", callback: Callable = None, priority: int = 10):
+    def add(
+        self,
+        session_id: str,
+        input_text: str,
+        source: str = "web",
+        callback: Callable = None,
+        priority: int = 10,
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
         """
         Add a task to the queue.
         Priority: Lower number = Higher priority.
+        metadata: Optional dict (e.g. user_scope_id for RAG) passed to the task.
         """
-        task = AgentTask(session_id, input_text, source, callback)
-        # PriorityQueue stores tuples (priority, timestamp, item). 
+        task = AgentTask(
+            session_id, input_text, source, callback, metadata=metadata or {}
+        )
+        # PriorityQueue stores tuples (priority, timestamp, item).
         # Using timestamp ensures FIFO for same priority.
         self.queue.put((priority, task.created_at, task))
         return task

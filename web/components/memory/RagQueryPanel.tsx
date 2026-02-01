@@ -74,15 +74,19 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
     
     return (
         <div className={cn('bg-white rounded-xl border border-gray-200 overflow-hidden flex flex-col', className)}>
-            {/* Header */}
-            <div className="px-4 py-3 border-b border-gray-200 bg-gradient-to-r from-indigo-50 to-purple-50">
+            {/* Header (DESIGN: section header, no indigo) */}
+            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
                 <div className="flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-indigo-600" />
-                    <h3 className="font-medium text-gray-800">Memory Search</h3>
+                    <div className="w-10 h-10 rounded-xl bg-gray-900 flex items-center justify-center flex-shrink-0">
+                        <Sparkles className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-semibold text-gray-900">Memory Search</h3>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                            Ask questions about your memories using AI-powered retrieval
+                        </p>
+                    </div>
                 </div>
-                <p className="text-xs text-gray-500 mt-1">
-                    Ask questions about your memories using AI-powered retrieval
-                </p>
             </div>
             
             {/* Query Input */}
@@ -97,13 +101,13 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                             onChange={(e) => setLocalQuery(e.target.value)}
                             placeholder="Ask a question about your memories..."
                             disabled={isQuerying}
-                            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:bg-gray-50"
+                            className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-transparent disabled:bg-gray-50"
                         />
                     </div>
                     <button
                         type="submit"
                         disabled={!localQuery.trim() || isQuerying}
-                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                     >
                         {isQuerying ? (
                             <Loader2 className="w-4 h-4 animate-spin" />
@@ -115,7 +119,7 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                         <button
                             type="button"
                             onClick={handleClear}
-                            className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
+                            className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700"
                             title="Clear"
                         >
                             <X className="w-4 h-4" />
@@ -126,9 +130,9 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
             
             {/* Error display */}
             {error && (
-                <div className="px-4 py-3 bg-red-50 border-b border-red-200">
-                    <div className="flex items-center gap-2 text-red-700">
-                        <AlertCircle className="w-4 h-4" />
+                <div className="px-4 py-3 bg-red-100 border-b border-red-500">
+                    <div className="flex items-center gap-2 text-red-600">
+                        <AlertCircle className="w-4 h-4 flex-shrink-0" />
                         <span className="text-sm">{error}</span>
                     </div>
                 </div>
@@ -147,7 +151,7 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                                 <div className="whitespace-pre-wrap text-gray-700">
                                     {currentAnswer}
                                     {isQuerying && (
-                                        <span className="inline-block w-2 h-4 bg-indigo-600 animate-pulse ml-1" />
+                                        <span className="inline-block w-2 h-4 bg-gray-900 animate-pulse ml-1" />
                                     )}
                                 </div>
                             ) : isQuerying ? (
@@ -182,11 +186,11 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                                         <button
                                             key={source.chunk_id}
                                             onClick={() => handleSourceClick(source)}
-                                            className="w-full px-4 py-3 text-left hover:bg-indigo-50 border-b border-gray-100 last:border-b-0 transition-colors"
+                                            className="w-full px-4 py-3 text-left hover:bg-gray-100 border-b border-gray-100 last:border-b-0 transition-colors"
                                         >
                                             <div className="flex items-start gap-3">
-                                                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center">
-                                                    <span className="text-xs font-medium text-indigo-600">
+                                                <div className="flex-shrink-0 w-8 h-8 rounded-xl bg-gray-200 flex items-center justify-center">
+                                                    <span className="text-xs font-medium text-gray-700">
                                                         {idx + 1}
                                                     </span>
                                                 </div>

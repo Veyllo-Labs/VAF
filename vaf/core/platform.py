@@ -305,6 +305,23 @@ class Platform:
         """
         return Path.home() / ".vaf"
 
+    @staticmethod
+    def get_context_log_dir() -> Path:
+        """
+        Directory for Soul/RAG context logs. Resolution order:
+        1. VAF_LOG_DIR env (e.g. d:\\VAF\\logs)
+        2. Platform.vaf_dir() / "logs"
+        3. Repo root / logs (from this file: vaf/core/platform.py -> parents[2] = repo)
+        """
+        env_dir = os.environ.get("VAF_LOG_DIR")
+        if env_dir:
+            return Path(env_dir)
+        try:
+            return Platform.vaf_dir() / "logs"
+        except Exception:
+            pass
+        return Path(__file__).resolve().parents[2] / "logs"
+
     # ═══════════════════════════════════════════════════════════════════════════
     # AUTOSTART (Tray)
     # ═══════════════════════════════════════════════════════════════════════════

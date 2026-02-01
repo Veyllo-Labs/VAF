@@ -97,7 +97,8 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
                 <div className="flex items-center gap-2">
                     <button
                         onClick={() => setExpanded(!expanded)}
-                        className="p-1 hover:bg-gray-200 rounded"
+                        className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                        title={expanded ? 'Collapse' : 'Expand'}
                     >
                         {expanded ? (
                             <ChevronDown className="w-4 h-4 text-gray-500" />
@@ -112,14 +113,14 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
                         <>
                             <button
                                 onClick={() => setIsEditing(true)}
-                                className="p-1.5 hover:bg-gray-200 rounded text-gray-600"
+                                className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700"
                                 title="Edit"
                             >
                                 <Edit2 className="w-4 h-4" />
                             </button>
                             <button
                                 onClick={() => setShowDeleteConfirm(true)}
-                                className="p-1.5 hover:bg-red-100 rounded text-red-600"
+                                className="p-2 hover:bg-red-100 rounded-lg transition-colors text-red-600"
                                 title="Delete"
                             >
                                 <Trash2 className="w-4 h-4" />
@@ -129,7 +130,7 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
                         <button
                             onClick={handleSave}
                             disabled={isLoading}
-                            className="p-1.5 hover:bg-green-100 rounded text-green-600"
+                            className="p-2 hover:bg-green-100 rounded-lg transition-colors text-green-700"
                             title="Save"
                         >
                             <Save className="w-4 h-4" />
@@ -137,7 +138,7 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
                     )}
                     <button
                         onClick={handleClose}
-                        className="p-1.5 hover:bg-gray-200 rounded text-gray-600"
+                        className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700"
                         title="Close"
                     >
                         <X className="w-4 h-4" />
@@ -158,13 +159,13 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
                         <button
                             onClick={handleDelete}
                             disabled={isLoading}
-                            className="px-3 py-1 text-xs font-medium bg-red-600 text-white rounded hover:bg-red-700"
+                            className="px-3 py-1 text-xs font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50"
                         >
                             {isLoading ? 'Deleting...' : 'Delete'}
                         </button>
                         <button
                             onClick={() => setShowDeleteConfirm(false)}
-                            className="px-3 py-1 text-xs font-medium bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+                            className="px-3 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
                         >
                             Cancel
                         </button>
@@ -192,7 +193,7 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
                                 type="text"
                                 value={editTitle}
                                 onChange={(e) => setEditTitle(e.target.value)}
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                className="w-full px-4 py-3 rounded-xl bg-white border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-transparent"
                             />
                         ) : (
                             <p className="text-sm text-gray-800 font-medium">
@@ -213,7 +214,7 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
                                 value={editTags}
                                 onChange={(e) => setEditTags(e.target.value)}
                                 placeholder="tag1, tag2, tag3"
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                className="w-full px-4 py-3 rounded-xl bg-white border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-transparent"
                             />
                         ) : (
                             <div className="flex flex-wrap gap-1">
@@ -241,7 +242,7 @@ export default function MemoryDetailPanel({ className, onClose }: MemoryDetailPa
                                 value={editContent}
                                 onChange={(e) => setEditContent(e.target.value)}
                                 rows={10}
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                className="w-full px-4 py-3 rounded-xl bg-white border border-gray-300 text-gray-900 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-transparent"
                             />
                         ) : (
                             <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 max-h-[300px] overflow-y-auto">

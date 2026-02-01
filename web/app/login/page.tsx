@@ -11,8 +11,7 @@ import SoulWizard from '@/components/SoulWizard';
 import { cn } from '@/lib/utils';
 import { CONNECTION_APPS, CATEGORIES, DiscordSetupWizard } from '@/components/connections';
 import type { DiscordConfig } from '@/components/connections';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+import { getApiBase } from '@/lib/utils';
 
 export default function LoginPage() {
     const router = useRouter();
@@ -34,15 +33,18 @@ export default function LoginPage() {
     const [createAdminSubStep, setCreateAdminSubStep] = useState<'username' | 'password' | '2fa'>('username');
     const [onboardingConfig, setOnboardingConfig] = useState<Record<string, unknown>>({});
     const [showDiscordWizard, setShowDiscordWizard] = useState(false);
+    const [backendUnreachable, setBackendUnreachable] = useState(false);
 
     useEffect(() => {
-        if (!API_BASE) {
+        const apiBase = getApiBase();
+        if (!apiBase) {
             setCheckingSetup(false);
             return;
         }
+        setBackendUnreachable(false);
 
         // Check if already authenticated
-        fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' })
+        fetch(`${apiBase}/api/auth/me`, { credentials: 'include' })
             .then((res) => {
                 if (res.ok) {
                     // If we're in the middle of onboarding (e.g. refresh after 2FA), stay and show Soul/Connections
@@ -57,7 +59,7 @@ export default function LoginPage() {
                 }
 
                 // If not authenticated, check setup status
-                fetch(`${API_BASE}/api/auth/needs-setup`, { credentials: 'include' })
+                fetch(`${apiBase}/api/auth/needs-setup`, { credentials: 'include' })
                     .then((res) => {
                         if (res.status === 404) return null;
                         if (res.ok) return res.json();
@@ -76,13 +78,16 @@ export default function LoginPage() {
             })
             .catch(() => {
                 setCheckingSetup(false);
+                setBackendUnreachable(true);
             });
     }, []);
 
     // Load config when entering connections step (for Discord wizard and persistence)
     useEffect(() => {
-        if (step !== 'connections' || !API_BASE) return;
-        fetch(`${API_BASE}/api/config`, { credentials: 'include' })
+        if (step !== 'connections') return;
+        const apiBase = getApiBase();
+        if (!apiBase) return;
+        fetch(`${apiBase}/api/config`, { credentials: 'include' })
             .then((res) => res.ok ? res.json() : {})
             .then((data) => setOnboardingConfig(data))
             .catch(() => setOnboardingConfig({}));
@@ -101,7 +106,7 @@ export default function LoginPage() {
         setIsLoading(true);
         setBootstrapError(null);
         try {
-            const res = await fetch(`${API_BASE}/api/auth/bootstrap`, {
+            const res = await fetch(`${getApiBase()}/api/auth/bootstrap`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
@@ -116,7 +121,7 @@ export default function LoginPage() {
             setTempToken(data.access_token || null);
             if (data.user?.requires_2fa_setup && data.access_token) {
                 try {
-                    const setupRes = await fetch(`${API_BASE}/api/auth/setup-2fa`, {
+                    const setupRes = await fetch(`${getApiBase()}/api/auth/setup-2fa`, {
                         method: 'POST',
                         headers: { Authorization: `Bearer ${data.access_token}` },
                         credentials: 'include',
@@ -136,7 +141,7 @@ export default function LoginPage() {
         } catch (err) {
             const msg = typeof err === 'object' && err && 'message' in err ? String((err as Error).message) : '';
             setBootstrapError(
-                `Connection failed. Is the backend at ${API_BASE} reachable?${msg ? ` (${msg})` : ''}`
+                `Connection failed. Is the backend at ${getApiBase()} reachable?${msg ? ` (${msg})` : ''}`
             );
         }
         setIsLoading(false);
@@ -147,7 +152,7 @@ export default function LoginPage() {
         setIsLoading(true);
         setTwoFAError(null);
         try {
-            const res = await fetch(`${API_BASE}/api/auth/verify-2fa`, {
+            const res = await fetch(`${getApiBase()}/api/auth/verify-2fa`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
@@ -174,7 +179,7 @@ export default function LoginPage() {
         setIsLoading(true);
         setLoginError(null);
         try {
-            const res = await fetch(`${API_BASE}/api/auth/login`, {
+            const res = await fetch(`${getApiBase()}/api/auth/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
@@ -194,7 +199,7 @@ export default function LoginPage() {
                 // If 2FA is already configured, just show code input field
                 if (data.needs_2fa_setup === true) {
                     try {
-                        const setupRes = await fetch(`${API_BASE}/api/auth/setup-2fa`, {
+                        const setupRes = await fetch(`${getApiBase()}/api/auth/setup-2fa`, {
                             method: 'POST',
                             headers: { Authorization: `Bearer ${data.temp_token}` },
                             credentials: 'include',
@@ -216,6 +221,7 @@ export default function LoginPage() {
             }
         } catch {
             setLoginError('Network error');
+            setBackendUnreachable(true);
         }
         setIsLoading(false);
     };
@@ -229,7 +235,7 @@ export default function LoginPage() {
         setIsLoading(true);
         setTwoFAError(null);
         try {
-            const res = await fetch(`${API_BASE}/api/auth/verify-2fa`, {
+            const res = await fetch(`${getApiBase()}/api/auth/verify-2fa`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
@@ -244,6 +250,7 @@ export default function LoginPage() {
             router.push('/');
         } catch {
             setTwoFAError('Network error');
+            setBackendUnreachable(true);
         }
         setIsLoading(false);
     };
@@ -305,6 +312,24 @@ export default function LoginPage() {
                             </span>
                         </div>
                     ))}
+                </div>
+            )}
+
+            {backendUnreachable && (
+                <div className="w-full max-w-md mb-4 p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
+                    <p className="font-medium mb-1">Backend unreachable</p>
+                    <p className="mb-2">
+                        If you just disabled Local Network: wait a few seconds for restart, then reload the page or open <strong>http://localhost:3000</strong> on this PC.
+                    </p>
+                    <p className="mb-3 text-amber-700">You can also restart your VAF app (tray or desktop).</p>
+                    <button
+                        type="button"
+                        title="Reload this page, or restart the VAF app from the tray/desktop"
+                        onClick={() => window.location.reload()}
+                        className="px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium"
+                    >
+                        Reload page
+                    </button>
                 </div>
             )}
 
@@ -627,7 +652,7 @@ export default function LoginPage() {
                         }}
                         username={username || 'Admin'}
                         onComplete={async (content) => {
-                            await fetch(`${API_BASE}/api/user/soul`, {
+                            await fetch(`${getApiBase()}/api/user/soul`, {
                                 method: 'PUT',
                                 headers: { 'Content-Type': 'application/json' },
                                 credentials: 'include',
@@ -747,7 +772,7 @@ export default function LoginPage() {
                 onClose={() => setShowDiscordWizard(false)}
                 onComplete={(config: DiscordConfig) => {
                     setOnboardingConfig((prev) => ({ ...prev, discord_config: config }));
-                    fetch(`${API_BASE}/api/config`, {
+                    fetch(`${getApiBase()}/api/config`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         credentials: 'include',

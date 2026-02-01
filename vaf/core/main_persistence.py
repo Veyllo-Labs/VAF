@@ -12,6 +12,9 @@ TEAM_STATE_FILE = "team_state.json"
 WORKING_MEMORY_FILE = "working_memory.json"
 RESULTS_DIR = "results"
 
+# Team state: entries older than this are pruned (per session / recent-only in prompt)
+TEAM_STATE_TTL_SECONDS = 3 * 3600  # 3 hours
+
 @dataclass
 class SubAgentState:
     agent_type: str
@@ -105,7 +108,16 @@ class MainPersistenceManager:
     # --- TEAM STATE ---
     def get_team_state(self) -> TeamState:
         data = self._load_json(self.context_dir / TEAM_STATE_FILE, {})
-        return TeamState.from_dict(data)
+        state = TeamState.from_dict(data)
+        # Prune entries older than TTL so prompt and file stay recent-only
+        now = time.time()
+        state.active_agents = {
+            k: v for k, v in state.active_agents.items()
+            if (now - getattr(v, "last_update", 0)) <= TEAM_STATE_TTL_SECONDS
+        }
+        state.last_updated = now
+        self._save_json(self.context_dir / TEAM_STATE_FILE, state.to_dict())
+        return state
 
     def update_subagent_status(self, task_id: str, agent_type: str, status: str, 
                                details: str = None, question: str = None, result_summary: str = None):
@@ -156,10 +168,26 @@ class MainPersistenceManager:
     def get_working_memory(self) -> Dict:
         return self._load_json(self.context_dir / WORKING_MEMORY_FILE, {})
 
-    def update_working_memory(self, notes: List[str] = None, plan: List[str] = None):
+    def update_working_memory(
+        self,
+        notes: Optional[List[str]] = None,
+        plan: Optional[List[str]] = None,
+        add_notes: Optional[List[str]] = None,
+        add_plan: Optional[List[str]] = None,
+    ):
         mem = self.get_working_memory()
-        if notes is not None: mem["notes"] = notes
-        if plan is not None: mem["plan"] = plan
+        notes_list = mem.get("notes", [])
+        plan_list = mem.get("plan", [])
+        if add_notes:
+            notes_list = notes_list + list(add_notes)
+        if add_plan:
+            plan_list = plan_list + list(add_plan)
+        if notes is not None:
+            notes_list = notes
+        if plan is not None:
+            plan_list = plan
+        mem["notes"] = notes_list
+        mem["plan"] = plan_list
         self._save_json(self.context_dir / WORKING_MEMORY_FILE, mem)
 
     # --- CONTEXT INJECTION HELPER ---
@@ -200,4 +228,8 @@ class MainPersistenceManager:
 Notes: {json.dumps(memory.get('notes', []), ensure_ascii=False)}
 Plan: {json.dumps(memory.get('plan', []), ensure_ascii=False)}
 </working_memory>
+
+Use the update_working_memory tool to save notes and plan; they persist across turns and appear here. Use notes/plan to set the full list, or add_notes/add_plan to append without replacing.
+
+Long-term memories about the user/system (from memory_store/RAG) are injected as "Memory context" when relevant to the query; use them to answer questions like "what do you remember about me?" and use memory_store to save new facts.
 """

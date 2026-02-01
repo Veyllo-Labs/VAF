@@ -22,6 +22,7 @@ try:
 except Exception:
     pass
 
+import atexit
 import time
 import threading
 import signal
@@ -62,6 +63,17 @@ tray_context = TrayContext()
 server_thread = None
 uvicorn_server = None  # Global reference for restart capability
 uvicorn_loop = None    # Event loop for the uvicorn server
+
+
+def _atexit_stop_server():
+    """Ensure llama-server is stopped when the process exits (e.g. killed from outside)."""
+    try:
+        server_mgr.stop_server(force_external=True)
+    except Exception:
+        pass
+
+
+atexit.register(_atexit_stop_server)
 
 def check_singleton():
     """Ensure only one instance runs. If another instance is running, notify it to open browser."""
@@ -416,13 +428,19 @@ def check_activity_loop(update_icon_callback):
                 start_model_async("Activity")
             update_icon_callback("active")
         else:
+            # When no active web connection: unload after idle_timeout from last ws activity/disconnect.
+            # If we have never had a websocket, use last_heartbeat so we do not unload immediately.
+            no_web = tray_context.active_websockets == 0
+            had_web = tray_context.last_websocket_disconnect > 0 or tray_context.last_websocket_activity > 0
+            idle_long_enough = (
+                (had_web and time_since_ws_activity > tray_context.idle_timeout and time_since_disconnect > tray_context.idle_timeout)
+                or (not had_web and time_since_last > tray_context.idle_timeout)
+            )
             if (
                 is_loaded and
                 not is_cloud_provider and
-                tray_context.active_websockets == 0 and
-                time_since_last > tray_context.idle_timeout and
-                time_since_ws_activity > tray_context.idle_timeout and
-                time_since_disconnect > tray_context.idle_timeout
+                no_web and
+                idle_long_enough
             ):
                 print(f"Idle timeout ({tray_context.idle_timeout}s) reached. Unloading model...")
                 log("Tray", f"Idle timeout reached. Unloading model (loaded={is_loaded}).")
@@ -572,7 +590,9 @@ def quit_app(icon_or_app):
     except Exception as e:
         print(f"Error stopping memory stack: {e}")
 
+    # Stop local llama-server so it does not stay running after quit
     server_mgr.stop_server(force_external=True)
+    time.sleep(0.5)  # Give taskkill / process exit a moment
     os._exit(0)
 
 def on_config_changed(key, value):

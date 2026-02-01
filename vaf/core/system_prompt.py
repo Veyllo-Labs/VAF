@@ -11,7 +11,11 @@ The SystemPromptManager provides:
 from typing import Dict, List, Any, Optional
 import re
 import os
+import logging
+from pathlib import Path
+from datetime import datetime
 from vaf.core.main_persistence import MainPersistenceManager
+from vaf.core.platform import Platform
 
 
 class SystemPromptManager:
@@ -363,6 +367,18 @@ Sub-agents run asynchronously - results arrive later
         
         # 1. CORE IDENTITY & PERSONA (Soul)
         
+        def _log_soul(msg: str) -> None:
+            try:
+                from datetime import datetime as _dt
+                log_dir = Platform.get_context_log_dir()
+                log_dir.mkdir(parents=True, exist_ok=True)
+                with open(log_dir / "soul_prompt.log", "a", encoding="utf-8") as f:
+                    f.write(f"{_dt.now().isoformat()} {msg}\n")
+            except Exception as e:
+                logging.warning("Soul log write failed: %s", e)
+
+        _log_soul("build_prompt persona block entered")
+
         # Attempt to load Admin Persona (Global for all users)
         persona_loaded = False
         try:
@@ -374,25 +390,32 @@ Sub-agents run asynchronously - results arrive later
             
             # Construct identity
             persona_parts = []
-            persona_parts.append(f"Du bist **{identity.get('name', 'VAF')}**.")
+            persona_parts.append(f"You are **{identity.get('name', 'VAF')}**.")
             if identity.get('emoji'):
-                persona_parts.append(f"Dein Symbol ist {identity.get('emoji')}.")
-            
-            persona_parts.append("\n## Deine Persönlichkeit & Regeln (Soul)")
+                persona_parts.append(f"Your symbol is {identity.get('emoji')}.")
+            persona_parts.append(
+                "\nYour Soul determines the way and voice of every answer. "
+                "Every answer must be thought through with the Soul – in this personality, not as a generic assistant. "
+                "Do not describe yourself as an 'AI assistant', 'trained to help', or list generic capabilities; "
+                "answer only in the voice and style defined in your Soul:\n\n"
+            )
+            persona_parts.append("## Your Personality & Rules (Soul)\n")
             persona_parts.append(soul)
             
             # Technical instructions
-            persona_parts.append("\n## Technische Instruktionen")
-            persona_parts.append("### 🧠 Thinking Format")
-            persona_parts.append("WICHTIG: Wenn du über ein Problem nachdenkst, schließe deine Gedanken in `<think>` Tags ein:")
-            persona_parts.append("```\n<think>\nDeine internen Überlegungen hier...\n</think>\n\nDeine tatsächliche Antwort an den Benutzer hier.\n```")
-            
+            persona_parts.append("\n## Technical Instructions")
+            persona_parts.append("### Thinking Format")
+            persona_parts.append("IMPORTANT: When you think through a problem, wrap your thoughts in `<think>` tags:")
+            persona_parts.append("```\n<think>\nYour internal reasoning here...\n</think>\n\nYour actual response to the user here.\n```")
             parts.append("\n".join(persona_parts))
             persona_loaded = True
-        except Exception:
-            pass
+            soul_len = len(soul) if soul else 0
+            _log_soul(f"Soul/identity loaded name={identity.get('name', 'VAF')} soul_len={soul_len}")
+        except Exception as e:
+            _log_soul(f"Soul/identity load failed: {e}")
 
         if not persona_loaded:
+            _log_soul("Using fallback identity (VQ-1 or generic)")
             # Use VQ-1 identity for VQ-1 models; otherwise use generic model identity
             use_vq1_identity = False
             if filename and ("vaf" in filename.lower() or "vq" in filename.lower()):
@@ -404,6 +427,15 @@ Sub-agents run asynchronously - results arrive later
                 parts.append(self.vq1_identity)
             else:
                 parts.append(self.generic_identity)
+
+        # Memory & RAG instructions (always present so model knows to remember user/system)
+        parts.append("""
+## Memory & What You Remember (RAG)
+You have **long-term memory** (RAG). Use it to remember things about the user and the system:
+- **memory_store**: Save facts about the user, preferences, decisions, or context. Stored content is searchable and injected automatically in future turns.
+- When the user asks "what do you remember about me?" or "was hast du dir über mich gemerkt?", use the **Memory context** injected in this turn (if any) and answer from that. If none is shown, say so and offer to remember things from now on.
+- **add_memory** / **update_working_memory**: Short-term notes and plan. **memory_store**: Long-term facts about the user/system (RAG). Use both; memory_store is for persistent personal/system facts.
+""")
         
         # ═══════════════════════════════════════════════════════════════════════
         # 2. CURRENT TIME & DATE
@@ -465,7 +497,16 @@ Sub-agents run asynchronously - results arrive later
             if tool_docs:
                 parts.append(tool_docs)
         
-        return "\n".join(parts)
+        full_prompt = "\n".join(parts)
+        try:
+            from datetime import datetime as _dt
+            log_dir = Platform.get_context_log_dir()
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_dir / "system_prompt_full.log", "a", encoding="utf-8") as f:
+                f.write(f"\n{'='*60}\n{_dt.now().isoformat()}\n{'='*60}\n{full_prompt}\n")
+        except Exception as e:
+            logging.warning("System prompt full log write failed: %s", e)
+        return full_prompt
     
     def _build_tool_documentation(self) -> str:
         """Build tool documentation section."""

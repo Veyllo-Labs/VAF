@@ -54,8 +54,8 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
             className={cn(
                 'min-w-[200px] max-w-[280px] rounded-xl border-2 shadow-sm transition-all duration-200',
                 typeColor,
-                selected && 'ring-2 ring-indigo-500 shadow-md',
-                data.isHighlighted && 'ring-2 ring-yellow-400 shadow-lg scale-105 z-10'
+                selected && 'ring-2 ring-gray-400 shadow-md',
+                data.isHighlighted && 'ring-2 ring-yellow-500 shadow-lg scale-105 z-10'
             )}
         >
             {/* Connection handles */}
@@ -180,7 +180,7 @@ export default function MemoryGraph({ className, onNodeSelect }: MemoryGraphProp
             style: {
                 strokeWidth: edge.style.strokeWidth,
                 opacity: edge.style.opacity,
-                stroke: edge.data.connectionType === 'semantic' ? '#6366f1' : '#9ca3af',
+                stroke: edge.data.connectionType === 'semantic' ? '#6b7280' : '#9ca3af',
             },
             markerEnd: {
                 type: MarkerType.ArrowClosed,
@@ -223,7 +223,7 @@ export default function MemoryGraph({ className, onNodeSelect }: MemoryGraphProp
         return (
             <div className={cn('flex items-center justify-center bg-gray-50 rounded-xl', className)}>
                 <div className="text-center">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto mb-2" />
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-400 mx-auto mb-2" />
                     <p className="text-sm text-gray-500">Loading memory graph...</p>
                 </div>
             </div>
@@ -266,8 +266,8 @@ export default function MemoryGraph({ className, onNodeSelect }: MemoryGraphProp
                 <Controls className="bg-white rounded-lg shadow-lg" />
                 <MiniMap
                     nodeColor={(node) => {
-                        if (node.data?.isHighlighted) return '#fbbf24';
-                        if (node.selected) return '#6366f1';
+                        if (node.data?.isHighlighted) return '#eab308';
+                        if (node.selected) return '#374151';
                         return '#9ca3af';
                     }}
                     maskColor="rgba(0, 0, 0, 0.1)"

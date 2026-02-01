@@ -13,7 +13,7 @@ from typing import List, Optional, Dict, Any, AsyncGenerator, Tuple
 from uuid import UUID, uuid4
 from datetime import datetime
 from dataclasses import dataclass
-from sqlalchemy import select, and_, func, text
+from sqlalchemy import select, and_, func, text, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from vaf.memory.models import Memory, Chunk, Connection, EMBEDDING_DIM
 from vaf.memory.crypto import get_crypto, MemoryCrypto
@@ -22,6 +22,7 @@ from vaf.memory.graph import GraphManager
 from vaf.memory.database import get_db
 from vaf.core.config import Config
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +174,25 @@ class RagPipeline:
         logger.info(f"Ingested memory {memory.id} with {len(chunks_data)} chunks (Scope: {user_scope_id})")
         
         return memory
+    
+    async def delete_memories_by_source_scope(
+        self,
+        source: str,
+        user_scope_id: Optional[UUID] = None
+    ) -> int:
+        """
+        Delete memories that match the given source (in meta) and user_scope_id.
+        Used by Sync to replace MEMORY.md content for a user (delete old, then ingest).
+        """
+        filters = [Memory.meta["source"].astext == source]
+        if user_scope_id is not None:
+            filters.append(Memory.user_scope_id == user_scope_id)
+        else:
+            filters.append(Memory.user_scope_id.is_(None))
+        stmt = delete(Memory).where(and_(*filters))
+        result = await self.db.execute(stmt)
+        await self.db.flush()
+        return result.rowcount if hasattr(result, "rowcount") else 0
     
     async def search(
         self,
@@ -584,11 +604,118 @@ Always cite which source(s) you used."""
         return [m.to_dict() for m in memories]
 
 
+# Auto-capture: trigger patterns (user or assistant says "remember", etc.)
+_AUTO_CAPTURE_TRIGGERS = [
+    r"\bremember\b", r"\bspeichern\b", r"\bnotieren\b", r"\bmerken\b",
+    r"\bprefer\b", r"\bimportant\b", r"\bwichtig\b", r"\bdecision\b",
+    r"\bentscheidung\b", r"\bwill use\b", r"\bbudeme\b", r"\balways\b",
+    r"\bnever\b", r"\bimmer\b", r"\bnie\b",
+]
+_AUTO_CAPTURE_RE = re.compile("|".join(f"({p})" for p in _AUTO_CAPTURE_TRIGGERS), re.I)
+
+
+async def auto_capture_memory(
+    user_input: str,
+    assistant_response: str,
+    user_scope_id: Optional[UUID],
+    max_candidates: int = 1,
+    dedupe_threshold: float = 0.95,
+) -> int:
+    """
+    Optionally store high-value snippets from the exchange into the Memory-DB.
+    Runs trigger filter; optionally dedupes; ingests at most max_candidates.
+    Returns number of memories stored (0 or 1).
+    """
+    if user_scope_id is None:
+        return 0
+    combined = f"{user_input or ''}\n{assistant_response or ''}"
+    if len(combined.strip()) < 10 or len(combined) > 2000:
+        return 0
+    if not _AUTO_CAPTURE_RE.search(combined):
+        return 0
+    # Use assistant response as candidate (or first 400 chars of combined)
+    candidate = (assistant_response or "").strip()[:500]
+    if not candidate or len(candidate) < 15:
+        return 0
+    # Skip if looks like injected context
+    if "<relevant-memories>" in candidate or "[Source " in candidate:
+        return 0
+
+    async with get_db() as db:
+        pipeline = RagPipeline(db)
+        # Dedupe: if very similar chunk exists, skip
+        try:
+            existing = await pipeline.search(
+                candidate, k=1, threshold=dedupe_threshold, user_scope_id=user_scope_id
+            )
+            if existing:
+                return 0
+        except Exception:
+            pass
+        await pipeline.ingest(
+            content=candidate,
+            metadata={"title": "Auto-capture", "source": "auto_capture", "type": "note"},
+            user_scope_id=user_scope_id,
+            auto_connect=False,
+        )
+    return 1
+
+
+def run_auto_capture_sync(
+    user_input: str,
+    assistant_response: str,
+    user_scope_id: Optional[UUID],
+) -> None:
+    """Run auto_capture_memory from sync code (e.g. headless runner). Swallows errors."""
+    if not Config.get("memory_enabled", True) or not Config.get("memory_auto_capture", True):
+        return
+    if user_scope_id is None:
+        return
+    try:
+        asyncio.run(auto_capture_memory(user_input, assistant_response, user_scope_id))
+    except Exception as e:
+        logger.warning("Auto-capture failed: %s", e)
+
+
+def run_memory_search_sync(
+    query: str,
+    k: int = 5,
+    user_scope_id: Optional[UUID] = None
+) -> str:
+    """
+    Run RAG search synchronously for use from sync code (e.g. headless runner).
+
+    Returns a formatted string of top-k snippets for injection into the agent prompt,
+    or empty string if memory is disabled, no results, or on error.
+    """
+    if not Config.get("memory_enabled", True):
+        return ""
+
+    async def _search() -> str:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+            sources = await pipeline.search(
+                query, k=k, user_scope_id=user_scope_id
+            )
+            if not sources:
+                return ""
+            parts = []
+            for i, s in enumerate(sources):
+                parts.append(f"[Source {i+1}] (Relevance: {s.score:.0%})\n{s.text}")
+            return "\n\n---\n\n".join(parts)
+
+    try:
+        return asyncio.run(_search())
+    except Exception as e:
+        logger.warning("RAG search failed (chat continues without memory): %s", e)
+        return ""
+
+
 # Helper function for creating pipeline instance
 async def get_rag_pipeline() -> RagPipeline:
     """
     Get a RAG pipeline with fresh database session.
-    
+
     Usage:
         async with get_db() as db:
             pipeline = RagPipeline(db)

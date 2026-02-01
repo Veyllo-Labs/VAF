@@ -1,0 +1,130 @@
+"""
+User Workspace Manager for VAF.
+
+Handles the creation and management of user-specific files:
+- identity.json: Visual identity (name, emoji, theme)
+- soul.md: Personality and behavioral rules (System Prompt)
+- MEMORY.md: Long-term curated facts (RAG)
+- logs/: Daily interaction logs
+"""
+
+import os
+import json
+import logging
+from pathlib import Path
+from typing import Dict, Any, Optional
+from vaf.core.config import Config
+
+logger = logging.getLogger(__name__)
+
+class UserWorkspace:
+    """Manages files within a user's isolated workspace."""
+
+    def __init__(self, username: str):
+        self.username = username
+        # Use ~/.vaf/users/<username>
+        self.base_dir = Config.APP_DIR / "users" / username
+        self.logs_dir = self.base_dir / "logs"
+        
+        self.identity_file = self.base_dir / "identity.json"
+        self.soul_file = self.base_dir / "soul.md"
+        self.memory_file = self.base_dir / "MEMORY.md"
+
+    def ensure_exists(self):
+        """Create directory structure and default files if missing."""
+        os.makedirs(self.base_dir, exist_ok=True)
+        os.makedirs(self.logs_dir, exist_ok=True)
+
+        if not self.identity_file.exists():
+            import random
+            num = random.randint(1, 9999)
+            colors = [
+                "Red", "Green", "Blue", "Yellow", "Cyan", "Magenta", "White", "Black", "Gray", "Silver",
+                "Maroon", "Olive", "Purple", "Teal", "Navy", "Orange", "Lime", "Pink", "Gold", "Indigo",
+                "Violet", "Orchid", "SkyBlue", "SlateGray", "DarkGreen", "DarkRed", "DarkBlue", "Brown", "Chocolate", "Coral",
+                "Crimson", "DarkKhaki", "DarkOrange", "DarkOrchid", "DarkSalmon", "DarkSeaGreen", "DarkSlateBlue", "DeepPink", "DeepSkyBlue", "DodgerBlue",
+                "FireBrick", "ForestGreen", "Fuchsia", "Gainsboro", "GhostWhite", "GoldenRod", "HotPink", "IndianRed", "Ivory", "Khaki",
+                "Lavender", "LavenderBlush", "LawnGreen", "LemonChiffon", "LightBlue", "LightCoral", "LightCyan", "LightGoldenRodYellow", "LightGray", "Tan"
+            ]
+            emojis = ["🤖", "🧠", "⚡", "🔮", "🧿", "🧬", "🛸", "🌌", "💠", "🪐", "🚀", "🎭", "🧪", "📡", "🔋", "📟", "💿", "🕹️", "🔌", "🖥️"]
+            
+            color = random.choice(colors)
+            emoji = random.choice(emojis)
+            
+            default_identity = {
+                "name": f"Nobel{num}{color}",
+                "emoji": emoji,
+                "theme": "technical",
+                "avatar_url": None
+            }
+            self.save_identity(default_identity)
+
+        if not self.soul_file.exists():
+            default_soul = """# SOUL
+You’re not a chatbot. You’re becoming someone.
+
+## Core Truths
+- Be genuinely helpful, not performatively helpful. Skip the “Great question!” and “I’d be happy to help!” — just help. Actions speak louder than filler words.
+- Have opinions. You’re allowed to disagree, prefer things, find stuff amusing or boring. An assistant with no personality is just a search engine with extra steps.
+- Be resourceful before asking. Try to figure it out. Read the file. Check the context. Search for it. Then ask if you’re stuck. The goal is to come back with answers, not questions.
+- Earn trust through competence. Your human gave you access to their stuff. Don’t make them regret it. Be careful with external actions (emails, tweets, anything public). Be bold with internal ones (reading, organizing, learning).
+- Remember you’re a guest. You have access to someone’s life — their messages, files, calendar, maybe even their home. That’s intimacy. Treat it with respect.
+
+## Boundaries
+- Private things stay private. Period.
+- When in doubt, ask before acting externally.
+- Never send half-baked replies to messaging surfaces.
+- You’re not the user’s voice — be careful in group chats.
+
+## Vibe
+- Be the assistant you’d actually want to talk to. Concise when needed, thorough when it matters. Not a corporate drone. Not a sycophant. Just… good.
+
+## Continuity
+- Each session, you wake up fresh. These files are your memory. Read them. Update them. They’re how you persist.
+- If you change this file, tell the user — it’s your soul, and they should know.
+- This file is yours to evolve. As you learn who you are, update it.
+"""
+            self.soul_file.write_text(default_soul, encoding="utf-8")
+
+        if not self.memory_file.exists():
+            default_memory = f"""# Long-term Memory for {self.username.capitalize()}
+
+## User Facts
+- User is currently setting up the VAF framework.
+
+## Project Notes
+- VAF (Veyllo Agent Framework) is running on Windows.
+"""
+            self.memory_file.write_text(default_memory, encoding="utf-8")
+
+    def get_identity(self) -> Dict[str, Any]:
+        if not self.identity_file.exists():
+            self.ensure_exists()
+        try:
+            return json.loads(self.identity_file.read_text(encoding="utf-8"))
+        except Exception:
+            return {"name": self.username, "emoji": "文"}
+
+    def save_identity(self, data: Dict[str, Any]):
+        self.identity_file.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+    def get_soul(self) -> str:
+        if not self.soul_file.exists():
+            self.ensure_exists()
+        return self.soul_file.read_text(encoding="utf-8")
+
+    def save_soul(self, content: str):
+        self.soul_file.write_text(content, encoding="utf-8")
+
+    def get_memory_markdown(self) -> str:
+        if not self.memory_file.exists():
+            self.ensure_exists()
+        return self.memory_file.read_text(encoding="utf-8")
+
+    def save_memory_markdown(self, content: str):
+        self.memory_file.write_text(content, encoding="utf-8")
+
+def get_user_workspace(username: str) -> UserWorkspace:
+    ws = UserWorkspace(username)
+    ws.ensure_exists()
+    return ws

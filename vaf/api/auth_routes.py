@@ -242,9 +242,9 @@ async def setup_2fa(request: Request):
 
 
 @router.post("/verify-2fa")
-async def verify_2fa(body: Verify2FARequest, response: Response):
+async def verify_2fa(body: Verify2FARequest, request: Request, response: Response):
     """
-    Verify TOTP code and complete 2FA. On success sets cookie and returns tokens.
+    Verify TOTP code and complete 2FA. On success sets cookie, creates session for new token, returns tokens.
     """
     payload = decode_token(body.temp_token)
     if not payload or payload.get("type") != "access":
@@ -277,6 +277,26 @@ async def verify_2fa(body: Verify2FARequest, response: Response):
             str(user.user_scope_id),
         )
         refresh = create_refresh_token(str(user.id))
+
+        payload_new = decode_token(access)
+        exp_ts = payload_new.get("exp") if payload_new else None
+        expires_at = (
+            datetime.fromtimestamp(exp_ts, tz=timezone.utc)
+            if exp_ts
+            else datetime.now(timezone.utc) + timedelta(hours=24)
+        )
+        if expires_at.tzinfo is not None:
+            expires_at = expires_at.replace(tzinfo=None)
+        client_host = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent", "")
+        session = UserSession(
+            user_id=user.id,
+            token_hash=token_hash_for_db(access),
+            device_info={"ip": client_host, "user_agent": user_agent, "device_type": "web"},
+            expires_at=expires_at,
+        )
+        db.add(session)
+        await db.commit()
 
     max_age = 30 * 24 * 3600
     response.set_cookie(
@@ -352,15 +372,54 @@ async def login(body: LoginRequest, request: Request, response: Response):
     }
 
 
+def _clear_auth_cookie(response: Response) -> None:
+    """Clear the auth cookie so the client stops sending a stale token."""
+    response.delete_cookie(key=COOKIE_NAME, path="/")
+
+
 @router.get("/me")
-async def me(request: Request):
-    """Get current user from JWT (cookie or Bearer)."""
+async def me(request: Request, response: Response):
+    """Get current user from JWT (cookie or Bearer). Validates user and session exist in DB."""
     token = request.cookies.get(COOKIE_NAME) or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     payload = decode_token(token)
     if not payload or payload.get("type") != "access":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    user_id_str = payload.get("sub")
+    if not user_id_str:
+        _clear_auth_cookie(response)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    try:
+        user_id = uuid_module.UUID(user_id_str)
+    except (ValueError, TypeError):
+        _clear_auth_cookie(response)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    async with get_auth_db() as db:
+        result = await db.execute(
+            select(LocalUser).where(LocalUser.id == user_id, LocalUser.is_active == True)
+        )
+        user = result.scalar_one_or_none()
+        if not user:
+            _clear_auth_cookie(response)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+        token_hash = token_hash_for_db(token)
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        session_result = await db.execute(
+            select(UserSession).where(
+                UserSession.token_hash == token_hash,
+                UserSession.is_active == True,
+                UserSession.expires_at > now_utc,
+            )
+        )
+        session = session_result.scalar_one_or_none()
+        if not session:
+            _clear_auth_cookie(response)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session invalid or expired")
+
     return {
         "id": payload.get("sub"),
         "username": payload.get("username"),

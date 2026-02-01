@@ -105,6 +105,22 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount network routes: {e}")
 
+# Mount User Persona routes
+try:
+    from vaf.api.user_persona_routes import router as persona_router
+    app.include_router(persona_router)
+    log("WebServer", "User persona routes mounted at /api/user")
+except Exception as e:
+    log("WebServer", f"Failed to mount persona routes: {e}")
+
+# Mount Config REST API (for onboarding connections step; config also available via WebSocket)
+try:
+    from vaf.api.config_routes import router as config_router
+    app.include_router(config_router)
+    log("WebServer", "Config REST API mounted at /api/config")
+except Exception as e:
+    log("WebServer", f"Failed to mount config routes: {e}")
+
 # Add authentication middleware if local network is enabled
 if Config.get("local_network_enabled", False):
     try:

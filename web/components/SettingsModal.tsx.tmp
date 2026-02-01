@@ -1,0 +1,50 @@
+'use client';
+
+import React, { useState, useEffect, useCallback } from 'react';
+import ReactFlow, { 
+    Background, 
+    Controls, 
+    MiniMap, 
+    useNodesState, 
+    useEdgesState,
+    Position,
+    MarkerType
+} from 'reactflow';
+import 'reactflow/dist/style.css';
+import {
+    X, Globe, Cpu, Volume2, Monitor, Shield, Save, RotateCcw,
+    Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch,
+    Brain, Database, Link2, MessageSquare, Network, Users, Lock, Server, Laptop, Smartphone,
+    Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig } from './connections';
+import SoulWizard from './SoulWizard';
+
+export interface SettingsModalProps {
+    isOpen: boolean;
+    onClose: () => void;
+    config: any;
+    onSave: (newConfig: any) => void;
+    availableModels: string[];
+    apiModels: Record<string, string[]>;
+    onFetchApiModels: (provider: string, apiKey: string) => void;
+    onRefreshLocalModels: () => void;
+    tools?: Array<{ name: string; description: string; category: string }>;
+    workflows?: Array<{ id: string; name: string; description: string; steps: number }>;
+    automations?: Array<{ id: string; name: string; description: string; frequency: string; time: string; enabled: boolean }>;
+    currentUser?: { id: string; username: string; role: string };
+}
+
+const CATEGORIES = [
+    { id: 'general', label: 'General', icon: Globe },
+    { id: 'persona', label: 'Persona & Memory', icon: Users, adminOnly: true },
+    { id: 'ai', label: 'AI & Model', icon: Cpu },
+    { id: 'voice', label: 'Voice & Speech', icon: Volume2 },
+    { id: 'interface', label: 'Interface', icon: Monitor },
+    { id: 'connections', label: 'Connections', icon: MessageSquare },
+    { id: 'advanced', label: 'Advanced', icon: Zap },
+    { id: 'automations', label: 'Automations', icon: Check },
+    { id: 'local_network', label: 'Local Network', icon: Network },
+    { id: 'about', label: 'About', icon: Globe },
+];

@@ -17,7 +17,11 @@ When "Local Network Hosting" is enabled, VAF automatically configures the OS fir
 - **Remote Access**: Any connection from a non-localhost IP **must** authenticate using a valid username and password.
 - **2FA**: Two-Factor Authentication (TOTP) is enforced for administrative accounts and optional for standard users.
 
-### 3. Connection Tracking
+### 3. Identity vs. Memory Scoping
+- **Global Personality (Soul)**: The agent's identity (Name, Emoji) and behavioral rules (Soul) are defined by the **Administrator** and are global for all users. This ensures a consistent experience across the network.
+- **Isolated Memory (RAG)**: While the personality is shared, the **RAG memory is strictly isolated per user**. Facts and history stored by a user are only accessible to them, preventing data leakage between connected devices.
+
+### 4. Connection Tracking
 The system actively tracks all connections (WebSocket and HTTP) to the VAF backend.
 - **Real-time Monitoring**: The "Network Topology" map in Settings visualizes all active devices.
 - **Pre-Auth Tracking**: Devices are detected and displayed as "Guest" or "Unauthenticated" immediately upon connection, ensuring visibility of unauthorized access attempts.

@@ -76,7 +76,9 @@ class UserSession(Base):
     device_info = Column(JSONB)  # {ip, user_agent, device_type}
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
+    last_activity = Column(DateTime, default=datetime.utcnow, nullable=False)
     is_active = Column(Boolean, default=True)
+    is_2fa_verified = Column(Boolean, default=False, nullable=False)
 
     user = relationship("LocalUser", back_populates="sessions")
 

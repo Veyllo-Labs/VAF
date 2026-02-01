@@ -14,7 +14,7 @@ interface ConnectionsPanelProps {
     onOpenDiscordWizard: () => void;
 }
 
-interface ConnectionApp {
+export interface ConnectionApp {
     id: string;
     name: string;
     icon: React.ElementType;
@@ -26,7 +26,7 @@ interface ConnectionApp {
     iconColor?: string;
 }
 
-const CONNECTION_APPS: ConnectionApp[] = [
+export const CONNECTION_APPS: ConnectionApp[] = [
     // ============ Communication ============
     {
         id: 'discord',
@@ -187,7 +187,7 @@ const CONNECTION_APPS: ConnectionApp[] = [
     },
 ];
 
-const CATEGORIES = [
+export const CATEGORIES = [
     { id: 'communication', label: 'Communication', description: 'Messaging & chat platforms' },
     { id: 'calendar', label: 'Calendar', description: 'Scheduling & event management' },
     { id: 'cloud', label: 'Cloud Storage', description: 'File sync & cloud drives' },

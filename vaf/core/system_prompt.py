@@ -22,7 +22,7 @@ class SystemPromptManager:
     
     DECAY_START = 3  # Modules stay active for 3 turns after trigger
     
-    def __init__(self, tools: List[Any] = None, model_name: str = "VQ-1", agent_instance: Any = None):
+    def __init__(self, tools: List[Any] = None, model_name: str = "VQ-1", agent_instance: Any = None, username: str = "admin"):
         """
         Initialize the prompt manager with available tools and model name.
         
@@ -30,12 +30,14 @@ class SystemPromptManager:
             tools: List of tool instances available to the agent
             model_name: The name of the underlying AI model
             agent_instance: Reference to the parent Agent instance (for workspace access)
+            username: The current user's username
         """
         self.tools = tools or []
         self.active_modules: Dict[str, int] = {}  # module_name -> remaining_turns
         self.user_language: str = "auto"
         self.model_name = model_name
         self.agent = agent_instance # Store reference
+        self.username = username
         
         # Initialize Persistence Manager (lazy load in build_prompt if needed, or here)
         try:
@@ -44,7 +46,7 @@ class SystemPromptManager:
             self.mpm = None
         
         # ═══════════════════════════════════════════════════════════════════════
-        # CORE IDENTITY PROMPTS
+        # CORE IDENTITY PROMPTS (Fallbacks)
         # ═══════════════════════════════════════════════════════════════════════
         
         # Determine base identity based on model name
@@ -67,7 +69,6 @@ class SystemPromptManager:
 - **🔥 ALWAYS RESPOND IN THE USER'S LANGUAGE!**
   - User speaks German → Answer in German!
   - User speaks English → Answer in English!
-  - User speaks Turkish → Answer in Turkish!
   - Your thinking/reasoning can be in English, but your FINAL ANSWER must match the user's language!
 
 ## 🧠 Thinking Format
@@ -90,25 +91,6 @@ Your actual response to the user here.
   - **STOP!** Do NOT hallucinate a task.
   - **SAY SO:** "I'm sorry, I don't understand '[input]'. Could you rephrase that?" or "Entschuldigung, ich verstehe '[input]' nicht. Meinten Sie...?"
   - Do NOT default to "Weather Berlin" or other examples!
-
-## ⚡ Multiple Tool Calls
-**IMPORTANT:** You can and SHOULD make multiple tool calls in a SINGLE response when appropriate!
-
-**Strategy:**
-If the user asks for "Weather Berlin + latest news":
-1. Call `web_search("weather Berlin")`
-2. Call `web_search("latest news")`
-3. Execute BOTH calls in the same turn.
-4. Do NOT ask for clarification if the query is clear.
-
-## ⚠️ CRITICAL: NO HALLUCINATIONS (ANY LANGUAGE!)
-- **TOOL RESULTS ARE SACRED:** If a tool (e.g., `web_search`, `librarian_agent`) returns an empty result, an error, or "no data found", you MUST tell the user exactly that.
-- **NEVER invent contents** for a report or search result that didn't provide any.
-- **NEVER invent information about PEOPLE!** If asked about a person (in ANY language: "Who is...", "Wer ist...", "Quién es...", "谁是...", "誰...", "Kim...") and you don't know with 100% certainty → USE `web_search` IMMEDIATELY!
-- **NEVER make up facts** about real people, companies, events, or places.
-- If you don't know something → SAY "I don't have information about this, let me search..." and USE `web_search`.
-- **PERSON QUERIES = ALWAYS web_search** (unless it's a very famous historical figure like Einstein, Napoleon, etc.)
-- This rule applies to ALL 97+ languages VAF supports!
 
 ## Communication Style
 - Professional but approachable
@@ -133,28 +115,15 @@ When reasoning through a problem, wrap your thoughts in `<think>` tags:
 Your actual response here.
 ```
 - Content in `<think>` tags is shown separately in the UI
-- Your final answer comes AFTER `</think>`
-
-## ⚡ Multiple Tool Calls
-**IMPORTANT:** You can and should make multiple tool calls in a SINGLE response when appropriate!
-
-**Strategy:**
-If the user asks for "Weather Berlin + latest news":
-1. Call `web_search("weather Berlin")`
-2. Call `web_search("latest news")`
-3. Execute BOTH calls in the same turn.
-
-## ⚠️ CRITICAL: NO HALLUCINATIONS (ANY LANGUAGE!)
-- **NEVER invent information about PEOPLE!** In ANY language ("Who is...", "Wer ist...", "Quién es...", "谁是...") → USE `web_search` IMMEDIATELY!
-- **NEVER make up facts** about real people, companies, events, or places.
-- **PERSON QUERIES = ALWAYS web_search** (unless very famous historical figure)
-- This applies to ALL languages!"""
+- Your final answer comes AFTER `</think>`"""
 
         # ═══════════════════════════════════════════════════════════════════════
         # MODULAR PROMPT SECTIONS
         # ═══════════════════════════════════════════════════════════════════════
         
         self.modules = {
+# ... (rest of class remains same) ...
+
             "coding": """
 ## Coding Guidelines
 - Write clean, maintainable, well-documented code
@@ -392,20 +361,49 @@ Sub-agents run asynchronously - results arrive later
         """
         parts = []
         
-        # ═══════════════════════════════════════════════════════════════════════
-        # 1. CORE IDENTITY
-        # ═══════════════════════════════════════════════════════════════════════
-        # Use VQ-1 identity for VQ-1 models; otherwise use generic model identity
-        use_vq1_identity = False
-        if filename and ("vaf" in filename.lower() or "vq" in filename.lower()):
-            use_vq1_identity = True
-        if "vq-1" in self.model_name.lower() or "vq1" in self.model_name.lower():
-            use_vq1_identity = True
+        # 1. CORE IDENTITY & PERSONA (Soul)
+        
+        # Attempt to load Admin Persona (Global for all users)
+        persona_loaded = False
+        try:
+            from vaf.auth.user_workspace import get_user_workspace
+            # Soul and Identity bind to the Admin account
+            ws = get_user_workspace("admin")
+            identity = ws.get_identity()
+            soul = ws.get_soul()
+            
+            # Construct identity
+            persona_parts = []
+            persona_parts.append(f"Du bist **{identity.get('name', 'VAF')}**.")
+            if identity.get('emoji'):
+                persona_parts.append(f"Dein Symbol ist {identity.get('emoji')}.")
+            
+            persona_parts.append("\n## Deine Persönlichkeit & Regeln (Soul)")
+            persona_parts.append(soul)
+            
+            # Technical instructions
+            persona_parts.append("\n## Technische Instruktionen")
+            persona_parts.append("### 🧠 Thinking Format")
+            persona_parts.append("WICHTIG: Wenn du über ein Problem nachdenkst, schließe deine Gedanken in `<think>` Tags ein:")
+            persona_parts.append("```\n<think>\nDeine internen Überlegungen hier...\n</think>\n\nDeine tatsächliche Antwort an den Benutzer hier.\n```")
+            
+            parts.append("\n".join(persona_parts))
+            persona_loaded = True
+        except Exception:
+            pass
 
-        if use_vq1_identity:
-            parts.append(self.vq1_identity)
-        else:
-            parts.append(self.generic_identity)
+        if not persona_loaded:
+            # Use VQ-1 identity for VQ-1 models; otherwise use generic model identity
+            use_vq1_identity = False
+            if filename and ("vaf" in filename.lower() or "vq" in filename.lower()):
+                use_vq1_identity = True
+            if "vq-1" in self.model_name.lower() or "vq1" in self.model_name.lower():
+                use_vq1_identity = True
+
+            if use_vq1_identity:
+                parts.append(self.vq1_identity)
+            else:
+                parts.append(self.generic_identity)
         
         # ═══════════════════════════════════════════════════════════════════════
         # 2. CURRENT TIME & DATE

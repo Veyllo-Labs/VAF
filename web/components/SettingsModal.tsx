@@ -15,10 +15,11 @@ import {
     X, Globe, Cpu, Volume2, Monitor, Shield, Save, RotateCcw,
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch,
     Brain, Database, Link2, MessageSquare, Network, Users, Lock, Server, Laptop, Smartphone,
-    Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy
+    Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig } from './connections';
+import SoulWizard from './SoulWizard';
 
 export interface SettingsModalProps {
     isOpen: boolean;
@@ -32,10 +33,12 @@ export interface SettingsModalProps {
     tools?: Array<{ name: string; description: string; category: string }>;
     workflows?: Array<{ id: string; name: string; description: string; steps: number }>;
     automations?: Array<{ id: string; name: string; description: string; frequency: string; time: string; enabled: boolean }>;
+    currentUser?: { id: string; username: string; role: string };
 }
 
 const CATEGORIES = [
     { id: 'general', label: 'General', icon: Globe },
+    { id: 'persona', label: 'Persona & Memory', icon: Users, adminOnly: true },
     { id: 'ai', label: 'AI & Model', icon: Cpu },
     { id: 'voice', label: 'Voice & Speech', icon: Volume2 },
     { id: 'interface', label: 'Interface', icon: Monitor },
@@ -61,7 +64,7 @@ const WAKE_WORDS = [
     { value: 'hey_rhasspy', label: 'Hey Rhasspy' },
 ];
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], automations = [] }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], automations = [], currentUser }: SettingsModalProps) {
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [activeTab, setActiveTab] = useState('general');
     const [changed, setChanged] = useState(false);
@@ -132,6 +135,22 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // Security Warning & Restart Animation
     const [showNetworkWarning, setShowNetworkWarning] = useState(false);
     const [isRestarting, setIsRestarting] = useState(false);
+    const [showSoulWizard, setShowSoulWizard] = useState(false);
+
+    // Persona State
+    const [personaData, setPersonaData] = useState<{identity: any, soul: string, memory: string} | null>(null);
+    const [personaLoading, setPersonaLoading] = useState(false);
+
+    useEffect(() => {
+        if (activeTab === 'persona') {
+            setPersonaLoading(true);
+            fetch('/api/user/persona')
+                .then(res => res.json())
+                .then(data => setPersonaData(data))
+                .catch(e => console.error("Failed to load persona", e))
+                .finally(() => setPersonaLoading(false));
+        }
+    }, [activeTab]);
 
     useEffect(() => {
         setLocalConfig(config || {});
@@ -519,7 +538,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">Settings</h2>
                     </div>
 
-                    {CATEGORIES.map(cat => (
+                    {CATEGORIES.map(cat => {
+                        if (cat.adminOnly && currentUser?.role !== 'admin') return null;
+                        return (
                         <button
                             key={cat.id}
                             onClick={() => setActiveTab(cat.id)}
@@ -533,7 +554,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <cat.icon size={18} />
                             {cat.label}
                         </button>
-                    ))}
+                    )})}
                 </div>
 
                 {/* Content Area */}
@@ -585,6 +606,111 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         type="password"
                                     />
                                 </Section>
+                            </div>
+                        )}
+
+                        {activeTab === 'persona' && (
+                            <div className="space-y-6 animate-in fade-in duration-300">
+                                {personaLoading ? (
+                                    <div className="flex justify-center py-12"><div className="w-8 h-8 border-2 border-gray-200 border-t-gray-900 rounded-full animate-spin" /></div>
+                                ) : (
+                                    <>
+                                        <Section title="Identity">
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <Input
+                                                    label="Agent Name"
+                                                    value={personaData?.identity?.name || ''}
+                                                    onChange={(v) => {
+                                                        const newIdentity = { ...personaData?.identity, name: v };
+                                                        setPersonaData({ ...personaData!, identity: newIdentity });
+                                                        fetch('/api/user/identity', {
+                                                            method: 'PUT',
+                                                            headers: { 'Content-Type': 'application/json' },
+                                                            body: JSON.stringify(newIdentity)
+                                                        });
+                                                    }}
+                                                />
+                                                <Input
+                                                    label="Emoji Symbol"
+                                                    value={personaData?.identity?.emoji || ''}
+                                                    onChange={(v) => {
+                                                        const newIdentity = { ...personaData?.identity, emoji: v };
+                                                        setPersonaData({ ...personaData!, identity: newIdentity });
+                                                        fetch('/api/user/identity', {
+                                                            method: 'PUT',
+                                                            headers: { 'Content-Type': 'application/json' },
+                                                            body: JSON.stringify(newIdentity)
+                                                        });
+                                                    }}
+                                                />
+                                            </div>
+                                        </Section>
+
+                                        <Section title="The Soul (System Prompt)">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <p className="text-xs text-gray-500">Define your agent's personality, rules, and behavior using Markdown.</p>
+                                                <button
+                                                    onClick={() => setShowSoulWizard(true)}
+                                                    className="text-xs px-2 py-1 bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 transition-colors flex items-center gap-1 font-medium"
+                                                >
+                                                    <Wand2 size={12} /> Create with Wizard
+                                                </button>
+                                            </div>
+                                            <textarea
+                                                className="w-full h-64 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 resize-none"
+                                                value={personaData?.soul || ''}
+                                                onChange={(e) => setPersonaData({ ...personaData!, soul: e.target.value })}
+                                                onBlur={() => fetch('/api/user/soul', {
+                                                    method: 'PUT',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({ content: personaData?.soul })
+                                                })}
+                                            />
+                                        </Section>
+
+                                        <Section title="Long-term Memory (RAG Source)">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <p className="text-xs text-gray-500">Curated facts and knowledge available via semantic search.</p>
+                                                <div className="flex gap-2">
+                                                    <button
+                                                        onClick={() => setShowMemoryModal(true)}
+                                                        disabled={!localConfig.memory_enabled}
+                                                        className={cn(
+                                                            "text-xs px-2 py-1 rounded-lg transition-colors flex items-center gap-1",
+                                                            localConfig.memory_enabled
+                                                                ? "bg-purple-50 text-purple-600 hover:bg-purple-100"
+                                                                : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                        )}
+                                                    >
+                                                        <Brain size={12} /> View Graph
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => fetch('/api/user/memory/sync', { method: 'POST' }).then(() => alert('Memory synced!'))}
+                                                        disabled={!localConfig.memory_enabled}
+                                                        className={cn(
+                                                            "text-xs px-2 py-1 rounded-lg transition-colors flex items-center gap-1",
+                                                            localConfig.memory_enabled
+                                                                ? "bg-blue-50 text-blue-600 hover:bg-blue-100"
+                                                                : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                        )}
+                                                    >
+                                                        <RefreshCw size={12} /> Sync to RAG
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <textarea
+                                                className="w-full h-64 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 resize-none"
+                                                value={personaData?.memory || ''}
+                                                onChange={(e) => setPersonaData({ ...personaData!, memory: e.target.value })}
+                                                onBlur={() => fetch('/api/user/memory', {
+                                                    method: 'PUT',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({ content: personaData?.memory })
+                                                })}
+                                            />
+                                        </Section>
+                                    </>
+                                )}
                             </div>
                         )}
 
@@ -1137,31 +1263,6 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <span className="text-xs text-gray-500">{workflows.length} workflows available</span>
                                         </div>
                                         <ChevronRight size={16} className="text-gray-400" />
-                                    </button>
-                                    <div className="h-4" />
-                                    <button
-                                        onClick={() => setShowMemoryModal(true)}
-                                        disabled={!localConfig.memory_enabled}
-                                        className={cn(
-                                            "w-full flex items-center justify-between p-3 rounded-lg border transition-colors",
-                                            localConfig.memory_enabled 
-                                                ? "bg-indigo-50 hover:bg-indigo-100 border-indigo-200"
-                                                : "bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed"
-                                        )}
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <Brain size={20} className={localConfig.memory_enabled ? "text-indigo-600" : "text-gray-400"} />
-                                            <div className="flex flex-col items-start">
-                                                <span className={cn("text-sm font-medium", localConfig.memory_enabled ? "text-indigo-700" : "text-gray-600")}>
-                                                    Memory System
-                                                </span>
-                                                <span className={cn("text-xs", localConfig.memory_enabled ? "text-indigo-500" : "text-gray-400")}>
-                                                    {memoryStats?.memories ?? 0} memories stored
-                                                    {memoryStats?.db_connected === false && " (disconnected)"}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        <ChevronRight size={16} className={localConfig.memory_enabled ? "text-indigo-400" : "text-gray-300"} />
                                     </button>
                                 </Section>
                             </div>
@@ -2302,6 +2403,23 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onClose={() => setShowDiscordWizard(false)}
                 onComplete={handleDiscordComplete}
                 existingConfig={localConfig.discord_config}
+            />
+
+            {/* Soul Wizard Modal */}
+            <SoulWizard
+                isOpen={showSoulWizard}
+                onClose={() => setShowSoulWizard(false)}
+                username={currentUser?.username || 'Admin'}
+                onComplete={(content) => {
+                    if (personaData) {
+                        setPersonaData({ ...personaData, soul: content });
+                    }
+                    fetch('/api/user/soul', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content })
+                    });
+                }}
             />
         </div>
     );

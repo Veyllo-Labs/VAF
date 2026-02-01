@@ -53,6 +53,10 @@ class Memory(Base):
     # Tree hierarchy (optional parent for nested organization)
     parent_id = Column(UUID(as_uuid=True), ForeignKey("memories.id"), nullable=True)
     
+    # Multi-tenancy scope (User ID)
+    # If null, it's a global/system memory (or legacy)
+    user_scope_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    
     # Soft delete flag
     is_deleted = Column(Boolean, default=False, nullable=False)
     

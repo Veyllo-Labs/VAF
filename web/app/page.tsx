@@ -342,11 +342,14 @@ export default function VAFDashboard() {
     const router = useRouter();
     const [authChecking, setAuthChecking] = useState(true);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [currentUser, setCurrentUser] = useState<any>(null);
 
     useEffect(() => {
         fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' })
-            .then((res) => {
+            .then(async (res) => {
                 if (res.ok) {
+                    const userData = await res.json();
+                    setCurrentUser(userData);
                     setIsAuthenticated(true);
                 } else {
                     router.replace('/login');
@@ -2196,6 +2199,7 @@ export default function VAFDashboard() {
                 tools={tools}
                 workflows={workflows}
                 automations={automations}
+                currentUser={currentUser}
             />
         </main>
     );

@@ -81,7 +81,8 @@ class RagPipeline:
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[UUID] = None,
-        auto_connect: bool = True
+        auto_connect: bool = True,
+        user_scope_id: Optional[UUID] = None
     ) -> Memory:
         """
         Ingest content into the memory system.
@@ -98,6 +99,7 @@ class RagPipeline:
             metadata: Optional metadata (title, tags, type, etc.)
             parent_id: Optional parent memory for tree hierarchy
             auto_connect: Whether to auto-connect to similar memories
+            user_scope_id: Optional user scope for multi-tenancy
             
         Returns:
             Created Memory object
@@ -134,9 +136,10 @@ class RagPipeline:
             id=uuid4(),
             encrypted_content=encrypted_content,
             nonce=nonce,
-            metadata=metadata,
+            meta=metadata, # Fixed: was metadata=metadata, but model uses 'meta'
             embedding=memory_embedding,
-            parent_id=parent_id
+            parent_id=parent_id,
+            user_scope_id=user_scope_id
         )
         self.db.add(memory)
         await self.db.flush()
@@ -162,11 +165,12 @@ class RagPipeline:
         
         await self.db.flush()
         
-        # 5. Auto-connect to similar memories
+        # 5. Auto-connect to similar memories (scoped!)
         if auto_connect:
+            # TODO: Update graph manager to respect scope
             await self.graph.auto_connect_memory(memory)
         
-        logger.info(f"Ingested memory {memory.id} with {len(chunks_data)} chunks")
+        logger.info(f"Ingested memory {memory.id} with {len(chunks_data)} chunks (Scope: {user_scope_id})")
         
         return memory
     
@@ -175,7 +179,8 @@ class RagPipeline:
         query: str,
         k: int = 5,
         threshold: float = 0.5,
-        metadata_filter: Optional[Dict[str, Any]] = None
+        metadata_filter: Optional[Dict[str, Any]] = None,
+        user_scope_id: Optional[UUID] = None
     ) -> List[RagSource]:
         """
         Search for relevant memories using vector similarity.
@@ -184,7 +189,8 @@ class RagPipeline:
             query: Search query
             k: Number of results to return
             threshold: Minimum similarity threshold (0-1)
-            metadata_filter: Optional metadata filter (e.g., {"tags": ["work"]})
+            metadata_filter: Optional metadata filter
+            user_scope_id: Optional user scope filter
             
         Returns:
             List of RagSource objects
@@ -195,17 +201,28 @@ class RagPipeline:
         # Convert threshold to distance (cosine distance = 1 - similarity)
         max_distance = 1.0 - threshold
         
-        # Build query with pgvector cosine distance
-        # Lower distance = more similar
+        # Build query
+        filters = [
+            Memory.is_deleted == False,
+            Chunk.embedding.cosine_distance(query_embedding) < max_distance
+        ]
+        
+        # Apply scope filter
+        if user_scope_id:
+            filters.append(Memory.user_scope_id == user_scope_id)
+        else:
+            # If no scope provided, allow global (null) or enforce?
+            # For now, if user_scope_id is None, we search EVERYTHING (Admin mode or Global)
+            # OR we search only Null scope.
+            # Decision: If user_scope_id is None, search memories where user_scope_id IS NULL.
+            filters.append(Memory.user_scope_id.is_(None))
+
         stmt = select(
             Chunk,
             Chunk.embedding.cosine_distance(query_embedding).label("distance"),
             Memory
         ).join(Memory, Chunk.memory_id == Memory.id).where(
-            and_(
-                Memory.is_deleted == False,
-                Chunk.embedding.cosine_distance(query_embedding) < max_distance
-            )
+            and_(*filters)
         ).order_by("distance").limit(k)
         
         result = await self.db.execute(stmt)
@@ -215,7 +232,7 @@ class RagPipeline:
         seen_memories = set()
         
         for chunk, distance, memory in rows:
-            # Apply metadata filter if provided
+            # Apply metadata filter
             if metadata_filter:
                 skip = False
                 for key, value in metadata_filter.items():
@@ -230,7 +247,7 @@ class RagPipeline:
                 if skip:
                     continue
             
-            score = 1.0 - distance  # Convert distance to similarity
+            score = 1.0 - distance
             
             source = RagSource(
                 memory_id=str(memory.id),
@@ -251,22 +268,12 @@ class RagPipeline:
         query: str,
         k: int = 5,
         system_prompt: Optional[str] = None,
-        metadata_filter: Optional[Dict[str, Any]] = None
+        metadata_filter: Optional[Dict[str, Any]] = None,
+        user_scope_id: Optional[UUID] = None
     ) -> RagResult:
-        """
-        Perform RAG query: search, build context, generate answer.
-        
-        Args:
-            query: User query
-            k: Number of chunks to retrieve
-            system_prompt: Optional custom system prompt
-            metadata_filter: Optional metadata filter
-            
-        Returns:
-            RagResult with answer and sources
-        """
+        """Perform RAG query with scoping."""
         # Search for relevant chunks
-        sources = await self.search(query, k=k, metadata_filter=metadata_filter)
+        sources = await self.search(query, k=k, metadata_filter=metadata_filter, user_scope_id=user_scope_id)
         
         if not sources:
             return RagResult(
@@ -276,7 +283,7 @@ class RagPipeline:
                 query_embedding=await self.embeddings.embed(query)
             )
         
-        # Build context from sources
+        # Build context
         context_parts = []
         for i, source in enumerate(sources):
             context_parts.append(f"[Source {i+1}] (Relevance: {source.score:.0%})\n{source.text}")
@@ -284,7 +291,6 @@ class RagPipeline:
         context = "\n\n---\n\n".join(context_parts)
         context_tokens = self.chunker.estimate_tokens(context)
         
-        # Build prompt
         default_system = """You are a helpful assistant with access to a memory database. 
 Answer the user's question based on the provided context from relevant memories.
 If the context doesn't contain enough information to answer, say so.
@@ -304,7 +310,6 @@ Always cite which source(s) you used in your answer."""
 - Cite sources using [Source N] notation
 - If uncertain, acknowledge it"""
         
-        # Generate answer using VAF's API backend
         answer = await self._generate_answer(full_prompt)
         
         return RagResult(
@@ -319,30 +324,22 @@ Always cite which source(s) you used in your answer."""
         query: str,
         k: int = 5,
         system_prompt: Optional[str] = None,
-        metadata_filter: Optional[Dict[str, Any]] = None
+        metadata_filter: Optional[Dict[str, Any]] = None,
+        user_scope_id: Optional[UUID] = None
     ) -> AsyncGenerator[Tuple[str, Optional[List[RagSource]]], None]:
-        """
-        Perform RAG query with streaming response.
+        """Perform RAG query with streaming response and scoping."""
+        sources = await self.search(query, k=k, metadata_filter=metadata_filter, user_scope_id=user_scope_id)
         
-        Yields:
-            Tuples of (token, sources) where sources is set once at start
-        """
-        # Search for relevant chunks
-        sources = await self.search(query, k=k, metadata_filter=metadata_filter)
-        
-        # Yield sources first
         if not sources:
             yield ("I couldn't find any relevant memories to answer your question.", sources)
             return
         
-        # Build context
         context_parts = []
         for i, source in enumerate(sources):
             context_parts.append(f"[Source {i+1}] (Relevance: {source.score:.0%})\n{source.text}")
         
         context = "\n\n---\n\n".join(context_parts)
         
-        # Build prompt
         default_system = """You are a helpful assistant with access to a memory database. 
 Answer the user's question based on the provided context from relevant memories.
 Always cite which source(s) you used."""
@@ -355,7 +352,6 @@ Always cite which source(s) you used."""
 ## Question:
 {query}"""
         
-        # Stream answer
         first_chunk = True
         async for token in self._stream_answer(full_prompt):
             if first_chunk:

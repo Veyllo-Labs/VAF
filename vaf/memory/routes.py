@@ -10,7 +10,7 @@ Provides REST API endpoints for:
 
 from typing import List, Optional, Dict, Any
 from uuid import UUID
-from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from vaf.memory.database import get_db, init_db, check_db_connection, get_db_stats
@@ -24,6 +24,23 @@ logger = logging.getLogger(__name__)
 
 # Create router
 memory_router = APIRouter()
+
+
+# Helper dependency to get user scope
+async def get_current_user_scope(request: Request) -> Optional[UUID]:
+    """
+    Get the user_scope_id from the request.
+    
+    - If authenticated (via AuthMiddleware), returns user.user_scope_id.
+    - If localhost bypass (no auth), returns None (Global/System).
+    """
+    user = getattr(request.state, "user", None)
+    if user and user.get("user_scope_id"):
+        try:
+            return UUID(user["user_scope_id"])
+        except ValueError:
+            pass
+    return None
 
 
 # Pydantic models for request/response
@@ -164,7 +181,10 @@ async def get_stats():
 
 # CRUD operations
 @memory_router.post("", response_model=MemoryResponse)
-async def create_memory(request: MemoryCreate):
+async def create_memory(
+    request: MemoryCreate,
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
+):
     """
     Create a new memory.
     
@@ -183,7 +203,8 @@ async def create_memory(request: MemoryCreate):
                 content=request.content,
                 metadata=request.metadata,
                 parent_id=parent_uuid,
-                auto_connect=request.auto_connect
+                auto_connect=request.auto_connect,
+                user_scope_id=user_scope_id
             )
             
             return MemoryResponse(
@@ -373,7 +394,10 @@ async def update_connections(memory_id: str, request: ConnectionUpdate):
 
 # RAG endpoints
 @memory_router.post("/rag/query", response_model=RagQueryResponse)
-async def rag_query(request: RagQueryRequest):
+async def rag_query(
+    request: RagQueryRequest,
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
+):
     """
     Perform a RAG query.
     
@@ -391,7 +415,8 @@ async def rag_query(request: RagQueryRequest):
             result = await pipeline.query(
                 query=request.query,
                 k=request.k,
-                metadata_filter=request.metadata_filter
+                metadata_filter=request.metadata_filter,
+                user_scope_id=user_scope_id
             )
             
             sources = [
@@ -416,7 +441,10 @@ async def rag_query(request: RagQueryRequest):
 
 
 @memory_router.post("/rag/query/stream")
-async def rag_query_stream(request: RagQueryRequest):
+async def rag_query_stream(
+    request: RagQueryRequest,
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
+):
     """
     Perform a RAG query with streaming response.
     
@@ -434,7 +462,8 @@ async def rag_query_stream(request: RagQueryRequest):
                 async for token, sources in pipeline.query_stream(
                     query=request.query,
                     k=request.k,
-                    metadata_filter=request.metadata_filter
+                    metadata_filter=request.metadata_filter,
+                    user_scope_id=user_scope_id
                 ):
                     if first and sources is not None:
                         # Send sources first
@@ -472,7 +501,10 @@ async def rag_query_stream(request: RagQueryRequest):
 
 # Semantic search (no LLM)
 @memory_router.post("/search", response_model=List[SourceResponse])
-async def semantic_search(request: SemanticSearchRequest):
+async def semantic_search(
+    request: SemanticSearchRequest,
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
+):
     """
     Semantic search without LLM generation.
     
@@ -486,7 +518,8 @@ async def semantic_search(request: SemanticSearchRequest):
                 query=request.query,
                 k=request.k,
                 threshold=request.threshold,
-                metadata_filter=request.metadata_filter
+                metadata_filter=request.metadata_filter,
+                user_scope_id=user_scope_id
             )
             
             return [

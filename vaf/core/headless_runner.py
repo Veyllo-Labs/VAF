@@ -3,6 +3,7 @@ import threading
 import traceback
 import os
 import sys
+import gc
 import requests
 from vaf.core.agent import Agent
 from vaf.core.task_queue import TaskQueue
@@ -11,6 +12,11 @@ from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
 from vaf.core.platform import Platform
 from pathlib import Path
+
+# Memory management constants - AGGRESSIVE to prevent 25GB situations
+MEMORY_CHECK_INTERVAL = 30  # Check memory every 30 seconds
+MEMORY_THRESHOLD_MB = 2048  # Trigger cleanup above 2GB
+MEMORY_CRITICAL_MB = 4096  # Force aggressive cleanup above 4GB
 
 def _get_debug_log_dir():
     candidates = []
@@ -33,6 +39,31 @@ def run_headless_agent():
     Run a headless agent loop that processes tasks from the TaskQueue.
     This is designed to run in a background thread within the Tray App.
     """
+    # IMMEDIATE: Create log dir and write startup marker
+    log_dir = _get_debug_log_dir()
+    try:
+        from datetime import datetime
+        with open(log_dir / "headless_startup.log", "a", encoding="utf-8") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"{datetime.now().isoformat()} Headless Runner STARTING\n")
+            f.write(f"PID: {os.getpid()}\n")
+            f.write(f"Log dir: {log_dir}\n")
+    except Exception as e:
+        print(f"[Headless] Failed to write startup log: {e}")
+
+    # Start Memory Profiler IMMEDIATELY
+    try:
+        from vaf.core.memory_profiler import start_profiler
+        start_profiler()
+        print(f"[Headless] Memory Profiler started - logging to {log_dir / 'memory_profiler.log'}")
+    except Exception as e:
+        print(f"[Headless] Memory Profiler failed to start: {e}")
+        try:
+            with open(log_dir / "headless_startup.log", "a", encoding="utf-8") as f:
+                f.write(f"Memory Profiler FAILED: {e}\n")
+        except:
+            pass
+
     # Ensure UTF-8 output to avoid Windows charmap crashes
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     try:
@@ -95,10 +126,98 @@ def run_headless_agent():
     # Main Loop
     last_subagent_check = 0.0
     last_subagent_ui_update = 0.0
+    last_memory_check = 0.0
     open_subagent_sessions = set()
     subagent_last_activity = {}
     subagent_last_steps = {}
     from vaf.core.config import Config
+
+    def _check_and_cleanup_memory():
+        """Check memory usage and cleanup if needed."""
+        nonlocal last_memory_check
+        now = time.time()
+        if now - last_memory_check < MEMORY_CHECK_INTERVAL:
+            return
+        last_memory_check = now
+
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / (1024 * 1024)
+
+            # Log memory usage to file for debugging
+            try:
+                log_dir = _get_debug_log_dir()
+                with open(log_dir / "memory_usage.log", "a", encoding="utf-8") as f:
+                    from datetime import datetime as _dt
+                    f.write(f"{_dt.now().isoformat()} Memory: {memory_mb:.0f}MB\n")
+            except:
+                pass
+
+            if memory_mb > MEMORY_CRITICAL_MB:
+                print(f"[Headless] CRITICAL: Memory usage {memory_mb:.0f}MB > {MEMORY_CRITICAL_MB}MB - aggressive cleanup!")
+                _aggressive_memory_cleanup()
+            elif memory_mb > MEMORY_THRESHOLD_MB:
+                print(f"[Headless] WARNING: Memory usage {memory_mb:.0f}MB > {MEMORY_THRESHOLD_MB}MB - running cleanup...")
+                _standard_memory_cleanup()
+            else:
+                # Still run gc periodically
+                gc.collect()
+        except ImportError:
+            # psutil not available, just run gc
+            gc.collect()
+        except Exception as e:
+            print(f"[Headless] Memory check error: {e}")
+
+    def _standard_memory_cleanup():
+        """Standard memory cleanup - clear caches, run gc."""
+        try:
+            # Clear embedding cache
+            from vaf.memory.embeddings import cleanup_embedding_memory
+            cleanup_embedding_memory()
+        except Exception as e:
+            print(f"[Headless] Embedding cleanup error: {e}")
+
+        # Force garbage collection
+        gc.collect()
+
+        try:
+            import psutil
+            memory_mb = psutil.Process().memory_info().rss / (1024 * 1024)
+            print(f"[Headless] After cleanup: {memory_mb:.0f}MB")
+        except:
+            pass
+
+    def _aggressive_memory_cleanup():
+        """Aggressive memory cleanup - unload models if needed."""
+        _standard_memory_cleanup()
+
+        try:
+            # Unload embedding model completely
+            from vaf.memory.embeddings import reset_embedding_service
+            reset_embedding_service()
+            print("[Headless] Unloaded embedding model")
+        except Exception as e:
+            print(f"[Headless] Embedding reset error: {e}")
+
+        # Multiple gc passes for better cleanup
+        for _ in range(3):
+            gc.collect()
+
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                print("[Headless] Cleared CUDA cache")
+        except ImportError:
+            pass
+
+        try:
+            import psutil
+            memory_mb = psutil.Process().memory_info().rss / (1024 * 1024)
+            print(f"[Headless] After aggressive cleanup: {memory_mb:.0f}MB")
+        except:
+            pass
 
     def _get_subagent_model_info():
         cfg = Config.load()
@@ -123,6 +242,14 @@ def run_headless_agent():
                 meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
                 agent._current_user_scope_id = meta.get("user_scope_id")
                 agent._current_username = meta.get("username")
+                # Debug: Log user scope for RAG troubleshooting
+                try:
+                    from datetime import datetime as _dt
+                    log_dir = _get_debug_log_dir()
+                    with open(log_dir / "rag_user_scope.log", "a", encoding="utf-8") as f:
+                        f.write(f"{_dt.now().isoformat()} [Headless] Task user_scope_id={meta.get('user_scope_id')}, username={meta.get('username')}\n")
+                except Exception:
+                    pass
 
                 # Load Session Context
                 try:
@@ -329,6 +456,15 @@ def run_headless_agent():
                             session_id=task.session_id
                         )
 
+                    # Emit message_complete event for Auto-TTS
+                    try:
+                        get_web_interface().emit_message_complete(
+                            content=str(final_text) if 'final_text' in dir() else str(response_text),
+                            session_id=task.session_id
+                        )
+                    except Exception:
+                        pass
+
                     # Send token/context stats to WebUI
                     try:
                         used, total = agent.get_token_usage()
@@ -398,7 +534,11 @@ def run_headless_agent():
 
                     # Result is already added to history and broadcast to WebUI by agent logic
                     print("[Headless] Task complete.")
-                    
+
+                    # Memory cleanup: clear response parts list
+                    if 'response_parts' in dir():
+                        response_parts.clear()
+
                 except Exception as e:
                     print(f"[Headless] Error during chat step: {e}")
                     traceback.print_exc()
@@ -659,7 +799,10 @@ def run_headless_agent():
 
                 # Sleep briefly to avoid busy loop
                 time.sleep(0.1)
-                
+
+                # Periodic memory check
+                _check_and_cleanup_memory()
+
         except Exception as e:
             print(f"[Headless] Loop error: {e}")
             time.sleep(1)

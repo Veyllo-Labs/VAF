@@ -325,6 +325,55 @@ def reset_embedding_service():
     _model_name = None
 
 
+def cleanup_embedding_memory():
+    """
+    Free up GPU/CPU memory used by the embedding model.
+    Call this periodically or when memory usage is high.
+    """
+    global _model, _model_name, _embedding_service
+    import gc
+
+    # Clear embedding cache first
+    if _embedding_service is not None:
+        _embedding_service.clear_cache()
+        logger.info("Cleared embedding cache")
+
+    # Unload model from memory
+    if _model is not None:
+        try:
+            # For torch-based models, move to CPU and delete
+            if hasattr(_model, 'to'):
+                _model.to('cpu')
+            del _model
+            _model = None
+            _model_name = None
+            logger.info("Unloaded embedding model from memory")
+        except Exception as e:
+            logger.warning(f"Error unloading embedding model: {e}")
+
+    # Force garbage collection
+    gc.collect()
+
+    # Clear CUDA cache if available
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.info("Cleared CUDA cache")
+    except ImportError:
+        pass  # torch not installed
+
+
+def get_memory_usage_mb() -> float:
+    """Get current process memory usage in MB."""
+    try:
+        import psutil
+        process = psutil.Process()
+        return process.memory_info().rss / (1024 * 1024)
+    except ImportError:
+        return 0.0
+
+
 # Text chunking utilities for RAG
 class TextChunker:
     """

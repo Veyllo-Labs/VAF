@@ -42,6 +42,7 @@ Network settings are managed via the Web UI (Settings -> Local Network).
 - **Enable Local Network Hosting**: Master toggle for external access.
 - **Port**: The frontend port can be customized (default: 3000) to avoid conflicts.
 - **Host IP**: Displays the detected LAN IP address for sharing.
+- **TLS (HTTPS/WSS)**: Optional. Set `local_network_tls_enabled` to `true` in `~/.vaf/config.json` and provide paths to `local_network_ssl_cert` (PEM certificate) and `local_network_ssl_key` (PEM private key). The backend then serves over HTTPS and WSS so API and WebSocket traffic are encrypted. Generate a self-signed cert for development: `openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"`. Access the app via `https://localhost:3000` (or your host) so the frontend uses `wss://` for the WebSocket.
 
 ### Live Updates
 Changes to network settings trigger an automatic, orchestrated restart of the frontend and backend services to apply new bindings (e.g., switching from `127.0.0.1` to `0.0.0.0`).

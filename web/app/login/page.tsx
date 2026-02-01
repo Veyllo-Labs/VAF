@@ -164,7 +164,10 @@ export default function LoginPage() {
                 setIsLoading(false);
                 return;
             }
-            if (typeof window !== 'undefined') sessionStorage.setItem('vaf_onboarding_step', 'soul_wizard');
+            if (typeof window !== 'undefined') {
+                sessionStorage.setItem('vaf_onboarding_step', 'soul_wizard');
+                if (data.access_token) sessionStorage.setItem('vaf_token', data.access_token);
+            }
             setStep('soul_wizard');
             return;
         } catch {
@@ -216,6 +219,9 @@ export default function LoginPage() {
                     setQrCodeBase64(null);
                 }
             } else {
+                if (typeof window !== 'undefined' && data.access_token) {
+                    sessionStorage.setItem('vaf_token', data.access_token);
+                }
                 router.push('/');
                 return;
             }
@@ -246,6 +252,9 @@ export default function LoginPage() {
                 setTwoFAError((data?.detail as string) || 'Invalid code');
                 setIsLoading(false);
                 return;
+            }
+            if (typeof window !== 'undefined' && data.access_token) {
+                sessionStorage.setItem('vaf_token', data.access_token);
             }
             router.push('/');
         } catch {

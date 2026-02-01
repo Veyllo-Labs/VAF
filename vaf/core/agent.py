@@ -5054,7 +5054,17 @@ class Agent:
             if name in self.tools:
                 tool_args = dict(args) if args else {}
                 if name in ("memory_save", "memory_search"):
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                    scope_id = getattr(self, "_current_user_scope_id", None)
+                    tool_args["user_scope_id"] = scope_id
+                    # Debug: Log user scope for RAG troubleshooting
+                    try:
+                        from datetime import datetime as _dt
+                        log_dir = Path(__file__).resolve().parents[2] / "logs"
+                        log_dir.mkdir(parents=True, exist_ok=True)
+                        with open(log_dir / "rag_user_scope.log", "a", encoding="utf-8") as f:
+                            f.write(f"{_dt.now().isoformat()} [Agent] {name} called with user_scope_id={scope_id}\n")
+                    except Exception:
+                        pass
                 result = self.tools[name].run(**tool_args)
             else:
                 result = f"Error: Unknown tool '{name}'"

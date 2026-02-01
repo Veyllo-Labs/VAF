@@ -219,8 +219,15 @@ class WebInterfaceManager:
                 f.write(f"[EMIT] role={role} content_len={len(content)} session={session_id}\n")
         except: pass
         self._push_session_update(session_id, {
-            "type": "agent_message_update", 
-            "role": role, 
+            "type": "agent_message_update",
+            "role": role,
+            "content": content
+        })
+
+    def emit_message_complete(self, content: str, session_id: str = None):
+        """Emit when a message is fully complete (for Auto-TTS trigger)."""
+        self._push_session_update(session_id, {
+            "type": "message_complete",
             "content": content
         })
 

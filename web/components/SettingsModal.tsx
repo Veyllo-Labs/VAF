@@ -321,6 +321,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const base = apiBase || (typeof window !== 'undefined' ? '' : 'http://localhost:8001');
         fetch(`${base}/api/auth/logout`, { method: 'POST', credentials: 'include' })
             .then(() => {
+                if (typeof window !== 'undefined') sessionStorage.removeItem('vaf_token');
                 setTimeout(() => {
                     setIsLoggingOut(false);
                     setLogoutBarProgress(0);
@@ -328,6 +329,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 }, 1500);
             })
             .catch(() => {
+                if (typeof window !== 'undefined') sessionStorage.removeItem('vaf_token');
                 setIsLoggingOut(false);
                 setLogoutBarProgress(0);
                 onLogout?.();
@@ -901,7 +903,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onChange={(v: boolean) => handleChange('speech_tts_enabled', v)}
                                     />
                                     {localConfig.speech_tts_enabled && (
-                                        <div className="mt-4">
+                                        <div className="mt-4 space-y-4">
                                             <Select
                                                 label="TTS Engine"
                                                 value={localConfig.speech_tts_engine || 'piper'}
@@ -911,9 +913,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     { value: 'system', label: 'System (Native OS Voice)' },
                                                 ]}
                                             />
-                                            <p className="text-xs text-gray-500 mt-2">
+                                            <p className="text-xs text-gray-500">
                                                 Piper provides natural-sounding neural voices. System uses your OS's built-in TTS.
                                             </p>
+                                            <Switch
+                                                label="Auto-Speak Responses"
+                                                description="Automatically speak agent responses in browser (headless-friendly)"
+                                                checked={localConfig.tts_auto_speak || false}
+                                                onChange={(v: boolean) => handleChange('tts_auto_speak', v)}
+                                            />
                                         </div>
                                     )}
                                 </Section>

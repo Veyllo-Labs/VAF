@@ -720,7 +720,12 @@ export default function VAFDashboard() {
     const [reconnectAttempt, setReconnectAttempt] = useState(0);
     useEffect(() => {
         if (typeof window === 'undefined') return;
-        const wsUrl = (getApiBase() || 'http://localhost:8001').replace(/^http/, 'ws') + '/ws';
+        const base = getApiBase() || 'http://localhost:8001';
+        let wsUrl = (base.startsWith('https') ? base.replace(/^https/, 'wss') : base.replace(/^http/, 'ws')) + '/ws';
+        const token = sessionStorage.getItem('vaf_token');
+        if (token) {
+            wsUrl += (wsUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+        }
         const socket = new WebSocket(wsUrl);
         let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
         socket.onopen = () => {
@@ -962,6 +967,18 @@ export default function VAFDashboard() {
                     } else if (data.status === 'stopped') {
                         setPlayingMessageId(null);
                         setLoadingMessageId(null);
+                    }
+                }
+                else if (data.type === 'message_complete') {
+                    // Auto-TTS: Speak the response if enabled
+                    if (config.tts_auto_speak && config.speech_tts_enabled && data.content) {
+                        // Don't auto-speak if already playing/loading
+                        if (playingMessageId === null && loadingMessageId === null) {
+                            ws?.send(JSON.stringify({
+                                type: 'speak',
+                                text: data.content
+                            }));
+                        }
                     }
                 }
                 else if (data.type === 'session_list') {

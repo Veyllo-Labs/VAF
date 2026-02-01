@@ -68,6 +68,11 @@ class Config:
                 "stt_enabled": False,                  # Enable Speech-to-Text
                 "stt_wake_word_enabled": False,        # Enable Wake Word detection (Auto Mode)
                 "stt_wake_word": "hey_jarvis",         # Wake Word model name (openWakeWord)
+
+                # TTS Settings
+                "speech_tts_enabled": False,           # Enable Text-to-Speech
+                "speech_tts_engine": "piper",          # TTS engine: "piper" or "system"
+                "tts_auto_speak": False,               # Auto-speak agent responses in browser
                 
                 # Librarian Agent settings
                 "librarian_max_pdf_size_mb": 50,       # Max PDF size in MB (default: 50)
@@ -100,6 +105,9 @@ class Config:
         "redis_url": "redis://localhost:6379/0",                   # Redis connection URL
         "redis_enabled": True,                                     # Enable Redis caching
         
+        # Local Admin Settings (for localhost without login)
+        "local_admin_scope_id": "00000000-0000-0000-0000-000000000001",  # Fixed UUID for Local Admin user scope
+
         # Local Network Settings
         "local_network_enabled": False,                            # Enable local network access (LAN only)
         "local_network_port": 8001,                                # Backend port for local network
@@ -110,6 +118,9 @@ class Config:
         "local_network_jwt_expiry_hours": 24,                      # JWT token expiry in hours
         "local_network_rate_limit_attempts": 5,                    # Max failed login attempts
         "local_network_rate_limit_window_minutes": 15,             # Rate limit window in minutes
+        "local_network_tls_enabled": False,                       # Serve backend over HTTPS/WSS (need cert + key)
+        "local_network_ssl_cert": "",                             # Path to PEM certificate file (e.g. cert.pem)
+        "local_network_ssl_key": "",                              # Path to PEM private key file (e.g. key.pem)
         
         # Docker Settings (Desktop Mode only)
         # Note: CLI mode (vaf run) always runs natively with full host access

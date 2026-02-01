@@ -227,11 +227,25 @@ def start_uvicorn():
         # When local_network_enabled is False, bind only to localhost (not reachable from LAN)
         local_network_enabled = Config.get("local_network_enabled", False)
         host = "0.0.0.0" if local_network_enabled else "127.0.0.1"
-        print(f"[Tray] Starting Uvicorn thread on port 8001 ({host})...")
-        log("Tray", f"Initializing Uvicorn Config ({host}:8001)...")
-        # log_level="info" to see startup errors
-        # use_colors=False to avoid further isatty checks
-        config = uvicorn.Config(app, host=host, port=8001, log_level="info", use_colors=False)
+        tls_enabled = Config.get("local_network_tls_enabled", False)
+        ssl_cert = (Config.get("local_network_ssl_cert") or "").strip()
+        ssl_key = (Config.get("local_network_ssl_key") or "").strip()
+        if tls_enabled and ssl_cert and ssl_key:
+            import os
+            if os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
+                print(f"[Tray] Starting Uvicorn with TLS (HTTPS/WSS) on port 8001 ({host})...")
+                log("Tray", f"Initializing Uvicorn Config with TLS ({host}:8001)...")
+                config = uvicorn.Config(
+                    app, host=host, port=8001, log_level="info", use_colors=False,
+                    ssl_certfile=ssl_cert, ssl_keyfile=ssl_key
+                )
+            else:
+                log("Tray", "TLS enabled but cert/key files missing or invalid; starting without TLS")
+                config = uvicorn.Config(app, host=host, port=8001, log_level="info", use_colors=False)
+        else:
+            print(f"[Tray] Starting Uvicorn thread on port 8001 ({host})...")
+            log("Tray", f"Initializing Uvicorn Config ({host}:8001)...")
+            config = uvicorn.Config(app, host=host, port=8001, log_level="info", use_colors=False)
         server = uvicorn.Server(config)
         uvicorn_server = server
 

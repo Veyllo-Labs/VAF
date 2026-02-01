@@ -436,16 +436,25 @@ async def get_workflow_details(wf_id: str):
     except Exception as e:
         return {"error": str(e)}
 
+# Auth cookie name (must match auth_routes) so WebSocket can read JWT when frontend doesn't pass ?token=
+VAF_TOKEN_COOKIE = "vaf_token"
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
     """
     WebSocket endpoint with optional token authentication.
     
-    When local_network_enabled=True, requires valid JWT token via query param.
-    Token can be passed as: ws://host:8001/ws?token=<jwt>
+    Token from: query param (?token=<jwt>) or cookie (vaf_token). Cookie is used when
+    frontend connects without query (e.g. same-host login); ensures user_scope_id is
+    set for RAG/memory so "No memories found" does not happen for logged-in users.
     
-    When local_network_enabled=False, only localhost connections are allowed.
+    When local_network_enabled=True, non-localhost requires valid JWT.
+    When local_network_enabled=False, only localhost is allowed.
     """
+    # Use cookie if frontend didn't pass token in URL (e.g. after login from same host)
+    if not token and hasattr(websocket, "cookies") and websocket.cookies:
+        token = websocket.cookies.get(VAF_TOKEN_COOKIE)
     client_ip = websocket.client.host if websocket.client else "unknown"
     print(f"[WebSocket] Connection attempt from {client_ip}")
     log("API", f"WebSocket connection attempt from {client_ip}")
@@ -524,8 +533,26 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             
             await websocket.close(code=4003, reason="Local network feature is disabled")
             return
-        # Localhost - allow without authentication
-        user_context = {"username": "Local Admin", "role": "admin"}
+        # Localhost - allow; if JWT cookie present, decode so we get user_scope_id for RAG
+        # Use fixed local_admin_scope_id for localhost without login (ensures memories are scoped)
+        local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
+        user_context = {"username": "Local Admin", "role": "admin", "user_scope_id": local_admin_scope}
+        if token:
+            try:
+                from vaf.auth.crypto import get_jwt_secret
+                import jwt
+                secret = get_jwt_secret()
+                payload = jwt.decode(token, secret, algorithms=["HS256"])
+                user_context = {
+                    "user_id": payload.get("sub"),
+                    "user_scope_id": payload.get("user_scope_id") or local_admin_scope,
+                    "username": payload.get("username", "Local Admin"),
+                    "role": payload.get("role", "admin"),
+                }
+                log("API", f"WebSocket (localhost) authenticated: {user_context.get('username')} (scope: {user_context.get('user_scope_id')})")
+            except Exception as e:
+                log("API", f"WebSocket (localhost) token decode failed: {e}, using Local Admin scope")
+                pass  # Keep Local Admin fallback with scope
     else:
         # Local network is ENABLED - authenticate network users
         try:
@@ -1145,6 +1172,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             metadata["user_scope_id"] = user_scope_id
                         if username:
                             metadata["username"] = username
+                        # Debug: Log user scope for RAG troubleshooting
+                        log("WebServer", f"Chat message from user_scope_id={user_scope_id}, username={username}")
                         # Add to queue
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)
                         
@@ -1495,15 +1524,24 @@ async def process_uploaded_files(files: list) -> str:
 
 
 def run_server(host="127.0.0.1", port=8001):
-    """Run the Uvicorn server."""
+    """Run the Uvicorn server. Uses TLS (HTTPS/WSS) when config has cert/key paths set."""
     # Store the loop so the TUI thread can schedule updates
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     manager.set_server_loop(loop)
-    
-    config = uvicorn.Config(app=app, host=host, port=port, loop="asyncio", log_level="error")
+
+    tls_enabled = Config.get("local_network_tls_enabled", False)
+    ssl_cert = (Config.get("local_network_ssl_cert") or "").strip()
+    ssl_key = (Config.get("local_network_ssl_key") or "").strip()
+    if tls_enabled and ssl_cert and ssl_key and os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
+        config = uvicorn.Config(
+            app=app, host=host, port=port, loop="asyncio", log_level="error",
+            ssl_certfile=ssl_cert, ssl_keyfile=ssl_key
+        )
+    else:
+        config = uvicorn.Config(app=app, host=host, port=port, loop="asyncio", log_level="error")
     server = uvicorn.Server(config)
-    
+
     # We run this in the thread provided by the caller
     loop.run_until_complete(server.serve())
 

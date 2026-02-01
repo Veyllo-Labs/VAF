@@ -45,8 +45,7 @@ def test_user_workspace_initialization():
     assert ws.base_dir.exists()
     assert ws.identity_file.exists()
     assert ws.soul_file.exists()
-    assert ws.memory_file.exists()
-    
+
     identity = ws.get_identity()
     assert identity["emoji"] == "文"
     

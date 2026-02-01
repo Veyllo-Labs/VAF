@@ -153,6 +153,26 @@ def run_headless_agent():
                     tq.task_done()
                     continue
 
+                # Compaction task: run session compaction (same serialized LLM as chat when local)
+                is_compaction = (task.metadata or {}).get("compaction") is True
+                if is_compaction:
+                    from uuid import UUID
+                    from vaf.memory.rag import run_session_compaction_sync
+                    _scope = (task.metadata or {}).get("user_scope_id")
+                    _turn = int((task.metadata or {}).get("turn_count", 0))
+                    if _scope is not None and not isinstance(_scope, UUID):
+                        try:
+                            _scope = UUID(str(_scope))
+                        except (ValueError, TypeError):
+                            _scope = None
+                    try:
+                        run_session_compaction_sync(agent, _scope, task.session_id, _turn)
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).warning("Session compaction (queued) failed: %s", e)
+                    tq.task_done()
+                    continue
+
                 # Lazy-load local model only when we have a real chat task (not for LOAD_SESSION etc.)
                 try:
                     if agent.provider == "local" and not agent.api_backend and not agent.llm and not agent.use_server:
@@ -344,6 +364,34 @@ def run_headless_agent():
                             run_auto_capture_sync(input_text or "", _assistant_text, _scope)
                     except Exception:
                         pass
+
+                    # Session compaction: every N turns store durable memories (MEMORY:/NO_REPLY), ingest to RAG.
+                    # When using a local LLM, enqueue compaction so it runs in the same queue (no parallel LLM use).
+                    try:
+                        from uuid import UUID
+                        from vaf.memory.rag import run_session_compaction_sync
+                        from vaf.core.config import Config
+                        if Config.get("memory_enabled", True) and Config.get("memory_compaction_enabled", True):
+                            turn_count = len([m for m in agent.history if m.get("role") == "user"])
+                            _scope = (task.metadata or {}).get("user_scope_id") if getattr(task, "metadata", None) else None
+                            if _scope is not None and not isinstance(_scope, UUID):
+                                try:
+                                    _scope = UUID(str(_scope))
+                                except (ValueError, TypeError):
+                                    _scope = None
+                            if getattr(agent, "provider", "local") == "local":
+                                tq.add(
+                                    task.session_id,
+                                    "__COMPACTION__",
+                                    source="web",
+                                    priority=15,
+                                    metadata={"compaction": True, "user_scope_id": str(_scope) if _scope else None, "turn_count": turn_count},
+                                )
+                            else:
+                                run_session_compaction_sync(agent, _scope, task.session_id, turn_count)
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).warning("Session compaction failed: %s", e)
 
                     # Result is already added to history and broadcast to WebUI by agent logic
                     print("[Headless] Task complete.")

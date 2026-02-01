@@ -54,23 +54,19 @@ The Soul System operates as a bridge between the **User Workspace** and the **LL
 
 ### 3.4 Continuity
 **Definition**: The mechanism for long-term evolution and persistence.  
-**Outcome**: The agent will proactively suggest updates to its own `MEMORY.md` or `soul.md` when it detects a significant shift in user requirements.
+**Outcome**: The agent will proactively suggest updates to its own `soul.md` when it detects a significant shift in user requirements.
 
 ---
 
 ## 4. API Specifications
 
 ### `GET /api/user/persona`
-- **Description**: Retrieves the current identity, soul, and memory markdown.
+- **Description**: Retrieves the current identity and soul (system prompt) markdown.
 - **Access**: Admin only.
 
 ### `PUT /api/user/soul`
 - **Description**: Updates the `soul.md` file.
 - **Payload**: `{ "content": "markdown string" }`
-- **Access**: Admin only.
-
-### `POST /api/user/memory/sync`
-- **Description**: Re-indexes the `MEMORY.md` file into the RAG vector database.
 - **Access**: Admin only.
 
 ---
@@ -94,7 +90,7 @@ Admins can refine the agent at any time via **Settings > Persona & Memory**.
 - **Wizard Reset**: Re-run the Soul Wizard to overwrite the existing personality.
 
 ### RAG Maintenance
-If the agent fails to recall facts documented in `MEMORY.md`, use the **"Sync to RAG"** button in the Persona tab. This flushes the existing index for that user and rebuilds it from the current Markdown source.
+Long-term facts are stored via the **memory_store** tool and auto-capture; they are indexed in the RAG database. Use the **Memory** page (or Settings > Persona > View Graph) to inspect and manage memories. There is no separate MEMORY.md file; RAG is populated from tool usage and optional auto-capture.
 
 ---
 

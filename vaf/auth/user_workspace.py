@@ -4,7 +4,6 @@ User Workspace Manager for VAF.
 Handles the creation and management of user-specific files:
 - identity.json: Visual identity (name, emoji, theme)
 - soul.md: Personality and behavioral rules (System Prompt)
-- MEMORY.md: Long-term curated facts (RAG)
 - logs/: Daily interaction logs
 """
 
@@ -28,7 +27,6 @@ class UserWorkspace:
         
         self.identity_file = self.base_dir / "identity.json"
         self.soul_file = self.base_dir / "soul.md"
-        self.memory_file = self.base_dir / "MEMORY.md"
 
     def ensure_exists(self):
         """Create directory structure and default files if missing."""
@@ -86,17 +84,6 @@ You’re not a chatbot. You’re becoming someone.
 """
             self.soul_file.write_text(default_soul, encoding="utf-8")
 
-        if not self.memory_file.exists():
-            default_memory = f"""# Long-term Memory for {self.username.capitalize()}
-
-## User Facts
-- User is currently setting up the VAF framework.
-
-## Project Notes
-- VAF (Veyllo Agent Framework) is running on Windows.
-"""
-            self.memory_file.write_text(default_memory, encoding="utf-8")
-
     def get_identity(self) -> Dict[str, Any]:
         if not self.identity_file.exists():
             self.ensure_exists()
@@ -115,14 +102,6 @@ You’re not a chatbot. You’re becoming someone.
 
     def save_soul(self, content: str):
         self.soul_file.write_text(content, encoding="utf-8")
-
-    def get_memory_markdown(self) -> str:
-        if not self.memory_file.exists():
-            self.ensure_exists()
-        return self.memory_file.read_text(encoding="utf-8")
-
-    def save_memory_markdown(self, content: str):
-        self.memory_file.write_text(content, encoding="utf-8")
 
 def get_user_workspace(username: str) -> UserWorkspace:
     ws = UserWorkspace(username)

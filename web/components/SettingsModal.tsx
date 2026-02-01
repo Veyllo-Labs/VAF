@@ -139,7 +139,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showSoulWizard, setShowSoulWizard] = useState(false);
 
     // Persona State
-    const [personaData, setPersonaData] = useState<{identity: any, soul: string, memory: string} | null>(null);
+    const [personaData, setPersonaData] = useState<{identity: any, soul: string} | null>(null);
     const [personaLoading, setPersonaLoading] = useState(false);
 
     useEffect(() => {

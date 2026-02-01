@@ -2146,6 +2146,50 @@ class Agent:
             UI.event("Debug", f"Summarization failed: {e}", style="dim")
             return ""
 
+    def _generate_for_compaction(self, user_prompt: str) -> str:
+        """
+        Single non-streaming LLM call for session compaction. Does not modify history.
+        Returns raw reply text (e.g. MEMORY: "..." or NO_REPLY).
+        """
+        temp_history = [{"role": "user", "content": user_prompt}]
+        content = ""
+        try:
+            if self.use_server:
+                import requests
+                payload = {
+                    "messages": temp_history,
+                    "max_tokens": 500,
+                    "temperature": 0.2,
+                    "stream": False,
+                }
+                res = requests.post(
+                    "http://127.0.0.1:8080/v1/chat/completions",
+                    json=payload,
+                    timeout=60,
+                ).json()
+                content = (res.get("choices") or [{}])[0].get("message", {}).get("content", "")
+            elif self.api_backend:
+                chunks = list(
+                    self.api_backend.chat_completion(
+                        messages=temp_history,
+                        max_tokens=500,
+                        temperature=0.2,
+                        stream=False,
+                    )
+                )
+                content = "".join(c if isinstance(c, str) else str(c) for c in chunks if c)
+            elif self.llm:
+                output = self.llm.create_chat_completion(
+                    messages=temp_history,
+                    max_tokens=500,
+                    temperature=0.2,
+                )
+                content = (output.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Compaction LLM call failed: %s", e)
+        return (content or "").strip()
+
     def manage_context(self):
         """
         Cursor-Style Context Management

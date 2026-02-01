@@ -182,7 +182,7 @@ class RagPipeline:
     ) -> int:
         """
         Delete memories that match the given source (in meta) and user_scope_id.
-        Used by Sync to replace MEMORY.md content for a user (delete old, then ingest).
+        Used to replace memories by source and scope (delete old, then re-ingest from elsewhere if needed).
         """
         filters = [Memory.meta["source"].astext == source]
         if user_scope_id is not None:
@@ -657,6 +657,116 @@ async def auto_capture_memory(
             auto_connect=False,
         )
     return 1
+
+
+def _parse_memory_reply(reply: str) -> List[str]:
+    """
+    Parse compaction LLM reply for MEMORY: "..." or MEMORY: ... lines.
+    Returns list of content strings; NO_REPLY or no MEMORY lines => [].
+    """
+    if not reply or not reply.strip():
+        return []
+    reply_upper = reply.strip().upper()
+    if "NO_REPLY" in reply_upper and "MEMORY:" not in reply_upper:
+        return []
+    out = []
+    for line in reply.splitlines():
+        line = line.strip()
+        if not line.upper().startswith("MEMORY:"):
+            continue
+        rest = line[7:].strip()
+        if rest.startswith('"') and rest.endswith('"'):
+            rest = rest[1:-1].replace('\\"', '"')
+        elif rest.startswith("'") and rest.endswith("'"):
+            rest = rest[1:-1].replace("\\'", "'")
+        if rest:
+            out.append(rest)
+    return out
+
+
+def _load_compaction_state() -> Dict[str, int]:
+    """Load last_compaction_at_turn per session_id from compaction_state.json."""
+    try:
+        from pathlib import Path
+        path = Path(Config.APP_DIR) / "compaction_state.json"
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                import json
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_compaction_state(state: Dict[str, int]) -> None:
+    """Save compaction state to compaction_state.json."""
+    try:
+        from pathlib import Path
+        import json
+        path = Path(Config.APP_DIR) / "compaction_state.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except Exception as e:
+        logger.warning("Failed to save compaction state: %s", e)
+
+
+def run_session_compaction_sync(
+    agent: Any,
+    user_scope_id: Optional[UUID],
+    session_id: str,
+    current_turn_count: int,
+) -> None:
+    """
+    Run session compaction if interval reached: inject prompt, parse MEMORY:/NO_REPLY, ingest to RAG.
+    Does not append compaction reply to chat history or UI.
+    """
+    if not Config.get("memory_enabled", True) or not Config.get("memory_compaction_enabled", True):
+        return
+    interval = int(Config.get("memory_compaction_interval", 15))
+    state = _load_compaction_state()
+    last = state.get(session_id, 0)
+    if current_turn_count - last < interval:
+        return
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    prompt = (
+        "Session nearing compaction. Store durable memories now. "
+        f"Write any lasting notes to memory/{date_str}.md. "
+        "Output all MEMORY lines in English. "
+        "Reply with NO_REPLY if nothing to store."
+    )
+    try:
+        reply = agent._generate_for_compaction(prompt)
+    except Exception as e:
+        logger.warning("Compaction LLM call failed: %s", e)
+        return
+    memories = _parse_memory_reply(reply)
+    if not memories:
+        state[session_id] = current_turn_count
+        _save_compaction_state(state)
+        return
+    async def _ingest_all() -> None:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+            for content in memories:
+                if not content or not content.strip():
+                    continue
+                await pipeline.ingest(
+                    content=content.strip(),
+                    metadata={
+                        "title": f"Compaction {date_str}",
+                        "source": f"memory/{date_str}",
+                        "type": "memory_flush",
+                    },
+                    user_scope_id=user_scope_id,
+                    auto_connect=False,
+                )
+    try:
+        asyncio.run(_ingest_all())
+    except Exception as e:
+        logger.warning("Compaction ingest failed: %s", e)
+    state[session_id] = current_turn_count
+    _save_compaction_state(state)
 
 
 def run_auto_capture_sync(

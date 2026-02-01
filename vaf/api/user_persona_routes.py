@@ -2,11 +2,9 @@
 API Routes for User Persona and Workspace Management.
 
 Endpoints:
-- GET  /api/user/persona  - Get identity, soul, and memory
+- GET  /api/user/persona  - Get identity and soul
 - PUT  /api/user/identity - Update identity.json
 - PUT  /api/user/soul     - Update soul.md
-- PUT  /api/user/memory   - Update MEMORY.md
-- POST /api/user/memory/sync - Trigger RAG re-index of MEMORY.md
 """
 
 import logging
@@ -42,7 +40,6 @@ async def get_persona(username: str = Depends(get_current_username)):
         return {
             "identity": ws.get_identity(),
             "soul": ws.get_soul(),
-            "memory": ws.get_memory_markdown()
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -60,45 +57,3 @@ async def update_soul(data: ContentUpdate, username: str = Depends(get_current_u
     ws = get_user_workspace(username)
     ws.save_soul(data.content)
     return {"status": "success"}
-
-@router.put("/memory")
-async def update_memory(data: ContentUpdate, username: str = Depends(get_current_username)):
-    ws = get_user_workspace(username)
-    ws.save_memory_markdown(data.content)
-    return {"status": "success"}
-
-@router.post("/memory/sync")
-async def sync_memory(request: Request, username: str = Depends(get_current_username)):
-    """Trigger a manual sync of MEMORY.md into the RAG index."""
-    ws = get_user_workspace(username)
-    content = ws.get_memory_markdown()
-    
-    # Get user scope ID
-    user = getattr(request.state, "user", None)
-    scope_id = user.get("user_scope_id") if user else None
-    
-    try:
-        from vaf.memory.database import get_db
-        from vaf.memory.rag import RagPipeline
-        import uuid
-        
-        scope_uuid = uuid.UUID(scope_id) if scope_id else None
-        async with get_db() as db:
-            pipeline = RagPipeline(db)
-            # 1. Replace: delete existing MEMORY.md entries for this user
-            await pipeline.delete_memories_by_source_scope("MEMORY.md", scope_uuid)
-            # 2. Ingest current file content
-            await pipeline.ingest(
-                content=content,
-                metadata={
-                    "title": "Long-term Memory",
-                    "source": "MEMORY.md",
-                    "type": "system_memory"
-                },
-                user_scope_id=scope_uuid
-            )
-            
-        return {"status": "success", "message": "Memory synced to RAG index"}
-    except Exception as e:
-        logger.error(f"Manual sync failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")

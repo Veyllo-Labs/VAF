@@ -35,6 +35,12 @@ def get_model():
 
     if _model is None or _model_name != model_name:
         try:
+            # CRITICAL: Disable CUDA entirely to prevent PyTorch from pre-allocating GPU memory
+            # This MUST happen BEFORE importing torch/sentence_transformers
+            import os
+            os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # Hide GPU from PyTorch
+            os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")  # Limit CUDA allocator
+
             # Log memory BEFORE loading
             mem_before = get_memory_usage_mb()
             logger.info(f"Loading embedding model: {model_name} (Memory before: {mem_before:.0f}MB)")
@@ -376,14 +382,7 @@ def cleanup_embedding_memory():
     # Force garbage collection
     gc.collect()
 
-    # Clear CUDA cache if available
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            logger.info("Cleared CUDA cache")
-    except ImportError:
-        pass  # torch not installed
+    # CUDA cache clearing not needed - CUDA_VISIBLE_DEVICES="" prevents GPU allocation
 
 
 def get_memory_usage_mb() -> float:

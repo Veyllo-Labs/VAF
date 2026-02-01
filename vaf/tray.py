@@ -1,6 +1,13 @@
 
 import os
 import sys
+
+# CRITICAL: Disable CUDA for PyTorch BEFORE any torch import to prevent memory explosion
+# PyTorch pre-allocates GPU memory even when using CPU-only models!
+# This MUST happen at the very beginning of the process.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # Hide GPU from PyTorch
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
+
 import socket
 import subprocess
 from pathlib import Path

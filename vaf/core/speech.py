@@ -19,18 +19,24 @@ from typing import Optional
 from vaf.core.config import Config
 from vaf.cli.ui import UI
 
-# Check for dependencies
-try:
-    import pyttsx3
-    HAS_TTS = True
-except ImportError:
-    HAS_TTS = False
+# NO LOCAL TTS! pyttsx3/comtypes causes 1-4GB RAM explosion via Windows SAPI
+# All TTS must go through Docker (speech_tts_engine=docker or chatterbox)
 
-try:
-    import speech_recognition as sr
-    HAS_STT = True
-except ImportError:
-    HAS_STT = False
+# LAZY IMPORT for speech_recognition (only needed for CLI local STT, not WebUI)
+HAS_STT = None
+_sr = None
+
+def _lazy_load_sr():
+    """Lazy load speech_recognition only when needed (local STT for CLI)."""
+    global HAS_STT, _sr
+    if HAS_STT is None:
+        try:
+            import speech_recognition as sr
+            _sr = sr
+            HAS_STT = True
+        except ImportError:
+            HAS_STT = False
+    return _sr
 
 class SpeechManager:
     _instance = None
@@ -38,7 +44,7 @@ class SpeechManager:
 
     def __init__(self):
         self.config = Config.load()
-        self.tts_engine = None
+        # NO tts_engine - pyttsx3 removed to prevent RAM explosion
         self.stt_recognizer = None
         self.stt_mic = None
         self._is_speaking = False
@@ -66,13 +72,21 @@ class SpeechManager:
         self.bin_dir.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
 
-        if self.is_stt_enabled() and HAS_STT:
-            self.stt_recognizer = sr.Recognizer()
-            self._init_mic()
+        # Lazy: Only init LOCAL STT (microphone) for CLI mode
+        # WebUI uses browser audio -> Docker STT, no local mic needed!
+        if self.is_local_stt_enabled():
+            sr = _lazy_load_sr()
+            if sr:
+                self.stt_recognizer = sr.Recognizer()
+                self._init_mic()
 
     def _init_mic(self):
         """Initialize microphone based on config."""
         try:
+            sr = _lazy_load_sr()
+            if not sr:
+                self.stt_mic = None
+                return
             mic_index = self.config.get("speech_mic_index", None)
             # Ensure index is integer if set
             if mic_index is not None:
@@ -91,15 +105,17 @@ class SpeechManager:
 
     def list_microphones(self) -> list:
         """List available microphones (MME only on Windows for clean list)."""
-        if not HAS_STT: return []
+        sr = _lazy_load_sr()
+        if not sr:
+            return []
         try:
             import pyaudio
             p = pyaudio.PyAudio()
             info = p.get_host_api_info_by_index(0) # 0 is usually MME on Windows
             numdevices = info.get('deviceCount')
-            
+
             filtered = []
-            
+
             for i in range(0, numdevices):
                 device_info = p.get_device_info_by_host_api_device_index(0, i)
                 if device_info.get('maxInputChannels') > 0:
@@ -108,7 +124,7 @@ class SpeechManager:
                     n = name.lower()
                     if "mapper" not in n:
                         filtered.append(f"{i}: {name}")
-            
+
             p.terminate()
             return filtered
         except:
@@ -127,6 +143,18 @@ class SpeechManager:
 
     def is_stt_enabled(self) -> bool:
         return bool(self.config.get("speech_stt_enabled") or self.config.get("stt_enabled", False))
+
+    def is_local_stt_enabled(self) -> bool:
+        """Check if LOCAL STT (speech_recognition + microphone) is needed.
+
+        Local STT is only needed for CLI mode.
+        WebUI uses browser audio -> Docker STT, no local microphone needed.
+        """
+        if not self.is_stt_enabled():
+            return False
+        # If engine is "docker", we don't need local STT at all
+        engine = self.config.get("speech_stt_engine", "docker")
+        return engine != "docker"
 
     def _get_piper_binary(self) -> Optional[Path]:
         """Get path to piper binary depending on OS."""
@@ -464,14 +492,18 @@ $player.Close()
         preferred_engine = (force_engine or self.config.get("speech_tts_engine", "docker")).lower()
         lang_short = (lang or "en")[:2].lower()
 
-        # Docker TTS: HTTP service (e.g. Piper in Docker). Multi-language: URL per lang (de/en/fr) or fallback.
-        if preferred_engine == "docker":
-            url_by_lang = {
-                "de": self.config.get("speech_tts_docker_url_de"),
-                "en": self.config.get("speech_tts_docker_url_en"),
-                "fr": self.config.get("speech_tts_docker_url_fr"),
-            }
-            url = (url_by_lang.get(lang_short) or self.config.get("speech_tts_docker_url") or "").strip().rstrip("/")
+        # Docker/Chatterbox TTS: HTTP service (e.g. Piper in Docker or Chatterbox). Multi-language: URL per lang (de/en/fr) or fallback.
+        if preferred_engine in ("docker", "chatterbox"):
+            # Chatterbox has its own URL config
+            if preferred_engine == "chatterbox":
+                url = (self.config.get("speech_tts_chatterbox_url") or "http://localhost:4123").strip().rstrip("/")
+            else:
+                url_by_lang = {
+                    "de": self.config.get("speech_tts_docker_url_de"),
+                    "en": self.config.get("speech_tts_docker_url_en"),
+                    "fr": self.config.get("speech_tts_docker_url_fr"),
+                }
+                url = (url_by_lang.get(lang_short) or self.config.get("speech_tts_docker_url") or "").strip().rstrip("/")
             if url:
                 try:
                     import urllib.request
@@ -573,24 +605,17 @@ $player.Close()
             except:
                 pass
                     
-        # pyttsx3 stop
-        if self.tts_engine:
-            try:
-                self.tts_engine.stop()
-            except:
-                pass
+        # NO pyttsx3 - removed to prevent RAM explosion
 
     def release_tts_resources(self):
         """
         Release TTS-related resources to free memory (e.g. during emergency cleanup).
-        Stops any playback, kills Piper subprocess, and drops pyttsx3 engine reference.
-        Next TTS use will re-initialize as needed.
+        Stops any playback, kills Piper subprocess.
         """
         self.stop()
-        self.tts_engine = None
 
     def speak(self, text: str, lang: str = "auto"):
-        """Speak text using Piper (High Quality Offline) or pyttsx3 (Fallback)."""
+        """Speak text using Docker TTS or Piper. NO local pyttsx3 (causes RAM explosion)."""
         if not self.is_tts_enabled(): return
 
         clean_text = self._clean_markdown(text)
@@ -616,9 +641,10 @@ $player.Close()
 
                 # Check user's preferred TTS engine
                 preferred_engine = self.config.get("speech_tts_engine", "docker")
-                
-                # 1a. Docker TTS (HTTP service – no local model, good for Docker stack)
-                if preferred_engine == "docker":
+
+                # 1a. Docker/Chatterbox TTS (HTTP service – no local model, good for Docker stack)
+                # "chatterbox" is also HTTP-based, treat it like docker
+                if preferred_engine in ("docker", "chatterbox"):
                     audio_bytes = self.synthesize_audio(clean_text, lang)
                     if audio_bytes:
                         try:
@@ -736,70 +762,12 @@ $player.Close()
                         # If 'say' fails, we are really out of options
                         pass
                 
-                elif HAS_TTS:
-                    try:
-                        import pythoncom
-                        pythoncom.CoInitialize()
-                    except ImportError: pass
-
-                    # Note: _lock is already held by _tts_lock, so we use _is_speaking flag instead
-                    self._is_speaking = True
-                    try:
-                        engine = pyttsx3.init()
-                        self.tts_engine = engine  # Store reference for stop()
-                        engine.setProperty('rate', 160)
-                        
-                        # Voice selection - platform-specific logic
-                        voices = engine.getProperty('voices')
-                        target = None
-                        
-                        # macOS: Prefer high-quality Apple voices
-                        if platform.system().lower() == "darwin":
-                            # Best voices on macOS (in order of preference)
-                            if lang.startswith("de"):
-                                # German: Anna (compact, high quality) > others
-                                preferred = ["anna", "compact.de", "german"]
-                            else:
-                                # English: Samantha (compact, high quality) > Siri > Alex
-                                preferred = ["samantha", "compact.en-us", "siri", "alex", "english"]
-                            
-                            # Try to find preferred voice
-                            for pref in preferred:
-                                for v in voices:
-                                    if pref in v.name.lower() or pref in str(v.id).lower():
-                                        target = v.id
-                                        break
-                                if target:
-                                    break
-                        else:
-                            # Windows/Linux: Use existing logic
-                            search = ["german", "de_DE"] if lang.startswith("de") else ["english", "en_US"]
-                            for v in voices:
-                                if any(s in v.name.lower() or s in str(v.id).lower() for s in search):
-                                    target = v.id
-                                    break
-                        
-                        if target:
-                            engine.setProperty('voice', target)
-                        
-                        if self.on_speech_start:
-                            try: self.on_speech_start(clean_text)
-                            except: pass
-
-                        engine.say(clean_text)
-                        engine.runAndWait()
-                        
-                        if self.on_speech_end:
-                            try: self.on_speech_end()
-                            except: pass
-
-                    except: pass
-                    finally:
-                        self._is_speaking = False
-                        try:
-                            pythoncom.CoUninitialize()
-                        except:
-                            pass
+                else:
+                    # NO LOCAL TTS! pyttsx3 causes 1-4GB RAM explosion via Windows SAPI/comtypes
+                    # User must use Docker TTS (speech_tts_engine=docker or chatterbox)
+                    from vaf.cli.ui import UI
+                    UI.warning("Local TTS disabled (causes RAM explosion). Use Docker TTS instead.")
+                    return
 
         threading.Thread(target=_speak_worker, daemon=True).start()
 
@@ -904,16 +872,20 @@ $player.Close()
                 UI.print("[dim]Processing...[/dim]")
                 
                 # Convert frames to AudioData
+                sr = _lazy_load_sr()
+                if not sr:
+                    UI.error("speech_recognition not available")
+                    return None
                 frame_data = b"".join(frames)
                 audio = sr.AudioData(frame_data, source.SAMPLE_RATE, source.SAMPLE_WIDTH)
-                
+
                 try:
                     text = self.stt_recognizer.recognize_google(audio, language=locale)
-                    
+
                     # SUCCESS! Play success sound
                     if text:
                         self._play_success_sound()
-                    
+
                     return text
                 except sr.UnknownValueError:
                     UI.warning("Audio captured but not understood (UnknownValueError).")

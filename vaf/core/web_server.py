@@ -1460,9 +1460,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         loop = asyncio.get_running_loop()
                         
                         try:
+                            # Use configured TTS engine (docker, chatterbox, etc.) - don't force "docker"
+                            # WebUI should respect user's speech_tts_engine setting
+                            configured_engine = Config.get("speech_tts_engine", "docker")
+                            # Only use HTTP-based engines for WebUI (docker, chatterbox)
+                            # If user has "piper" or "system", fall back to docker for WebUI
+                            if configured_engine not in ("docker", "chatterbox"):
+                                configured_engine = "docker"
                             audio_bytes = await loop.run_in_executor(
                                 None,
-                                lambda: sm.synthesize_audio(text, lang, force_engine="docker"),
+                                lambda: sm.synthesize_audio(text, lang, force_engine=configured_engine),
                             )
                             
                             if audio_bytes:

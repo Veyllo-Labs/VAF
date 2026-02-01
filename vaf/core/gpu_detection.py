@@ -115,14 +115,10 @@ def _check_cuda_available() -> bool:
             if os.path.exists(path):
                 return True
     
-    # Try to import PyTorch CUDA as fallback check
-    try:
-        import torch
-        if torch.cuda.is_available():
-            return True
-    except ImportError:
-        pass
-    
+    # REMOVED: PyTorch fallback check - importing torch causes 1GB+ RAM explosion!
+    # The DLL/library checks above are sufficient for CUDA detection.
+    # If someone needs torch, the embedding model will handle CUDA_VISIBLE_DEVICES.
+
     return False
 
 

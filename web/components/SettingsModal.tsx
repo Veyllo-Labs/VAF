@@ -1,16 +1,25 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
-import ReactFlow, { 
-    Background, 
-    Controls, 
-    MiniMap, 
-    useNodesState, 
+import React, { useState, useEffect, useCallback, lazy, Suspense, useMemo } from 'react';
+// PERFORMANCE: Lazy load ReactFlow - it's heavy and only needed for specific modals
+const ReactFlow = lazy(() => import('reactflow').then(mod => ({ default: mod.default })));
+import {
+    Background,
+    Controls,
+    MiniMap,
+    useNodesState,
     useEdgesState,
     Position,
     MarkerType
 } from 'reactflow';
 import 'reactflow/dist/style.css';
+
+// Loading fallback for lazy-loaded ReactFlow
+const ReactFlowFallback = () => (
+    <div className="flex items-center justify-center h-full bg-gray-50">
+        <div className="animate-pulse text-gray-400">Loading visualization...</div>
+    </div>
+);
 import {
     X, Globe, Cpu, Volume2, Monitor, Shield, Save, RotateCcw,
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch,
@@ -1759,22 +1768,24 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         
                         {/* Content Split View */}
                         <div className="flex-1 flex overflow-hidden">
-                            {/* Left: ReactFlow Canvas */}
+                            {/* Left: ReactFlow Canvas - Lazy loaded */}
                             <div className="flex-1 bg-gray-50 relative border-r border-gray-200">
-                                <ReactFlow
-                                    nodes={nodes}
-                                    edges={edges}
-                                    onNodesChange={onNodesChange}
-                                    onEdgesChange={onEdgesChange}
-                                    onNodeClick={onNodeClick}
-                                    nodesDraggable={false}
-                                    fitView
-                                    fitViewOptions={{ padding: 0.2 }}
-                                    proOptions={{ hideAttribution: true }}
-                                >
-                                    <Background color="#ccc" gap={20} />
-                                    <Controls />
-                                </ReactFlow>
+                                <Suspense fallback={<ReactFlowFallback />}>
+                                    <ReactFlow
+                                        nodes={nodes}
+                                        edges={edges}
+                                        onNodesChange={onNodesChange}
+                                        onEdgesChange={onEdgesChange}
+                                        onNodeClick={onNodeClick}
+                                        nodesDraggable={false}
+                                        fitView
+                                        fitViewOptions={{ padding: 0.2 }}
+                                        proOptions={{ hideAttribution: true }}
+                                    >
+                                        <Background color="#ccc" gap={20} />
+                                        <Controls />
+                                    </ReactFlow>
+                                </Suspense>
                             </div>
 
                             {/* Right: Code Viewer (Fixed 30%) */}
@@ -1891,67 +1902,69 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </div>
                                 </div>
                             ) : (
-                                <ReactFlow
-                                    nodes={memoryNodes.map((node, i) => ({
-                                        id: node.id,
-                                        type: 'default',
-                                        position: node.position || { x: (i % 5) * 280, y: Math.floor(i / 5) * 180 },
-                                        data: { 
-                                            label: (
-                                                <div className="text-left p-1">
-                                                    <div className="font-medium text-gray-800 text-sm truncate max-w-[180px]">
-                                                        {node.data?.label || 'Untitled'}
-                                                    </div>
-                                                    {node.data?.preview && (
-                                                        <div className="text-xs text-gray-500 truncate max-w-[180px] mt-0.5">
-                                                            {node.data.preview}
+                                <Suspense fallback={<ReactFlowFallback />}>
+                                    <ReactFlow
+                                        nodes={memoryNodes.map((node, i) => ({
+                                            id: node.id,
+                                            type: 'default',
+                                            position: node.position || { x: (i % 5) * 280, y: Math.floor(i / 5) * 180 },
+                                            data: {
+                                                label: (
+                                                    <div className="text-left p-1">
+                                                        <div className="font-medium text-gray-800 text-sm truncate max-w-[180px]">
+                                                            {node.data?.label || 'Untitled'}
                                                         </div>
-                                                    )}
-                                                    <div className="flex items-center gap-2 mt-1 text-[10px] text-gray-400">
-                                                        <span>{node.data?.chunkCount || 0} chunks</span>
-                                                        {node.data?.tags?.length > 0 && (
-                                                            <span className="px-1.5 py-0.5 bg-gray-100 rounded">
-                                                                {node.data.tags[0]}
-                                                            </span>
+                                                        {node.data?.preview && (
+                                                            <div className="text-xs text-gray-500 truncate max-w-[180px] mt-0.5">
+                                                                {node.data.preview}
+                                                            </div>
                                                         )}
+                                                        <div className="flex items-center gap-2 mt-1 text-[10px] text-gray-400">
+                                                            <span>{node.data?.chunkCount || 0} chunks</span>
+                                                            {node.data?.tags?.length > 0 && (
+                                                                <span className="px-1.5 py-0.5 bg-gray-100 rounded">
+                                                                    {node.data.tags[0]}
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                     </div>
-                                                </div>
-                                            )
-                                        },
-                                        style: {
-                                            background: node.data?.isHighlighted ? '#fef3c7' : 'white',
-                                            border: node.data?.isHighlighted ? '2px solid #f59e0b' : '1px solid #e5e7eb',
-                                            borderRadius: '12px',
-                                            padding: '8px',
-                                            minWidth: '200px',
-                                        }
-                                    }))}
-                                    edges={memoryEdges.map(edge => ({
-                                        id: edge.id,
-                                        source: edge.source,
-                                        target: edge.target,
-                                        type: 'smoothstep',
-                                        animated: edge.data?.connectionType === 'semantic',
-                                        style: {
-                                            stroke: edge.data?.connectionType === 'semantic' ? '#6b7280' : '#9ca3af',
-                                            strokeWidth: Math.max(1, (edge.data?.strength || 0.5) * 3),
-                                            opacity: 0.6,
-                                        },
-                                        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
-                                    }))}
-                                    fitView
-                                    fitViewOptions={{ padding: 0.3 }}
-                                    proOptions={{ hideAttribution: true }}
-                                    defaultEdgeOptions={{ type: 'smoothstep' }}
-                                >
-                                    <Background color="#e5e7eb" gap={24} />
-                                    <Controls className="bg-white rounded-lg shadow-lg" />
-                                    <MiniMap 
-                                        nodeColor={(node) => node.style?.background === '#fef3c7' ? '#eab308' : '#374151'}
-                                        maskColor="rgba(0, 0, 0, 0.1)"
-                                        className="bg-white rounded-lg shadow-lg"
-                                    />
-                                </ReactFlow>
+                                                )
+                                            },
+                                            style: {
+                                                background: node.data?.isHighlighted ? '#fef3c7' : 'white',
+                                                border: node.data?.isHighlighted ? '2px solid #f59e0b' : '1px solid #e5e7eb',
+                                                borderRadius: '12px',
+                                                padding: '8px',
+                                                minWidth: '200px',
+                                            }
+                                        }))}
+                                        edges={memoryEdges.map(edge => ({
+                                            id: edge.id,
+                                            source: edge.source,
+                                            target: edge.target,
+                                            type: 'smoothstep',
+                                            animated: edge.data?.connectionType === 'semantic',
+                                            style: {
+                                                stroke: edge.data?.connectionType === 'semantic' ? '#6b7280' : '#9ca3af',
+                                                strokeWidth: Math.max(1, (edge.data?.strength || 0.5) * 3),
+                                                opacity: 0.6,
+                                            },
+                                            markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
+                                        }))}
+                                        fitView
+                                        fitViewOptions={{ padding: 0.3 }}
+                                        proOptions={{ hideAttribution: true }}
+                                        defaultEdgeOptions={{ type: 'smoothstep' }}
+                                    >
+                                        <Background color="#e5e7eb" gap={24} />
+                                        <Controls className="bg-white rounded-lg shadow-lg" />
+                                        <MiniMap
+                                            nodeColor={(node) => node.style?.background === '#fef3c7' ? '#eab308' : '#374151'}
+                                            maskColor="rgba(0, 0, 0, 0.1)"
+                                            className="bg-white rounded-lg shadow-lg"
+                                        />
+                                    </ReactFlow>
+                                </Suspense>
                             )}
                         </div>
 
@@ -2432,25 +2445,27 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </div>
                         </div>
                         
-                        {/* Graph Content */}
+                        {/* Graph Content - Lazy loaded */}
                         <div className="flex-1 overflow-hidden bg-gray-50 relative">
-                             <ReactFlow
-                                nodes={networkNodes}
-                                edges={networkEdges}
-                                onNodesChange={onNetworkNodesChange}
-                                onEdgesChange={onNetworkEdgesChange}
-                                fitView
-                                fitViewOptions={{ padding: 0.2 }}
-                                proOptions={{ hideAttribution: true }}
-                            >
-                                <Background color="#e5e7eb" gap={20} />
-                                <Controls className="bg-white border-gray-200 shadow-sm text-gray-500" />
-                                <MiniMap 
-                                    nodeColor={() => '#3b82f6'}
-                                    maskColor="rgba(243, 244, 246, 0.7)"
-                                    className="bg-white border-gray-200 shadow-sm"
-                                />
-                            </ReactFlow>
+                            <Suspense fallback={<ReactFlowFallback />}>
+                                <ReactFlow
+                                    nodes={networkNodes}
+                                    edges={networkEdges}
+                                    onNodesChange={onNetworkNodesChange}
+                                    onEdgesChange={onNetworkEdgesChange}
+                                    fitView
+                                    fitViewOptions={{ padding: 0.2 }}
+                                    proOptions={{ hideAttribution: true }}
+                                >
+                                    <Background color="#e5e7eb" gap={20} />
+                                    <Controls className="bg-white border-gray-200 shadow-sm text-gray-500" />
+                                    <MiniMap
+                                        nodeColor={() => '#3b82f6'}
+                                        maskColor="rgba(243, 244, 246, 0.7)"
+                                        className="bg-white border-gray-200 shadow-sm"
+                                    />
+                                </ReactFlow>
+                            </Suspense>
 
                             {/* Legend Overlay */}
                             <div className="absolute top-6 left-6 p-4 bg-white/90 backdrop-blur rounded-xl border border-gray-200 shadow-lg space-y-3 z-10">

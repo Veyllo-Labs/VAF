@@ -146,9 +146,12 @@ class MemoryProfiler:
 
         # Unload Whisper STT model (can be 1–20GB+; native allocs not freed by gc alone)
         try:
-            from vaf.core.web_server import unload_whisper_model
-            unload_whisper_model()
-            self._log("  - Unloaded Whisper model")
+            from vaf.core.web_server import unload_whisper_model, _whisper_model
+            if _whisper_model is not None:
+                unload_whisper_model()
+                self._log("  - Unloaded Whisper model")
+            else:
+                self._log("  - Whisper model not loaded (skipped)")
         except Exception as e:
             self._log(f"  - Whisper unload failed: {e}")
 
@@ -165,14 +168,8 @@ class MemoryProfiler:
             collected = gc.collect()
             self._log(f"  - GC pass {i+1}: collected {collected} objects")
 
-        # Clear CUDA if available
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                self._log("  - Cleared CUDA cache")
-        except ImportError:
-            pass
+        # REMOVED: torch import causes 1GB+ RAM explosion!
+        # CUDA cache clearing not needed when CUDA_VISIBLE_DEVICES="" is set
 
         after = self._get_memory_mb()
         self._log(f"  - Cleanup result: {before:.0f}MB → {after:.0f}MB (freed {before-after:.0f}MB)")

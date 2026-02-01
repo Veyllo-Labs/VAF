@@ -130,8 +130,11 @@ class RagPipeline:
         encrypted_content, nonce = self.crypto.encrypt(content)
         
         # 2. Create memory embedding (from title/summary)
+        # Note: Only E5 models need prefix; MiniLM works without
+        model_name = self.embeddings.model_name or ""
+        use_prefix = "e5" in model_name.lower()
         summary = f"{metadata.get('title', '')} {' '.join(metadata.get('tags', []))}"
-        memory_embedding = await self.embeddings.embed(summary, prefix="passage")
+        memory_embedding = await self.embeddings.embed(summary, prefix="passage" if use_prefix else None)
         
         # 3. Create memory record
         memory = Memory(
@@ -151,7 +154,7 @@ class RagPipeline:
         
         if chunks_data:
             chunk_texts = [c["text"] for c in chunks_data]
-            chunk_embeddings = await self.embeddings.embed_batch(chunk_texts, prefix="passage")
+            chunk_embeddings = await self.embeddings.embed_batch(chunk_texts, prefix="passage" if use_prefix else None)
             
             for chunk_data, embedding in zip(chunks_data, chunk_embeddings):
                 chunk = Chunk(
@@ -199,25 +202,30 @@ class RagPipeline:
         self,
         query: str,
         k: int = 5,
-        threshold: float = 0.5,
+        threshold: float = 0.3,  # Lowered from 0.5 to allow more matches
         metadata_filter: Optional[Dict[str, Any]] = None,
         user_scope_id: Optional[UUID] = None
     ) -> List[RagSource]:
         """
         Search for relevant memories using vector similarity.
-        
+
         Args:
             query: Search query
             k: Number of results to return
             threshold: Minimum similarity threshold (0-1)
             metadata_filter: Optional metadata filter
             user_scope_id: Optional user scope filter
-            
+
         Returns:
             List of RagSource objects
         """
-        # Embed query (E5: use "query" prefix for best retrieval)
-        query_embedding = await self.embeddings.embed(query, prefix="query")
+        # Embed query - NO prefix for MiniLM (only E5 needs prefix)
+        model_name = self.embeddings.model_name or ""
+        use_prefix = "e5" in model_name.lower()
+        query_embedding = await self.embeddings.embed(query, prefix="query" if use_prefix else None)
+
+        # Debug logging
+        logger.info(f"RAG search: query='{query[:50]}...', user_scope_id={user_scope_id}, threshold={threshold}")
         
         # Convert threshold to distance (cosine distance = 1 - similarity)
         max_distance = 1.0 - threshold
@@ -281,7 +289,24 @@ class RagPipeline:
             seen_memories.add(str(memory.id))
         
         logger.info(f"Search found {len(sources)} relevant chunks from {len(seen_memories)} memories")
-        
+
+        # Debug: Log to file
+        try:
+            from pathlib import Path
+            from datetime import datetime
+            log_dir = Path(__file__).resolve().parents[2] / "logs"
+            with open(log_dir / "rag_search_debug.log", "a", encoding="utf-8") as f:
+                f.write(f"{datetime.now().isoformat()} Query: '{query[:100]}'\n")
+                f.write(f"  user_scope_id: {user_scope_id}\n")
+                f.write(f"  threshold: {threshold}, max_distance: {max_distance}\n")
+                f.write(f"  Results: {len(sources)} chunks from {len(seen_memories)} memories\n")
+                if sources:
+                    for s in sources[:3]:
+                        f.write(f"    - Score {s.score:.2%}: {s.text[:60]}...\n")
+                f.write("\n")
+        except Exception:
+            pass
+
         return sources
     
     async def query(

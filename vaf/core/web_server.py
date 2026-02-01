@@ -48,6 +48,56 @@ app.add_middleware(
 
 log("WebServer", "Getting WebInterfaceManager...")
 manager = get_web_interface()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WHISPER MODEL SINGLETON - Prevents memory leak from reloading model per request
+# ═══════════════════════════════════════════════════════════════════════════════
+_whisper_model = None
+_whisper_model_lock = threading.Lock()
+
+def get_whisper_model():
+    """Get or lazily load the Whisper STT model (singleton)."""
+    global _whisper_model
+    if _whisper_model is None:
+        with _whisper_model_lock:
+            if _whisper_model is None:  # Double-check
+                try:
+                    import importlib
+                    import psutil
+
+                    mem_before = psutil.Process().memory_info().rss / (1024 * 1024)
+                    log("WebServer", f"Loading WhisperModel (base, CPU, int8) - Memory before: {mem_before:.0f}MB")
+
+                    whisper_module = importlib.import_module("faster_whisper")
+                    WhisperModel = getattr(whisper_module, "WhisperModel")
+                    _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+
+                    mem_after = psutil.Process().memory_info().rss / (1024 * 1024)
+                    log("WebServer", f"WhisperModel loaded - Memory after: {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)")
+
+                    # Log to file
+                    try:
+                        from datetime import datetime
+                        log_dir = Path(__file__).resolve().parents[2] / "logs"
+                        with open(log_dir / "whisper_load.log", "a") as f:
+                            f.write(f"{datetime.now().isoformat()} WhisperModel: {mem_before:.0f}MB -> {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)\n")
+                    except:
+                        pass
+
+                except ImportError:
+                    raise ImportError("faster-whisper not installed. Install with: pip install faster-whisper")
+    return _whisper_model
+
+def unload_whisper_model():
+    """Unload Whisper model to free memory."""
+    global _whisper_model
+    with _whisper_model_lock:
+        if _whisper_model is not None:
+            del _whisper_model
+            _whisper_model = None
+            import gc
+            gc.collect()
+            log("WebServer", "WhisperModel unloaded")
 log("WebServer", "Getting SessionManager...")
 session_mgr = SessionManager()
 log("WebServer", "SmartAutoSuggest will be lazy loaded...")
@@ -1312,23 +1362,19 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 })
                                 continue
                             
-                            # OFFLINE STT: faster-whisper
+                            # OFFLINE STT: faster-whisper (SINGLETON - prevents memory leak!)
                             try:
-                                print("DEBUG: Using faster-whisper (OFFLINE)...") # DEBUG
-                                import importlib
-                                whisper_module = importlib.import_module("faster_whisper")
-                                WhisperModel = getattr(whisper_module, "WhisperModel")
-                                
-                                # Initialize model (base = good speed/accuracy balance)
-                                print("DEBUG: Initializing WhisperModel (base, offline)...") # DEBUG
-                                model = WhisperModel("base", device="cpu", compute_type="int8")
-                                
+                                print("DEBUG: Using faster-whisper (OFFLINE, SINGLETON)...") # DEBUG
+
+                                # Use singleton model to prevent memory leak
+                                model = get_whisper_model()
+
                                 # Transcribe
                                 print(f"DEBUG: Transcribing {temp_path}...") # DEBUG
                                 segments, info = model.transcribe(temp_path, beam_size=5)
                                 text = " ".join([segment.text for segment in segments])
                                 print(f"DEBUG: Transcription result: '{text}'") # DEBUG
-                                
+
                                 await websocket.send_json({
                                     "type": "stt_result",
                                     "text": text.strip()

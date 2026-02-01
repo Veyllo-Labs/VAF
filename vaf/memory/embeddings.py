@@ -2,9 +2,11 @@
 Embedding service for VAF Memory System.
 
 Uses sentence-transformers for text embeddings.
-Recommended multilingual (DE/EN and 100 languages): intfloat/multilingual-e5-small (384-dim, MTEB).
-Legacy English-only: all-MiniLM-L6-v2 (384-dim, fast).
+Default: all-MiniLM-L6-v2 (384-dim, fast, ~90MB RAM).
+Alternative multilingual: intfloat/multilingual-e5-small (384-dim, ~500MB RAM).
 E5 models require "query: "/"passage: " prefix for best retrieval; we add it automatically.
+
+IMPORTANT: Models are loaded on CPU only to prevent CUDA memory issues.
 """
 
 import asyncio
@@ -24,26 +26,46 @@ _model_name = None
 def get_model():
     """
     Get or load the sentence-transformers model.
-    
+
     Uses lazy loading to avoid importing heavy dependencies at startup.
     """
     global _model, _model_name
-    
-    model_name = Config.get("memory_embedding_model", "intfloat/multilingual-e5-small")
-    
+
+    model_name = Config.get("memory_embedding_model", "all-MiniLM-L6-v2")
+
     if _model is None or _model_name != model_name:
         try:
+            # Log memory BEFORE loading
+            mem_before = get_memory_usage_mb()
+            logger.info(f"Loading embedding model: {model_name} (Memory before: {mem_before:.0f}MB)")
+
             from sentence_transformers import SentenceTransformer
-            logger.info(f"Loading embedding model: {model_name}")
-            _model = SentenceTransformer(model_name)
+
+            # CRITICAL: Load model on CPU only to prevent CUDA memory explosion
+            _model = SentenceTransformer(model_name, device="cpu")
             _model_name = model_name
-            logger.info(f"Embedding model loaded: {model_name}")
+
+            # Log memory AFTER loading
+            mem_after = get_memory_usage_mb()
+            logger.info(f"Embedding model loaded: {model_name} (Memory after: {mem_after:.0f}MB, delta: {mem_after-mem_before:.0f}MB)")
+
+            # Write to debug log
+            try:
+                from pathlib import Path
+                from datetime import datetime
+                log_dir = Path(__file__).resolve().parents[2] / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                with open(log_dir / "embedding_load.log", "a", encoding="utf-8") as f:
+                    f.write(f"{datetime.now().isoformat()} Loaded {model_name}: {mem_before:.0f}MB -> {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)\n")
+            except:
+                pass
+
         except ImportError:
             raise ImportError(
                 "sentence-transformers is required for embeddings. "
                 "Install with: pip install sentence-transformers"
             )
-    
+
     return _model
 
 
@@ -68,7 +90,7 @@ class EmbeddingService:
         Args:
             model_name: Override model name from config
         """
-        self.model_name = model_name or Config.get("memory_embedding_model", "intfloat/multilingual-e5-small")
+        self.model_name = model_name or Config.get("memory_embedding_model", "all-MiniLM-L6-v2")
         self._cache: Dict[str, List[float]] = {}
         self._cache_keys: List[str] = []
         self._redis_cache = None

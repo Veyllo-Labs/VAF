@@ -22,7 +22,7 @@ class ServerManager:
     # For reliability, let's use a specific build tag that we know exists
     LLAMA_TAG = "b4320" 
     
-    def __init__(self):
+    def __init__(self, skip_cleanup: bool = False):
         self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.bin_dir = os.path.join(self.base_dir, "bin")
         self.process = None
@@ -42,8 +42,9 @@ class ServerManager:
              
         self.server_path = os.path.join(self.bin_dir, self.server_exe)
         
-        # Cleanup any orphaned server from previous crash
-        self._cleanup_orphan_server()
+        # Cleanup any orphaned server from previous crash (unless skipped)
+        if not skip_cleanup:
+            self._cleanup_orphan_server()
         
         # Windows: Create Job Object to ensure child process terminates with parent
         if self.system == "Windows":
@@ -148,7 +149,7 @@ class ServerManager:
                 # WICHTIG: Prüfe zuerst, ob der Server noch antwortet
                 # Wenn er antwortet, ist er NICHT orphaned, sondern aktiv!
                 try:
-                    response = requests.get("http://127.0.0.1:8080/health", timeout=1)
+                    response = requests.get("http://127.0.0.1:8080/health", timeout=2)
                     if response.status_code == 200:
                         # Server läuft und antwortet - NICHT orphaned, sondern aktiv!
                         # Lass ihn laufen, entferne nur die PID-Datei nicht
@@ -578,6 +579,26 @@ class ServerManager:
             else:
                 mode_msg = "CPU Sequential (1 Slot - RAM Limited)"
             
+        # SAFETY OVERRIDE: 10GB Cards (like RTX 3080) often spill over with 2 slots + large context
+        # Enforce 1 slot if VRAM < 12GB to be safe, unless user overrides.
+        if gpu and gpu.vram_mb > 0 and gpu.vram_mb < 12000 and final_parallel > 1:
+            final_parallel = 1
+            final_total_ctx = n_ctx # Reset context to single sequence
+            mode_msg = "GPU Sequential (1 Slot - VRAM < 12GB Safety)"
+
+        # USER CONFIG OVERRIDE
+        # Allow user to explicitly set n_parallel in config (e.g. to force 1 or try 4)
+        config_parallel = Config.get("n_parallel")
+        if config_parallel:
+            try:
+                p_val = int(config_parallel)
+                if p_val > 0:
+                    final_parallel = p_val
+                    final_total_ctx = n_ctx * final_parallel
+                    mode_msg = f"User Configured ({final_parallel} Slots)"
+            except ValueError:
+                pass
+
         UI.event("System", f"Config: {mode_msg}", style="dim")
         if gpu and gpu.vram_mb > 0:
             UI.event("System", f"VRAM: {vram_gb:.1f}GB | Est. 2-Slot Need: {cost_2_slots_vram:.1f}GB", style="dim")
@@ -603,7 +624,8 @@ class ServerManager:
             # - --reasoning-format deepseek: Parses <think>...</think> blocks into reasoning_content field
             "--jinja",
             "--reasoning-format", "deepseek",
-            "--verbose" # Helpful for debug output in console
+            # Keep server.log small: default verbosity (3=info) or 2=warning; --verbose would log every token -> 14+ MB
+            "--log-verbosity", "2",
         ]
         
         # Log the command for debugging

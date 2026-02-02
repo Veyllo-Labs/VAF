@@ -508,7 +508,7 @@ def compress(self, history: List[Dict]) -> List[Dict]:
     # 2. Update Intent and State from ALL messages
     for msg in history:
         if msg.get("role") == "user":
-            self.update_intent(msg.get("content", ""))
+            self.update_intent(msg.get("content", ""))  # Session goal (user_intent), not preferences/language
         self.update_state(msg)
     
     # 3. Build compressed history

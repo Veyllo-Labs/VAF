@@ -208,6 +208,10 @@ class MemorySearchTool(BaseTool):
         query = (kwargs.get("query") or "").strip()
         if not query:
             return "Error: query is required."
+        # Avoid huge RAG query (e.g. model passing full thinking) → RAM spike in embeddings
+        from vaf.memory.embeddings import MAX_EMBED_INPUT_CHARS
+        if len(query) > MAX_EMBED_INPUT_CHARS:
+            query = query[:MAX_EMBED_INPUT_CHARS].rstrip()
         k = int(kwargs.get("k") or 5)
         k = max(1, min(k, 20))
         user_scope_id = kwargs.get("user_scope_id")

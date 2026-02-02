@@ -237,7 +237,8 @@ class FrontendManager:
             except: pass
 
             # Log file
-            log_dir = os.path.join(os.getcwd(), "logs")
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            log_dir = os.path.join(base_dir, "logs")
             os.makedirs(log_dir, exist_ok=True)
             log_file = os.path.join(log_dir, "web_debug.log")
 
@@ -270,6 +271,24 @@ class FrontendManager:
             # Assign process to Job Object (all children will be tracked)
             if self._job_handle:
                 self._assign_process_to_job(self.process)
+
+            # Wait until the frontend is actually listening (critical after reboot: npm can take 20–60s)
+            wait_timeout = 90
+            wait_interval = 1.5
+            elapsed = 0
+            while elapsed < wait_timeout:
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.settimeout(1)
+                        if s.connect_ex((host if host != "0.0.0.0" else "127.0.0.1", port)) == 0:
+                            self._log(f"Frontend ready on port {port} after {elapsed:.0f}s", "dim", log_callback)
+                            break
+                except Exception:
+                    pass
+                time.sleep(wait_interval)
+                elapsed += wait_interval
+            if elapsed >= wait_timeout:
+                self._log(f"Frontend port {port} not ready after {wait_timeout}s (browser may open to loading page)", "warning", log_callback)
 
             self.port = port
             return port

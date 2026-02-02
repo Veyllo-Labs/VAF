@@ -970,7 +970,31 @@ if platform.system() != "Darwin" or "rumps" not in sys.modules:
             from vaf.core.frontend_manager import FrontendManager
             auto_open = Config.get("web_ui_enabled", True)
             port = FrontendManager().start_frontend(log_callback=lambda msg, style: log("Frontend", msg))
+            if not port:
+                # After reboot, PATH/npm may not be ready yet; retry once after a short delay
+                log("Tray", "Frontend start failed, retrying in 10s (e.g. after reboot)...")
+                time.sleep(10)
+                port = FrontendManager().start_frontend(log_callback=lambda msg, style: log("Frontend", msg))
             if port:
+                # Wait for backend (Uvicorn on 8001) to be reachable so the Web UI can call the API
+                log("Tray", "Waiting for backend (port 8001) to be reachable...")
+                backend_ready = False
+                for _ in range(60):
+                    try:
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(1)
+                        if sock.connect_ex(("127.0.0.1", 8001)) == 0:
+                            backend_ready = True
+                            sock.close()
+                            break
+                        sock.close()
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                if backend_ready:
+                    log("Tray", "Backend (8001) is reachable")
+                else:
+                    log("Tray", "Backend (8001) not ready after 30s; opening Web UI anyway")
                 print(f"[Tray] Frontend started on port {port}, opening browser...")
                 log("Tray", f"Frontend started on port {port}")
                 if auto_open:

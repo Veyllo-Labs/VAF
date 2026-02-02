@@ -291,9 +291,12 @@ class Agent:
         """
         Initializes and returns a lightweight Llama instance for tokenization.
         Caches the instance to avoid re-initialization.
+        When use_server is True we must never load the library (~8–18 GB); caller uses estimation or server /tokenize.
         """
         if self._tokenizer_instance:
             return self._tokenizer_instance
+        if getattr(self, "use_server", False):
+            return None
 
         try:
             from llama_cpp import Llama  # type: ignore[import-untyped]
@@ -312,6 +315,14 @@ class Agent:
             # No GPU layers, minimal context, no verbose logging
             # This should only load the vocabulary and not the full model weights into VRAM.
             UI.event("System", "Initializing tokenizer...", style="dim")
+            try:
+                log_dir = _get_debug_log_dir()
+                log_dir.mkdir(parents=True, exist_ok=True)
+                from datetime import datetime as _dt
+                with open(log_dir / "llm_backend.log", "a", encoding="utf-8") as f:
+                    f.write(f"{_dt.now().isoformat()} LIBRARY_LOAD tokenizer (n_ctx=1)\n")
+            except Exception:
+                pass
             self._tokenizer_instance = Llama(
                 model_path=self.model_path,
                 n_gpu_layers=0,
@@ -1364,10 +1375,15 @@ class Agent:
         # Check for Python 3.13 or explicit config to force server
         py_ver = sys.version_info
         is_py313 = py_ver.major == 3 and py_ver.minor == 13
-        
-        # If explicitly requested, Py3.13 detected, OR on macOS (use standalone binary to avoid cmake/build issues)
+        is_win = platform.system() == "Windows"
         is_mac = platform.system() == "Darwin"
-        if is_py313 or is_mac or self.config.get("force_server", False):
+        # On Windows default force_server=True to avoid loading library in-process (double model = 15–20 GB RAM).
+        _fs = self.config.get("force_server")
+        force_server = (True if is_win else False) if _fs is None else bool(_fs)
+        # FACT: On Windows with Python < 3.13 and no force_server, we use the LIBRARY (llama-cpp-python
+        # in-process). The Tray may start the native llama-server (8080), but the agent does not use it
+        # here — so the model is loaded twice (server process + Python process) unless force_server=True.
+        if is_py313 or is_mac or force_server:
             UI.event("System", f"Initializing Standalone Server (Py3.13 / Mac / GPU Mode)...", style="warning")
             # If the server is already running (or still loading), reuse it to avoid duplicates.
             # CRITICAL: When Tray is running, it starts the server on activity. Wait for it first
@@ -1375,7 +1391,7 @@ class Agent:
             try:
                 response = requests.get("http://127.0.0.1:8080/health", timeout=1)
                 if response.status_code in (200, 503):
-                    self.server = ServerManager()
+                    self.server = ServerManager(skip_cleanup=True)
                     self.use_server = True
                     UI.event("System", "Reusing existing HTTP backend on :8080.", style="dim")
                     return
@@ -1386,7 +1402,7 @@ class Agent:
                 try:
                     r = requests.get("http://127.0.0.1:8080/health", timeout=2)
                     if r.status_code in (200, 503):
-                        self.server = ServerManager()
+                        self.server = ServerManager(skip_cleanup=True)
                         self.use_server = True
                         UI.event("System", "Reusing existing HTTP backend on :8080 (waited).", style="dim")
                         return
@@ -1406,8 +1422,32 @@ class Agent:
                     UI.event("Info", "Using HTTP Backend (CPU Mode)", style="dim")
                 return # Success
             else:
+                # When force_server is True: do NOT load the library (would double RAM: server + Python process).
+                if force_server:
+                    self.server = ServerManager()
+                    self.use_server = True
+                    UI.event("System", "Server not ready yet. Using HTTP backend (8080); retry 503 in chat.", style="warning")
+                    return
                 UI.error("Server backend failed. Falling back to internal library (CPU).")
         
+        # Before loading library: if 8080 is reachable, use server to avoid double model (15–20 GB RAM).
+        try:
+            r = requests.get("http://127.0.0.1:8080/health", timeout=1)
+            if r.status_code in (200, 503):
+                self.server = ServerManager(skip_cleanup=True)
+                self.use_server = True
+                UI.event("System", "Reusing existing HTTP backend on :8080 (avoiding library load).", style="dim")
+                return
+        except Exception:
+            pass
+
+        # When force_server is True we must never load the library (double model = 15–20 GB RAM).
+        if force_server:
+            self.server = ServerManager(skip_cleanup=True)
+            self.use_server = True
+            UI.event("System", "Server required (force_server). Using HTTP backend (8080). Start Tray or llama-server.", style="warning")
+            return
+
         # Fallback to Local Library (optional dep: pip install llama-cpp-python)
         try:
             from llama_cpp import Llama  # type: ignore[import-untyped]
@@ -1416,7 +1456,14 @@ class Agent:
             sys.exit(1)
 
         UI.event("System", f"Loading Library: {self.filename}...", style="dim")
-        
+        try:
+            log_dir = _get_debug_log_dir()
+            log_dir.mkdir(parents=True, exist_ok=True)
+            from datetime import datetime as _dt
+            with open(log_dir / "llm_backend.log", "a", encoding="utf-8") as f:
+                f.write(f"{_dt.now().isoformat()} LIBRARY_LOAD main model (force_server was False)\n")
+        except Exception:
+            pass
         # Redirect stderr to suppress ggml_metal_init logs on Mac
         
         # Context manager to suppress stderr
@@ -2057,9 +2104,42 @@ class Agent:
             total_used = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
             return total_used, self.context_manager.max_tokens
 
-        # Server Mode: Use estimation to avoid loading a second model instance
-        # Loading the tokenizer separately would block since the model file is already in use
+        # Server Mode: Use server /tokenize API for precise count (no local model load).
+        # If server is not ready or tokenize fails, fall back to estimation.
         if self.use_server:
+            try:
+                total = 0
+                for msg in self.history:
+                    content = str(msg.get("content", ""))
+                    role = str(msg.get("role", ""))
+                    for text in (content, role):
+                        if not text:
+                            continue
+                        r = requests.post(
+                            "http://127.0.0.1:8080/tokenize",
+                            json={"content": text},
+                            timeout=5
+                        )
+                        if r.status_code == 200:
+                            data = r.json()
+                            total += len(data.get("tokens", []))
+                    total += 5
+                if hasattr(self, "TOOLS") and self.TOOLS:
+                    try:
+                        schema_str = json.dumps(self.TOOLS)
+                        r = requests.post(
+                            "http://127.0.0.1:8080/tokenize",
+                            json={"content": schema_str},
+                            timeout=5
+                        )
+                        if r.status_code == 200:
+                            total += len(r.json().get("tokens", []))
+                    except Exception:
+                        total += len(self.tools) * 200
+                total += 100
+                return total, self.config.get("n_ctx", 8192)
+            except Exception:
+                pass
             return self._estimate_token_usage()
 
         tokenizer = self._get_tokenizer()
@@ -3148,7 +3228,30 @@ class Agent:
                         "temperature": 0.0,  # Deterministic for routing
                         "stream": False
                     }
-                    res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=120).json()
+                    res = None
+                    for _router_attempt in range(10):  # Retry on 503 (model loading), ~20s max
+                        resp = requests.post(
+                            "http://127.0.0.1:8080/v1/chat/completions",
+                            json=payload,
+                            timeout=120
+                        )
+                        if resp.status_code == 503:
+                            time.sleep(2)
+                            continue
+                        res = resp.json()
+                        if resp.status_code != 200 and isinstance(res.get('error'), dict):
+                            err = res.get('error', {})
+                            if err.get('code') == 503:
+                                time.sleep(2)
+                                continue
+                        break
+                    if res is None and resp is not None:
+                        try:
+                            res = resp.json()
+                        except Exception:
+                            res = {}
+                    if res is None:
+                        res = {}
                     if 'choices' in res and len(res['choices']) > 0:
                         msg = res['choices'][0]['message']
                         # Try content first, then reasoning_content (for reasoning models like VQ-1)
@@ -3496,7 +3599,23 @@ class Agent:
             streaming_tools = {}
             tool_calls_detected = []
             auto_continue = False  # Track if response was cut off
-            
+
+            # Log which LLM backend is used (for debugging: VQ1 vs API vs server)
+            try:
+                log_dir = _get_debug_log_dir()
+                log_dir.mkdir(parents=True, exist_ok=True)
+                from datetime import datetime
+                if self.api_backend:
+                    backend_type = f"api({getattr(self.api_backend, 'provider_name', self.provider)})"
+                elif self.use_server:
+                    backend_type = "server(8080)"
+                else:
+                    backend_type = "library(llama-cpp-python)"
+                with open(log_dir / "llm_backend.log", "a", encoding="utf-8") as f:
+                    f.write(f"{datetime.now().isoformat()} chat_step backend={backend_type}\n")
+            except Exception:
+                pass
+
             # API Backend Path (OpenAI, Anthropic, DeepSeek, Google, OpenRouter)
             if self.api_backend:
                 try:
@@ -3518,12 +3637,18 @@ class Agent:
                     prepared_messages = self._prepare_messages(self.history)
                     if prepared_messages:
                         if memory_context and memory_context.strip():
-                            memory_msg = {"role": "system", "content": "## Memory context (relevant to this query)\n\nUse when relevant; you may cite briefly (e.g. from memory).\n\n" + memory_context.strip()}
+                            memory_msg = {"role": "system", "content": (
+                                "## Memory context (relevant to this query)\n\n"
+                                "Use when relevant; you may cite briefly (e.g. from memory). "
+                                "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text.\n\n"
+                                + memory_context.strip()
+                            )}
                         else:
                             memory_msg = {"role": "system", "content": (
                                 "## Memory context (relevant to this query)\n\n"
                                 "(No memories found for this query.) "
                                 "Use this section to answer 'who am I?' or 'what do you remember?'; if none, say so and offer to remember. "
+                                "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text. "
                                 "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
                             )}
                         prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
@@ -3735,19 +3860,25 @@ class Agent:
                 
                 # Retry loop for 503 (Model Loading), 500 (Context Overflow), and 400 (Context Size Error)
                 response = None
-                for _ in range(15): # Try for ~30 seconds
+                for _attempt in range(15):  # Try for ~30 seconds
                     try:
                         # CRITICAL: Rebuild payload with current history (may have been compressed)
                         # Prepare messages for specific model quirks (e.g. Gemma)
                         prepared_messages = self._prepare_messages(self.history)
                         if prepared_messages:
                             if memory_context and memory_context.strip():
-                                memory_msg = {"role": "system", "content": "## Memory context (relevant to this query)\n\nUse when relevant; you may cite briefly (e.g. from memory).\n\n" + memory_context.strip()}
+                                memory_msg = {"role": "system", "content": (
+                                    "## Memory context (relevant to this query)\n\n"
+                                    "Use when relevant; you may cite briefly (e.g. from memory). "
+                                    "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text.\n\n"
+                                    + memory_context.strip()
+                                )}
                             else:
                                 memory_msg = {"role": "system", "content": (
                                     "## Memory context (relevant to this query)\n\n"
                                     "(No memories found for this query.) "
                                     "Use this section to answer 'who am I?' or 'what do you remember?'; if none, say so and offer to remember. "
+                                    "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text. "
                                     "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
                                 )}
                             prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
@@ -3779,6 +3910,14 @@ class Agent:
                         # UI.event("Debug", f"Raw Response: {response.status_code}")
 
                         if response.status_code == 503:
+                            try:
+                                log_dir = _get_debug_log_dir()
+                                log_dir.mkdir(parents=True, exist_ok=True)
+                                from datetime import datetime as _dt
+                                with open(log_dir / "llm_backend.log", "a", encoding="utf-8") as f:
+                                    f.write(f"{_dt.now().isoformat()} server(8080) 503 model_loading retry={_attempt + 1}/15\n")
+                            except Exception:
+                                pass
                             UI.event("Server", "Model is loading, waiting...", style="warning")
                             time.sleep(2)
                             continue
@@ -3903,11 +4042,24 @@ class Agent:
                         # If successful (200), break retry loop
                         break
                     except requests.exceptions.ConnectionError:
-                         UI.event("Server", "Connection failed, retrying...", style="warning")
+                         UI.event("Server", "Connection failed. Attempting to start server...", style="warning")
+                         if hasattr(self, 'server') and self.server:
+                             try:
+                                 self.server.start_server(self.model_path, n_gpu_layers=self.config.get("gpu_layers", 99), n_ctx=self.config.get("n_ctx", 8192))
+                             except Exception as start_err:
+                                 UI.error(f"Failed to start server: {start_err}")
                          time.sleep(2)
                          continue
                     
                 if not response or response.status_code != 200:
+                    try:
+                        log_dir = _get_debug_log_dir()
+                        log_dir.mkdir(parents=True, exist_ok=True)
+                        from datetime import datetime as _dt
+                        with open(log_dir / "llm_backend.log", "a", encoding="utf-8") as f:
+                            f.write(f"{_dt.now().isoformat()} server(8080) unavailable_after_retries status={getattr(response, 'status_code', None)}\n")
+                    except Exception:
+                        pass
                     UI.error("Server unavailable after retries.")
                     return
 
@@ -4010,7 +4162,7 @@ class Agent:
                     return
             
             else:
-                # Library Logic
+                # Library Logic (llama-cpp-python) — must handle reasoning_content like server path for VQ1
                 try:
                     stream = self.llm.create_chat_completion(
                         messages=self.history,
@@ -4050,14 +4202,38 @@ class Agent:
                                     if 'name' in fn: streaming_tools[idx]['name'] += fn['name']
                                     if 'arguments' in fn: streaming_tools[idx]['arguments'] += fn['arguments']
 
-                        content_chunk = delta.get('content', '')
-                        if content_chunk:
+                        content_chunk = delta.get('content') or ''
+                        reasoning_chunk = delta.get('reasoning_content') or ''
+
+                        # Method 1: Explicit reasoning_content (VQ1 / reasoning models via library)
+                        if reasoning_chunk:
+                            if not is_reasoning:
+                                is_reasoning = True
+                                if stream_callback: stream_callback("<think>")
                             if first_token:
-                                if stream_callback: stream_callback("") 
+                                if stream_callback: stream_callback("")
                                 first_token = False
-                            if stream_callback: stream_callback(content_chunk)
+                            if stream_callback:
+                                stream_callback(reasoning_chunk)
+                            full_response += reasoning_chunk
+                            full_reasoning += reasoning_chunk
+
+                        # Method 2: Content (may contain inline <think> tags)
+                        if content_chunk:
+                            if is_reasoning and not reasoning_chunk:
+                                if stream_callback: stream_callback("</think>\n\n")
+                                is_reasoning = False
+                            if first_token:
+                                if stream_callback: stream_callback("")
+                                first_token = False
+                            if stream_callback:
+                                stream_callback(content_chunk)
                             full_response += content_chunk
                             full_content += content_chunk
+
+                    if is_reasoning and stream_callback:
+                        stream_callback("</think>")
+                        is_reasoning = False
                 except Exception as e:
                      UI.error(f"Inference Error: {e}")
                      return
@@ -4221,7 +4397,10 @@ class Agent:
             # Fallback regex matches for models that don't use server API for tools
             if not tool_calls_detected:
                 # 1. XML Format: <tool_call>{"name":..., "arguments":...}</tool_call>
-                xml_tools = re.findall(r'<tool_call>(.*?)</tool_call>', full_response, re.DOTALL)
+                # Search full_response AND full_reasoning so tool_calls inside <think> are found
+                # (e.g. when reasoning is streamed separately from content)
+                text_to_search = (full_response + "\n" + (full_reasoning or "")).strip() or full_response
+                xml_tools = re.findall(r'<tool_call>(.*?)</tool_call>', text_to_search, re.DOTALL)
                 for tool_str in xml_tools:
                      try:
                         tool_data = json.loads(tool_str)
@@ -4234,9 +4413,9 @@ class Agent:
                      except: pass
                 
                 # 2. Raw JSON Code Block: ```json ... ``` (if XML fails and looks like tool)
-                if not tool_calls_detected and "```json" in full_response:
+                if not tool_calls_detected and "```json" in text_to_search:
                     try:
-                        json_match = re.search(r'```json\s*(\[.*?\]|\{.*?\})\s*```', full_response, re.DOTALL)
+                        json_match = re.search(r'```json\s*(\[.*?\]|\{.*?\})\s*```', text_to_search, re.DOTALL)
                         if json_match:
                             data = json.loads(json_match.group(1))
                             if isinstance(data, dict): data = [data] # normalize to list
@@ -4252,7 +4431,7 @@ class Agent:
                 # 3. Text Pattern: "1. web_search(...)" or "Answer: web_search(...)"
                 # This catches models (like VQ-1) that hallucinate text formats instead of JSON
                 if not tool_calls_detected:
-                    text_tools = re.findall(r'(?:^|\n)(?:Answer:)?\s*(?:\d+\.\s*)?([a-zA-Z0-9_]+)\s*\((.*?)\)', full_response)
+                    text_tools = re.findall(r'(?:^|\n)(?:Answer:)?\s*(?:\d+\.\s*)?([a-zA-Z0-9_]+)\s*\((.*?)\)', text_to_search)
                     for func_name, args_str in text_tools:
                         if func_name in self.tools:
                             # Parse arguments (simple quote extraction)
@@ -4585,8 +4764,15 @@ class Agent:
                 temp_final = temp_final.replace(pattern, "")
             temp_final = temp_final.strip()
             # Has final answer = user-facing content (full_content only), not just thinking
-            has_final_answer = len(temp_final) >= 3
-            
+            # Use >= 2 so short replies like "Hi" or "Ok" are accepted (CoT/first prompt)
+            has_final_answer = len(temp_final) >= 2
+
+            # CoT fallback: Some models (e.g. VQ1) send the whole reply in reasoning_content and
+            # little or nothing in content. Treat substantial reasoning as a valid answer so we
+            # don't trigger infinite "Empty response" retries.
+            if not has_final_answer and not tool_calls_detected and full_reasoning and len(full_reasoning.strip()) > 100:
+                has_final_answer = True
+
             # Empty Response Handler: No answer for the user (thinking only counts as empty)
             # NO RETRY LIMITS - will loop until we get a response
             # SKIP if user stopped generation manually

@@ -23,6 +23,7 @@ class Config:
         "provider": "local",
         "gpu_layers": -1,
         "n_ctx": 8192,
+        "n_parallel": 0, # 0 = Auto-detect based on VRAM (1 or 2); Set to 1 to force sequential if crashing
         "temperature": 0.7,
 
         # AI Provider Settings

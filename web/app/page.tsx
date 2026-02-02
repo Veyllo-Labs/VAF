@@ -551,7 +551,10 @@ export default function VAFDashboard() {
             ws?.send(JSON.stringify({ type: 'stop_speech' }));
         }
 
-        setLoadingMessageId(index);
+        // Only show TTS loading animation when TTS is enabled (avoids endless loading when TTS is off)
+        if (config.speech_tts_enabled) {
+            setLoadingMessageId(index);
+        }
 
         // Send speak command immediately. 
         // We wait for 'tts_state' event (status='playing') to switch to playing state.
@@ -924,22 +927,23 @@ export default function VAFDashboard() {
                 }
                 else if (data.type === 'tts_state') {
                     if (data.status === 'loading') {
-                        // Find target message for loading state
-                        let targetIndex = -1;
-                        if (loadingMessageIdRef.current !== null) {
-                            targetIndex = loadingMessageIdRef.current;
-                        } else {
-                            // Auto-TTS: Assume last assistant message
-                            const currentMessages = messagesRef.current;
-                            for (let i = currentMessages.length - 1; i >= 0; i--) {
-                                if (currentMessages[i].role === 'assistant') {
-                                    targetIndex = i;
-                                    break;
+                        // Only show TTS loading when TTS is enabled (server may send loading from other code paths)
+                        if (config.speech_tts_enabled) {
+                            let targetIndex = -1;
+                            if (loadingMessageIdRef.current !== null) {
+                                targetIndex = loadingMessageIdRef.current;
+                            } else {
+                                const currentMessages = messagesRef.current;
+                                for (let i = currentMessages.length - 1; i >= 0; i--) {
+                                    if (currentMessages[i].role === 'assistant') {
+                                        targetIndex = i;
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        if (targetIndex !== -1) {
-                            setLoadingMessageId(targetIndex);
+                            if (targetIndex !== -1) {
+                                setLoadingMessageId(targetIndex);
+                            }
                         }
                     }
                     else if (data.status === 'playing') {

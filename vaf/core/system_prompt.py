@@ -88,6 +88,7 @@ Your actual response to the user here.
 - The `<think>` block is for your internal reasoning process
 - Content inside `<think>` tags will be shown separately in the UI
 - Your final answer should come AFTER the `</think>` tag
+- **Tool calls must be in the main response (after `</think>`), not inside `<think>`**, so they are executed
 - Keep your thinking concise but thorough
 - Execute tasks efficiently using available tools
 - Explain your actions briefly when helpful
@@ -120,7 +121,8 @@ When reasoning through a problem, wrap your thoughts in `<think>` tags:
 Your actual response here.
 ```
 - Content in `<think>` tags is shown separately in the UI
-- Your final answer comes AFTER `</think>`"""
+- Your final answer comes AFTER `</think>`
+- Tool calls must be in the main response (after `</think>`), not inside `<think>`, so they are executed"""
 
         # ═══════════════════════════════════════════════════════════════════════
         # MODULAR PROMPT SECTIONS
@@ -440,10 +442,11 @@ Sub-agents run asynchronously - results arrive later
         parts.append("""
 ## Memory & What You Remember (RAG)
 You have **long-term memory** (RAG). Use it to remember things about the user and the system:
-- **memory_search**: Search memory for facts about the user. Use when the user asks "who am I?", "what do you remember about me?", "was hast du über mich gespeichert?", or similar. Returns snippets or "No memories found". Do NOT use memory_save for lookup.
-- **memory_save**: Save NEW facts only when the user explicitly asks to remember something (e.g. "remember that...", "merke dir..."). Do NOT use for "who am I?" or "what do you remember?" – use memory_search or the **Memory context** block below for that.
-- When the user asks "who am I?" or "what do you remember?", use the **Memory context** injected in this turn (if any) or call **memory_search**; then answer from that. If none is shown, say so and offer to remember things from now on.
-- **add_memory** / **update_working_memory**: Short-term notes and plan. **memory_save**: Long-term facts (save only). **memory_search**: Look up facts. Use both; memory_save is for saving, memory_search for looking up.
+- **Memory context** for this turn is injected in a separate block below (## Memory context (relevant to this query)). Use that block first; it is already filled from the user's message before you think or answer.
+- **memory_search**: Only if you need a different search. Pass a SHORT query only (e.g. "user name", "user preferences", "facts about user"). NEVER pass your full thinking, reasoning, or <think> text as the query. Do NOT use memory_save for lookup.
+- **memory_save**: Save NEW facts only when the user explicitly asks to remember something (e.g. "remember that...", "merke dir..."). Do NOT use for "who am I?" or "what do you remember?" – use the **Memory context** block or **memory_search** with a short query.
+- When the user asks "who am I?" or "what do you remember?", use the **Memory context** block injected this turn (if any) or call **memory_search** with a short query; then answer from that. If none is shown, say so and offer to remember things from now on.
+- **add_memory** / **update_working_memory**: Short-term notes and plan. **memory_save**: Long-term facts (save only). **memory_search**: Look up facts (short query only). Use both; memory_save is for saving, memory_search for looking up.
 """)
 
         # User identity (current user): static identity + cached RAG summary (refreshed after compaction)

@@ -133,6 +133,7 @@ def run_headless_agent():
     last_subagent_check = 0.0
     last_subagent_ui_update = 0.0
     last_memory_check = 0.0
+    waited_for_server_ready = False  # Wait for 8080 to return 200 before first chat (avoids 503)
     open_subagent_sessions = set()
     subagent_last_activity = {}
     subagent_last_steps = {}
@@ -236,6 +237,13 @@ def run_headless_agent():
             # check for tasks
             task = tq.get()
             if task:
+                try:
+                    from datetime import datetime as _dt
+                    with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                        prev = (task.input_text or "")[:60]
+                        f.write(f"{_dt.now().isoformat()} QUEUE_GET session_id={task.session_id} preview={repr(prev)} queue_size_after={tq.get_queue_size()}\n")
+                except Exception:
+                    pass
                 print(f"[Headless] Processing task for session {task.session_id}...")
                 # Do not log "Processing task..." to Web UI – redundant after every user message
 
@@ -284,6 +292,12 @@ def run_headless_agent():
                 # Check for System Commands (similar to run.py) - do NOT load model for commands
                 if is_cmd:
                     _handle_command(input_text, agent, session_mgr)
+                    try:
+                        from datetime import datetime as _dt
+                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (cmd)\n")
+                    except Exception:
+                        pass
                     tq.task_done()
                     continue
 
@@ -304,6 +318,12 @@ def run_headless_agent():
                     except Exception as e:
                         import logging
                         logging.getLogger(__name__).warning("Session compaction (queued) failed: %s", e)
+                    try:
+                        from datetime import datetime as _dt
+                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (compaction)\n")
+                    except Exception:
+                        pass
                     tq.task_done()
                     continue
 
@@ -346,9 +366,36 @@ def run_headless_agent():
                 except Exception:
                     pass
 
+                # Wait for local server (8080) to be ready before first chat to avoid 503 "Loading model"
+                if agent.provider == "local" and getattr(agent, "use_server", False) and not waited_for_server_ready:
+                    import requests as _req
+                    _deadline = time.time() + 120  # max 2 min
+                    while time.time() < _deadline:
+                        try:
+                            r = _req.get("http://127.0.0.1:8080/v1/models", timeout=3)
+                            if r.status_code == 200:
+                                waited_for_server_ready = True
+                                break
+                        except Exception:
+                            pass
+                        try:
+                            get_web_interface().log("Model is loading, please wait...", level="info", source="System", session_id=task.session_id)
+                        except Exception:
+                            pass
+                        time.sleep(2)
+                    if not waited_for_server_ready:
+                        waited_for_server_ready = True  # don't block forever
+
                 # Normal Chat Step
                 # usage: chat_step(user_input, ...)
+                _chat_start = time.time()
                 try:
+                    try:
+                        from datetime import datetime as _dt
+                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_START session_id={task.session_id}\n")
+                    except Exception:
+                        pass
                     try:
                         get_web_interface().log(
                             f"Starting chat_step for session {task.session_id}...",
@@ -534,6 +581,13 @@ def run_headless_agent():
                         logging.getLogger(__name__).warning("Session compaction failed: %s", e)
 
                     # Result is already added to history and broadcast to WebUI by agent logic
+                    _duration = time.time() - _chat_start
+                    try:
+                        from datetime import datetime as _dt
+                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_END session_id={task.session_id} duration_sec={_duration:.1f}\n")
+                    except Exception:
+                        pass
                     print("[Headless] Task complete.")
 
                     # Memory cleanup: clear response parts list
@@ -541,6 +595,14 @@ def run_headless_agent():
                         response_parts.clear()
 
                 except Exception as e:
+                    _duration = time.time() - _chat_start
+                    try:
+                        from datetime import datetime as _dt
+                        err_preview = str(e).replace("\n", " ")[:120]
+                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_FAIL session_id={task.session_id} duration_sec={_duration:.1f} error={repr(err_preview)}\n")
+                    except Exception:
+                        pass
                     print(f"[Headless] Error during chat step: {e}")
                     traceback.print_exc()
                     try:
@@ -559,7 +621,12 @@ def run_headless_agent():
                         )
                     except Exception:
                         pass
-                
+                try:
+                    from datetime import datetime as _dt
+                    with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                        f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (chat)\n")
+                except Exception:
+                    pass
                 tq.task_done()
             else:
                 # Periodically check for sub-agent results and summarize for WebUI

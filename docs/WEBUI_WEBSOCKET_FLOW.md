@@ -81,11 +81,22 @@ WebUI debug traces are written to the first writable location in this order:
 3. `Platform.vaf_dir()/logs` (user home)
 4. Repo `logs/` (dev fallback)
 
-Useful files when debugging WebUI responses:
-- `callback_debug.txt` (stream callback activity)
-- `emit_debug.txt` (emit_agent_message entry)
-- `webui_push_debug.txt` (session-scoped push)
-- `api_chunks_debug.txt` (provider stream chunks)
+Useful files when debugging WebUI / LLM / queue (all under the log dir above):
+
+| File | Contents |
+|------|----------|
+| `queue.log` | **QUEUE_ADD** (session_id, preview, queue_size_after), **QUEUE_GET** (session_id, preview, queue_size_after), **QUEUE_CHAT_START** / **QUEUE_CHAT_END** (session_id, duration_sec), **QUEUE_CHAT_FAIL** (session_id, duration_sec, error), **QUEUE_DONE** (session_id, cmd/compaction/chat) |
+| `llm_backend.log` | Which backend per chat_step (`api(...)` / `server(8080)` / `library(...)`), **503 model_loading retry=N/15**, **unavailable_after_retries** |
+| `callback_debug.txt` | Stream callback activity (text_len, parts, session) |
+| `emit_debug.txt` | emit_agent_message entry |
+| `webui_push_debug.txt` | Session-scoped push |
+| `api_chunks_debug.txt` | Provider stream chunks (API path) |
+| `memory_usage.log` | Periodic RSS (MB) from headless loop |
+| `memory_profiler.log` | Memory profiler snapshots (if enabled) |
+| `headless_startup.log` | Headless runner PID and log dir at start |
+| `rag_context.log` | RAG snippet count / failures |
+| `rag_user_scope.log` | User scope per task |
+| `soul_prompt.log` / `system_prompt_full.log` | Prompt assembly (if context log dir set) |
 
 ### 1) WebSocket Connected, But No Answer
 
@@ -108,6 +119,12 @@ If you see `LLM Call Failed: HTTPConnectionPool(127.0.0.1:8080)`:
 - The local HTTP backend is not running or was stopped.
 - Ensure the tray is running and the backend is reused instead of starting a second process.
 - If multiple `llama-server.exe` instances appear, close all of them and restart the tray.
+
+### 1c) 503 "Loading model" on first prompt / VQ1 no thinking / RAM 15–20 GB
+
+- **503 on first prompt**: Headless now waits for `http://127.0.0.1:8080/v1/models` to return 200 (up to 2 min) before the first chat when using the server backend; the WebUI shows "Model is loading, please wait..." during that time.
+- **VQ1 thinking**: Once the first request no longer hits 503, the server path streams `reasoning_content` (thinking) correctly. Tool calls emitted inside `<think>` are still parsed (agent searches `full_response` + `full_reasoning` for `<tool_call>...</tool_call>`); the system prompt instructs the model to place tool calls in the main response.
+- **RAM spike (double model)**: On Windows, `force_server` defaults to **true** so the agent uses the HTTP backend (8080) only and does not load the library in-process. If the server block was skipped (e.g. server failed to start), the agent checks 8080 again before loading the library and reuses the server if reachable.
 
 ### 2) Messages Filtered on Frontend
 

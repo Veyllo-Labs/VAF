@@ -18,6 +18,12 @@ from vaf.core.config import Config
 
 logger = logging.getLogger(__name__)
 
+# Max chars per text sent to the encoder. Prevents RAM spike when model passes
+# huge strings (e.g. full thinking block) to memory_search. Kept low (512) because
+# sentence-transformers/PyTorch can allocate large native buffers; 512 chars ~128
+# tokens is enough for RAG queries (all-MiniLM-L6-v2 max 256 tokens).
+MAX_EMBED_INPUT_CHARS = 2512
+
 # Global model instance (lazy loaded)
 _model = None
 _model_name = None
@@ -167,6 +173,10 @@ class EmbeddingService:
         """
         if not text or not text.strip():
             raise ValueError("Cannot embed empty text")
+        # Truncate to avoid huge PyTorch allocations (e.g. model passing full thinking as RAG query)
+        if len(text) > MAX_EMBED_INPUT_CHARS:
+            text = text[:MAX_EMBED_INPUT_CHARS].rstrip()
+            logger.debug("Embed input truncated to %s chars", MAX_EMBED_INPUT_CHARS)
         input_text = text
         if self._is_e5_model(self.model_name) and prefix:
             input_text = self._apply_e5_prefix(text, prefix)
@@ -182,6 +192,12 @@ class EmbeddingService:
             normalize_embeddings=normalize,
         ).tolist()
         self._add_to_cache(input_text, embedding)
+        # Encourage PyTorch to release temporary buffers (sentence-transformers known to hold RAM)
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
         return embedding
     
     def embed_batch_sync(self, texts: List[str], *, prefix: Optional[str] = None) -> List[List[float]]:
@@ -201,10 +217,15 @@ class EmbeddingService:
             return []
         dim = self.get_dimension()
         # Apply E5 prefix to each text for cache/encode
+        # Truncate each text to avoid huge PyTorch allocations
+        truncated = [
+            (t[:MAX_EMBED_INPUT_CHARS].rstrip() if t and len(t) > MAX_EMBED_INPUT_CHARS else (t or ""))
+            for t in texts
+        ]
         if self._is_e5_model(self.model_name) and prefix:
-            input_texts = [self._apply_e5_prefix(t, prefix) if t and t.strip() else "" for t in texts]
+            input_texts = [self._apply_e5_prefix(t, prefix) if t and t.strip() else "" for t in truncated]
         else:
-            input_texts = list(texts)
+            input_texts = list(truncated)
         results = [None] * len(texts)
         uncached_indices = []
         uncached_input_texts = []
@@ -231,6 +252,11 @@ class EmbeddingService:
                 embedding_list = emb.tolist()
                 results[idx] = embedding_list
                 self._add_to_cache(inp, embedding_list)
+            try:
+                import gc
+                gc.collect()
+            except Exception:
+                pass
         return results
     
     async def embed(self, text: str, *, prefix: Optional[str] = None) -> List[float]:
@@ -248,6 +274,9 @@ class EmbeddingService:
         """
         if not text or not text.strip():
             raise ValueError("Cannot embed empty text")
+        # Truncate before any use (async path may receive long query from RAG/tool)
+        if len(text) > MAX_EMBED_INPUT_CHARS:
+            text = text[:MAX_EMBED_INPUT_CHARS].rstrip()
         input_text = self._apply_e5_prefix(text, prefix) if self._is_e5_model(self.model_name) and prefix else text
         cached = self._get_from_cache(input_text)
         if cached:

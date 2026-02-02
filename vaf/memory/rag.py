@@ -219,6 +219,21 @@ class RagPipeline:
         Returns:
             List of RagSource objects
         """
+        # Remove <think> blocks from query to avoid recursive RAG loops
+        import re
+        # 1. Remove complete <think>...</think> blocks
+        query = re.sub(r'<think>.*?</think>', '', query, flags=re.DOTALL).strip()
+        # 2. Remove unclosed <think>... (streaming/partial thought) - CRITICAL for preventing recursive RAG
+        if '<think>' in query:
+            query = query.split('<think>')[0].strip()
+        
+        if not query:
+            return []
+
+        # Cap query length to avoid huge encoder allocations (e.g. model passing full thinking)
+        from vaf.memory.embeddings import MAX_EMBED_INPUT_CHARS
+        if len(query) > MAX_EMBED_INPUT_CHARS:
+            query = query[:MAX_EMBED_INPUT_CHARS].rstrip()
         # Embed query - NO prefix for MiniLM (only E5 needs prefix)
         model_name = self.embeddings.model_name or ""
         use_prefix = "e5" in model_name.lower()
@@ -849,16 +864,53 @@ def run_auto_capture_sync(
 def run_memory_search_sync(
     query: str,
     k: int = 5,
-    user_scope_id: Optional[UUID] = None
+    user_scope_id: Optional[UUID] = None,
+    caller: Optional[str] = None,
 ) -> str:
     """
     Run RAG search synchronously for use from sync code (e.g. headless runner).
 
     Returns a formatted string of top-k snippets for injection into the agent prompt,
     or empty string if memory is disabled, no results, or on error.
+
+    caller: "headless" | "tool" | None – for logging who triggered the RAG call.
     """
     if not Config.get("memory_enabled", True):
         return ""
+
+    # Truncate at entry so we never pass long strings to encoder (avoids 10GB+ RAM spike)
+    # Also strip <think> blocks to prevent recursive loops
+    from vaf.memory.embeddings import MAX_EMBED_INPUT_CHARS
+    import re
+    
+    _q = (query or "").strip()
+    # 1. Remove complete <think>...</think> blocks
+    _q = re.sub(r'<think>.*?</think>', '', _q, flags=re.DOTALL).strip()
+    # 2. Remove unclosed <think>... (streaming/partial thought)
+    if '<think>' in _q:
+        _q = _q.split('<think>')[0].strip()
+    
+    if not _q:
+        return ""
+    
+    if len(_q) > MAX_EMBED_INPUT_CHARS:
+        _q = _q[:MAX_EMBED_INPUT_CHARS].rstrip()
+    query = _q
+
+    # Debug log: who called RAG and with what length (to trace RAM spike)
+    try:
+        from pathlib import Path
+        from datetime import datetime
+        log_dir = Path(__file__).resolve().parents[2] / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        qlen = len(query or "")
+        will_truncate = qlen >= MAX_EMBED_INPUT_CHARS  # we already truncated
+        with open(log_dir / "rag_embed_calls.log", "a", encoding="utf-8") as f:
+            f.write(
+                f"{datetime.now().isoformat()} run_memory_search_sync caller={caller or 'unknown'} query_len={qlen} will_truncate={will_truncate}\n"
+            )
+    except Exception:
+        pass
 
     async def _search() -> str:
         async with get_db() as db:
@@ -873,8 +925,16 @@ def run_memory_search_sync(
                 parts.append(f"[Source {i+1}] (Relevance: {s.score:.0%})\n{s.text}")
             return "\n\n---\n\n".join(parts)
 
+    _RAG_TIMEOUT = 15.0  # seconds; avoid blocking chat if DB is down or slow
+
+    async def _run_with_timeout() -> str:
+        return await asyncio.wait_for(_search(), timeout=_RAG_TIMEOUT)
+
     try:
-        return asyncio.run(_search())
+        return asyncio.run(_run_with_timeout())
+    except asyncio.TimeoutError:
+        logger.warning("RAG search timed out after %.0fs (chat continues without memory)", _RAG_TIMEOUT)
+        return ""
     except Exception as e:
         logger.warning("RAG search failed (chat continues without memory): %s", e)
         return ""

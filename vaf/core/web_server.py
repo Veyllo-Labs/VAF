@@ -1254,7 +1254,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         log("WebServer", f"Chat message from user_scope_id={user_scope_id}, username={username}")
                         # Add to queue
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)
-                        
+                        try:
+                            from datetime import datetime as _dt
+                            qlog_dir = Path(os.environ.get("VAF_LOG_DIR", str(Path(__file__).resolve().parents[2] / "logs")))
+                            qlog_dir.mkdir(parents=True, exist_ok=True)
+                            qsize = tq.get_queue_size()
+                            with open(qlog_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} QUEUE_ADD session_id={session_id} preview={repr((content or '')[:60])} queue_size_after={qsize}\n")
+                        except Exception:
+                            pass
                         # Ack to console
                         file_info = f" [{len(files)} file(s)]" if files else ""
                         print(f"[WebUI] Queued input{file_info} for session {session_id}: {content[:50]}...")
@@ -1446,49 +1454,46 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 pass
                 
                 elif type == "speak":
-                    # TTS Output: Web UI always streams to client (Docker TTS). Never local playback on server.
+                    # TTS Output: only if Auto TTS is enabled; otherwise skip to avoid loading TTS when disabled.
                     text = cmd.get("text")
                     if text:
-                        from vaf.core.speech import SpeechManager
-                        sm = SpeechManager.get_instance()
-                        
-                        await websocket.send_json({"type": "tts_state", "status": "loading"})
-                        lang = _detect_language_simple(text)
-                        
-                        import asyncio
-                        import base64
-                        loop = asyncio.get_running_loop()
-                        
-                        try:
-                            # Use configured TTS engine (docker, chatterbox, etc.) - don't force "docker"
-                            # WebUI should respect user's speech_tts_engine setting
-                            configured_engine = Config.get("speech_tts_engine", "docker")
-                            # Only use HTTP-based engines for WebUI (docker, chatterbox)
-                            # If user has "piper" or "system", fall back to docker for WebUI
-                            if configured_engine not in ("docker", "chatterbox"):
-                                configured_engine = "docker"
-                            audio_bytes = await loop.run_in_executor(
-                                None,
-                                lambda: sm.synthesize_audio(text, lang, force_engine=configured_engine),
-                            )
-                            
-                            if audio_bytes:
-                                # Encode to Base64
-                                audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
-                                
-                                # Send to client
-                                await websocket.send_json({
-                                    "type": "tts_audio",
-                                    "audio": audio_b64,
-                                    "format": "wav"
-                                })
-                                # Note: Client will set status to 'playing' when audio starts
-                            else:
-                                # Synthesis failed (e.g. TTS disabled or Piper error)
-                                await websocket.send_json({"type": "tts_state", "status": "stopped"})
-                        except Exception as e:
-                            print(f"[WebServer] TTS Error: {e}")
+                        if not Config.get("speech_tts_enabled", False):
                             await websocket.send_json({"type": "tts_state", "status": "stopped"})
+                        else:
+                            from vaf.core.speech import SpeechManager
+                            sm = SpeechManager.get_instance()
+                            await websocket.send_json({"type": "tts_state", "status": "loading"})
+                            lang = _detect_language_simple(text)
+                            import asyncio
+                            import base64
+                            loop = asyncio.get_running_loop()
+                            _TTS_SYNTH_TIMEOUT = 35.0  # seconds; avoid blocking WebSocket if Docker TTS hangs
+                            try:
+                                configured_engine = Config.get("speech_tts_engine", "docker")
+                                if configured_engine not in ("docker", "chatterbox"):
+                                    configured_engine = "docker"
+                                audio_bytes = await asyncio.wait_for(
+                                    loop.run_in_executor(
+                                        None,
+                                        lambda: sm.synthesize_audio(text, lang, force_engine=configured_engine),
+                                    ),
+                                    timeout=_TTS_SYNTH_TIMEOUT,
+                                )
+                                if audio_bytes:
+                                    audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+                                    await websocket.send_json({
+                                        "type": "tts_audio",
+                                        "audio": audio_b64,
+                                        "format": "wav"
+                                    })
+                                else:
+                                    await websocket.send_json({"type": "tts_state", "status": "stopped"})
+                            except asyncio.TimeoutError:
+                                log("WebServer", f"TTS synthesize timed out after {_TTS_SYNTH_TIMEOUT}s (WebSocket continues)")
+                                await websocket.send_json({"type": "tts_state", "status": "stopped"})
+                            except Exception as e:
+                                print(f"[WebServer] TTS Error: {e}")
+                                await websocket.send_json({"type": "tts_state", "status": "stopped"})
                 
                 elif type == "stop_speech":
                     # Stop TTS

@@ -170,11 +170,31 @@ async def download_file(path: str = Query(..., description="Absolute path to loc
 
 def run_agent_step(agent: Agent, text: str, context: dict):
     """Blocking function to run the agent step."""
-    # This runs in a thread
+    from vaf.core.config import Config
+
+    # RAG: fetch memory context for this turn (pre-injection, before LLM)
+    memory_context = ""
+    try:
+        if Config.get("memory_enabled", True):
+            from vaf.memory.rag import run_memory_search_sync
+            from uuid import UUID
+            user_scope_id = None
+            raw = (context or {}).get("user_scope_id")
+            if raw:
+                try:
+                    user_scope_id = UUID(str(raw))
+                except (ValueError, TypeError):
+                    pass
+            memory_context = run_memory_search_sync(
+                query=text, k=5, user_scope_id=user_scope_id, caller="gateway"
+            )
+    except Exception:
+        memory_context = ""
+
     result = agent.chat_step(
         user_input=text,
-        # We can implement a stream callback here to push deltas to WS
-        stream_callback=None # simplified for now
+        stream_callback=None,  # simplified for now
+        memory_context=memory_context or None,
     )
     return result
 

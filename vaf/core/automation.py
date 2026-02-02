@@ -823,8 +823,24 @@ vaf automation delete <id>   # Delete task
                         response_parts.append(filtered)
                     if callback:
                         callback(text)
-                
-                agent.chat_step(prompt, stream_callback=capture)
+
+                # RAG: fetch memory context for this turn (pre-injection, before LLM)
+                memory_context = ""
+                try:
+                    from vaf.core.config import Config
+                    if Config.get("memory_enabled", True):
+                        from vaf.memory.rag import run_memory_search_sync
+                        memory_context = run_memory_search_sync(
+                            query=prompt, k=5, user_scope_id=None, caller="automation"
+                        )
+                except Exception:
+                    memory_context = ""
+
+                agent.chat_step(
+                    prompt,
+                    stream_callback=capture,
+                    memory_context=memory_context or None,
+                )
                 raw_result = "".join(response_parts)
                 
                 # Extract only the final clean answer (remove all internal thinking)

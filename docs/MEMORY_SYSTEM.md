@@ -11,6 +11,7 @@ The Memory System provides persistent, encrypted memory storage with RAG (Retrie
 - **Graph Visualization**: Interactive ReactFlow-based memory graph
 - **Auto-Connections**: Automatically links semantically related memories
 - **Streaming Responses**: Real-time token streaming for RAG queries
+- **Session Compaction**: Background process that every N user turns prompts the LLM to write durable memories (MEMORY:/NO_REPLY) into RAG; see [Session Compaction (background)](#session-compaction-background).
 
 ## Overview
 
@@ -47,6 +48,10 @@ The Memory System provides persistent, encrypted memory storage with RAG (Retrie
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### Chat integration (pre-generation injection)
+
+In chat, RAG retrieval runs in the **input phase** before the LLM is called: the user message is used to run a memory search, and the result is injected as the "Memory context (relevant to this query)" block in the first prompt. The `memory_search` tool is for follow-up short queries only, not for model output (e.g. `<think>` content). See [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md#rag-and-memory-context-pre-generation-injection) for details.
+
 ## Features
 
 - **Encrypted Storage**: AES-256-GCM encryption for all memory content at rest
@@ -55,6 +60,7 @@ The Memory System provides persistent, encrypted memory storage with RAG (Retrie
 - **Graph Visualization**: Interactive ReactFlow-based memory graph
 - **Auto-Connections**: Automatically links semantically related memories
 - **Streaming Responses**: Real-time token streaming for RAG queries
+- **Session Compaction**: Periodic background flush of durable memories into RAG (see [Session Compaction (background)](#session-compaction-background)).
 
 ## Requirements
 
@@ -108,9 +114,21 @@ Additional settings in `~/.vaf/config.json`:
     "memory_auto_connect_threshold": 0.7,
     "memory_chunk_size": 512,
     "memory_chunk_overlap": 50,
-    "memory_db_echo": false
+    "memory_db_echo": false,
+    "memory_compaction_enabled": true,
+    "memory_compaction_interval": 15
 }
 ```
+
+### Session Compaction (background)
+
+**Session Compaction** is an automatic background process that periodically asks the LLM to write durable memories from the current session into RAG. It does not append anything to the chat UI.
+
+- **When:** After every chat task, the headless runner checks whether the session has reached the compaction interval (number of user turns since last compaction). Default: every **15 user turns** (`memory_compaction_interval`).
+- **What:** A single non-streaming LLM call with a prompt like “Store durable memories now. Write any lasting notes to memory/{date}.md. Output MEMORY: \"...\" lines or NO_REPLY.” The reply is parsed for `MEMORY:` lines; those are ingested into RAG (metadata: `type=memory_flush`, `source=memory/{date}`). Then the user-profile summary cache is refreshed.
+- **Where:** Logic in `vaf/memory/rag.py` (`run_session_compaction_sync`); triggered from `vaf/core/headless_runner.py` (after each chat, or enqueued as a separate task when using a local LLM so only one LLM call runs at a time). State per session: `~/.vaf/compaction_state.json` (last compaction turn per `session_id`).
+- **Config:** `memory_compaction_enabled` (default `true`), `memory_compaction_interval` (default `15`). Both require `memory_enabled` to be `true`.
+- **Logs:** `~/.vaf/logs/compaction.log` (or `%USERPROFILE%\.vaf\logs\compaction.log` on Windows). Lines: `COMPACTION_SKIP` (interval not reached), `COMPACTION_START`, `COMPACTION_NO_REPLY`, `COMPACTION_DONE` (with `memories=N`), `COMPACTION_LLM_FAIL`, `COMPACTION_INGEST_FAIL`. The headless runner also writes `QUEUE_DONE session_id=... (compaction)` to `queue.log` when the compaction task finishes.
 
 ## API Reference
 

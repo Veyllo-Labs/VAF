@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 # sentence-transformers/PyTorch can allocate large native buffers; 512 chars ~128
 # tokens is enough for RAG queries (all-MiniLM-L6-v2 max 256 tokens).
 MAX_EMBED_INPUT_CHARS = 2512
+# Max texts per model.encode() call. Prevents 12GB+ spike when RAG ingests huge docs.
+MAX_EMBED_BATCH_SIZE = 64
 
 # Global model instance (lazy loaded)
 _model = None
@@ -242,16 +244,21 @@ class EmbeddingService:
         if uncached_input_texts:
             model = get_model()
             normalize = self._is_e5_model(self.model_name)
-            embeddings = model.encode(
-                uncached_input_texts,
-                convert_to_numpy=True,
-                show_progress_bar=False,
-                normalize_embeddings=normalize,
-            )
-            for idx, emb, inp in zip(uncached_indices, embeddings, uncached_input_texts):
-                embedding_list = emb.tolist()
-                results[idx] = embedding_list
-                self._add_to_cache(inp, embedding_list)
+            # Process in chunks to avoid 12GB+ RAM spike (PyTorch allocates for full batch)
+            for start in range(0, len(uncached_input_texts), MAX_EMBED_BATCH_SIZE):
+                end = min(start + MAX_EMBED_BATCH_SIZE, len(uncached_input_texts))
+                batch_indices = uncached_indices[start:end]
+                batch_texts = uncached_input_texts[start:end]
+                batch_embeddings = model.encode(
+                    batch_texts,
+                    convert_to_numpy=True,
+                    show_progress_bar=False,
+                    normalize_embeddings=normalize,
+                )
+                for idx, emb, inp in zip(batch_indices, batch_embeddings, batch_texts):
+                    embedding_list = emb.tolist() if hasattr(emb, "tolist") else list(emb)
+                    results[idx] = embedding_list
+                    self._add_to_cache(inp, embedding_list)
             try:
                 import gc
                 gc.collect()

@@ -428,7 +428,7 @@ def run_headless_agent():
                                 except (ValueError, TypeError):
                                     pass
                             memory_context = run_memory_search_sync(
-                                task.input_text, k=5, user_scope_id=user_scope_id
+                                task.input_text, k=5, user_scope_id=user_scope_id, caller="headless"
                             )
                             snippet_count = memory_context.count("[Source ") if memory_context else 0
                             if snippet_count == 0:
@@ -448,8 +448,9 @@ def run_headless_agent():
                         except Exception:
                             pass
 
-                    # Streaming callback for WebUI - accumulates chunks and sends updates
+                    # Streaming callback for WebUI - accumulates chunks and sends updates on every chunk
                     response_parts = []
+
                     def webui_stream_callback(text):
                         response_parts.append(text)
                         # DEBUG: Log callback invocation
@@ -458,7 +459,6 @@ def run_headless_agent():
                             with open(log_dir / "callback_debug.txt", "a", encoding="utf-8") as f:
                                 f.write(f"[CALLBACK] text_len={len(text)} parts={len(response_parts)} session={task.session_id}\n")
                         except: pass
-                        # Construct full text so far and send to WebUI
                         full_text = "".join(response_parts)
                         if full_text.strip():
                             try:
@@ -467,10 +467,12 @@ def run_headless_agent():
                                     content=full_text,
                                     session_id=task.session_id
                                 )
-                                # DEBUG: Confirm emit was called
-                                log_dir = _get_debug_log_dir()
-                                with open(log_dir / "callback_debug.txt", "a", encoding="utf-8") as f:
-                                    f.write(f"[EMIT_DONE] session={task.session_id}\n")
+                                try:
+                                    log_dir = _get_debug_log_dir()
+                                    with open(log_dir / "callback_debug.txt", "a", encoding="utf-8") as f:
+                                        f.write(f"[EMIT_DONE] session={task.session_id}\n")
+                                except Exception:
+                                    pass
                             except Exception as e:
                                 log_dir = _get_debug_log_dir()
                                 with open(log_dir / "callback_debug.txt", "a", encoding="utf-8") as f:

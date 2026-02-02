@@ -761,6 +761,20 @@ def _save_compaction_state(state: Dict[str, int]) -> None:
         logger.warning("Failed to save compaction state: %s", e)
 
 
+def _compaction_log(message: str, session_id: str = "", **kwargs: Any) -> None:
+    """Append one line to compaction.log (same base dir as compaction_state)."""
+    try:
+        from pathlib import Path
+        log_dir = Path(Config.APP_DIR) / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        extra = " ".join(f"{k}={v}" for k, v in kwargs.items())
+        line = f"{datetime.utcnow().isoformat()}Z {message} session_id={session_id} {extra}\n"
+        with open(log_dir / "compaction.log", "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass
+
+
 def run_session_compaction_sync(
     agent: Any,
     user_scope_id: Optional[UUID],
@@ -777,7 +791,9 @@ def run_session_compaction_sync(
     state = _load_compaction_state()
     last = state.get(session_id, 0)
     if current_turn_count - last < interval:
+        _compaction_log("COMPACTION_SKIP", session_id=session_id, turn_count=str(current_turn_count), last=str(last), interval=str(interval), reason="interval_not_reached")
         return
+    _compaction_log("COMPACTION_START", session_id=session_id, turn_count=str(current_turn_count), last=str(last), interval=str(interval))
     date_str = datetime.utcnow().strftime("%Y-%m-%d")
     prompt = (
         "Session nearing compaction. Store durable memories now. "
@@ -789,9 +805,11 @@ def run_session_compaction_sync(
         reply = agent._generate_for_compaction(prompt)
     except Exception as e:
         logger.warning("Compaction LLM call failed: %s", e)
+        _compaction_log("COMPACTION_LLM_FAIL", session_id=session_id, error=str(e)[:200])
         return
     memories = _parse_memory_reply(reply)
     if not memories:
+        _compaction_log("COMPACTION_NO_REPLY", session_id=session_id)
         state[session_id] = current_turn_count
         _save_compaction_state(state)
         refresh_user_profile_summary(user_scope_id)
@@ -816,6 +834,8 @@ def run_session_compaction_sync(
         asyncio.run(_ingest_all())
     except Exception as e:
         logger.warning("Compaction ingest failed: %s", e)
+        _compaction_log("COMPACTION_INGEST_FAIL", session_id=session_id, error=str(e)[:200])
+    _compaction_log("COMPACTION_DONE", session_id=session_id, memories=str(len(memories)), date=date_str)
     state[session_id] = current_turn_count
     _save_compaction_state(state)
     refresh_user_profile_summary(user_scope_id)

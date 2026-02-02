@@ -180,6 +180,14 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### RAG and Memory Context (Pre-Generation Injection)
+
+RAG retrieval for the current turn is done in the **input processing phase**, strictly **before** the LLM is called. There is no RAG trigger on the model output stream.
+
+1. **When**: Every chat entry point (Web UI via headless runner, gateway, automation) runs a memory search on the **user message** before calling the agent. The retrieved chunks are passed as `memory_context` into `chat_step`.
+2. **Where it appears**: The model receives context in the first prompt via the system block **"## Memory context (relevant to this query)"**. That block is filled with the pre-retrieved snippets (or a placeholder if none were found).
+3. **memory_search tool**: The `memory_search` tool is for **follow-up or different short queries only** (e.g. "user name", "user preferences"). It must **not** be used with full thinking or `<think>` content; the tool rejects such queries and instructs the model to use the Memory context block for this turn.
+
 ### Persistent Hybrid Architecture (Agatic vNext)
 
 In addition to the RAM-based context above, VAF now employs a **Persistent Hybrid Architecture** that maintains a "brain on disk". This ensures the Main Agent knows "where it is" and "what it's doing" even after restarts.

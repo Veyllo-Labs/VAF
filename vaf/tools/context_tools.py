@@ -208,6 +208,12 @@ class MemorySearchTool(BaseTool):
         query = (kwargs.get("query") or "").strip()
         if not query:
             return "Error: query is required."
+        # Reject model output (e.g. <think> blocks) — use Memory context block for this turn
+        if query.startswith("<think>") or "</think>" in query:
+            return (
+                "Use the Memory context block for this turn. "
+                "For memory_search pass only a short query (e.g. 'user name', 'user preferences')."
+            )
         # Avoid huge RAG query (e.g. model passing full thinking) → RAM spike in embeddings
         from vaf.memory.embeddings import MAX_EMBED_INPUT_CHARS
         if len(query) > MAX_EMBED_INPUT_CHARS:
@@ -222,7 +228,9 @@ class MemorySearchTool(BaseTool):
                 user_scope_id = None
         try:
             from vaf.memory.rag import run_memory_search_sync
-            result = run_memory_search_sync(query=query, k=k, user_scope_id=user_scope_id)
+            result = run_memory_search_sync(
+                query=query, k=k, user_scope_id=user_scope_id, caller="tool"
+            )
             if not result or not result.strip():
                 return "No memories found for this query. You can tell the user you don't have stored information and offer to remember things from now on."
             return result

@@ -4755,7 +4755,9 @@ class Agent:
             # CRITICAL: We must detect whether we received an ANSWER for the user, not just thinking.
             # Some models output long reasoning (full_reasoning) but no final answer (full_content).
             # Empty = no meaningful final answer – we do NOT count reasoning as the answer.
-            clean_final = re.sub(r'<[^>]*>', '', (full_content or ""))  # Remove XML (e.g. <think>)
+            # Fix: First strip complete <think> blocks (content included), THEN strip other tags
+            clean_final = re.sub(r'<think>.*?</think>', '', (full_content or ""), flags=re.DOTALL)
+            clean_final = re.sub(r'<[^>]*>', '', clean_final)  # Remove remaining XML (e.g. <tool_call>)
             clean_final = re.sub(r'```[\s\S]*?```', '', clean_final)  # Remove code blocks
             clean_final = clean_final.replace(".", "").replace("\n", "").replace(":", "").strip()
             empty_patterns = ["answer", "antwort", "response", "here", "hier", "ok", "okay"]
@@ -4770,8 +4772,10 @@ class Agent:
             # CoT fallback: Some models (e.g. VQ1) send the whole reply in reasoning_content and
             # little or nothing in content. Treat substantial reasoning as a valid answer so we
             # don't trigger infinite "Empty response" retries.
-            if not has_final_answer and not tool_calls_detected and full_reasoning and len(full_reasoning.strip()) > 100:
-                has_final_answer = True
+            # UPDATE: Disabled this fallback because it prevents retrying when the model truly
+            # forgets to answer (outputting only <think>).
+            # if not has_final_answer and not tool_calls_detected and full_reasoning and len(full_reasoning.strip()) > 100:
+            #     has_final_answer = True
 
             # Empty Response Handler: No answer for the user (thinking only counts as empty)
             # NO RETRY LIMITS - will loop until we get a response

@@ -10,6 +10,7 @@ import requests
 from vaf.cli.ui import UI
 from vaf.core.config import Config
 from vaf.core.gpu_detection import get_primary_gpu
+from vaf.core.platform import Platform
 
 class ServerManager:
     """
@@ -510,13 +511,14 @@ class ServerManager:
         self.stop_server(force_external=True)
         
         # ═══════════════════════════════════════════════════════════════════
-        # SMART CONTEXT & SLOT CALCULATION (VRAM-FIRST)
+        # N_PARALLEL: DRIVEN BY MODEL SIZE (GB), NOT BY TOKENS
         # ═══════════════════════════════════════════════════════════════════
-        # Goal: Give each agent the FULL requested context (n_ctx).
+        # Goal: Avoid RAM/VRAM explosion. n_parallel is decided by MODEL SIZE IN GB
+        # and available VRAM/RAM; context (tokens) is only used to check if 2 slots fit.
         # Strategy:
-        # - Priority 1: Fit everything in VRAM (Fastest).
-        # - Priority 2: If VRAM full, use System RAM but LIMIT SLOTS to 1 (Sequential) to avoid thrashing.
-        # - Priority 3: Max RAM usage target: 55% of Total System RAM.
+        # - Priority 1: Model size in GB vs VRAM — if model alone uses too much, 1 slot.
+        # - Priority 2: Model + 2× context + overhead must fit in VRAM for 2 slots.
+        # - Priority 3: VRAM < 12GB or model > ~6GB → always 1 slot to be safe.
         
         import psutil
         from vaf.core.gpu_detection import get_primary_gpu
@@ -525,66 +527,54 @@ class ServerManager:
         total_ram_gb = psutil.virtual_memory().total / (1024**3)
         gpu = get_primary_gpu()
         
-        # 2. Estimate Memory Usage (STRICT / REALISTIC for Windows)
-        # Model Weights: Get ACTUAL file size + runtime overhead
+        # 2. Model size in GB (primary driver for n_parallel)
         try:
             model_file_size = os.path.getsize(model_path)
             model_gb = model_file_size / (1024**3)
-            # Add 0.5GB - 1.0GB overhead for scratch buffers, compute graphs etc.
+            # Runtime overhead: scratch buffers, compute graphs
             est_model_gb = model_gb + 1.0
         except Exception:
-            # Fallback if file not found (should not happen here)
-            est_model_gb = 6.5 
+            est_model_gb = 6.5
         
-        # Context (KV Cache): Standard f16 cache is HUGE.
-        # 8192 tokens * f16 key/value * layers ~ 2.5 GB VRAM (conservatively)
+        # Context (KV) in GB — only to check if 2 slots fit; not the main driver
         est_ctx_gb_per_8k = 2.5
-        
-        # OS Overhead: Windows needs ~1.5-2.0 GB reserved
         os_overhead_gb = 2.0
-        
         req_ctx_gb_per_slot = (n_ctx / 8192) * est_ctx_gb_per_8k
-        
-        # 3. Decision Logic
+        cost_2_slots_vram = est_model_gb + (req_ctx_gb_per_slot * 2) + os_overhead_gb
+        cost_2_slots_ram = est_model_gb + (req_ctx_gb_per_slot * 2) + 1.0
+
+        # 3. Decision: start with 1 slot; only allow 2 if model size (GB) + context clearly fit
         final_parallel = 1
         final_total_ctx = n_ctx
         mode_msg = "Sequential (1 Slot)"
-        
-        # Check VRAM first (if available)
+        vram_gb = (gpu.vram_mb / 1024) if (gpu and gpu.vram_mb > 0) else 0.0
+
         if gpu and gpu.vram_mb > 0:
-            vram_gb = gpu.vram_mb / 1024
-            
-            # Cost for 2 slots in VRAM
-            cost_2_slots_vram = est_model_gb + (req_ctx_gb_per_slot * 2) + os_overhead_gb
-            
-            if cost_2_slots_vram <= vram_gb:
-                # Fits in VRAM! Go Parallel.
+            # Model-size rule: if model alone uses > 50% of VRAM, no room for 2 slots
+            if est_model_gb > vram_gb * 0.5:
+                mode_msg = "GPU Sequential (1 Slot - Model Size vs VRAM)"
+            elif cost_2_slots_vram <= vram_gb:
                 final_parallel = 2
                 final_total_ctx = n_ctx * 2
                 mode_msg = "GPU Parallel (2 Slots - VRAM)"
             else:
-                # Doesn't fit. Fallback to 1 slot to stay in VRAM.
-                # This prevents the 1 Token/sec swap death.
                 mode_msg = "GPU Sequential (1 Slot - VRAM Optimized)"
         else:
-            # CPU/RAM Mode
-            # Calculate Cost for 2 Slots in RAM
-            cost_2_slots_ram = est_model_gb + (req_ctx_gb_per_slot * 2) + 1.0
             ram_budget_gb = total_ram_gb * 0.55
-            
             if cost_2_slots_ram <= ram_budget_gb:
                 final_parallel = 2
                 final_total_ctx = n_ctx * 2
                 mode_msg = "CPU Parallel (2 Slots - RAM)"
             else:
                 mode_msg = "CPU Sequential (1 Slot - RAM Limited)"
-            
-        # SAFETY OVERRIDE: 10GB Cards (like RTX 3080) often spill over with 2 slots + large context
-        # Enforce 1 slot if VRAM < 12GB to be safe, unless user overrides.
-        if gpu and gpu.vram_mb > 0 and gpu.vram_mb < 12000 and final_parallel > 1:
-            final_parallel = 1
-            final_total_ctx = n_ctx # Reset context to single sequence
-            mode_msg = "GPU Sequential (1 Slot - VRAM < 12GB Safety)"
+
+        # SAFETY: Small VRAM or large model (GB) → always 1 slot
+        if gpu and gpu.vram_mb > 0:
+            if gpu.vram_mb < 12000 or est_model_gb > 6.0:
+                if final_parallel > 1:
+                    final_parallel = 1
+                    final_total_ctx = n_ctx
+                    mode_msg = "GPU Sequential (1 Slot - VRAM/Model Safety)"
 
         # USER CONFIG OVERRIDE
         # Allow user to explicitly set n_parallel in config (e.g. to force 1 or try 4)
@@ -605,14 +595,19 @@ class ServerManager:
         else:
             UI.event("System", f"RAM: {total_ram_gb:.1f}GB | Est. 2-Slot Need: {cost_2_slots_ram:.1f}GB", style="dim")
         
+        # llama.cpp server (official README): -np/--parallel N (env: LLAMA_ARG_N_PARALLEL), -c/--ctx-size N.
+        # CLI takes precedence over env. We pass both so the value is respected either way.
+        # -kvu (disable kv_unified) is build-specific; some builds force n_parallel=4 unless -kvu.
         cmd = [
             self.server_path,
             "-m", model_path,
             "-ngl", str(n_gpu_layers),
-            "-c", str(final_total_ctx), # Total allocated context
+            "-c", str(final_total_ctx),  # --ctx-size: total context (env: LLAMA_ARG_CTX_SIZE)
             "--port", str(port),
             "--host", "127.0.0.1",
             "--parallel", str(final_parallel),
+            "-np", str(final_parallel),  # number of parallel slots (env: LLAMA_ARG_N_PARALLEL)
+            "-kvu",  # disable kv_unified on builds that support it (avoids forced n_parallel=4)
             # Disable integrated web UI to save resources and keep port 8080 clean
             "--no-webui",
             # VRAM Optimization: Use 8-bit cache for Key/Value memory
@@ -628,13 +623,17 @@ class ServerManager:
             "--log-verbosity", "2",
         ]
         
-        # Log the command for debugging
+        # Log the command for debugging (always ~/.vaf/logs so it's findable)
+        log_dir = Platform.vaf_dir() / "logs"
         try:
-            log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "logs")
-            os.makedirs(log_dir, exist_ok=True)
-            with open(os.path.join(log_dir, "server_cmd.log"), "w") as f:
-                f.write(" ".join(cmd))
-        except: pass
+            log_dir.mkdir(parents=True, exist_ok=True)
+            cmd_log = log_dir / "server_cmd.log"
+            cmd_log.write_text(
+                f"# n_parallel (slots) = {final_parallel}\n" + " ".join(cmd),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
         
         UI.event("Server", f"Starting background process on :{port} (ctx={final_total_ctx}, parallel={final_parallel})...", style="dim")
         
@@ -647,14 +646,15 @@ class ServerManager:
              creationflags = subprocess.CREATE_NO_WINDOW
         
         try:
-            # Create log file for server output (helps with debugging)
-            log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "logs")
-            os.makedirs(log_dir, exist_ok=True)
-            log_file = os.path.join(log_dir, "server.log")
-            
-            # Open log file with UTF-8 encoding to avoid Windows cp1252 issues
+            # Create log file for server output (same dir as server_cmd.log: ~/.vaf/logs)
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / "server.log"
             self._log_file = open(log_file, 'w', encoding='utf-8', errors='replace')
-            
+
+            # Override LLAMA_ARG_N_PARALLEL so user env cannot force 4
+            run_env = os.environ.copy()
+            run_env["LLAMA_ARG_N_PARALLEL"] = str(final_parallel)
+
             # CRITICAL FIX: Ensure child process terminates when parent exits
             # On Windows, use CREATE_BREAKAWAY_FROM_JOB to prevent orphaned processes
             # This ensures the server process is linked to the parent process lifecycle
@@ -662,12 +662,13 @@ class ServerManager:
                 # CREATE_NO_WINDOW: Don't show console window
                 # CREATE_NEW_PROCESS_GROUP: Allow clean shutdown via CTRL+BREAK
                 creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-            
+
             self.process = subprocess.Popen(
                 cmd,
-                stdout=self._log_file,      # Write to log file
-                stderr=self._log_file,      # Write errors to same log
-                creationflags=creationflags
+                stdout=self._log_file,
+                stderr=self._log_file,
+                creationflags=creationflags,
+                env=run_env,
             )
             
             # Windows: Add process to job object for automatic cleanup
@@ -702,9 +703,20 @@ class ServerManager:
                     requests.get(f"http://127.0.0.1:{port}/health", timeout=0.5)
                     # Save PID for crash recovery
                     self._save_pid(self.process.pid)
-                    # Return True - caller will show success message after spinner ends
+                    # Verify server actually applied our n_parallel (GET /props returns total_slots)
+                    try:
+                        r = requests.get(f"http://127.0.0.1:{port}/props", timeout=2)
+                        if r.status_code == 200:
+                            data = r.json()
+                            slots = data.get("total_slots")
+                            if slots is not None and int(slots) != final_parallel:
+                                UI.event("Server", f"Warn: server reports total_slots={slots} (expected {final_parallel})", style="yellow")
+                            elif slots is not None:
+                                UI.event("System", f"Server confirmed: total_slots={slots}", style="dim")
+                    except Exception:
+                        pass  # /props optional; older builds may not have it
                     return True
-                except:
+                except Exception:
                     time.sleep(0.5)
                     
             UI.error("Server startup timed out.")

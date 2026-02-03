@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from vaf.memory.database import get_db, init_db, check_db_connection, get_db_stats
 from vaf.memory.rag import RagPipeline, RagSource
 from vaf.memory.graph import GraphManager
+from vaf.memory.cache import get_cache
 from vaf.core.config import Config
 import json
 import logging
@@ -167,14 +168,21 @@ async def initialize_database(drop_existing: bool = False):
 async def get_stats():
     """Get memory system statistics."""
     try:
+        cache = get_cache()
+        cached = await cache.get_stats()
+        if cached is not None:
+            return StatsResponse(**cached)
+
         stats = await get_db_stats()
         db_ok = await check_db_connection()
-        return StatsResponse(
+        response = StatsResponse(
             memories=stats["memories"],
             chunks=stats["chunks"],
             connections=stats["connections"],
             db_connected=db_ok
         )
+        await cache.set_stats(response.model_dump())
+        return response
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")
         return StatsResponse(
@@ -212,6 +220,7 @@ async def create_memory(
                 auto_connect=request.auto_connect,
                 user_scope_id=user_scope_id
             )
+            await get_cache().invalidate_graph()
             chunk_count = await pipeline.get_chunk_count(memory.id)
             return MemoryResponse(
                 id=str(memory.id),
@@ -266,13 +275,23 @@ async def get_graph(
 ):
     """Get memory graph data for ReactFlow visualization."""
     try:
+        use_cache = not highlight
+        highlight_ids = highlight.split(",") if highlight else None
+        if use_cache:
+            cache = get_cache()
+            graph_data = await cache.get_graph(limit)
+            if graph_data is not None:
+                return GraphResponse(**graph_data)
+
         async with get_db() as db:
             graph_manager = GraphManager(db)
-            highlight_ids = highlight.split(",") if highlight else None
             graph_data = await graph_manager.get_graph_data(
                 limit=limit,
                 highlight_ids=highlight_ids
             )
+            if use_cache:
+                cache = get_cache()
+                await cache.set_graph(graph_data, limit)
             return GraphResponse(**graph_data)
     except Exception as e:
         logger.error(f"Failed to get graph: {e}")
@@ -319,6 +338,7 @@ async def update_memory(memory_id: str, request: MemoryUpdate):
                 content=request.content,
                 metadata=request.metadata
             )
+            await get_cache().invalidate_graph()
             chunk_count = await pipeline.get_chunk_count(memory.id)
             return MemoryResponse(
                 id=str(memory.id),
@@ -353,10 +373,11 @@ async def delete_memory(memory_id: str, hard: bool = Query(default=False)):
         async with get_db() as db:
             pipeline = RagPipeline(db)
             deleted = await pipeline.delete_memory(memory_uuid, soft=not hard)
-            
+
             if not deleted:
                 raise HTTPException(status_code=404, detail="Memory not found")
-            
+
+            await get_cache().invalidate_graph()
             return {"status": "deleted", "id": memory_id, "hard": hard}
     except HTTPException:
         raise
@@ -382,7 +403,7 @@ async def update_connections(memory_id: str, request: ConnectionUpdate):
                 request.related_ids,
                 request.connection_type
             )
-            
+            await get_cache().invalidate_graph()
             return {
                 "status": "updated",
                 "memory_id": memory_id,
@@ -410,16 +431,27 @@ async def rag_query(
     For streaming responses, use /rag/query/stream endpoint.
     """
     try:
+        cache = get_cache()
+        scope_str = str(user_scope_id) if user_scope_id else None
+        cached = await cache.get_rag_result(
+            request.query,
+            k=request.k,
+            user_scope_id=scope_str,
+            metadata_filter=request.metadata_filter,
+        )
+        if cached is not None:
+            return RagQueryResponse(**cached)
+
         async with get_db() as db:
             pipeline = RagPipeline(db)
-            
+
             result = await pipeline.query(
                 query=request.query,
                 k=request.k,
                 metadata_filter=request.metadata_filter,
                 user_scope_id=user_scope_id
             )
-            
+
             sources = [
                 SourceResponse(
                     memory_id=s.memory_id,
@@ -430,12 +462,21 @@ async def rag_query(
                 )
                 for s in result.sources
             ]
-            
-            return RagQueryResponse(
+
+            response = RagQueryResponse(
                 answer=result.answer,
                 sources=sources,
                 context_tokens=result.context_tokens
             )
+            cache_dict = response.model_dump()
+            await cache.set_rag_result(
+                request.query,
+                cache_dict,
+                k=request.k,
+                user_scope_id=scope_str,
+                metadata_filter=request.metadata_filter,
+            )
+            return response
     except Exception as e:
         logger.error(f"RAG query failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

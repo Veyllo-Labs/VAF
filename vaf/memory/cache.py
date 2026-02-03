@@ -133,13 +133,20 @@ class MemoryCache:
     # RAG Query Cache
     # =========================================================================
     
-    async def get_rag_result(self, query: str, k: int = 5) -> Optional[Dict[str, Any]]:
-        """Get cached RAG result for query."""
+    async def get_rag_result(
+        self,
+        query: str,
+        k: int = 5,
+        user_scope_id: Optional[str] = None,
+        metadata_filter: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Get cached RAG result for query (key includes scope and filter)."""
         if not await self.is_available():
             return None
         
         try:
-            cache_key = f"{query}:k={k}"
+            filter_str = json.dumps(metadata_filter or {}, sort_keys=True)
+            cache_key = f"{query}:k={k}:scope={user_scope_id}:filter={filter_str}"
             key = f"{CacheKeys.RAG_QUERY}{self._hash_key(cache_key)}"
             data = await self.client.get(key)
             if data:
@@ -155,14 +162,17 @@ class MemoryCache:
         query: str,
         result: Dict[str, Any],
         k: int = 5,
-        ttl: int = None
+        user_scope_id: Optional[str] = None,
+        metadata_filter: Optional[Dict[str, Any]] = None,
+        ttl: int = None,
     ) -> bool:
-        """Cache RAG result for query."""
+        """Cache RAG result for query (key includes scope and filter)."""
         if not await self.is_available():
             return False
         
         try:
-            cache_key = f"{query}:k={k}"
+            filter_str = json.dumps(metadata_filter or {}, sort_keys=True)
+            cache_key = f"{query}:k={k}:scope={user_scope_id}:filter={filter_str}"
             key = f"{CacheKeys.RAG_QUERY}{self._hash_key(cache_key)}"
             ttl = ttl or self.DEFAULT_RAG_TTL
             await self.client.setex(key, ttl, json.dumps(result))

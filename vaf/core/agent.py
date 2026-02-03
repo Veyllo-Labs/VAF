@@ -3983,11 +3983,12 @@ class Agent:
                             append_domain_log("backend", f"calling_8080 attempt={_attempt + 1}")
                         except Exception:
                             pass
+                        # (connect_sec, read_sec): read applies per chunk so we don't hang forever if server stalls
                         response = requests.post(
                             "http://127.0.0.1:8080/v1/chat/completions", 
                             json=payload, 
                             stream=True,
-                            timeout=600 
+                            timeout=(60, 300)
                         )
                         
                         # DEBUG TRACER
@@ -4130,6 +4131,14 @@ class Agent:
                                  UI.error(f"Failed to start server: {start_err}")
                          time.sleep(2)
                          continue
+                    except requests.exceptions.ReadTimeout:
+                         try:
+                             append_domain_log("backend", "server(8080) read_timeout no_data_300s")
+                         except Exception:
+                             pass
+                         UI.event("Server", "Local model took too long (no data for 5 min). Retrying...", style="warning")
+                         time.sleep(2)
+                         continue
                     
                 if not response or response.status_code != 200:
                     try:
@@ -4233,6 +4242,19 @@ class Agent:
                         stream_callback("</think>")
                         is_reasoning = False
 
+                except requests.exceptions.ReadTimeout:
+                    try:
+                        append_domain_log("backend", "server(8080) read_timeout_during_stream")
+                    except Exception:
+                        pass
+                    UI.error("Local model sent no data for 5 minutes (timeout). Partial answer saved.")
+                    if is_reasoning and stream_callback:
+                        stream_callback("</think>")
+                    timeout_msg = "\n\n[Antwort wegen Timeout abgebrochen. Bitte erneut versuchen.]"
+                    if stream_callback:
+                        stream_callback(timeout_msg)
+                    full_response += timeout_msg
+                    full_content += timeout_msg
                 except Exception as e:
                     UI.error(f"Server Error: {e}")
                     return

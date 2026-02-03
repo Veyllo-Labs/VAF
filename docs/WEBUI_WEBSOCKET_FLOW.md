@@ -87,7 +87,7 @@ Useful files when debugging WebUI / LLM / queue (all under the log dir above):
 | File | Contents |
 |------|----------|
 | `queue.log` | **QUEUE_ADD**, **QUEUE_GET**, **QUEUE_CHAT_START** / **QUEUE_CHAT_END**, **QUEUE_CHAT_FAIL**, **QUEUE_DONE** (session_id, cmd/compaction/chat) |
-| `backend.log` | Backend per chat_step `[api(...)` / `server(8080)` / `library(...)]`, **503 model_loading retry**, **unavailable_after_retries**, **calling_8080**, **\[CHUNK\]** / **\[CONTENT\]** (API stream) |
+| `backend.log` | Backend per chat_step `[api(...)` / `server(8080)` / `library(...)]`, **503 model_loading retry**, **unavailable_after_retries**, **calling_8080**, **read_timeout no_data_300s** / **read_timeout_during_stream**, **\[CHUNK\]** / **\[CONTENT\]** (API stream) |
 | `webui.log` | **\[WARNING\]** only when a message is dropped (no server loop). Stream/emit logging is disabled to avoid UI lag. |
 | `rag.log` | RAG timing, search debug, embed calls, snippet count, user scope, failures |
 | `memory.log` | **\[COMPACTION\]**, **\[USAGE\]** RSS, **\[EMBED\]** load, **\[PROFILER\]**, **\[WHISPER\]** (all timestamped) |
@@ -108,6 +108,7 @@ If `Queued input...` is present but no further logs appear:
 If `Starting chat_step...` appears but no response:
 - **chat_step crashed or hung**.
 - Check if the error mentions encoding (`charmap`); fix with UTF-8 output.
+- For local backend: if `backend.log` shows `calling_8080 attempt=1` and nothing after, the server may have stopped sending data. The agent now applies a 5‑minute read timeout; after that it ends the step and the queue continues. Check `server.log` and machine load if timeouts repeat.
 
 ### 1b) Local Backend Not Reachable
 
@@ -158,6 +159,7 @@ If the tool card expands but the panel does not open:
 |---|---|---|
 | `Chat_step failed ... charmap` | Windows console encoding | Set `PYTHONIOENCODING=utf-8` and reconfigure stdout/stderr |
 | `LLM Call Failed: HTTPConnectionPool(127.0.0.1:8080)` | Backend not running or duplicate server start | Restart tray; ensure only one `llama-server` is running |
+| Chat stuck after `calling_8080` (no `QUEUE_CHAT_END`) | Local server stopped sending stream data | Agent now times out after 5 min and ends the step. If it keeps happening, check model load and RAM; see **Local Server: Request Timeouts** in `docs/API_INTEGRATION.md`. |
 | Messages appear in CLI only | Headless agent not running | Ensure tray starts `run_headless_agent()` |
 | WebUI shows only system logs | `agent_message_update` filtered by session | Fix session sync and auto-load `history_update` |
 | Sub-agent window never appears | No `subagent_update` emitted | Send periodic sub-agent status updates from headless loop |

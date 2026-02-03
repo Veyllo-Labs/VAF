@@ -122,6 +122,20 @@ When using the local provider, the llama-server reserves RAM for a prompt cache 
 
 On systems with limited RAM (e.g. 32 GB total), a lower value (e.g. 2048 or 0) reduces the risk of swapping or out-of-memory errors. On systems with more RAM, a higher value (e.g. 8192) can improve response time in long conversations. Changes apply after the next server start.
 
+## Local Server: Request Timeouts
+
+The agent talks to the local llama-server at `http://127.0.0.1:8080/v1/chat/completions` with a **streamed** response. To avoid the chat queue hanging when the server stops sending data (e.g. model stuck, long “thinking”, or overload), timeouts are applied:
+
+- **Connect:** 60 seconds to establish the connection.
+- **Read:** 300 seconds (5 minutes) maximum wait for the next chunk. If no data is received in that time, the request is treated as failed.
+
+On timeout:
+
+- If the timeout happens **before** any response body is received, the agent retries (same as for connection errors), then gives up after retries.
+- If the timeout happens **during** streaming, the agent stops waiting, appends a short message to the user (e.g. “Answer aborted due to timeout. Please try again.”), and ends the step so the queue can process the next message.
+
+Logs: `backend.log` may show `server(8080) read_timeout no_data_300s` (timeout before body) or `server(8080) read_timeout_during_stream` (timeout while reading chunks). If you see these often, the model or machine may be overloaded or the prompt may be too large.
+
 ## API Features
 
 ### Streaming

@@ -112,6 +112,16 @@ When using API providers, you may want to disable automatic llama-server startup
 
 This saves resources when not using local models.
 
+## Local Server: Prompt Cache (Memory)
+
+When using the local provider, the llama-server reserves RAM for a prompt cache so it can reuse conversation context across turns instead of re-evaluating the full history each time. You can tune this in `~/.vaf/config.json` or in the Web UI under **AI & Model** → **Local Model Settings**:
+
+| Key | Default | Description |
+| :--- | :--- | :--- |
+| `llama_cache_ram` | `4096` | Cache size in MB. `0` disables the cache. `-1` uses 40% of free system RAM, capped at 8192 MB. Valid range: 0–16384. |
+
+On systems with limited RAM (e.g. 32 GB total), a lower value (e.g. 2048 or 0) reduces the risk of swapping or out-of-memory errors. On systems with more RAM, a higher value (e.g. 8192) can improve response time in long conversations. Changes apply after the next server start.
+
 ## API Features
 
 ### Streaming

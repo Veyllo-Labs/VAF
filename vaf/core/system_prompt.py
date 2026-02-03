@@ -25,7 +25,9 @@ class SystemPromptManager:
     Dynamically adjusts active modules based on conversation context.
     """
     
-    DECAY_START = 3  # Modules stay active for 3 turns after trigger
+    DECAY_START = 3  # Default turns until module deactivates
+    # Per-module turn count (higher = stays active longer); missing modules use DECAY_START
+    MODULE_DECAY_TURNS: Dict[str, int] = {"coding": 5, "research": 4, "filesystem": 3}
     
     def __init__(self, tools: List[Any] = None, model_name: str = "VQ-1", agent_instance: Any = None, username: str = "admin"):
         """
@@ -622,8 +624,8 @@ Use tools proactively to accomplish tasks. Don't ask for permission - just use t
         for module_name, keywords in self.module_keywords.items():
             # Activate module if any keyword is found
             if any(kw in user_lower for kw in keywords):
-                # Reset counter to max
-                self.active_modules[module_name] = self.DECAY_START
+                # Reset counter to module-specific or default decay turns
+                self.active_modules[module_name] = self.MODULE_DECAY_TURNS.get(module_name, self.DECAY_START)
     
     def get_active_modules(self) -> List[str]:
         """Get list of currently active module names."""
@@ -632,7 +634,7 @@ Use tools proactively to accomplish tasks. Don't ask for permission - just use t
     def activate_module(self, module_name: str) -> None:
         """Manually activate a module."""
         if module_name in self.modules:
-            self.active_modules[module_name] = self.DECAY_START
+            self.active_modules[module_name] = self.MODULE_DECAY_TURNS.get(module_name, self.DECAY_START)
     
     def deactivate_module(self, module_name: str) -> None:
         """Manually deactivate a module."""

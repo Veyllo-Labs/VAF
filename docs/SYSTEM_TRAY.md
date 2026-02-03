@@ -49,6 +49,7 @@ Settings are managed in `~/.vaf/config.json`:
 | `server_idle_timeout` | `15` | Seconds to wait before unloading model |
 | `persist_server` | `false` | If true, model stays loaded (same as checkbox) |
 | `tray_autostart` | `false` | Auto-start tray app on OS login |
+| `llama_cache_ram` | `4096` | Prompt cache size in MB for the local llama-server. Set to `0` to disable caching; set to `-1` to use 40% of free system RAM (capped at 8192 MB). Takes effect after the next server start. |
 
 ## Architecture
 

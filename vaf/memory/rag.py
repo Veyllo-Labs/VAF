@@ -881,6 +881,45 @@ def run_auto_capture_sync(
         logger.warning("Auto-capture failed: %s", e)
 
 
+def refine_rag_request(query: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """
+    Refine a RAG query for better retrieval on user-profile / "who am I" style questions.
+
+    Keyword-based (no LLM). When the query suggests user/preferences/remember context,
+    appends disambiguating terms so semantic search tends to hit profile/compaction memories.
+    Optionally returns a metadata_filter; currently returns None to avoid over-filtering.
+
+    Returns:
+        (refined_query, optional_metadata_filter)
+    """
+    if not query or not query.strip():
+        return (query, None)
+    q = query.strip().lower()
+    # Phrases that suggest "user profile / what do you know about me"
+    user_profile_phrases = (
+        "who am i", "who am I", "what is this user", "this user", "about me", "about the user",
+        "what do you know", "what do you remember", "my preferences", "user preferences",
+        "remember me", "merke dir", "was weißt du über mich", "was weisst du",
+        "what do you have on me", "my info", "user info", "user facts",
+        "preferences", "meine präferenzen", "sag mir was du über mich weißt",
+    )
+    is_user_query = any(p in q for p in user_profile_phrases) or (
+        len(q) <= 80 and any(w in q for w in ("user", "me ", " me", "preferences", "remember"))
+    )
+    if not is_user_query:
+        return (query, None)
+    # Short vague query: expand for semantic disambiguation
+    max_expand_len = 100
+    if len(q) <= max_expand_len:
+        refined = (query.strip() + " user profile facts preferences about this user").strip()
+        # Cap total length for embedding
+        from vaf.memory.embeddings import MAX_EMBED_INPUT_CHARS
+        if len(refined) > MAX_EMBED_INPUT_CHARS:
+            refined = refined[:MAX_EMBED_INPUT_CHARS].rstrip()
+        return (refined, None)
+    return (query, None)
+
+
 def run_memory_search_sync(
     query: str,
     k: int = 5,
@@ -917,6 +956,13 @@ def run_memory_search_sync(
         _q = _q[:MAX_EMBED_INPUT_CHARS].rstrip()
     query = _q
 
+    # Optional: refine query for user-profile style questions (keyword-based)
+    metadata_filter: Optional[Dict[str, Any]] = None
+    if Config.get("memory_rag_refine_query", True):
+        query, metadata_filter = refine_rag_request(query)
+        if not query:
+            return ""
+
     # Debug log: who called RAG and with what length (to trace RAM spike)
     try:
         from pathlib import Path
@@ -936,7 +982,7 @@ def run_memory_search_sync(
         async with get_db() as db:
             pipeline = RagPipeline(db)
             sources = await pipeline.search(
-                query, k=k, user_scope_id=user_scope_id
+                query, k=k, metadata_filter=metadata_filter, user_scope_id=user_scope_id
             )
             if not sources:
                 return ""

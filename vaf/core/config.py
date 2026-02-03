@@ -24,6 +24,7 @@ class Config:
         "gpu_layers": -1,
         "n_ctx": 8192,
         "n_parallel": 0, # 0 = Auto-detect based on VRAM (1 or 2); Set to 1 to force sequential if crashing
+        "llama_cache_ram": 4096,  # Prompt cache size in MB. 0 = disabled. -1 = auto (40% free RAM, cap 8192).
         "temperature": 0.7,
 
         # AI Provider Settings
@@ -98,6 +99,7 @@ class Config:
         
         # Memory System Settings (RAG + Vector Search)
         "memory_enabled": True,                                    # Enable memory system
+        "memory_rag_refine_query": True,                           # Refine vague queries (e.g. "who am I") for better RAG hits
         "memory_auto_capture": True,                                # Auto-store high-value snippets after agent response
         "memory_compaction_enabled": True,                          # Session compaction: prompt to store durable memories every N turns
         "memory_compaction_interval": 15,                           # Run compaction every N user/assistant turns

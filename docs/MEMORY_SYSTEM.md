@@ -7,10 +7,10 @@ The Memory System provides persistent, encrypted memory storage with RAG (Retrie
 - **Encrypted Storage**: AES-256-GCM encryption for all memory content at rest
 - **Vector Search**: PostgreSQL with pgvector extension for semantic similarity search
 - **Redis Caching**: Fast caching for embeddings, RAG queries, and graph data
-- **RAG Pipeline**: Intelligent retrieval and answer generation with source citations
+- **RAG pipeline**: Retrieval and answer generation with source citations
 - **Graph Visualization**: Interactive ReactFlow-based memory graph
 - **Auto-Connections**: Automatically links semantically related memories
-- **Streaming Responses**: Real-time token streaming for RAG queries
+- **Streaming**: Token streaming for RAG query responses
 - **Session Compaction**: Background process that every N user turns prompts the LLM to write durable memories (MEMORY:/NO_REPLY) into RAG; see [Session Compaction (background)](#session-compaction-background).
 
 ## Overview
@@ -50,17 +50,7 @@ The Memory System provides persistent, encrypted memory storage with RAG (Retrie
 
 ### Chat integration (pre-generation injection)
 
-In chat, RAG retrieval runs in the **input phase** before the LLM is called: the user message is used to run a memory search, and the result is injected as the "Memory context (relevant to this query)" block in the first prompt. The `memory_search` tool is for follow-up short queries only, not for model output (e.g. `<think>` content). See [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md#rag-and-memory-context-pre-generation-injection) for details.
-
-## Features
-
-- **Encrypted Storage**: AES-256-GCM encryption for all memory content at rest
-- **Vector Search**: PostgreSQL with pgvector extension for semantic similarity search
-- **RAG Pipeline**: Intelligent retrieval and answer generation with source citations
-- **Graph Visualization**: Interactive ReactFlow-based memory graph
-- **Auto-Connections**: Automatically links semantically related memories
-- **Streaming Responses**: Real-time token streaming for RAG queries
-- **Session Compaction**: Periodic background flush of durable memories into RAG (see [Session Compaction (background)](#session-compaction-background)).
+In chat, retrieval runs in the **input phase** before the LLM is called: the user message is used to run a memory search, and the result is injected as the "Memory context (relevant to this query)" block in the first prompt. When `memory_rag_refine_query` is enabled (default), short queries that look like user-profile questions (e.g. "who am I", "what do you remember") are expanded before search so that profile and compaction memories match more often. The `memory_search` tool is for follow-up short queries only; it must not be given model output (e.g. `<think>` content). See [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md#rag-and-memory-context-pre-generation-injection) for details.
 
 ## Requirements
 
@@ -108,6 +98,7 @@ Additional settings in `~/.vaf/config.json`:
 ```json
 {
     "memory_enabled": true,
+    "memory_rag_refine_query": true,
     "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",
     "memory_encryption_key": "",
     "memory_embedding_model": "all-MiniLM-L6-v2",
@@ -119,6 +110,10 @@ Additional settings in `~/.vaf/config.json`:
     "memory_compaction_interval": 15
 }
 ```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `memory_rag_refine_query` | `true` | Expand short user-profile-style queries (e.g. "who am I", "preferences") before search to improve recall. Set to `false` to use the raw user message only. |
 
 ### Session Compaction (background)
 

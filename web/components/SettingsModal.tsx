@@ -815,6 +815,31 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 type="number"
                                             />
                                         </div>
+                                        <div className="mt-4">
+                                            <Switch
+                                                label="Prompt cache: Auto (40% free RAM, max 8 GB)"
+                                                description="When enabled, cache size is computed from free system RAM. When disabled, use the value below."
+                                                checked={localConfig.llama_cache_ram === -1}
+                                                onChange={(v: boolean) => handleChange('llama_cache_ram', v ? -1 : 4096)}
+                                            />
+                                            {localConfig.llama_cache_ram !== -1 && (
+                                                <div className="mt-3">
+                                                    <Input
+                                                        label="Prompt Cache RAM (MB)"
+                                                        value={localConfig.llama_cache_ram ?? 4096}
+                                                        onChange={(v: string) => {
+                                                            const n = parseInt(v, 10);
+                                                            if (!Number.isNaN(n)) handleChange('llama_cache_ram', Math.max(0, Math.min(16384, n)));
+                                                        }}
+                                                        type="number"
+                                                    />
+                                                    <p className="text-xs text-gray-400 mt-1">Memory reserved to cache conversation history. Higher = faster replies in long chats, but uses more RAM. Set to 0 to disable. Default: 4096. Applies after next server start.</p>
+                                                </div>
+                                            )}
+                                            {localConfig.llama_cache_ram === -1 && (
+                                                <p className="text-xs text-gray-400 mt-2">Auto: 40% of free system RAM, capped at 8192 MB.</p>
+                                            )}
+                                        </div>
                                     </Section>
                                 )}
 

@@ -624,6 +624,18 @@ class ServerManager:
             "--log-verbosity", "2",
         ]
         
+        # Prompt cache RAM (MB): configurable to avoid OOM on limited systems
+        cache_ram_mb = Config.get("llama_cache_ram", 4096)
+        if cache_ram_mb == -1:
+            free_mb = psutil.virtual_memory().available / (1024 * 1024)
+            cache_ram_mb = min(8192, int(free_mb * 0.4))
+        try:
+            cache_ram_mb = max(0, int(cache_ram_mb))
+        except (TypeError, ValueError):
+            cache_ram_mb = 4096
+        cmd.extend(["--cache-ram", str(cache_ram_mb)])
+        UI.event("Server", f"Prompt cache: {cache_ram_mb} MB", style="dim")
+        
         # Log the command for debugging (local project logs/ dir)
         log_dir = Path(self.base_dir) / "logs"
         try:

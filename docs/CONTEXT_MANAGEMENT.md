@@ -77,59 +77,59 @@ VAF uses a **modular system prompt** that loads only what's needed:
 | File Analysis | ~4,000 tokens | ~1,100 tokens | **72%** |
 | All Modules Active | ~4,000 tokens | ~2,400 tokens | **40%** |
 
-### Sticky Context with Decay
+### Module retention (decay)
 
-Modules don't disappear immediately - they use a **decay mechanism** to prevent context "flicker":
+Modules remain active for a number of turns after they are triggered instead of being removed immediately. This avoids rapid switching when the user alternates between topics. The default retention is 3 turns; selected modules (e.g. coding, research) can use a longer retention via `MODULE_DECAY_TURNS`.
 
 ```python
-# Module stays active for 3 messages after being triggered
+# Default: 3 turns; override per module as needed
 DECAY_START = 3
+MODULE_DECAY_TURNS = {"coding": 5, "research": 4, "filesystem": 3}
 
-# Example conversation:
-User: "Create a Python script"     → 💻 Coder activated (3 turns remaining)
-User: "Add error handling"         → 💻 Coder stays active (reset to 3)
-User: "What's the weather?"        → 💻 Coder (2), 🔍 Researcher (3)
-User: "Thanks!"                    → 💻 Coder (1), 🔍 Researcher (2)
-User: "Bye"                        → 💻 Coder removed, 🔍 Researcher (1)
+# Example:
+User: "Create a Python script"     → coding active (5 turns)
+User: "Add error handling"         → coding reset to 5
+User: "What's the weather?"        → coding 4, research 4
+User: "Thanks!"                    → coding 3, research 3
+User: "Bye"                        → coding 2, research 2
 ```
 
 ### Implementation
 
-The system is implemented in `vaf/core/system_prompt.py`:
+Implemented in `vaf/core/system_prompt.py`:
 
 ```python
 class SystemPromptManager:
-    DECAY_START = 3  # Messages until module deactivates
+    DECAY_START = 3  # Default turns until module is deactivated
+    MODULE_DECAY_TURNS = {"coding": 5, "research": 4, "filesystem": 3}
     
     def __init__(self, agent_tools):
         self.tools = agent_tools
         self.active_modules = {}  # module_name -> remaining_turns
         
     def analyze_context(self, user_input: str):
-        """Analyze input and activate relevant modules."""
-        # 1. Decay existing modules
+        """Update active modules from user input."""
+        # 1. Decrement remaining turns; remove when zero
         for mod in list(self.active_modules.keys()):
             self.active_modules[mod] -= 1
             if self.active_modules[mod] <= 0:
                 del self.active_modules[mod]
         
-        # 2. Activate modules based on keyword triggers
+        # 2. Activate or reset modules from keyword triggers
         if any(kw in user_input.lower() for kw in ["code", "script", "create"]):
-            self.active_modules["coder"] = self.DECAY_START
+            self.active_modules["coding"] = self.MODULE_DECAY_TURNS.get("coding", self.DECAY_START)
         if any(kw in user_input.lower() for kw in ["search", "who is", "weather"]):
-            self.active_modules["researcher"] = self.DECAY_START
+            self.active_modules["research"] = self.MODULE_DECAY_TURNS.get("research", self.DECAY_START)
         # ... etc
     
     def build_prompt(self, filename: str) -> str:
         """Build prompt from active modules only."""
-        prompt = self._build_core()  # Always included
-        
-        if "researcher" in self.active_modules:
+        prompt = self._build_core()
+        if "research" in self.active_modules:
             prompt += MODULE_RESEARCHER
-        if "coder" in self.active_modules:
+        if "coding" in self.active_modules:
             prompt += MODULE_CODER
         # ... etc
-        
         return prompt
 ```
 
@@ -180,13 +180,14 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### RAG and Memory Context (Pre-Generation Injection)
+### RAG and memory context (pre-generation injection)
 
-RAG retrieval for the current turn is done in the **input processing phase**, strictly **before** the LLM is called. There is no RAG trigger on the model output stream.
+Retrieval for the current turn runs in the **input phase**, before the LLM is called. The model output stream does not trigger retrieval.
 
-1. **When**: Every chat entry point (Web UI via headless runner, gateway, automation) runs a memory search on the **user message** before calling the agent. The retrieved chunks are passed as `memory_context` into `chat_step`.
-2. **Where it appears**: The model receives context in the first prompt via the system block **"## Memory context (relevant to this query)"**. That block is filled with the pre-retrieved snippets (or a placeholder if none were found).
-3. **memory_search tool**: The `memory_search` tool is for **follow-up or different short queries only** (e.g. "user name", "user preferences"). It must **not** be used with full thinking or `<think>` content; the tool rejects such queries and instructs the model to use the Memory context block for this turn.
+1. **When**: Each chat entry (Web UI via headless runner, gateway, automation) runs a memory search on the **user message** before calling the agent. The result is passed as `memory_context` into `chat_step`.
+2. **Placement**: The model sees it in the first prompt under the system block **"## Memory context (relevant to this query)"**, either as pre-retrieved snippets or a placeholder when none match.
+3. **Query refinement**: For short, user-oriented questions (e.g. "who am I", "what do you remember", "my preferences"), the search query is expanded before retrieval so that profile and compaction memories are more likely to match. This is controlled by `memory_rag_refine_query` in config (default: true).
+4. **memory_search tool**: Use for **follow-up or different short queries only** (e.g. "user name", "user preferences"). Do not pass full thinking or `<think>` content; the tool rejects such input and directs the model to use the Memory context block for the current turn.
 
 ### Persistent Hybrid Architecture (Agatic vNext)
 

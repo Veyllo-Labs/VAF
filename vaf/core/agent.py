@@ -3648,6 +3648,7 @@ class Agent:
                                 "## Memory context (relevant to this query)\n\n"
                                 "(No memories found for this query.) "
                                 "Use this section to answer 'who am I?' or 'what do you remember?'; if none, say so and offer to remember. "
+                                "If the user's question is vague (e.g. 'what is this user' or 'what do you know'), ask them to clarify what they want to know rather than guessing. "
                                 "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text. "
                                 "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
                             )}
@@ -3878,6 +3879,7 @@ class Agent:
                                     "## Memory context (relevant to this query)\n\n"
                                     "(No memories found for this query.) "
                                     "Use this section to answer 'who am I?' or 'what do you remember?'; if none, say so and offer to remember. "
+                                    "If the user's question is vague (e.g. 'what is this user' or 'what do you know'), ask them to clarify what they want to know rather than guessing. "
                                     "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text. "
                                     "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
                                 )}

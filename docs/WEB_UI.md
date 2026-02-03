@@ -195,7 +195,21 @@ The local LLM runs as a single HTTP backend on `127.0.0.1:8080`. When a prompt a
   "timestamp": "ISO timestamp",
   "sessionId": "uuid"
 }
+```
 
+```json
+{
+  "type": "rag_results",
+  "query": "The search query used",
+  "sources": [
+    {
+      "text": "Snippet text...",
+      "full_text": "Full text...",
+      "score": 0.85,
+      "metadata": {"source": "file.txt", "title": "My Note"}
+    }
+  ]
+}
 ```
 
 ## Configuration

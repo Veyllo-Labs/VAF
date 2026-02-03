@@ -457,9 +457,16 @@ def check_activity_loop(update_icon_callback):
             nonlocal loading_in_progress
             try:
                 model = Config.get("model")
+                # Fix: Retrieve context window and gpu layers from config
+                n_ctx = Config.get("n_ctx", 8192)
+                gpu_layers = Config.get("gpu_layers", 99)
+                if gpu_layers == -1: gpu_layers = 99
+                
                 started = server_mgr.start_server(
                     model_path=server_mgr.get_model_path(model),
-                    port=8080
+                    port=8080,
+                    n_ctx=n_ctx,
+                    n_gpu_layers=gpu_layers
                 )
                 log("Tray", f"{reason} start_server result: {started}")
                 if started:

@@ -2106,27 +2106,31 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <p className="text-gray-500 text-sm">Load Persona &amp; Memory tab first, or no user identity data yet.</p>
                                 )}
                             </div>
-                            {/* Right: Timeline (change_log) – schmal, läuft von oben nach unten */}
-                            <div className="w-72 shrink-0 overflow-y-auto p-4 border-l border-gray-100">
-                                <h3 className="text-sm font-semibold text-gray-700 mb-3">Timeline (agent updates)</h3>
+                            {/* Right: Timeline (change_log) – schmal, scrollbar bei vielen Einträgen */}
+                            <div className="w-72 shrink-0 min-h-0 flex flex-col border-l border-gray-100">
+                                <h3 className="text-sm font-semibold text-gray-700 mb-3 shrink-0 p-4 pb-0">Timeline (agent updates)</h3>
                                 {personaData?.user_identity?.change_log?.length > 0 ? (
-                                    <div className="relative">
-                                        {/* vertical line */}
-                                        <div className="absolute left-3 top-2 bottom-2 w-0.5 bg-amber-200" />
-                                        <ul className="space-y-0">
-                                            {[...(personaData?.user_identity?.change_log ?? []) as Array<{ at: string; action: string }>].reverse().map((entry, i) => (
-                                                <li key={i} className="relative flex gap-3 pb-4 last:pb-0">
-                                                    <div className="relative z-10 w-6 h-6 rounded-full bg-amber-200 border-2 border-amber-500 shrink-0 mt-0.5" />
-                                                    <div className="flex-1 min-w-0">
-                                                        <p className="text-xs text-gray-500 font-mono">{typeof entry.at === 'string' ? new Date(entry.at).toLocaleString() : entry.at}</p>
-                                                        <p className="text-sm text-gray-900 font-medium mt-0.5">{entry.action || 'update'}</p>
-                                                    </div>
-                                                </li>
-                                            ))}
-                                        </ul>
+                                    <div className="flex-1 min-h-0 overflow-y-auto p-4 pt-3">
+                                        {/* Wrapper nur so hoch wie die Liste – Linie verbindet nur die Punkte */}
+                                        <div className="relative">
+                                            <div className="absolute left-3 top-2 bottom-2 w-0.5 bg-amber-200" />
+                                            <ul className="space-y-0">
+                                                {[...(personaData?.user_identity?.change_log ?? []) as Array<{ at: string; action: string }>].reverse().map((entry, i) => (
+                                                    <li key={i} className="relative flex gap-3 pb-4 last:pb-0">
+                                                        <div className="relative z-10 w-6 h-6 rounded-full bg-amber-200 border-2 border-amber-500 shrink-0 mt-0.5" />
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-xs text-gray-500 font-mono">{typeof entry.at === 'string' ? new Date(entry.at).toLocaleString() : entry.at}</p>
+                                                            <p className="text-sm text-gray-900 font-medium mt-0.5">{entry.action || 'update'}</p>
+                                                        </div>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
                                     </div>
                                 ) : (
-                                    <p className="text-gray-500 text-sm">No agent updates yet. When the LLM uses the update_user_identity tool, entries appear here.</p>
+                                    <div className="flex-1 min-h-0 overflow-y-auto p-4 pt-0">
+                                        <p className="text-gray-500 text-sm">No agent updates yet. When the LLM uses the update_user_identity tool, entries appear here.</p>
+                                    </div>
                                 )}
                             </div>
                         </div>

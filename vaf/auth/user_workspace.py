@@ -139,9 +139,67 @@ You’re not a chatbot. You’re becoming someone.
                 data["change_log"] = [e for e in data["change_log"] if isinstance(e, dict) and "at" in e]
             if "name" not in data:
                 data["name"] = defaults["name"]
+
+            # One-time migration: local admin used to use username "Local Admin"; data may still be there
+            local_admin_username = Config.get("local_admin_username", "admin")
+            if self.username == local_admin_username and self._is_default_user_identity(data):
+                migrated = self._migrate_from_local_admin()
+                if migrated:
+                    return migrated
             return data
         except Exception:
             return defaults.copy()
+
+    def _is_default_user_identity(self, data: Dict[str, Any]) -> bool:
+        """True if this looks like a fresh default (no real user details)."""
+        name = (data.get("name") or "").strip()
+        lang = data.get("preferred_language")
+        prefs = data.get("preferences") or []
+        dos = data.get("dos") or []
+        donts = data.get("donts") or []
+        change_log = data.get("change_log") or []
+        return (
+            name in ("", "admin", self.username)
+            and not lang
+            and len(prefs) == 0
+            and len(dos) == 0
+            and len(donts) == 0
+            and len(change_log) == 0
+        )
+
+    def _migrate_from_local_admin(self) -> Optional[Dict[str, Any]]:
+        """If ~/.vaf/users/Local Admin/user_identity.json exists and has content, copy to current user and return it."""
+        try:
+            legacy_path = Config.APP_DIR / "users" / "Local Admin" / "user_identity.json"
+            if not legacy_path.exists():
+                return None
+            raw = json.loads(legacy_path.read_text(encoding="utf-8"))
+            for key in ("preferences", "dos", "donts"):
+                if key not in raw or not isinstance(raw[key], list):
+                    raw[key] = []
+                else:
+                    raw[key] = [x for x in raw[key] if isinstance(x, str)]
+            if "change_log" not in raw or not isinstance(raw["change_log"], list):
+                raw["change_log"] = []
+            else:
+                raw["change_log"] = [e for e in raw["change_log"] if isinstance(e, dict) and "at" in e]
+            # Only migrate if legacy has real content (language, name, change_log, or lists)
+            has_content = (
+                bool(raw.get("preferred_language"))
+                or (raw.get("change_log") and len(raw["change_log"]) > 0)
+                or (raw.get("name") or "").strip() not in ("", "Local Admin", "admin")
+                or len(raw.get("preferences") or []) > 0
+                or len(raw.get("dos") or []) > 0
+                or len(raw.get("donts") or []) > 0
+            )
+            if not has_content:
+                return None
+            self.save_user_identity(raw)
+            logger.info("Migrated user_identity from 'Local Admin' to '%s'", self.username)
+            return raw
+        except Exception as e:
+            logger.debug("No migration from Local Admin: %s", e)
+            return None
 
     def save_user_identity(self, data: Dict[str, Any]):
         self.user_identity_file.write_text(json.dumps(data, indent=4), encoding="utf-8")

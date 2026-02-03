@@ -54,6 +54,25 @@ Under **Settings → Persona & Memory → Long-term Memory (RAG Source)** there 
 
 The modal size matches the Memory Graph modal (95vw × 90vh).
 
+## Local vs network (DB and user separation)
+
+When **local only** (no network, no auth):
+
+- **RAG / DB (memories)** use a fixed scope so entries are scoped, not global:
+  - Config: `local_admin_scope_id` = `00000000-0000-0000-0000-000000000001` (default).
+  - WebSocket and HTTP Memory API both use this scope when there is no authenticated user.
+- **User identity (user_identity.json)** uses a fixed username so Chat and Settings show the same data:
+  - Config: `local_admin_username` = `admin` (default).
+  - WebSocket (chat) and HTTP API (GET /api/user/persona) both use this username when there is no auth.
+  - File: `~/.vaf/users/admin/user_identity.json`.
+
+So in local mode, one logical “local user” is used everywhere: same `user_scope_id` for RAG/DB and same username for user identity. The WebUI User Identity modal and the model’s `update_user_identity` tool read/write the same file.
+
+When **network is enabled** and users log in:
+
+- Each user has a `user_scope_id` (UUID from auth DB) for RAG/memories and a `username` for `~/.vaf/users/<username>/user_identity.json`.
+- WebSocket sets these from the JWT; HTTP API would get them from auth middleware (`request.state.user`) when implemented.
+
 ## Best practices
 
 - Use `update_user_identity` only for the **current user's** profile. The tool receives the username from the session; do not use it to write another user's file.

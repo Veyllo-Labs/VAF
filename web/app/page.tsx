@@ -404,6 +404,9 @@ export default function VAFDashboard() {
         output_tokens?: number;
     };
     const [tokenStats, setTokenStats] = useState<TokenStats | null>(null);
+    const [contextStats, setContextStats] = useState<any | null>(null); // New X-Ray Stats
+    const [ragResults, setRagResults] = useState<any | null>(null); // RAG Results
+    const [isContextModalOpen, setIsContextModalOpen] = useState(false);
 
     // Sub-Agent Window State
     const [subAgentState, setSubAgentState] = useState<{
@@ -872,6 +875,12 @@ export default function VAFDashboard() {
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
                     setTokenStats(data.stats);
                 }
+                else if (data.type === 'context_status') {
+                    setContextStats(data.stats);
+                }
+                else if (data.type === 'rag_results') {
+                    setRagResults(data);
+                }
                 else if (data.type === 'agent_message_update') {
                     // CRITICAL: Only update if this message belongs to the current session!
                     // If user switched chats while bot was typing, ignore this update.
@@ -1315,7 +1324,17 @@ export default function VAFDashboard() {
     // Sync sttEnabled state with config changes
     useEffect(() => {
         setSttEnabled(config.stt_enabled === true);
-    }, [config]);
+        
+        // Initialize context stats if empty (so bar is always visible)
+        if (!contextStats && config.n_ctx) {
+            setContextStats({
+                tokens: 0,
+                max_tokens: config.n_ctx,
+                percent: 0,
+                message_count: 0
+            });
+        }
+    }, [config, contextStats]);
 
     const stopGeneration = () => {
         if (!ws || !currentSessionId) return;
@@ -2123,34 +2142,30 @@ export default function VAFDashboard() {
                             </div>
                         )}
 
-                        {/* Token Stats (TUI Style) */}
-                        {tokenStats && (
-                            <div className={cn(chatWidthClass, "mx-auto mb-1 flex justify-end")}>
-                                <span className="text-[10px] sm:text-xs font-mono text-gray-400 opacity-80 select-none">
-                                    {tokenStats.api ? (
-                                        <>Tokens: In: {(tokenStats.input_tokens ?? tokenStats.used).toLocaleString()} | Out: {(tokenStats.output_tokens ?? 0).toLocaleString()}</>
-                                    ) : (
-                                        <>
-                                            Tokens:
-                                            <span className="mx-1 tracking-tighter">
-                                                {"●".repeat(Math.min(10, Math.max(0, Math.round(tokenStats.percent * 10))))}
-                                                {"○".repeat(Math.max(0, 10 - Math.min(10, Math.max(0, Math.round(tokenStats.percent * 10)))))}
-                                            </span>
-                                            {Math.round(tokenStats.percent * 100)}%
-                                            ({tokenStats.used.toLocaleString()}/{tokenStats.total.toLocaleString()})
-                                        </>
-                                    )}
+                        {/* Token Stats (Clickable) */}
+                        <div className={cn(chatWidthClass, "mx-auto mb-1 flex justify-end min-h-[16px]")}>
+                            {contextStats && (
+                                <span 
+                                    className="text-[10px] sm:text-xs font-mono text-gray-400 opacity-80 select-none cursor-pointer hover:text-black hover:opacity-100 transition-all"
+                                    onClick={() => setIsContextModalOpen(true)}
+                                >
+                                    Tokens:
+                                    <span className="mx-1 tracking-tighter">
+                                        {"●".repeat(Math.min(10, Math.max(0, Math.round(contextStats.percent / 10))))}
+                                        {"○".repeat(Math.max(0, 10 - Math.min(10, Math.max(0, Math.round(contextStats.percent / 10)))))}
+                                    </span>
+                                    {Math.round(contextStats.percent)}% ({contextStats.tokens.toLocaleString()}/{contextStats.max_tokens.toLocaleString()})
                                 </span>
-                            </div>
-                        )}
+                            )}
+                        </div>
 
-                        {/* Stop Generation Button - centered above message box */}
+                        {/* Stop Generation Button - Absolute overlay (prevents layout shift) */}
                         {loading && (
-                            <div className={cn(chatWidthClass, "mx-auto flex justify-center mb-2")}>
+                            <div className="absolute left-1/2 -translate-x-1/2 -top-10 z-50">
                                 <button
                                     type="button"
                                     onClick={stopGeneration}
-                                    className="px-4 py-1.5 rounded-full bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-all shadow-md flex items-center gap-2"
+                                    className="px-4 py-1.5 rounded-full bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-all shadow-md flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2"
                                 >
                                     <Square size={12} fill="currentColor" />
                                     Stop
@@ -2256,6 +2271,96 @@ export default function VAFDashboard() {
             </div>
             {/* Active Tools Panel Moved Inline */}
             <VAFWorkflowRuntime />
+
+            {/* Context X-Ray Modal */}
+            {isContextModalOpen && contextStats && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+                    <div className="bg-white w-full max-w-4xl max-h-[85vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+                        {/* Header */}
+                        <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
+                                    <Activity size={20} />
+                                </div>
+                                <div>
+                                    <h3 className="text-lg font-bold text-gray-900">Context X-Ray</h3>
+                                    <p className="text-xs text-gray-500">Live view of LLM input state</p>
+                                </div>
+                            </div>
+                            <button 
+                                onClick={() => setIsContextModalOpen(false)}
+                                className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-500"
+                            >
+                                <span className="sr-only">Close</span>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                            </button>
+                        </div>
+
+                        {/* Content */}
+                        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                            
+                            {/* Stats Grid */}
+                            <div className="grid grid-cols-3 gap-4">
+                                <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
+                                    <div className="text-xs font-semibold text-blue-500 uppercase tracking-wider mb-1">Context Usage</div>
+                                    <div className="text-2xl font-bold text-blue-700">{contextStats.percent}%</div>
+                                    <div className="text-xs text-blue-600 mt-1">{contextStats.tokens} / {contextStats.max_tokens} tokens</div>
+                                </div>
+                                <div className="p-4 bg-purple-50 rounded-xl border border-purple-100">
+                                    <div className="text-xs font-semibold text-purple-500 uppercase tracking-wider mb-1">Messages</div>
+                                    <div className="text-2xl font-bold text-purple-700">{contextStats.message_count}</div>
+                                    <div className="text-xs text-purple-600 mt-1">Chat History</div>
+                                </div>
+                                <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
+                                    <div className="text-xs font-semibold text-emerald-500 uppercase tracking-wider mb-1">RAG Sources</div>
+                                    <div className="text-2xl font-bold text-emerald-700">{ragResults?.sources?.length || 0}</div>
+                                    <div className="text-xs text-emerald-600 mt-1">Active snippets</div>
+                                </div>
+                            </div>
+
+                            {/* RAG Preview */}
+                            {contextStats.rag_preview && (
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-2 text-sm font-bold text-gray-800">
+                                        <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                                        Active RAG Context
+                                    </div>
+                                    <div className="bg-slate-900 text-slate-300 p-4 rounded-xl font-mono text-xs overflow-x-auto border border-slate-800 shadow-inner leading-relaxed whitespace-pre-wrap">
+                                        {contextStats.rag_preview}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Detailed RAG Sources */}
+                            {ragResults?.sources && ragResults.sources.length > 0 && (
+                                <div className="space-y-3">
+                                    <div className="flex items-center gap-2 text-sm font-bold text-gray-800">
+                                        <div className="w-2 h-2 rounded-full bg-orange-500"></div>
+                                        Source Details
+                                    </div>
+                                    <div className="grid gap-3">
+                                        {ragResults.sources.map((src: any, idx: number) => (
+                                            <div key={idx} className="bg-white border border-gray-200 rounded-lg p-3 hover:border-orange-200 transition-colors">
+                                                <div className="flex justify-between items-start mb-2">
+                                                    <span className="text-xs font-bold text-gray-700 bg-gray-100 px-2 py-0.5 rounded">Source {idx + 1}</span>
+                                                    <span className="text-[10px] font-mono text-gray-400">Score: {src.score}</span>
+                                                </div>
+                                                <p className="text-xs text-gray-600 line-clamp-3">{src.text}</p>
+                                                {src.metadata?.source && (
+                                                    <div className="mt-2 pt-2 border-t border-gray-50 text-[10px] text-gray-400 flex items-center gap-1">
+                                                        <Paperclip size={10} />
+                                                        {src.metadata.source}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <SettingsModal
                 isOpen={isSettingsOpen}

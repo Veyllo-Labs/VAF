@@ -972,6 +972,29 @@ def run_memory_search_sync(
             sources = await pipeline.search(
                 query, k=k, metadata_filter=metadata_filter, user_scope_id=user_scope_id
             )
+            
+            # PUSH TO WEB UI (for Hover/Info)
+            try:
+                from vaf.core.web_interface import get_web_interface
+                web_sources = []
+                for s in sources:
+                    web_sources.append({
+                        "text": s.text[:200] + "..." if len(s.text) > 200 else s.text,
+                        "full_text": s.text,
+                        "score": round(s.score, 2),
+                        "metadata": s.metadata
+                    })
+                
+                if web_sources:
+                    get_web_interface().push_update({
+                        "type": "rag_results",
+                        "query": query,
+                        "sources": web_sources
+                    })
+            except Exception as e:
+                # Don't break RAG if UI push fails
+                logger.warning(f"Failed to push RAG results to UI: {e}")
+
             if not sources:
                 return ""
             parts = []

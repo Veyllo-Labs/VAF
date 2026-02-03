@@ -117,7 +117,9 @@ class Config:
         "redis_enabled": True,                                     # Enable Redis caching
         
         # Local Admin Settings (for localhost without login)
-        "local_admin_scope_id": "00000000-0000-0000-0000-000000000001",  # Fixed UUID for Local Admin user scope
+        # user_identity.json and RAG/memory scope use these when no auth (local only)
+        "local_admin_scope_id": "00000000-0000-0000-0000-000000000001",  # Fixed UUID for Local Admin user scope (DB/RAG)
+        "local_admin_username": "admin",  # Username for ~/.vaf/users/<this>/user_identity.json when local (WebSocket + HTTP API)
 
         # Local Network Settings
         "local_network_enabled": False,                            # Enable local network access (LAN only)

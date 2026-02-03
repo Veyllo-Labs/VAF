@@ -2336,6 +2336,41 @@ class Agent:
 
         # Compress with Cursor-style algorithm (now includes the new narrative_summary)
         self.history = cm.compress(self.history)
+        
+        # Broadcast update to WebUI
+        self._broadcast_context_status()
+
+    def _broadcast_context_status(self):
+        """Send context debug info to WebUI (X-Ray Vision)."""
+        try:
+            from vaf.core.web_interface import get_web_interface
+            
+            tokens, max_tokens = self.get_token_usage()
+            
+            system_content = ""
+            if self.history and self.history[0]["role"] == "system":
+                system_content = self.history[0].get("content", "")
+            
+            # Extract RAG part from System Prompt (if present)
+            rag_content = ""
+            if "## Memory context" in system_content:
+                parts = system_content.split("## Memory context")
+                if len(parts) > 1:
+                    # Take the part after the header
+                    rag_content = parts[1].split("##")[0].strip()
+            
+            get_web_interface().push_update({
+                "type": "context_status",
+                "stats": {
+                    "tokens": tokens,
+                    "max_tokens": max_tokens,
+                    "percent": round((tokens / max_tokens) * 100, 1) if max_tokens else 0,
+                    "message_count": len(self.history),
+                    "rag_preview": rag_content[:500] + "..." if len(rag_content) > 500 else rag_content
+                }
+            })
+        except Exception:
+            pass
     
     def restore_context(self) -> bool:
         """Restore full context from archive."""
@@ -3467,6 +3502,9 @@ class Agent:
         # This must happen early so it affects workflow selection + normal chat replies.
         if not skip_input:
             self._refresh_language_hint(user_input)
+            
+        # Broadcast context status to WebUI (X-Ray Vision)
+        self._broadcast_context_status()
 
         # 0. Context Management (Trim/Summarize) - BEFORE adding user input
         self.manage_context()
@@ -3544,8 +3582,9 @@ class Agent:
                     if name in self.tools and name not in selected_tools:
                         selected_tools = list(selected_tools) + [name]
 
-            if selected_tools:
-                UI.event("Router", f"Final tools: {', '.join(selected_tools)}", style="dim")
+            # ALWAYS show final tools for debugging consistency
+            final_list = ", ".join(selected_tools) if selected_tools else "None (Safety Net -> ALL)"
+            UI.event("Router", f"Final tools: {final_list}", style="dim")
             
             # SAFETY NET: If router returns empty list, fallback to ALL tools
             # Otherwise the model gets 0 tools and hallucinates using them.

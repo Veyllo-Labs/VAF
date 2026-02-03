@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from vaf.auth.user_workspace import get_user_workspace
 from vaf.auth.database import get_auth_db
+from vaf.core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +34,8 @@ class ContentUpdate(BaseModel):
 def get_current_username(request: Request) -> str:
     user = getattr(request.state, "user", None)
     if not user:
-        # Default to admin for localhost bypass (convenience)
-        return "admin"
+        # Local: same username as WebSocket so user_identity.json and Settings UI match
+        return Config.get("local_admin_username", "admin")
     return user.get("username", "admin")
 
 @router.get("/persona")

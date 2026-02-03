@@ -608,9 +608,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             await websocket.close(code=4003, reason="Local network feature is disabled")
             return
         # Localhost - allow; if JWT cookie present, decode so we get user_scope_id for RAG
-        # Use fixed local_admin_scope_id for localhost without login (ensures memories are scoped)
+        # Use fixed local_admin_scope_id + local_admin_username so WebSocket and HTTP API use same user (user_identity, RAG)
         local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
-        user_context = {"username": "Local Admin", "role": "admin", "user_scope_id": local_admin_scope}
+        local_admin_username = Config.get("local_admin_username", "admin")
+        user_context = {"username": local_admin_username, "role": "admin", "user_scope_id": local_admin_scope}
         if token:
             try:
                 from vaf.auth.crypto import get_jwt_secret
@@ -620,7 +621,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 user_context = {
                     "user_id": payload.get("sub"),
                     "user_scope_id": payload.get("user_scope_id") or local_admin_scope,
-                    "username": payload.get("username", "Local Admin"),
+                    "username": payload.get("username", local_admin_username),
                     "role": payload.get("role", "admin"),
                 }
                 log("API", f"WebSocket (localhost) authenticated: {user_context.get('username')} (scope: {user_context.get('user_scope_id')})")
@@ -693,9 +694,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     await websocket.close(code=4001, reason="Invalid token")
                     return
             elif is_localhost_client:
-                # Localhost without token: use fixed scope so RAG/memory are scoped (not global)
+                # Localhost without token: use fixed scope + username so RAG and user_identity match HTTP API
                 local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
-                user_context = {"username": "Local Admin", "role": "admin", "user_scope_id": local_admin_scope}
+                local_admin_username = Config.get("local_admin_username", "admin")
+                user_context = {"username": local_admin_username, "role": "admin", "user_scope_id": local_admin_scope}
             
         except ImportError:
             # Auth modules not available - still block non-localhost when disabled

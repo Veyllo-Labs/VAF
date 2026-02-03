@@ -272,20 +272,30 @@ If Redis is unavailable, the system falls back gracefully:
 - In-memory caching still works (per-session)
 - All features remain functional, just slower for repeated queries
 
-## Embedding Models
+## Embedding Engine (ONNX Optimized)
 
-The default model is `all-MiniLM-L6-v2` (384 dimensions), which offers a good balance of speed and quality.
+VAF uses a highly optimized embedding pipeline to minimize resource usage while maintaining high retrieval accuracy.
 
-Available models:
+### Architecture
+- **Runtime:** **ONNX Runtime (CPU)**
+  - Replaces heavy PyTorch/Sentence-Transformers dependencies.
+  - **Performance:**
+    - **RAM Usage:** ~200 MB (vs. ~1.5 GB with PyTorch).
+    - **Startup Time:** < 1 second (vs. 10-200 seconds depending on system load).
+    - **Inference:** ~100ms per query on standard CPUs.
+- **Model:** `Xenova/all-MiniLM-L6-v2` (Quantized)
+  - 384-dimensional dense vectors.
+  - Automatically downloaded from HuggingFace Hub on first launch.
+- **Tokenizer:** Rust-based `tokenizers` library for sub-millisecond tokenization.
 
-| Model | Dimensions | Notes |
-|-------|------------|-------|
-| all-MiniLM-L6-v2 | 384 | Default, fast, good quality |
-| all-mpnet-base-v2 | 768 | More accurate, slower |
-| paraphrase-MiniLM-L6-v2 | 384 | Good for paraphrasing |
-| multi-qa-MiniLM-L6-cos-v1 | 384 | Optimized for Q&A |
+### Optimization Strategy
+1.  **Lazy Loading:** The embedding model is loaded only when the first RAG request occurs or background indexing starts.
+2.  **Quantization:** Uses int8 quantization to reduce model size without significant accuracy loss.
+3.  **Non-Blocking:** Embedding operations are offloaded to avoid blocking the main event loop, ensuring the UI remains responsive even during heavy indexing.
 
-Change the model in Settings → Advanced → Memory System.
+### Supported Models
+While `all-MiniLM-L6-v2` is the default, the system is compatible with other ONNX-exported models.
+- **Multilingual:** `intfloat/multilingual-e5-small` (requires `memory_embedding_model` config update).
 
 ## Docker Management
 

@@ -70,6 +70,9 @@ asyncpg>=0.29.0  # Async PostgreSQL driver
 pgvector>=0.2.0  # pgvector SQLAlchemy integration
 sentence-transformers>=2.2.0  # Text embeddings (all-MiniLM-L6-v2)
 cryptography>=41.0.0  # AES-256-GCM encryption
+onnxruntime>=1.16.0  # Lightweight ONNX Runtime for embeddings
+tokenizers>=0.15.0   # Fast Rust-based tokenizers
+numpy>=1.24.0        # Numerical operations for embeddings
 
 # Caching (Redis)
 redis>=5.0.0  # Redis client for caching embeddings, RAG queries, sessions

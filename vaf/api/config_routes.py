@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api", tags=["config"])
 def get_current_username(request: Request) -> str:
     user = getattr(request.state, "user", None)
     if not user:
-        return "admin"
+        return Config.get("local_admin_username", "admin")
     return user.get("username", "admin")
 
 

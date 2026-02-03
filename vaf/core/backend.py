@@ -7,6 +7,7 @@ import zipfile
 import tarfile
 import time
 import requests
+from pathlib import Path
 from vaf.cli.ui import UI
 from vaf.core.config import Config
 from vaf.core.gpu_detection import get_primary_gpu
@@ -623,8 +624,8 @@ class ServerManager:
             "--log-verbosity", "2",
         ]
         
-        # Log the command for debugging (always ~/.vaf/logs so it's findable)
-        log_dir = Platform.vaf_dir() / "logs"
+        # Log the command for debugging (local project logs/ dir)
+        log_dir = Path(self.base_dir) / "logs"
         try:
             log_dir.mkdir(parents=True, exist_ok=True)
             cmd_log = log_dir / "server_cmd.log"
@@ -646,7 +647,7 @@ class ServerManager:
              creationflags = subprocess.CREATE_NO_WINDOW
         
         try:
-            # Create log file for server output (same dir as server_cmd.log: ~/.vaf/logs)
+            # Create log file for server output (same dir as server_cmd.log: project/logs)
             log_dir.mkdir(parents=True, exist_ok=True)
             log_file = log_dir / "server.log"
             self._log_file = open(log_file, 'w', encoding='utf-8', errors='replace')

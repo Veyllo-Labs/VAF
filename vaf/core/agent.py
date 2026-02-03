@@ -1605,6 +1605,9 @@ class Agent:
             self.init_chat()
             self.current_session_id = session_id
             set_current_session_id(session_id)
+            
+        # Broadcast new context stats to WebUI immediately
+        self._broadcast_context_status()
 
     def _clean_reasoning(self, text: str) -> str:
         """Removes internal reasoning/CoT blocks from the model response."""

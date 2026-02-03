@@ -8,7 +8,7 @@ In `chat_step()` (agent.py) gibt es genau **drei** Pfade:
 2. **`elif self.use_server`** → HTTP an **127.0.0.1:8080** (nativer llama-server). Modell läuft im **Server-Prozess**.
 3. **`else`** → **Library** (llama-cpp-python, `self.llm`). Modell läuft **im VAF-Python-Prozess**.
 
-Es wird **immer genau einer** dieser drei Pfade genutzt. Welcher, steht ab sofort in **`logs/llm_backend.log`** (z. B. `backend=library(llama-cpp-python)` oder `backend=server(8080)`).
+Es wird **immer genau einer** dieser drei Pfade genutzt. Welcher, steht in **`logs/backend.log`** (z. B. `chat_step backend=library(llama-cpp-python)` oder `backend=server(8080)`).
 
 ---
 
@@ -46,11 +46,10 @@ Wenn das Modell einen Tool-Call **innerhalb** von `<think>...</think>` ausgibt (
 
 ---
 
-## Logs zum Nachvollziehen
+## Logs for debugging
 
-- **`logs/llm_backend.log`** (neu): Pro Chat-Turn eine Zeile, z. B.  
-  `chat_step backend=library(llama-cpp-python)` oder `chat_step backend=server(8080)` oder `chat_step backend=api(openai)`.
-- **`logs/memory_profiler.log`**: RAM des Python-Prozesses (alle 30 s).
-- **`logs/startup_trace.txt`**: Tray/WebServer/Activity; „Model loaded“ bedeutet: Tray hat den **Server** (8080) gestartet – der Agent kann trotzdem die **Library** nutzen, wenn er nicht in den Server-Block von `load_model()` geht.
+- **`logs/backend.log`**: One line per chat step with the backend in use, e.g. `chat_step backend=library(llama-cpp-python)`, `chat_step backend=server(8080)`, or `chat_step backend=api(openai)`.
+- **`logs/memory.log`**: `[PROFILER]` entries (RAM every 30 s), plus compaction, usage, embedding load, `[WHISPER]` load.
+- **`logs/startup_trace.txt`**: Tray and WebServer startup. "Model loaded" means the tray started the server (8080); the agent may still use the library if `load_model()` did not take the server path.
 
-Die Kombination aus **llm_backend.log** und **startup_trace** zeigt eindeutig: Tray startet Server ja/nein, Agent nutzt API / Server (8080) / Library.
+Together, **backend.log** and **startup_trace.txt** show whether the tray started the server and whether the agent is using the API, server (8080), or library.

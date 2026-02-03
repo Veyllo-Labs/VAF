@@ -15,6 +15,7 @@ from functools import lru_cache
 import hashlib
 import logging
 from vaf.core.config import Config
+from vaf.core.log_helper import append_domain_log
 
 logger = logging.getLogger(__name__)
 
@@ -63,16 +64,8 @@ def get_model():
             mem_after = get_memory_usage_mb()
             logger.info(f"Embedding model loaded: {model_name} (Memory after: {mem_after:.0f}MB, delta: {mem_after-mem_before:.0f}MB)")
 
-            # Write to debug log
-            try:
-                from pathlib import Path
-                from datetime import datetime
-                log_dir = Path(__file__).resolve().parents[2] / "logs"
-                log_dir.mkdir(parents=True, exist_ok=True)
-                with open(log_dir / "embedding_load.log", "a", encoding="utf-8") as f:
-                    f.write(f"{datetime.now().isoformat()} Loaded {model_name}: {mem_before:.0f}MB -> {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)\n")
-            except:
-                pass
+            # Write to debug log (consolidated in memory.log)
+            append_domain_log("memory", f"[EMBED] Loaded {model_name}: {mem_before:.0f}MB -> {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)")
 
         except ImportError:
             raise ImportError(

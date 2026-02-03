@@ -22,8 +22,10 @@ from vaf.memory.embeddings import get_embedding_service, get_chunker, EmbeddingS
 from vaf.memory.graph import GraphManager
 from vaf.memory.database import get_db
 from vaf.core.config import Config
+from vaf.core.log_helper import append_domain_log
 import logging
 import re
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -305,22 +307,12 @@ class RagPipeline:
         
         logger.info(f"Search found {len(sources)} relevant chunks from {len(seen_memories)} memories")
 
-        # Debug: Log to file
-        try:
-            from pathlib import Path
-            from datetime import datetime
-            log_dir = Path(__file__).resolve().parents[2] / "logs"
-            with open(log_dir / "rag_search_debug.log", "a", encoding="utf-8") as f:
-                f.write(f"{datetime.now().isoformat()} Query: '{query[:100]}'\n")
-                f.write(f"  user_scope_id: {user_scope_id}\n")
-                f.write(f"  threshold: {threshold}, max_distance: {max_distance}\n")
-                f.write(f"  Results: {len(sources)} chunks from {len(seen_memories)} memories\n")
-                if sources:
-                    for s in sources[:3]:
-                        f.write(f"    - Score {s.score:.2%}: {s.text[:60]}...\n")
-                f.write("\n")
-        except Exception:
-            pass
+        # Debug: Log to file (consolidated in rag.log)
+        q_preview = (query[:100] + "…") if len(query) > 100 else query
+        append_domain_log("rag", f"SEARCH query={q_preview!r} user_scope_id={user_scope_id} results={len(sources)} chunks from {len(seen_memories)} memories")
+        if sources:
+            top = " ".join(f"{s.score:.0%}" for s in sources[:3])
+            append_domain_log("rag", f"SEARCH top_scores={top}")
 
         return sources
     
@@ -762,17 +754,9 @@ def _save_compaction_state(state: Dict[str, int]) -> None:
 
 
 def _compaction_log(message: str, session_id: str = "", **kwargs: Any) -> None:
-    """Append one line to compaction.log (same base dir as compaction_state)."""
-    try:
-        from pathlib import Path
-        log_dir = Path(Config.APP_DIR) / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        extra = " ".join(f"{k}={v}" for k, v in kwargs.items())
-        line = f"{datetime.utcnow().isoformat()}Z {message} session_id={session_id} {extra}\n"
-        with open(log_dir / "compaction.log", "a", encoding="utf-8") as f:
-            f.write(line)
-    except Exception:
-        pass
+    """Append one line to memory.log with [COMPACTION] prefix."""
+    extra = " ".join(f"{k}={v}" for k, v in kwargs.items())
+    append_domain_log("memory", f"[COMPACTION] {message} session_id={session_id} {extra}".strip())
 
 
 def run_session_compaction_sync(
@@ -920,6 +904,11 @@ def refine_rag_request(query: str) -> Tuple[str, Optional[Dict[str, Any]]]:
     return (query, None)
 
 
+def _rag_timing_log(line: str) -> None:
+    """Append one timestamped line to rag.log."""
+    append_domain_log("rag", line)
+
+
 def run_memory_search_sync(
     query: str,
     k: int = 5,
@@ -934,49 +923,48 @@ def run_memory_search_sync(
 
     caller: "headless" | "tool" | None – for logging who triggered the RAG call.
     """
+    import time as _time
+    _t0 = _time.time()
+
     if not Config.get("memory_enabled", True):
+        _rag_timing_log("RAG_SKIP reason=memory_disabled")
         return ""
 
     # Truncate at entry so we never pass long strings to encoder (avoids 10GB+ RAM spike)
     # Also strip <think> blocks to prevent recursive loops
     from vaf.memory.embeddings import MAX_EMBED_INPUT_CHARS
     import re
-    
+
     _q = (query or "").strip()
     # 1. Remove complete <think>...</think> blocks
     _q = re.sub(r'<think>.*?</think>', '', _q, flags=re.DOTALL).strip()
     # 2. Remove unclosed <think>... (streaming/partial thought)
     if '<think>' in _q:
         _q = _q.split('<think>')[0].strip()
-    
+
     if not _q:
+        _rag_timing_log(f"RAG_EXIT_EMPTY caller={caller or 'unknown'} duration_sec={_time.time() - _t0:.1f} reason=query_empty_after_strip")
         return ""
-    
+
     if len(_q) > MAX_EMBED_INPUT_CHARS:
         _q = _q[:MAX_EMBED_INPUT_CHARS].rstrip()
     query = _q
+
+    _rag_timing_log(f"RAG_ENTRY caller={caller or 'unknown'} query_len={len(query)}")
 
     # Optional: refine query for user-profile style questions (keyword-based)
     metadata_filter: Optional[Dict[str, Any]] = None
     if Config.get("memory_rag_refine_query", True):
         query, metadata_filter = refine_rag_request(query)
         if not query:
+            _rag_timing_log(f"RAG_EXIT_EMPTY caller={caller or 'unknown'} duration_sec={_time.time() - _t0:.1f} reason=refine_returned_empty")
             return ""
+    _rag_timing_log(f"RAG_AFTER_REFINE query_len={len(query)}")
 
     # Debug log: who called RAG and with what length (to trace RAM spike)
-    try:
-        from pathlib import Path
-        from datetime import datetime
-        log_dir = Path(__file__).resolve().parents[2] / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        qlen = len(query or "")
-        will_truncate = qlen >= MAX_EMBED_INPUT_CHARS  # we already truncated
-        with open(log_dir / "rag_embed_calls.log", "a", encoding="utf-8") as f:
-            f.write(
-                f"{datetime.now().isoformat()} run_memory_search_sync caller={caller or 'unknown'} query_len={qlen} will_truncate={will_truncate}\n"
-            )
-    except Exception:
-        pass
+    qlen = len(query or "")
+    will_truncate = qlen >= MAX_EMBED_INPUT_CHARS
+    append_domain_log("rag", f"run_memory_search_sync caller={caller or 'unknown'} query_len={qlen} will_truncate={will_truncate}")
 
     async def _search() -> str:
         async with get_db() as db:
@@ -996,12 +984,22 @@ def run_memory_search_sync(
     async def _run_with_timeout() -> str:
         return await asyncio.wait_for(_search(), timeout=_RAG_TIMEOUT)
 
+    _rag_timing_log(f"RAG_ASYNC_START timeout_sec={_RAG_TIMEOUT}")
+
     try:
-        return asyncio.run(_run_with_timeout())
+        _t_async = _time.time()
+        result = asyncio.run(_run_with_timeout())
+        _dur = _time.time() - _t_async
+        _rag_timing_log(f"RAG_ASYNC_END duration_sec={_dur:.1f} result_len={len(result)}")
+        return result
     except asyncio.TimeoutError:
+        _dur = _time.time() - _t_async
+        _rag_timing_log(f"RAG_TIMEOUT duration_sec={_dur:.1f} timeout_sec={_RAG_TIMEOUT}")
         logger.warning("RAG search timed out after %.0fs (chat continues without memory)", _RAG_TIMEOUT)
         return ""
     except Exception as e:
+        _dur = _time.time() - _t_async
+        _rag_timing_log(f"RAG_ERROR duration_sec={_dur:.1f} error={repr(e)[:80]}")
         logger.warning("RAG search failed (chat continues without memory): %s", e)
         return ""
 

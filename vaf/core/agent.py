@@ -31,6 +31,7 @@ except ImportError:
 from vaf.core.config import Config
 from vaf.core.backend import ServerManager
 from vaf.core.platform import Platform
+from vaf.core.log_helper import append_domain_log
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.tools.search import WebSearchTool
 from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, MoveFileTool
@@ -316,11 +317,7 @@ class Agent:
             # This should only load the vocabulary and not the full model weights into VRAM.
             UI.event("System", "Initializing tokenizer...", style="dim")
             try:
-                log_dir = _get_debug_log_dir()
-                log_dir.mkdir(parents=True, exist_ok=True)
-                from datetime import datetime as _dt
-                with open(log_dir / "llm_backend.log", "a", encoding="utf-8") as f:
-                    f.write(f"{_dt.now().isoformat()} LIBRARY_LOAD tokenizer (n_ctx=1)\n")
+                append_domain_log("backend", "LIBRARY_LOAD tokenizer (n_ctx=1)")
             except Exception:
                 pass
             self._tokenizer_instance = Llama(
@@ -1062,12 +1059,14 @@ class Agent:
         # Manually register Context Tools for Main Agent
         try:
             from vaf.tools.context_tools import UpdateIntentTool, UpdateWorkingMemoryTool, RequestClarificationTool, MemorySaveTool, MemorySearchTool
+            from vaf.tools.user_identity import UpdateUserIdentityTool
             
             # UpdateIntent and UpdateWorkingMemory are for Main Agent
             self.tools["update_intent"] = UpdateIntentTool()
             self.tools["update_working_memory"] = UpdateWorkingMemoryTool()
             self.tools["memory_save"] = MemorySaveTool()
             self.tools["memory_search"] = MemorySearchTool()
+            self.tools["update_user_identity"] = UpdateUserIdentityTool()
             
             # RequestClarification is strictly for Sub-Agents (via coder_only flag),
             # but we register it here so it's available in the system (even if filtered out later for Main Agent).
@@ -1457,11 +1456,7 @@ class Agent:
 
         UI.event("System", f"Loading Library: {self.filename}...", style="dim")
         try:
-            log_dir = _get_debug_log_dir()
-            log_dir.mkdir(parents=True, exist_ok=True)
-            from datetime import datetime as _dt
-            with open(log_dir / "llm_backend.log", "a", encoding="utf-8") as f:
-                f.write(f"{_dt.now().isoformat()} LIBRARY_LOAD main model (force_server was False)\n")
+            append_domain_log("backend", "LIBRARY_LOAD main model (force_server was False)")
         except Exception:
             pass
         # Redirect stderr to suppress ggml_metal_init logs on Mac
@@ -3380,6 +3375,11 @@ class Agent:
     def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False, disable_workflows=False, disable_tools=False, memory_context=None):
         from vaf.cli.ui import UI
         
+        try:
+            append_domain_log("backend", "chat_step_start")
+        except Exception:
+            pass
+
         self.context_manager.decay_state()
         
         # Check if any backend is available (local, server, or API)
@@ -3410,6 +3410,7 @@ class Agent:
         # ------------------------------------------------------------------
         # Dynamic Context: Update System Prompt
         # ------------------------------------------------------------------
+        new_prompt = None
         if hasattr(self, 'prompt_manager') and user_input and not skip_input:
             # Detect language first so it can be used in build_prompt (e.g. for localized date)
             # Respect configured language if set
@@ -3424,7 +3425,7 @@ class Agent:
             # Analyze intent and active relevant modules
             self.prompt_manager.analyze_context(user_input, language=lang)
             
-            # Rebuild system prompt
+            # Rebuild system prompt (includes User identity so e.g. "Hey" -> model knows "that's Mert")
             new_prompt = self.prompt_manager.build_prompt(
                 self.filename,
                 username=getattr(self, "_current_username", None),
@@ -3439,21 +3440,28 @@ class Agent:
             self.history = self.context_manager.compress(self.history)
             
             # Inject PROACTIVE CONTEXT GLUE (Stability)
-            # This ensures the agent always knows which files exist, what errors happened, etc.
-            context_glue = self.context_manager._build_context_summary()
-            if context_glue:
-                new_prompt += f"\n\n{context_glue}"
+            if new_prompt is not None:
+                context_glue = self.context_manager._build_context_summary()
+                if context_glue:
+                    new_prompt += f"\n\n{context_glue}"
             
             # Preserve Project Context if it exists
             if len(self.history) > 0 and self.history[0]["role"] == "system":
                 current_content = self.history[0]["content"]
-                if "## PROJECT CONTEXT" in current_content:
-                    project_context_part = current_content.split("## PROJECT CONTEXT", 1)[1]
-                    new_prompt += f"\n\n## PROJECT CONTEXT{project_context_part}"
-                
-                # Update system prompt in history
-                self.history[0]["content"] = new_prompt
+                if new_prompt is not None:
+                    if "## PROJECT CONTEXT" in current_content:
+                        project_context_part = current_content.split("## PROJECT CONTEXT", 1)[1]
+                        new_prompt += f"\n\n## PROJECT CONTEXT{project_context_part}"
+                    self.history[0]["content"] = new_prompt
                 # UI.event("Brain", f"Context adjusted: {list(self.prompt_manager.active_modules.keys())}", style="dim")
+        
+        # Apply dynamic system prompt every turn (not only when compressing) so User identity is always current
+        if new_prompt is not None and len(self.history) > 0 and self.history[0].get("role") == "system":
+            current_content = self.history[0]["content"]
+            if "## PROJECT CONTEXT" in current_content and "## PROJECT CONTEXT" not in new_prompt:
+                project_context_part = current_content.split("## PROJECT CONTEXT", 1)[1]
+                new_prompt = new_prompt + f"\n\n## PROJECT CONTEXT{project_context_part}"
+            self.history[0]["content"] = new_prompt
 
         # Keep language pinned to the user's most recent message.
         # This must happen early so it affects workflow selection + normal chat replies.
@@ -3462,7 +3470,11 @@ class Agent:
 
         # 0. Context Management (Trim/Summarize) - BEFORE adding user input
         self.manage_context()
-        
+        try:
+            append_domain_log("backend", "chat_step_after_manage_context")
+        except Exception:
+            pass
+
         # ═══════════════════════════════════════════════════════════════════════
         # WORKFLOW ENGINE: ENABLED - Try to match workflow templates first
         # ═══════════════════════════════════════════════════════════════════════
@@ -3602,17 +3614,13 @@ class Agent:
 
             # Log which LLM backend is used (for debugging: VQ1 vs API vs server)
             try:
-                log_dir = _get_debug_log_dir()
-                log_dir.mkdir(parents=True, exist_ok=True)
-                from datetime import datetime
                 if self.api_backend:
                     backend_type = f"api({getattr(self.api_backend, 'provider_name', self.provider)})"
                 elif self.use_server:
                     backend_type = "server(8080)"
                 else:
                     backend_type = "library(llama-cpp-python)"
-                with open(log_dir / "llm_backend.log", "a", encoding="utf-8") as f:
-                    f.write(f"{datetime.now().isoformat()} chat_step backend={backend_type}\n")
+                append_domain_log("backend", f"chat_step backend={backend_type}")
             except Exception:
                 pass
 
@@ -3687,12 +3695,10 @@ class Agent:
                         _chunk_count += 1
                         if not chunk: continue
 
-                        # DEBUG: Log chunk to file for troubleshooting
+                        # DEBUG: Log chunk (consolidated in backend.log)
                         try:
-                            log_dir = _get_debug_log_dir()
-                            with open(log_dir / "api_chunks_debug.txt", "a", encoding="utf-8") as f:
-                                chunk_preview = str(chunk)[:100].replace('\n', '\\n')
-                                f.write(f"[CHUNK {_chunk_count}] {chunk_preview}\n")
+                            chunk_preview = str(chunk)[:100].replace('\n', '\\n')
+                            append_domain_log("backend", f"[CHUNK {_chunk_count}] {chunk_preview}")
                         except: pass
 
                         # Check for error/warning messages from backend
@@ -3747,11 +3753,9 @@ class Agent:
                         if not is_control_msg:
                             full_response += chunk
                             
-                            # DEBUG: Log content chunk
+                            # DEBUG: Log content chunk (consolidated in backend.log)
                             try:
-                                log_dir = _get_debug_log_dir()
-                                with open(log_dir / "api_chunks_debug.txt", "a", encoding="utf-8") as f:
-                                    f.write(f"[CONTENT] len={len(chunk)} callback={stream_callback is not None}\n")
+                                append_domain_log("backend", f"[CONTENT] len={len(chunk)} callback={stream_callback is not None}")
                             except: pass
                             
                             # Live Update (TUI)
@@ -3901,6 +3905,11 @@ class Agent:
                             if "tools" in payload: del payload["tools"]
                             if "tool_choice" in payload: del payload["tool_choice"]
 
+                        UI.event("Server", "Calling local server (8080)...", style="dim")
+                        try:
+                            append_domain_log("backend", f"calling_8080 attempt={_attempt + 1}")
+                        except Exception:
+                            pass
                         response = requests.post(
                             "http://127.0.0.1:8080/v1/chat/completions", 
                             json=payload, 
@@ -3913,11 +3922,7 @@ class Agent:
 
                         if response.status_code == 503:
                             try:
-                                log_dir = _get_debug_log_dir()
-                                log_dir.mkdir(parents=True, exist_ok=True)
-                                from datetime import datetime as _dt
-                                with open(log_dir / "llm_backend.log", "a", encoding="utf-8") as f:
-                                    f.write(f"{_dt.now().isoformat()} server(8080) 503 model_loading retry={_attempt + 1}/15\n")
+                                append_domain_log("backend", f"server(8080) 503 model_loading retry={_attempt + 1}/15")
                             except Exception:
                                 pass
                             UI.event("Server", "Model is loading, waiting...", style="warning")
@@ -4055,11 +4060,7 @@ class Agent:
                     
                 if not response or response.status_code != 200:
                     try:
-                        log_dir = _get_debug_log_dir()
-                        log_dir.mkdir(parents=True, exist_ok=True)
-                        from datetime import datetime as _dt
-                        with open(log_dir / "llm_backend.log", "a", encoding="utf-8") as f:
-                            f.write(f"{_dt.now().isoformat()} server(8080) unavailable_after_retries status={getattr(response, 'status_code', None)}\n")
+                        append_domain_log("backend", f"server(8080) unavailable_after_retries status={getattr(response, 'status_code', None)}")
                     except Exception:
                         pass
                     UI.error("Server unavailable after retries.")
@@ -5248,15 +5249,10 @@ class Agent:
                 if name in ("memory_save", "memory_search"):
                     scope_id = getattr(self, "_current_user_scope_id", None)
                     tool_args["user_scope_id"] = scope_id
-                    # Debug: Log user scope for RAG troubleshooting
-                    try:
-                        from datetime import datetime as _dt
-                        log_dir = Path(__file__).resolve().parents[2] / "logs"
-                        log_dir.mkdir(parents=True, exist_ok=True)
-                        with open(log_dir / "rag_user_scope.log", "a", encoding="utf-8") as f:
-                            f.write(f"{_dt.now().isoformat()} [Agent] {name} called with user_scope_id={scope_id}\n")
-                    except Exception:
-                        pass
+                    # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
+                    append_domain_log("rag", f"[Agent] {name} called with user_scope_id={scope_id}")
+                if name == "update_user_identity":
+                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 result = self.tools[name].run(**tool_args)
             else:
                 result = f"Error: Unknown tool '{name}'"

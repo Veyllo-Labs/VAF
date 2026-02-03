@@ -49,20 +49,20 @@ except ImportError:
 
 import logging
 
-# Configure Logging
-log_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "tray_debug.log")
+# Configure Logging (only write tray_debug.log when Debug Logs is enabled)
 logger = logging.getLogger("VAF_Tray")
 logger.setLevel(logging.DEBUG)
-# Force file handler
-fh = logging.FileHandler(log_file)
-fh.setLevel(logging.DEBUG)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-fh.setFormatter(formatter)
-logger.addHandler(fh)
-
-# Also add to root logger so we catch other errors?
-# No, let's keep it specific to avoid noise, but maybe add root error capture.
-logging.getLogger().addHandler(fh)
+if Config.get("debug_logs_enabled", False):
+    log_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "tray_debug.log")
+    try:
+        fh = logging.FileHandler(log_file)
+        fh.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+        logging.getLogger().addHandler(fh)
+    except Exception:
+        pass
 
 # Global state
 server_mgr = ServerManager()

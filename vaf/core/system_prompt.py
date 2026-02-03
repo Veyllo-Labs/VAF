@@ -17,6 +17,7 @@ from datetime import datetime
 from vaf.core.main_persistence import MainPersistenceManager
 from vaf.core.platform import Platform
 from vaf.core.config import Config
+from vaf.core.log_helper import append_domain_log, append_domain_log_block
 
 
 class SystemPromptManager:
@@ -380,14 +381,7 @@ Sub-agents run asynchronously - results arrive later
         # 1. CORE IDENTITY & PERSONA (Soul)
         
         def _log_soul(msg: str) -> None:
-            try:
-                from datetime import datetime as _dt
-                log_dir = Platform.get_context_log_dir()
-                log_dir.mkdir(parents=True, exist_ok=True)
-                with open(log_dir / "soul_prompt.log", "a", encoding="utf-8") as f:
-                    f.write(f"{_dt.now().isoformat()} {msg}\n")
-            except Exception as e:
-                logging.warning("Soul log write failed: %s", e)
+            append_domain_log("prompt", f"[SOUL] {msg}")
 
         _log_soul("build_prompt persona block entered")
 
@@ -449,19 +443,33 @@ You have **long-term memory** (RAG). Use it to remember things about the user an
 - **memory_save**: Save NEW facts only when the user explicitly asks to remember something (e.g. "remember that...", "merke dir..."). Do NOT use for "who am I?" or "what do you remember?" – use the **Memory context** block or **memory_search** with a short query.
 - When the user asks "who am I?" or "what do you remember?", use the **Memory context** block injected this turn (if any) or call **memory_search** with a short query; then answer from that. If none is shown, say so and offer to remember things from now on.
 - **add_memory** / **update_working_memory**: Short-term notes and plan. **memory_save**: Long-term facts (save only). **memory_search**: Look up facts (short query only). Use both; memory_save is for saving, memory_search for looking up.
+- **update_user_identity**: Update the current user's name, language, preferences, do's and don'ts so you can greet them correctly (e.g. \"Hey Mert\") and follow their rules. Use when the user tells you their name or how they want to be treated.
 """)
 
-        # User identity (current user): static identity + cached RAG summary (refreshed after compaction)
+        # User identity (current user): name, language, preferences, do's/don'ts + cached RAG summary
         if username or user_scope_id:
             user_identity_parts = ["\n## User identity (current user)\n"]
+            user_identity_parts.append(
+                "Use this so you know who you're talking to (e.g. greet by name). "
+                "You can update it with the **update_user_identity** tool when the user tells you their name, language, preferences, or do's/don'ts.\n"
+            )
             if username:
                 try:
                     from vaf.auth.user_workspace import get_user_workspace
                     ws = get_user_workspace(username)
-                    identity = ws.get_identity()
-                    user_identity_parts.append(f"- [NAME] {identity.get('name', username)}")
-                    if identity.get("preferred_language"):
-                        user_identity_parts.append(f"- [LANGUAGE] {identity.get('preferred_language')}")
+                    user_identity = ws.get_user_identity()
+                    user_identity_parts.append(f"- [NAME] {user_identity.get('name', username)}")
+                    if user_identity.get("preferred_language"):
+                        user_identity_parts.append(f"- [LANGUAGE] {user_identity.get('preferred_language')}")
+                    prefs = user_identity.get("preferences") or []
+                    if prefs:
+                        user_identity_parts.append("\n**Preferences:** " + "; ".join(prefs))
+                    dos = user_identity.get("dos") or []
+                    if dos:
+                        user_identity_parts.append("\n**Do:** " + "; ".join(dos))
+                    donts = user_identity.get("donts") or []
+                    if donts:
+                        user_identity_parts.append("\n**Don't:** " + "; ".join(donts))
                 except Exception:
                     user_identity_parts.append(f"- [NAME] {username}")
             if user_scope_id:
@@ -542,11 +550,7 @@ You have **long-term memory** (RAG). Use it to remember things about the user an
         
         full_prompt = "\n".join(parts)
         try:
-            from datetime import datetime as _dt
-            log_dir = Platform.get_context_log_dir()
-            log_dir.mkdir(parents=True, exist_ok=True)
-            with open(log_dir / "system_prompt_full.log", "a", encoding="utf-8") as f:
-                f.write(f"\n{'='*60}\n{_dt.now().isoformat()}\n{'='*60}\n{full_prompt}\n")
+            append_domain_log_block("prompt", "[SYSTEM_FULL]", full_prompt.splitlines())
         except Exception as e:
             logging.warning("System prompt full log write failed: %s", e)
         return full_prompt

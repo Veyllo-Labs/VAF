@@ -2,18 +2,27 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import List, Dict, Any, Optional
+
+# Throttle log pushes to WebUI so typing and UI stay responsive (max ~3 log updates/sec)
+LOG_PUSH_THROTTLE_SEC = 0.35
 from fastapi import WebSocket
 from vaf.core.platform import Platform
+from vaf.core.log_helper import append_domain_log
 from pathlib import Path
 
 import queue
 
 def _resolve_log_dir() -> Path:
+    """Resolve log dir so emit_debug.txt and webui_push_debug.txt land in project logs (e.g. d:\\VAF\\logs)."""
     candidates = []
     env_dir = os.environ.get("VAF_LOG_DIR")
     if env_dir:
         candidates.append(Path(env_dir))
+    # Prefer repo root / logs so WebUI debug logs sit next to callback_debug.txt, queue.log, etc.
+    repo_logs = Path(__file__).resolve().parents[2] / "logs"
+    candidates.append(repo_logs)
     candidates.append(Platform.data_dir() / "logs")
     candidates.append(Platform.vaf_dir() / "logs")
     candidates.append(Path(__file__).resolve().parents[1] / "logs")
@@ -63,8 +72,9 @@ class WebInterfaceManager:
         }
         self.last_stats = None
         self.initialized = True
-        self.agent_instance = None # Reference to the active Agent
+        self.agent_instance = None  # Reference to the active Agent
         self._server_loop = None
+        self._last_log_push_time = 0.0
 
     def register_agent(self, agent):
         """Register the active agent instance to allow control from Web UI."""
@@ -189,22 +199,23 @@ class WebInterfaceManager:
 
     def log(self, message: str, level: str = "info", source: str = "system", session_id: str = None):
         """
-        Add a log entry.
-        
+        Add a log entry. Pushes to WebUI are throttled so the UI does not lag when many logs are emitted.
         If session_id is provided, the log is only sent to clients viewing that session.
         """
         log_entry = {
-            "timestamp":  __import__("datetime").datetime.now().isoformat(),
+            "timestamp": __import__("datetime").datetime.now().isoformat(),
             "message": message,
             "level": level,
             "source": source
         }
         self.latest_state["logs"].append(log_entry)
-        # Keep logs capped at 1000
         if len(self.latest_state["logs"]) > 1000:
-             self.latest_state["logs"].pop(0)
-             
-        self._push_session_update(session_id, {"type": "new_log", "entry": log_entry})
+            self.latest_state["logs"].pop(0)
+
+        now = time.time()
+        if now - self._last_log_push_time >= LOG_PUSH_THROTTLE_SEC:
+            self._last_log_push_time = now
+            self._push_session_update(session_id, {"type": "new_log", "entry": log_entry})
 
     def set_tasks(self, tasks: List[Dict], session_id: str = None):
         """Update the list of active/pending tasks."""
@@ -213,11 +224,6 @@ class WebInterfaceManager:
         
     def emit_agent_message(self, role: str, content: str, session_id: str = None):
         """Emit a message update. Content is the FULL message so far."""
-        # DEBUG: Log entry into this function
-        try:
-            with open(self.log_dir / "emit_debug.txt", "a", encoding="utf-8") as f:
-                f.write(f"[EMIT] role={role} content_len={len(content)} session={session_id}\n")
-        except: pass
         self._push_session_update(session_id, {
             "type": "agent_message_update",
             "role": role,
@@ -276,13 +282,6 @@ class WebInterfaceManager:
         """
         Thread-safe push update with session scoping.
         """
-        # DEBUG: Log every update to file
-        try:
-            with open(self.log_dir / "webui_push_debug.txt", "a", encoding="utf-8") as f:
-                content_preview = str(data.get('content', ''))[:50] if data.get('content') else 'N/A'
-                f.write(f"[PUSH] type={data.get('type')} | sess={session_id} | loop={self._server_loop is not None} | content={content_preview}\n")
-        except: pass
-
         if session_id:
             data['sessionId'] = session_id
             if self._server_loop:
@@ -292,10 +291,7 @@ class WebInterfaceManager:
                 )
             else:
                 # WARNING: No server loop means messages are silently dropped!
-                try:
-                    with open(self.log_dir / "webui_push_debug.txt", "a", encoding="utf-8") as f:
-                        f.write(f"[WARNING] No server loop! Message dropped for session {session_id}\n")
-                except: pass
+                append_domain_log("webui", f"[WARNING] No server loop! Message dropped for session {session_id}")
         else:
             # Fallback to global broadcast for non-session events
             self.push_update(data)

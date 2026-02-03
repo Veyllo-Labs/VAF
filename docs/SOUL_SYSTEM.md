@@ -18,56 +18,59 @@
 ---
 
 ## 1. Introduction
-The **VAF Soul System** is a sophisticated personality and behavioral framework designed to give Veyllo Agentic Framework (VAF) instances a consistent, human-like, yet technically precise character. Inspired by the "Soul as Code" philosophy, it separates the agent's core identity from its operational logic, allowing for a highly customizable and transparent AI persona.
 
-### Measurable Outcomes:
-- **Consistency**: 100% of system prompts across all connected devices will share the same Admin-defined identity.
-- **Onboarding Efficiency**: New administrators can define a complete persona in under 2 minutes using the Soul Wizard.
-- **Isolation**: 0% leakage of RAG data between standard users while maintaining a shared personality.
+The Soul system defines the **agent's** personality and rules. It is stored as files in the admin workspace and injected into the system prompt so the agent answers in a consistent way.
+
+- **Consistency**: The same Soul is used for all users on the same instance.
+- **Separation**: The **human user's** profile (name, language, preferences) is stored separately in `user_identity.json`. See [USER_IDENTITY.md](USER_IDENTITY.md).
 
 ---
 
 ## 2. Architecture Overview
 The Soul System operates as a bridge between the **User Workspace** and the **LLM Inference Engine**.
 
-### Data Flow:
-1. **Storage Layer**: Persona data is stored in `~/.vaf/users/admin/` as `soul.md` (Rules) and `identity.json` (Visuals).
-2. **Access Layer**: The `UserWorkspace` class manages secure I/O operations for these files.
-3. **API Layer**: `user_persona_routes.py` exposes endpoints for the Web UI to modify the soul.
-4. **Injection Layer**: The `SystemPromptManager` dynamically reads the Admin's soul and prepends it to the LLM context for every turn, regardless of which user is logged in.
+### Data flow
+
+1. **Storage**: Under `~/.vaf/users/admin/`: `soul.md` (personality and rules) and `identity.json` (agent display: name, emoji, theme). The **current user's** profile is in `user_identity.json` per user; see [USER_IDENTITY.md](USER_IDENTITY.md).
+2. **Access**: `UserWorkspace` in `vaf/auth/user_workspace.py` reads and writes these files.
+3. **API**: `user_persona_routes.py` exposes GET/PUT for persona and soul.
+4. **Prompt**: `SystemPromptManager.build_prompt()` injects the Soul (and agent identity) into the system prompt each turn.
 
 ---
 
 ## 3. Module Descriptions
 
 ### 3.1 Core Truths
-**Definition**: The fundamental, immutable mission and identity of the agent.  
-**Outcome**: The agent will consistently refer to itself by its defined name and stick to its primary mission (e.g., "Technical Assistant") during role-play or identity queries.
+
+The agent's main mission and how it refers to itself (name in `identity.json`). Keeps answers aligned with that role.
 
 ### 3.2 Boundaries
-**Definition**: Strict behavioral and ethical limits.  
-**Outcome**: The agent will refuse to engage in prohibited actions or styles (e.g., "No small talk") with a 95% adherence rate in standard inference tests.
+
+Rules and limits (e.g. no small talk, no external actions without confirmation). The Soul text is injected so the model can follow them.
 
 ### 3.3 Vibe
-**Definition**: The aesthetic and linguistic style of communication.  
-**Outcome**: Responses will consistently reflect the chosen tone (e.g., "Concise", "Formal") as measured by linguistic analysis of output length and vocabulary choice.
+
+Tone and style (e.g. concise, formal). Defined in the Soul markdown and applied to every reply.
 
 ### 3.4 Continuity
-**Definition**: The mechanism for long-term evolution and persistence.  
-**Outcome**: The agent will proactively suggest updates to its own `soul.md` when it detects a significant shift in user requirements.
+
+The Soul can be updated over time (manually in Settings or by the agent suggesting edits). Stored in `soul.md`.
 
 ---
 
 ## 4. API Specifications
 
 ### `GET /api/user/persona`
-- **Description**: Retrieves the current identity and soul (system prompt) markdown.
-- **Access**: Admin only.
+
+Returns `identity` (agent name, emoji, theme), `user_identity` (current user profile; see [USER_IDENTITY.md](USER_IDENTITY.md)), and `soul` (markdown). Used by Settings and the User Identity modal.
+
+### `PUT /api/user/identity`
+
+Updates `identity.json` (agent display only: name, emoji, theme). Payload: optional `name`, `emoji`, `theme`.
 
 ### `PUT /api/user/soul`
-- **Description**: Updates the `soul.md` file.
-- **Payload**: `{ "content": "markdown string" }`
-- **Access**: Admin only.
+
+Updates `soul.md`. Payload: `{ "content": "markdown string" }`.
 
 ---
 
@@ -94,8 +97,9 @@ Long-term facts are stored via the **memory_save** tool and auto-capture; they a
 
 ---
 
-## 7. Glossary of Terms
-- **Soul**: The collective system instructions defining the agent's character.
-- **RAG (Retrieval-Augmented Generation)**: The process of fetching relevant facts from external storage to ground LLM responses.
-- **Multi-Tenancy**: The ability for multiple users to use the same system while keeping their data (memory) isolated.
-- **User Scope ID**: A unique identifier used to partition the RAG database per user.
+## 7. Glossary
+
+- **Soul**: The markdown in `soul.md` that defines the agent's personality and rules. Injected into the system prompt.
+- **identity.json**: Agent display (name, emoji, theme). Used in the Soul block. Not the human user's profile.
+- **user_identity.json**: The current human user's profile (name, language, preferences, do's/don'ts). See [USER_IDENTITY.md](USER_IDENTITY.md).
+- **User scope ID**: Identifier that scopes RAG and user data per user when multiple users share the same instance.

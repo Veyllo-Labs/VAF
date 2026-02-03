@@ -95,6 +95,7 @@ class Config:
         "web_ui_enabled": True,                # Start Web UI automatically
         "server_persistence_enabled": False,   # Keep server running after exit
         "tray_autostart": False,               # Auto-start tray on OS login
+        "debug_logs_enabled": False,           # Write domain logs and queue.log when enabled; off by default to reduce I/O
         "server_idle_timeout": 15,             # Unload local model after idle seconds
         
         # Memory System Settings (RAG + Vector Search)

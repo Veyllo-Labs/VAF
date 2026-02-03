@@ -7,13 +7,16 @@ import time
 import gc
 import sys
 import os
+import tracemalloc
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+from vaf.core.log_helper import append_domain_log, get_app_log_dir
+
 # Profiling interval in seconds
 PROFILE_INTERVAL = 30
-LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class MemoryProfiler:
@@ -27,7 +30,7 @@ class MemoryProfiler:
         self._thread: Optional[threading.Thread] = None
         self._snapshots: List[Dict] = []
         self._start_memory: float = 0.0
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        get_app_log_dir().mkdir(parents=True, exist_ok=True)
 
     @classmethod
     def get_instance(cls) -> "MemoryProfiler":
@@ -43,6 +46,8 @@ class MemoryProfiler:
             return
 
         self._running = True
+        if not tracemalloc.is_tracing():
+            tracemalloc.start(25)
         self._start_memory = self._get_memory_mb()
         self._thread = threading.Thread(target=self._profile_loop, daemon=True, name="MemoryProfiler")
         self._thread.start()
@@ -64,26 +69,21 @@ class MemoryProfiler:
                 self._log(f"Profiler error: {e}")
             time.sleep(PROFILE_INTERVAL)
 
+    def _format_allocation_site(self, stat) -> str:
+        """Format a tracemalloc Statistic as 'path:line in name' (project-relative when possible)."""
+        if not stat.traceback:
+            return "?"
+        frame = stat.traceback[0]
+        try:
+            path = Path(frame.filename).relative_to(PROJECT_ROOT)
+        except ValueError:
+            path = Path(frame.filename)
+        return f"{path}:{frame.lineno} in {frame.name}"
+
     def _take_snapshot(self):
         """Take a memory snapshot and log it."""
         memory_mb = self._get_memory_mb()
         delta = memory_mb - self._start_memory
-
-        # Get object counts for common leak suspects
-        gc.collect()  # Collect garbage first for accurate counts
-        obj_counts = self._get_object_counts()
-
-        snapshot = {
-            "timestamp": datetime.now().isoformat(),
-            "memory_mb": memory_mb,
-            "delta_mb": delta,
-            "objects": obj_counts,
-        }
-        self._snapshots.append(snapshot)
-
-        # Keep only last 100 snapshots
-        if len(self._snapshots) > 100:
-            self._snapshots = self._snapshots[-100:]
 
         # Log warning if memory is growing fast
         warning = ""
@@ -94,11 +94,48 @@ class MemoryProfiler:
         elif delta > 500:
             warning = " ⚠️ GROWING"
 
-        # Format top object types
-        top_objects = sorted(obj_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        obj_str = ", ".join([f"{k}:{v}" for k, v in top_objects])
+        if tracemalloc.is_tracing():
+            t_snapshot = tracemalloc.take_snapshot()
+            top_stats = t_snapshot.statistics("lineno")
+            top_allocations: List[str] = []
+            for stat in top_stats[:10]:
+                size_mib = stat.size / 1024 / 1024
+                site = self._format_allocation_site(stat)
+                top_allocations.append(f"{size_mib:.1f} MiB - {site}")
 
-        self._log(f"Memory: {memory_mb:.0f}MB (Δ{delta:+.0f}MB){warning} | Top: {obj_str}")
+            snapshot = {
+                "timestamp": datetime.now().isoformat(),
+                "memory_mb": memory_mb,
+                "delta_mb": delta,
+                "objects": {},
+                "top_allocations": top_allocations,
+            }
+            self._snapshots.append(snapshot)
+
+            if len(self._snapshots) > 100:
+                self._snapshots = self._snapshots[-100:]
+
+            self._log(f"Memory: {memory_mb:.0f}MB (Δ{delta:+.0f}MB){warning}")
+            self._log("[Top 10 Memory Allocations]")
+            for line in top_allocations:
+                self._log(f"  {line}")
+        else:
+            gc.collect()
+            obj_counts = self._get_object_counts()
+            snapshot = {
+                "timestamp": datetime.now().isoformat(),
+                "memory_mb": memory_mb,
+                "delta_mb": delta,
+                "objects": obj_counts,
+            }
+            self._snapshots.append(snapshot)
+
+            if len(self._snapshots) > 100:
+                self._snapshots = self._snapshots[-100:]
+
+            top_objects = sorted(obj_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+            obj_str = ", ".join([f"{k}:{v}" for k, v in top_objects])
+            self._log(f"Memory: {memory_mb:.0f}MB (Δ{delta:+.0f}MB){warning} | Top: {obj_str}")
 
         # Auto-cleanup if memory is high
         if memory_mb > 4000:
@@ -175,13 +212,8 @@ class MemoryProfiler:
         self._log(f"  - Cleanup result: {before:.0f}MB → {after:.0f}MB (freed {before-after:.0f}MB)")
 
     def _log(self, message: str):
-        """Write to log file."""
-        try:
-            log_file = LOG_DIR / "memory_profiler.log"
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"{datetime.now().isoformat()} {message}\n")
-        except Exception:
-            pass
+        """Write one line to memory.log with [PROFILER] prefix."""
+        append_domain_log("memory", f"[PROFILER] {message}")
 
     def get_report(self) -> str:
         """Generate a summary report."""
@@ -195,11 +227,16 @@ class MemoryProfiler:
             f"Growth since start: {current['delta_mb']:+.0f}MB",
             f"Snapshots: {len(self._snapshots)}",
             "",
-            "Top object types:",
         ]
 
-        for name, count in sorted(current['objects'].items(), key=lambda x: x[1], reverse=True)[:10]:
-            lines.append(f"  {name}: {count:,}")
+        if current.get("top_allocations"):
+            lines.append("Top allocations:")
+            for line in current["top_allocations"]:
+                lines.append(f"  {line}")
+        else:
+            lines.append("Top object types:")
+            for name, count in sorted(current["objects"].items(), key=lambda x: x[1], reverse=True)[:10]:
+                lines.append(f"  {name}: {count:,}")
 
         return "\n".join(lines)
 
@@ -243,10 +280,8 @@ def log_object_growth():
 
         if growth:
             growth.sort(key=lambda x: x[1], reverse=True)
-            log_file = LOG_DIR / "memory_profiler.log"
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"{datetime.now().isoformat()} Object growth:\n")
-                for name, delta, total in growth[:10]:
-                    f.write(f"  {name}: +{delta} (total: {total})\n")
+            append_domain_log("memory", "[PROFILER] Object growth:")
+            for name, delta, total in growth[:10]:
+                append_domain_log("memory", f"[PROFILER]   {name}: +{delta} (total: {total})")
 
     _last_counts = current_counts

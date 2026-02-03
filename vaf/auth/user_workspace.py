@@ -2,7 +2,8 @@
 User Workspace Manager for VAF.
 
 Handles the creation and management of user-specific files:
-- identity.json: Visual identity (name, emoji, theme)
+- identity.json: Agent persona (name, emoji, theme) – used in Soul block
+- user_identity.json: Current human user's profile (name, language, preferences, do's/don'ts) – used in "User identity (current user)" block and by update_user_identity tool
 - soul.md: Personality and behavioral rules (System Prompt)
 - logs/: Daily interaction logs
 """
@@ -26,6 +27,7 @@ class UserWorkspace:
         self.logs_dir = self.base_dir / "logs"
         
         self.identity_file = self.base_dir / "identity.json"
+        self.user_identity_file = self.base_dir / "user_identity.json"
         self.soul_file = self.base_dir / "soul.md"
 
     def ensure_exists(self):
@@ -53,9 +55,21 @@ class UserWorkspace:
                 "name": f"Nobel{num}{color}",
                 "emoji": emoji,
                 "theme": "technical",
-                "avatar_url": None
+                "avatar_url": None,
             }
             self.save_identity(default_identity)
+
+        if not self.user_identity_file.exists():
+            self.base_dir.mkdir(parents=True, exist_ok=True)
+            default_user = {
+                "name": self.username,
+                "preferred_language": None,
+                "preferences": [],
+                "dos": [],
+                "donts": [],
+                "change_log": [],
+            }
+            self.save_user_identity(default_user)
 
         if not self.soul_file.exists():
             default_soul = """# SOUL
@@ -85,15 +99,52 @@ You’re not a chatbot. You’re becoming someone.
             self.soul_file.write_text(default_soul, encoding="utf-8")
 
     def get_identity(self) -> Dict[str, Any]:
+        """Agent persona (name, emoji, theme) – used in Soul block."""
         if not self.identity_file.exists():
             self.ensure_exists()
+        defaults = {"name": self.username, "emoji": "文", "theme": "technical", "avatar_url": None}
         try:
-            return json.loads(self.identity_file.read_text(encoding="utf-8"))
+            data = json.loads(self.identity_file.read_text(encoding="utf-8"))
+            return {**defaults, **{k: v for k, v in data.items() if k in ("name", "emoji", "theme", "avatar_url")}}
         except Exception:
-            return {"name": self.username, "emoji": "文"}
+            return defaults.copy()
 
     def save_identity(self, data: Dict[str, Any]):
         self.identity_file.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+    def get_user_identity(self) -> Dict[str, Any]:
+        """Human user profile (name, language, preferences, do's/don'ts, change_log) – used in "User identity (current user)" block."""
+        if not self.user_identity_file.exists():
+            self.ensure_exists()
+        defaults = {
+            "name": self.username,
+            "preferred_language": None,
+            "preferences": [],
+            "dos": [],
+            "donts": [],
+            "change_log": [],
+        }
+        try:
+            data = json.loads(self.user_identity_file.read_text(encoding="utf-8"))
+            for key in ("preferences", "dos", "donts"):
+                if key not in data or not isinstance(data[key], list):
+                    data[key] = defaults[key]
+                else:
+                    data[key] = [x for x in data[key] if isinstance(x, str)]
+            if "preferred_language" not in data:
+                data["preferred_language"] = defaults["preferred_language"]
+            if "change_log" not in data or not isinstance(data["change_log"], list):
+                data["change_log"] = []
+            else:
+                data["change_log"] = [e for e in data["change_log"] if isinstance(e, dict) and "at" in e]
+            if "name" not in data:
+                data["name"] = defaults["name"]
+            return data
+        except Exception:
+            return defaults.copy()
+
+    def save_user_identity(self, data: Dict[str, Any]):
+        self.user_identity_file.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
     def get_soul(self) -> str:
         if not self.soul_file.exists():

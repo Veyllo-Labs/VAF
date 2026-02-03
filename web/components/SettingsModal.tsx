@@ -23,7 +23,7 @@ const ReactFlowFallback = () => (
 import {
     X, Globe, Cpu, Volume2, Monitor, Shield, Save, RotateCcw,
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch,
-    Brain, Database, Link2, MessageSquare, Network, Users, Lock, Server, Laptop, Smartphone,
+    Brain, Database, Link2, MessageSquare, Network, Users, User, Lock, Server, Laptop, Smartphone,
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -81,6 +81,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showWorkflowsModal, setShowWorkflowsModal] = useState(false);
     const [showNetworkModal, setShowNetworkModal] = useState(false);
     const [showMemoryModal, setShowMemoryModal] = useState(false);
+    const [showUserIdentityModal, setShowUserIdentityModal] = useState(false);
     const [showDiscordWizard, setShowDiscordWizard] = useState(false);
 
     const [toolsSearch, setToolsSearch] = useState('');
@@ -149,7 +150,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showSoulWizard, setShowSoulWizard] = useState(false);
 
     // Persona State
-    const [personaData, setPersonaData] = useState<{identity: any, soul: string} | null>(null);
+    const [personaData, setPersonaData] = useState<{identity: any, user_identity?: any, soul: string} | null>(null);
     const [personaLoading, setPersonaLoading] = useState(false);
 
     useEffect(() => {
@@ -294,6 +295,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     e.stopPropagation();
                     return;
                 }
+                if (showUserIdentityModal) {
+                    setShowUserIdentityModal(false);
+                    e.stopPropagation();
+                    return;
+                }
                 if (showToolsModal) {
                     setShowToolsModal(false);
                     e.stopPropagation();
@@ -315,7 +321,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             window.addEventListener('keydown', handleKeyDown);
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, codeModal, workflowModal, showMemoryModal, showToolsModal, showWorkflowsModal, onClose]);
+    }, [isOpen, codeModal, workflowModal, showMemoryModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, onClose]);
 
     const handleLogoutYes = useCallback(() => {
         setShowLogoutConfirm(false);
@@ -745,18 +751,27 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </Section>
 
                                         <Section title="Long-term Memory (RAG Source)">
-                                            <button
-                                                onClick={() => setShowMemoryModal(true)}
-                                                disabled={!localConfig.memory_enabled}
-                                                className={cn(
-                                                    "text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2",
-                                                    localConfig.memory_enabled
-                                                        ? "bg-purple-50 text-purple-600 hover:bg-purple-100"
-                                                        : "bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                )}
-                                            >
-                                                <Brain size={16} /> View Graph
-                                            </button>
+                                            <div className="flex flex-wrap gap-2">
+                                                <button
+                                                    onClick={() => setShowMemoryModal(true)}
+                                                    disabled={!localConfig.memory_enabled}
+                                                    className={cn(
+                                                        "text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2",
+                                                        localConfig.memory_enabled
+                                                            ? "bg-purple-50 text-purple-600 hover:bg-purple-100"
+                                                            : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                    )}
+                                                >
+                                                    <Brain size={16} /> View Graph
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowUserIdentityModal(true)}
+                                                    className="text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2 bg-amber-100 text-amber-700 hover:bg-amber-200"
+                                                >
+                                                    <User size={16} /> User Identity
+                                                </button>
+                                            </div>
                                         </Section>
                                     </>
                                 )}
@@ -1350,6 +1365,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         description="Store and retrieve memories with AI-powered RAG"
                                         checked={localConfig.memory_enabled ?? true}
                                         onChange={(v: boolean) => handleChange('memory_enabled', v)}
+                                    />
+                                    <div className="h-4" />
+                                    <Switch
+                                        label="Debug Logs"
+                                        description="Write domain and queue logs; turn off to reduce disk I/O"
+                                        checked={localConfig.debug_logs_enabled ?? false}
+                                        onChange={(v: boolean) => handleChange('debug_logs_enabled', v)}
                                     />
                                     <div className="h-4" />
                                     <button
@@ -2018,6 +2040,93 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600">
                                         Disconnected
                                     </span>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* User Identity Modal */}
+            {showUserIdentityModal && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowUserIdentityModal(false)}>
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div
+                        className="relative bg-white w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between p-4 border-b border-gray-200 shrink-0 bg-amber-50">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-amber-200 flex items-center justify-center">
+                                    <User size={20} className="text-amber-800" />
+                                </div>
+                                <div>
+                                    <h2 className="text-xl font-bold text-gray-900">User Identity</h2>
+                                    <p className="text-sm text-gray-500">Stored in user_identity.json • Timeline of agent updates</p>
+                                </div>
+                            </div>
+                            <button onClick={() => setShowUserIdentityModal(false)} className="p-2 hover:bg-amber-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700" title="Close">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-hidden flex min-h-0">
+                            {/* Left: User identity (human) – user_identity.json */}
+                            <div className="flex-1 min-w-0 border-r border-gray-200 overflow-y-auto p-5 bg-gray-50">
+                                <h3 className="text-sm font-semibold text-gray-700 mb-3">User identity (user_identity.json)</h3>
+                                <p className="text-xs text-gray-500 mb-3">Who the agent is talking to. Updated by the LLM via update_user_identity or when you say e.g. &quot;call me Mert&quot;.</p>
+                                {personaData?.user_identity ? (
+                                    <div className="space-y-3 text-sm">
+                                        <div><span className="text-gray-500 font-medium">Name</span><br /><span className="text-gray-900">{personaData.user_identity.name ?? '—'}</span></div>
+                                        {personaData.user_identity.preferred_language && (
+                                            <div><span className="text-gray-500 font-medium">Language</span><br /><span className="text-gray-900">{personaData.user_identity.preferred_language}</span></div>
+                                        )}
+                                        {(personaData.user_identity.preferences?.length ?? 0) > 0 && (
+                                            <div>
+                                                <span className="text-gray-500 font-medium">Preferences</span>
+                                                <ul className="list-disc list-inside text-gray-900 mt-0.5">{personaData.user_identity.preferences.map((p: string, i: number) => <li key={i}>{p}</li>)}</ul>
+                                            </div>
+                                        )}
+                                        {(personaData.user_identity.dos?.length ?? 0) > 0 && (
+                                            <div>
+                                                <span className="text-gray-500 font-medium">Do</span>
+                                                <ul className="list-disc list-inside text-gray-900 mt-0.5">{personaData.user_identity.dos.map((d: string, i: number) => <li key={i}>{d}</li>)}</ul>
+                                            </div>
+                                        )}
+                                        {(personaData.user_identity.donts?.length ?? 0) > 0 && (
+                                            <div>
+                                                <span className="text-gray-500 font-medium">Don&apos;t</span>
+                                                <ul className="list-disc list-inside text-gray-900 mt-0.5">{personaData.user_identity.donts.map((d: string, i: number) => <li key={i}>{d}</li>)}</ul>
+                                            </div>
+                                        )}
+                                        {!(personaData.user_identity.name && personaData.user_identity.name !== 'admin') && (personaData.user_identity.preferences?.length ?? 0) === 0 && (personaData.user_identity.dos?.length ?? 0) === 0 && (personaData.user_identity.donts?.length ?? 0) === 0 && (
+                                            <p className="text-gray-400 text-xs">No details yet. Tell the agent your name or preferences (e.g. &quot;call me Mert&quot;, &quot;I prefer German&quot;) and it will update this.</p>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <p className="text-gray-500 text-sm">Load Persona &amp; Memory tab first, or no user identity data yet.</p>
+                                )}
+                            </div>
+                            {/* Right: Timeline (change_log) – schmal, läuft von oben nach unten */}
+                            <div className="w-72 shrink-0 overflow-y-auto p-4 border-l border-gray-100">
+                                <h3 className="text-sm font-semibold text-gray-700 mb-3">Timeline (agent updates)</h3>
+                                {personaData?.user_identity?.change_log?.length > 0 ? (
+                                    <div className="relative">
+                                        {/* vertical line */}
+                                        <div className="absolute left-3 top-2 bottom-2 w-0.5 bg-amber-200" />
+                                        <ul className="space-y-0">
+                                            {[...(personaData?.user_identity?.change_log ?? []) as Array<{ at: string; action: string }>].reverse().map((entry, i) => (
+                                                <li key={i} className="relative flex gap-3 pb-4 last:pb-0">
+                                                    <div className="relative z-10 w-6 h-6 rounded-full bg-amber-200 border-2 border-amber-500 shrink-0 mt-0.5" />
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="text-xs text-gray-500 font-mono">{typeof entry.at === 'string' ? new Date(entry.at).toLocaleString() : entry.at}</p>
+                                                        <p className="text-sm text-gray-900 font-medium mt-0.5">{entry.action || 'update'}</p>
+                                                    </div>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                ) : (
+                                    <p className="text-gray-500 text-sm">No agent updates yet. When the LLM uses the update_user_identity tool, entries appear here.</p>
                                 )}
                             </div>
                         </div>

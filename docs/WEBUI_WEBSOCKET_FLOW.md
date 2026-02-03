@@ -85,18 +85,13 @@ Useful files when debugging WebUI / LLM / queue (all under the log dir above):
 
 | File | Contents |
 |------|----------|
-| `queue.log` | **QUEUE_ADD** (session_id, preview, queue_size_after), **QUEUE_GET** (session_id, preview, queue_size_after), **QUEUE_CHAT_START** / **QUEUE_CHAT_END** (session_id, duration_sec), **QUEUE_CHAT_FAIL** (session_id, duration_sec, error), **QUEUE_DONE** (session_id, cmd/compaction/chat) |
-| `llm_backend.log` | Which backend per chat_step (`api(...)` / `server(8080)` / `library(...)`), **503 model_loading retry=N/15**, **unavailable_after_retries** |
-| `callback_debug.txt` | Stream callback activity (text_len, parts, session) |
-| `emit_debug.txt` | emit_agent_message entry |
-| `webui_push_debug.txt` | Session-scoped push |
-| `api_chunks_debug.txt` | Provider stream chunks (API path) |
-| `memory_usage.log` | Periodic RSS (MB) from headless loop |
-| `memory_profiler.log` | Memory profiler snapshots (if enabled) |
-| `headless_startup.log` | Headless runner PID and log dir at start |
-| `rag_context.log` | RAG snippet count / failures |
-| `rag_user_scope.log` | User scope per task |
-| `soul_prompt.log` / `system_prompt_full.log` | Prompt assembly (if context log dir set) |
+| `queue.log` | **QUEUE_ADD**, **QUEUE_GET**, **QUEUE_CHAT_START** / **QUEUE_CHAT_END**, **QUEUE_CHAT_FAIL**, **QUEUE_DONE** (session_id, cmd/compaction/chat) |
+| `backend.log` | Backend per chat_step `[api(...)` / `server(8080)` / `library(...)]`, **503 model_loading retry**, **unavailable_after_retries**, **calling_8080**, **\[CHUNK\]** / **\[CONTENT\]** (API stream) |
+| `webui.log` | **\[WARNING\]** only when a message is dropped (no server loop). Stream/emit logging is disabled to avoid UI lag. |
+| `rag.log` | RAG timing, search debug, embed calls, snippet count, user scope, failures |
+| `memory.log` | **\[COMPACTION\]**, **\[USAGE\]** RSS, **\[EMBED\]** load, **\[PROFILER\]**, **\[WHISPER\]** (all timestamped) |
+| `headless.log` | **\[STARTUP\]** Headless PID, log dir, Memory Profiler status |
+| `prompt.log` | **\[SOUL\]** persona block, **\[SYSTEM_FULL\]** full prompt dump (multi-line) |
 
 ### 1) WebSocket Connected, But No Answer
 
@@ -143,7 +138,7 @@ If only `stats` or `new_log` arrives:
 If OpenAI/Anthropic/DeepSeek responses loop with `False promise detected`:
 - The API may be emitting tool-call chunks without a function name.
 - The agent should drop invalid tool calls and fail fast instead of retrying.
-- Check `api_chunks_debug.txt` for `tool_calls` entries where `name` is missing.
+- Check `backend.log` for `[CHUNK]` / `[CONTENT]` and `tool_calls` entries where `name` is missing.
 
 ### 4) Sub-Agent Panel Does Not Open
 

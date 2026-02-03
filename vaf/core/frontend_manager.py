@@ -10,6 +10,7 @@ import ctypes
 from datetime import datetime
 from pathlib import Path
 from vaf.core.config import Config
+from vaf.core.log_helper import is_debug_logging_enabled
 
 class FrontendManager:
     """Manages the lifecycle of the Next.js Frontend."""
@@ -236,37 +237,46 @@ class FrontendManager:
                     f.write(str(port))
             except: pass
 
-            # Log file
+            # Log file (only when Debug Logs enabled)
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             log_dir = os.path.join(base_dir, "logs")
             os.makedirs(log_dir, exist_ok=True)
             log_file = os.path.join(log_dir, "web_debug.log")
+            use_debug_log = is_debug_logging_enabled()
 
             # Start Process - avoid shell=True to have direct control over process tree
             # -H specifies the hostname/interface to bind to
             cmd = [npm_path, "run", "dev", "--", "-p", str(port), "-H", host]
             
-            # DEBUG LOGGING
             self._log(f"Starting Frontend with command: {' '.join(cmd)}", "info", log_callback)
             self._log(f"Binding to host: {host} (Local Network: {Config.get('local_network_enabled', False)})", "info", log_callback)
-            self._log(f"Logging stdout/stderr to: {log_file}", "info", log_callback)
+            if use_debug_log:
+                self._log(f"Logging stdout/stderr to: {log_file}", "info", log_callback)
 
             creationflags = 0
             if platform.system() == "Windows":
-                # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP for better process management
                 creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-
-                # Create Job Object BEFORE starting process
                 self._job_handle = self._create_job_object()
 
-            self.process = subprocess.Popen(
-                cmd,
-                cwd=web_dir,
-                stdout=open(log_file, "a"),
-                stderr=subprocess.STDOUT,
-                creationflags=creationflags,
-                shell=False  # Important: shell=False for proper process tree control
-            )
+            if use_debug_log:
+                out_err = open(log_file, "a")
+                self.process = subprocess.Popen(
+                    cmd,
+                    cwd=web_dir,
+                    stdout=out_err,
+                    stderr=subprocess.STDOUT,
+                    creationflags=creationflags,
+                    shell=False
+                )
+            else:
+                self.process = subprocess.Popen(
+                    cmd,
+                    cwd=web_dir,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=creationflags,
+                    shell=False
+                )
 
             # Assign process to Job Object (all children will be tracked)
             if self._job_handle:

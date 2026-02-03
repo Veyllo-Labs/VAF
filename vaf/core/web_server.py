@@ -18,6 +18,7 @@ from vaf.core.session import SessionManager
 from vaf.cli.autosuggest import SmartAutoSuggest
 import json
 from vaf.core.config import Config
+from vaf.core.log_helper import append_domain_log, is_debug_logging_enabled
 from pathlib import Path
 from typing import Optional, List
 import logging
@@ -79,14 +80,8 @@ def get_whisper_model():
                     mem_after = psutil.Process().memory_info().rss / (1024 * 1024)
                     log("WebServer", f"WhisperModel ({model_size}) loaded - Memory after: {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)")
 
-                    # Log to file (helps confirm which model caused memory spikes)
-                    try:
-                        from datetime import datetime
-                        log_dir = Path(__file__).resolve().parents[2] / "logs"
-                        with open(log_dir / "whisper_load.log", "a") as f:
-                            f.write(f"{datetime.now().isoformat()} WhisperModel({model_size}): {mem_before:.0f}MB -> {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)\n")
-                    except:
-                        pass
+                    # Log to file (consolidated in memory.log)
+                    append_domain_log("memory", f"[WHISPER] WhisperModel({model_size}): {mem_before:.0f}MB -> {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)")
 
                 except ImportError:
                     raise ImportError("faster-whisper not installed. Install with: pip install faster-whisper")
@@ -1258,12 +1253,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # Add to queue
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)
                         try:
-                            from datetime import datetime as _dt
-                            qlog_dir = Path(os.environ.get("VAF_LOG_DIR", str(Path(__file__).resolve().parents[2] / "logs")))
-                            qlog_dir.mkdir(parents=True, exist_ok=True)
-                            qsize = tq.get_queue_size()
-                            with open(qlog_dir / "queue.log", "a", encoding="utf-8") as f:
-                                f.write(f"{_dt.now().isoformat()} QUEUE_ADD session_id={session_id} preview={repr((content or '')[:60])} queue_size_after={qsize}\n")
+                            if is_debug_logging_enabled():
+                                from datetime import datetime as _dt
+                                qlog_dir = Path(os.environ.get("VAF_LOG_DIR", str(Path(__file__).resolve().parents[2] / "logs")))
+                                qlog_dir.mkdir(parents=True, exist_ok=True)
+                                qsize = tq.get_queue_size()
+                                with open(qlog_dir / "queue.log", "a", encoding="utf-8") as f:
+                                    f.write(f"{_dt.now().isoformat()} QUEUE_ADD session_id={session_id} preview={repr((content or '')[:60])} queue_size_after={qsize}\n")
                         except Exception:
                             pass
                         # Ack to console

@@ -17,6 +17,7 @@ from vaf.core.session import SessionManager
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
 from vaf.core.platform import Platform
+from vaf.core.log_helper import append_domain_log, is_debug_logging_enabled
 from pathlib import Path
 
 # Memory management constants - AGGRESSIVE to prevent 25GB situations
@@ -24,11 +25,18 @@ MEMORY_CHECK_INTERVAL = 30  # Check memory every 30 seconds
 MEMORY_THRESHOLD_MB = 2048  # Trigger cleanup above 2GB
 MEMORY_CRITICAL_MB = 4096  # Force aggressive cleanup above 4GB
 
+# Throttle stream updates to WebUI so the UI does not lag behind (max ~12 updates/sec)
+STREAM_EMIT_THROTTLE_SEC = 0.08
+
 def _get_debug_log_dir():
+    """Resolve log dir so queue.log, callback_debug.txt, etc. land in project logs (e.g. d:\\VAF\\logs)."""
     candidates = []
     env_dir = os.environ.get("VAF_LOG_DIR")
     if env_dir:
         candidates.append(Path(env_dir))
+    # Prefer repo root / logs so all debug logs sit in one place
+    repo_logs = Path(__file__).resolve().parents[2] / "logs"
+    candidates.append(repo_logs)
     candidates.append(Platform.data_dir() / "logs")
     candidates.append(Platform.vaf_dir() / "logs")
     candidates.append(Path(__file__).resolve().parents[1] / "logs")
@@ -45,15 +53,12 @@ def run_headless_agent():
     Run a headless agent loop that processes tasks from the TaskQueue.
     This is designed to run in a background thread within the Tray App.
     """
-    # IMMEDIATE: Create log dir and write startup marker
+    # IMMEDIATE: Create log dir and write startup marker (consolidated in headless.log)
     log_dir = _get_debug_log_dir()
     try:
-        from datetime import datetime
-        with open(log_dir / "headless_startup.log", "a", encoding="utf-8") as f:
-            f.write(f"\n{'='*60}\n")
-            f.write(f"{datetime.now().isoformat()} Headless Runner STARTING\n")
-            f.write(f"PID: {os.getpid()}\n")
-            f.write(f"Log dir: {log_dir}\n")
+        append_domain_log("headless", "[STARTUP] Headless Runner STARTING")
+        append_domain_log("headless", f"[STARTUP] PID: {os.getpid()}")
+        append_domain_log("headless", f"[STARTUP] Log dir: {log_dir}")
     except Exception as e:
         print(f"[Headless] Failed to write startup log: {e}")
 
@@ -61,14 +66,10 @@ def run_headless_agent():
     try:
         from vaf.core.memory_profiler import start_profiler
         start_profiler()
-        print(f"[Headless] Memory Profiler started - logging to {log_dir / 'memory_profiler.log'}")
+        print(f"[Headless] Memory Profiler started - logging to {log_dir / 'memory.log'}")
     except Exception as e:
         print(f"[Headless] Memory Profiler failed to start: {e}")
-        try:
-            with open(log_dir / "headless_startup.log", "a", encoding="utf-8") as f:
-                f.write(f"Memory Profiler FAILED: {e}\n")
-        except:
-            pass
+        append_domain_log("headless", f"[STARTUP] Memory Profiler FAILED: {e}")
 
     # Ensure UTF-8 output to avoid Windows charmap crashes
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
@@ -152,14 +153,8 @@ def run_headless_agent():
             process = psutil.Process()
             memory_mb = process.memory_info().rss / (1024 * 1024)
 
-            # Log memory usage to file for debugging
-            try:
-                log_dir = _get_debug_log_dir()
-                with open(log_dir / "memory_usage.log", "a", encoding="utf-8") as f:
-                    from datetime import datetime as _dt
-                    f.write(f"{_dt.now().isoformat()} Memory: {memory_mb:.0f}MB\n")
-            except:
-                pass
+            # Log memory usage to file for debugging (consolidated in memory.log)
+            append_domain_log("memory", f"[USAGE] Memory: {memory_mb:.0f}MB")
 
             if memory_mb > MEMORY_CRITICAL_MB:
                 print(f"[Headless] CRITICAL: Memory usage {memory_mb:.0f}MB > {MEMORY_CRITICAL_MB}MB - aggressive cleanup!")
@@ -238,10 +233,11 @@ def run_headless_agent():
             task = tq.get()
             if task:
                 try:
-                    from datetime import datetime as _dt
-                    with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
-                        prev = (task.input_text or "")[:60]
-                        f.write(f"{_dt.now().isoformat()} QUEUE_GET session_id={task.session_id} preview={repr(prev)} queue_size_after={tq.get_queue_size()}\n")
+                    if is_debug_logging_enabled():
+                        from datetime import datetime as _dt
+                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            prev = (task.input_text or "")[:60]
+                            f.write(f"{_dt.now().isoformat()} QUEUE_GET session_id={task.session_id} preview={repr(prev)} queue_size_after={tq.get_queue_size()}\n")
                 except Exception:
                     pass
                 print(f"[Headless] Processing task for session {task.session_id}...")
@@ -251,14 +247,8 @@ def run_headless_agent():
                 meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
                 agent._current_user_scope_id = meta.get("user_scope_id")
                 agent._current_username = meta.get("username")
-                # Debug: Log user scope for RAG troubleshooting
-                try:
-                    from datetime import datetime as _dt
-                    log_dir = _get_debug_log_dir()
-                    with open(log_dir / "rag_user_scope.log", "a", encoding="utf-8") as f:
-                        f.write(f"{_dt.now().isoformat()} [Headless] Task user_scope_id={meta.get('user_scope_id')}, username={meta.get('username')}\n")
-                except Exception:
-                    pass
+                # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
+                append_domain_log("rag", f"[Headless] Task user_scope_id={meta.get('user_scope_id')}, username={meta.get('username')}")
 
                 # Load Session Context
                 try:
@@ -293,9 +283,10 @@ def run_headless_agent():
                 if is_cmd:
                     _handle_command(input_text, agent, session_mgr)
                     try:
-                        from datetime import datetime as _dt
-                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
-                            f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (cmd)\n")
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (cmd)\n")
                     except Exception:
                         pass
                     tq.task_done()
@@ -319,9 +310,10 @@ def run_headless_agent():
                         import logging
                         logging.getLogger(__name__).warning("Session compaction (queued) failed: %s", e)
                     try:
-                        from datetime import datetime as _dt
-                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
-                            f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (compaction)\n")
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (compaction)\n")
                     except Exception:
                         pass
                     tq.task_done()
@@ -391,9 +383,10 @@ def run_headless_agent():
                 _chat_start = time.time()
                 try:
                     try:
-                        from datetime import datetime as _dt
-                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
-                            f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_START session_id={task.session_id}\n")
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_START session_id={task.session_id}\n")
                     except Exception:
                         pass
                     try:
@@ -409,14 +402,7 @@ def run_headless_agent():
                     memory_context = ""
                     try:
                         def _log_rag(msg: str) -> None:
-                            try:
-                                from datetime import datetime as _dt
-                                log_dir = Platform.get_context_log_dir()
-                                log_dir.mkdir(parents=True, exist_ok=True)
-                                with open(log_dir / "rag_context.log", "a", encoding="utf-8") as f:
-                                    f.write(f"{_dt.now().isoformat()} {msg}\n")
-                            except Exception:
-                                pass
+                            append_domain_log("rag", msg)
                         if Config.get("memory_enabled", True):
                             from vaf.memory.rag import run_memory_search_sync
                             from uuid import UUID
@@ -427,9 +413,25 @@ def run_headless_agent():
                                     user_scope_id = UUID(str(raw))
                                 except (ValueError, TypeError):
                                     pass
+                            try:
+                                _rag_t0 = time.time()
+                                if is_debug_logging_enabled():
+                                    from datetime import datetime as _dt
+                                    with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                        f.write(f"{_dt.now().isoformat()} RAG_START session_id={task.session_id} query_len={len(task.input_text or '')}\n")
+                            except Exception:
+                                _rag_t0 = time.time()
                             memory_context = run_memory_search_sync(
                                 task.input_text, k=5, user_scope_id=user_scope_id, caller="headless"
                             )
+                            try:
+                                _rag_dur = time.time() - _rag_t0
+                                if is_debug_logging_enabled():
+                                    from datetime import datetime as _dt
+                                    with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                        f.write(f"{_dt.now().isoformat()} RAG_DONE session_id={task.session_id} duration_sec={_rag_dur:.1f} snippet_count={memory_context.count('[Source ') if memory_context else 0}\n")
+                            except Exception:
+                                pass
                             snippet_count = memory_context.count("[Source ") if memory_context else 0
                             if snippet_count == 0:
                                 _log_rag(f"RAG snippets=0 (no matching memories or DB empty) query_len={len(task.input_text or '')}")
@@ -439,45 +441,36 @@ def run_headless_agent():
                             _log_rag("RAG skipped (memory_enabled=False)")
                     except Exception as e:
                         memory_context = ""
-                        try:
-                            from datetime import datetime as _dt
-                            log_dir = Platform.get_context_log_dir()
-                            log_dir.mkdir(parents=True, exist_ok=True)
-                            with open(log_dir / "rag_context.log", "a", encoding="utf-8") as f:
-                                f.write(f"{_dt.now().isoformat()} RAG failed: {e}\n")
-                        except Exception:
-                            pass
+                        append_domain_log("rag", f"RAG failed: {e}")
 
-                    # Streaming callback for WebUI - accumulates chunks and sends updates on every chunk
+                    # Streaming callback for WebUI - accumulates chunks, throttled emit so UI keeps up
                     response_parts = []
+                    _last_emit_time = [0.0]  # list so nested function can assign
 
                     def webui_stream_callback(text):
                         response_parts.append(text)
-                        # DEBUG: Log callback invocation
-                        try:
-                            log_dir = _get_debug_log_dir()
-                            with open(log_dir / "callback_debug.txt", "a", encoding="utf-8") as f:
-                                f.write(f"[CALLBACK] text_len={len(text)} parts={len(response_parts)} session={task.session_id}\n")
-                        except: pass
                         full_text = "".join(response_parts)
-                        if full_text.strip():
+                        if not full_text.strip():
+                            return
+                        now = time.time()
+                        if now - _last_emit_time[0] >= STREAM_EMIT_THROTTLE_SEC:
                             try:
                                 get_web_interface().emit_agent_message(
                                     role="assistant",
                                     content=full_text,
                                     session_id=task.session_id
                                 )
-                                try:
-                                    log_dir = _get_debug_log_dir()
-                                    with open(log_dir / "callback_debug.txt", "a", encoding="utf-8") as f:
-                                        f.write(f"[EMIT_DONE] session={task.session_id}\n")
-                                except Exception:
-                                    pass
-                            except Exception as e:
-                                log_dir = _get_debug_log_dir()
-                                with open(log_dir / "callback_debug.txt", "a", encoding="utf-8") as f:
-                                    f.write(f"[EMIT_ERROR] {e}\n")
+                                _last_emit_time[0] = now
+                            except Exception:
+                                pass
 
+                    try:
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} CHAT_STEP_CALL session_id={task.session_id}\n")
+                    except Exception:
+                        pass
                     response = agent.chat_step(
                         user_input=input_text,
                         stream_callback=webui_stream_callback,  # Stream to WebUI!
@@ -585,9 +578,10 @@ def run_headless_agent():
                     # Result is already added to history and broadcast to WebUI by agent logic
                     _duration = time.time() - _chat_start
                     try:
-                        from datetime import datetime as _dt
-                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
-                            f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_END session_id={task.session_id} duration_sec={_duration:.1f}\n")
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_END session_id={task.session_id} duration_sec={_duration:.1f}\n")
                     except Exception:
                         pass
                     print("[Headless] Task complete.")
@@ -599,10 +593,11 @@ def run_headless_agent():
                 except Exception as e:
                     _duration = time.time() - _chat_start
                     try:
-                        from datetime import datetime as _dt
-                        err_preview = str(e).replace("\n", " ")[:120]
-                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
-                            f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_FAIL session_id={task.session_id} duration_sec={_duration:.1f} error={repr(err_preview)}\n")
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            err_preview = str(e).replace("\n", " ")[:120]
+                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_FAIL session_id={task.session_id} duration_sec={_duration:.1f} error={repr(err_preview)}\n")
                     except Exception:
                         pass
                     print(f"[Headless] Error during chat step: {e}")
@@ -624,9 +619,10 @@ def run_headless_agent():
                     except Exception:
                         pass
                 try:
-                    from datetime import datetime as _dt
-                    with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
-                        f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (chat)\n")
+                    if is_debug_logging_enabled():
+                        from datetime import datetime as _dt
+                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (chat)\n")
                 except Exception:
                     pass
                 tq.task_done()

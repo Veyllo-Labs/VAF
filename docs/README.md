@@ -6,7 +6,8 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 
 ### Core Systems
 - **MEMORY_SYSTEM.md**: RAG-powered memory storage with encryption, vector search, and graph visualization.
-- **SOUL_SYSTEM.md**: Definition of persistent agent personality, identity, and behavioral rules.
+- **SOUL_SYSTEM.md**: Agent personality and rules (Soul, identity.json). Distinct from the human user profile.
+- **USER_IDENTITY.md**: Current user profile (user_identity.json), update_user_identity tool, and Settings UI.
 - **CONTEXT_MANAGEMENT.md**: Dynamic system prompt and token optimization strategies.
 - **GATEWAY.md**: Persistent gateway server and multi-channel access.
 - **WEB_UI.md**: Browser-based dashboard and WebSocket API.

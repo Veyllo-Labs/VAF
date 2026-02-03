@@ -11,6 +11,7 @@ from pathlib import Path
 from vaf.cli.ui import UI
 from vaf.core.config import Config
 from vaf.core.gpu_detection import get_primary_gpu
+from vaf.core.log_helper import is_debug_logging_enabled
 from vaf.core.platform import Platform
 
 class ServerManager:
@@ -636,50 +637,48 @@ class ServerManager:
         cmd.extend(["--cache-ram", str(cache_ram_mb)])
         UI.event("Server", f"Prompt cache: {cache_ram_mb} MB", style="dim")
         
-        # Log the command for debugging (local project logs/ dir)
+        # Log the command and server output only when Debug Logs is enabled
         log_dir = Path(self.base_dir) / "logs"
-        try:
-            log_dir.mkdir(parents=True, exist_ok=True)
-            cmd_log = log_dir / "server_cmd.log"
-            cmd_log.write_text(
-                f"# n_parallel (slots) = {final_parallel}\n" + " ".join(cmd),
-                encoding="utf-8",
-            )
-        except Exception:
-            pass
+        debug_logs = is_debug_logging_enabled()
+        if debug_logs:
+            try:
+                log_dir.mkdir(parents=True, exist_ok=True)
+                cmd_log = log_dir / "server_cmd.log"
+                cmd_log.write_text(
+                    f"# n_parallel (slots) = {final_parallel}\n" + " ".join(cmd),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
         
         UI.event("Server", f"Starting background process on :{port} (ctx={final_total_ctx}, parallel={final_parallel})...", style="dim")
-        
-        # Start detached process
-        # On Windows, we might want CREATE_NO_WINDOW if we want it silent, 
-        # but for now let's keep it visible or standard piping so user sees it working
         
         creationflags = 0
         if self.system == "Windows":
              creationflags = subprocess.CREATE_NO_WINDOW
         
         try:
-            # Create log file for server output (same dir as server_cmd.log: project/logs)
-            log_dir.mkdir(parents=True, exist_ok=True)
             log_file = log_dir / "server.log"
-            self._log_file = open(log_file, 'w', encoding='utf-8', errors='replace')
+            if debug_logs:
+                log_dir.mkdir(parents=True, exist_ok=True)
+                self._log_file = open(log_file, 'w', encoding='utf-8', errors='replace')
+                stdout_err = self._log_file
+                stderr_err = self._log_file
+            else:
+                self._log_file = None
+                stdout_err = subprocess.DEVNULL
+                stderr_err = subprocess.DEVNULL
 
-            # Override LLAMA_ARG_N_PARALLEL so user env cannot force 4
             run_env = os.environ.copy()
             run_env["LLAMA_ARG_N_PARALLEL"] = str(final_parallel)
 
-            # CRITICAL FIX: Ensure child process terminates when parent exits
-            # On Windows, use CREATE_BREAKAWAY_FROM_JOB to prevent orphaned processes
-            # This ensures the server process is linked to the parent process lifecycle
             if self.system == "Windows":
-                # CREATE_NO_WINDOW: Don't show console window
-                # CREATE_NEW_PROCESS_GROUP: Allow clean shutdown via CTRL+BREAK
                 creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
 
             self.process = subprocess.Popen(
                 cmd,
-                stdout=self._log_file,
-                stderr=self._log_file,
+                stdout=stdout_err,
+                stderr=stderr_err,
                 creationflags=creationflags,
                 env=run_env,
             )
@@ -701,14 +700,16 @@ class ServerManager:
             # Wait for startup (up to 60s for large models/slow disks)
             for _ in range(120):
                 if self.process.poll() is not None:
-                    # It died - read from log file
-                    self._log_file.flush()
-                    try:
-                        with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
-                            log_content = f.read()[-500:]  # Last 500 chars
-                        UI.error(f"Server failed to start. Check {log_file}\n{log_content}")
-                    except:
-                        UI.error(f"Server failed to start. Check {log_file}")
+                    if self._log_file:
+                        self._log_file.flush()
+                        try:
+                            with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
+                                log_content = f.read()[-500:]
+                            UI.error(f"Server failed to start. Check {log_file}\n{log_content}")
+                        except Exception:
+                            UI.error(f"Server failed to start. Check {log_file}")
+                    else:
+                        UI.error("Server failed to start. Enable Debug Logs in Advanced settings for server.log.")
                     return False
                 
                 # Check if port is live

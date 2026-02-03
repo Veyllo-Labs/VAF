@@ -1589,11 +1589,19 @@ class Agent:
             # Replay History
             for msg in session.messages:
                 role = msg.get("role")
-                content = msg.get("content")
+                content = str(msg.get("content") or "")
                 if role in ["user", "assistant", "tool", "system"]:
-                    # Skip duplicate system prompts
-                    if role == "system" and "## PROJECT CONTEXT" not in str(content):
-                        continue
+                    # Skip duplicate or operational system prompts
+                    if role == "system":
+                        # List of operational log prefixes to IGNORE in LLM context
+                        ignore_patterns = [
+                            "System:", "Info:", "Step ", "Router:", "Queued input",
+                            "Initializing Standalone Server", "Starting chat_step",
+                            "Generation stopped", "Empty response detected"
+                        ]
+                        if any(p in content for p in ignore_patterns) and "## PROJECT CONTEXT" not in content:
+                            continue
+                            
                     self.history.append({"role": role, "content": content})
             
             # Update Pointer
@@ -2354,13 +2362,8 @@ class Agent:
             if self.history and self.history[0]["role"] == "system":
                 system_content = self.history[0].get("content", "")
             
-            # Extract RAG part from System Prompt (if present)
-            rag_content = ""
-            if "## Memory context" in system_content:
-                parts = system_content.split("## Memory context")
-                if len(parts) > 1:
-                    # Take the part after the header
-                    rag_content = parts[1].split("##")[0].strip()
+            # Send FULL system content for X-Ray visibility
+            # (Frontend can format/truncate if needed, but for debugging we want raw truth)
             
             get_web_interface().push_update({
                 "type": "context_status",
@@ -2369,7 +2372,7 @@ class Agent:
                     "max_tokens": max_tokens,
                     "percent": round((tokens / max_tokens) * 100, 1) if max_tokens else 0,
                     "message_count": len(self.history),
-                    "rag_preview": rag_content[:500] + "..." if len(rag_content) > 500 else rag_content
+                    "rag_preview": system_content  # Send FULL content here
                 }
             })
         except Exception:
@@ -2595,7 +2598,7 @@ class Agent:
         msg_extracting = "Extracting variables from user input..."
         msg_running_separate = "Running in separate terminal [Task: {task_id}]"
         msg_runs_independently = "[>] Workflow runs independently. Result will be reported when done."
-        msg_async_return = "[WORKFLOW_ASYNC:{task_id}:{workflow_id}] Workflow '{name}' is running in a separate terminal.\n\nYou can continue using me while the workflow runs. I'll notify you when the result is ready."
+        msg_async_return = "[WORKFLOW_ASYNC:{task_id}:{workflow_id}] Workflow '{name}' is running in a separate terminal."
         msg_paused_ui = "⏸️  Workflow paused - waiting for sub-agent [Task: {task_id}]"
         msg_paused_hint = "💡 You can continue using VAF. The workflow will resume automatically when the sub-agent finishes."
         msg_paused_return = "⏸️ Workflow '{workflow_id}' is paused, waiting for a sub-agent to complete.\n\nYou can continue using me while we wait. The workflow will automatically resume when the result is ready."
@@ -2606,7 +2609,7 @@ class Agent:
             msg_extracting = "Extrahiere Variablen aus Benutzereingabe..."
             msg_running_separate = "Läuft in separatem Terminal [Task: {task_id}]"
             msg_runs_independently = "[>] Workflow läuft unabhängig. Ergebnis wird gemeldet, wenn fertig."
-            msg_async_return = "[WORKFLOW_ASYNC:{task_id}:{workflow_id}] Workflow '{name}' läuft in einem separaten Terminal.\n\nIch bin weiter für dich da, während der Workflow läuft. Ich melde mich, wenn das Ergebnis da ist."
+            msg_async_return = "[WORKFLOW_ASYNC:{task_id}:{workflow_id}] Workflow '{name}' läuft in einem separaten Terminal."
             msg_paused_ui = "⏸️  Workflow pausiert - warte auf Sub-Agent [Task: {task_id}]"
             msg_paused_hint = "💡 Du kannst VAF weiter nutzen. Der Workflow wird automatisch fortgesetzt, wenn der Sub-Agent fertig ist."
             msg_paused_return = "⏸️ Workflow '{workflow_id}' ist pausiert und wartet auf einen Sub-Agent.\n\nIch bin weiter für dich da, während wir warten. Der Workflow wird automatisch fortgesetzt, wenn das Ergebnis da ist."
@@ -3633,6 +3636,7 @@ class Agent:
         
         # Retry counter for empty responses
         empty_retry_count = 0
+        MAX_EMPTY_RETRIES = 3 # Prevent infinite loops
         current_temp = target_temp
         
         # Main chat loop with retries for empty responses
@@ -3643,7 +3647,7 @@ class Agent:
         streaming_tools = {}
         tool_calls_detected = []
         
-        while True:
+        while empty_retry_count < MAX_EMPTY_RETRIES:
             # 1. Prepare Request
             full_response = ""     # Reset for this turn
             full_content = ""      # Reset for this turn
@@ -3946,6 +3950,33 @@ class Agent:
                         if current_tools is None:
                             if "tools" in payload: del payload["tools"]
                             if "tool_choice" in payload: del payload["tool_choice"]
+
+                        # X-RAY: Send EXACT payload to WebUI for inspection
+                        try:
+                            from vaf.core.web_interface import get_web_interface
+                            import json
+                            # Extract System Prompt (first system message)
+                            sys_prompt = next((m["content"] for m in prepared_messages if m["role"] == "system"), "")
+                            # Extract History (everything else)
+                            hist_msgs = [m for m in prepared_messages if m["role"] != "system"]
+                            
+                            # Calculate RAG part specifically for the bar
+                            rag_part = ""
+                            if "## Memory context" in sys_prompt:
+                                parts = sys_prompt.split("## Memory context")
+                                if len(parts) > 1:
+                                    rag_part = parts[1].split("##")[0].strip()
+
+                            get_web_interface().push_update({
+                                "type": "real_context_payload",
+                                "system": sys_prompt,
+                                "rag_preview": rag_part,
+                                "history": hist_msgs,
+                                # We can't get exact tokens easily here without a tokenizer, 
+                                # but we can send the raw text so the frontend can display it perfectly.
+                            })
+                        except Exception:
+                            pass
 
                         UI.event("Server", "Calling local server (8080)...", style="dim")
                         try:
@@ -4929,8 +4960,8 @@ class Agent:
                 # ═══════════════════════════════════════════════════════════════
                 # CONTEXT OVERFLOW DETECTION (Fix for Issue #VAF-CTX-001)
                 # ═══════════════════════════════════════════════════════════════
-                MAX_RETRIES_BEFORE_EMERGENCY = 10
-                HARD_LIMIT = 15
+                MAX_RETRIES_BEFORE_EMERGENCY = 3
+                HARD_LIMIT = 5
 
                 # Wait 1 second before retry to avoid hammering the model (use global time module)
                 time.sleep(1)

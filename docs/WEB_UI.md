@@ -102,6 +102,10 @@ Singleton pattern manager that:
 
 When the provider is `local`, the tray process only loads the model on real activity (prompt/CLI heartbeat). If there are no active WebUI WebSocket connections for 15 seconds, the model is unloaded from VRAM unless persistence is enabled.
 
+## Wechsel zwischen lokalem Modell und API
+
+Beim Wechsel des Providers (Local ↔ API) in den Einstellungen erscheint ein zentrales Overlay **„Changing model“** für etwa 5 Sekunden; danach lädt die Seite neu. Gleichzeitig entlädt der Tray bei Wechsel von Local zu API das Modell aus dem VRAM (llama-Server wird beendet) bzw. lädt bei Wechsel von API zu Local das Modell in den VRAM. Details: [MODELL_UND_PROVIDER_WECHSEL.md](MODELL_UND_PROVIDER_WECHSEL.md).
+
 ## Local HTTP Backend Reuse
 
 The local LLM runs as a single HTTP backend on `127.0.0.1:8080`. When a prompt arrives, VAF first checks `/health` and reuses the existing backend if it is already running (or still loading). This prevents duplicate `llama-server` processes and keeps WebUI and CLI on the same server instance.

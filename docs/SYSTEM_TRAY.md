@@ -15,6 +15,7 @@ VAF includes a persistent background service managed by a system tray applicatio
 - **Instant Wake-on-Demand**: The server wakes up instantly when you run a CLI command (`vaf run`) or open the Web UI.
 - **Graceful Shutdown**: Checks for active CLI sessions before quitting to prevent data loss.
 - **Single HTTP Backend**: The tray manages a single `llama-server` on `127.0.0.1:8080`. Other components reuse it instead of spawning duplicates.
+- **Provider-Wechsel**: Beim Wechsel des Providers in den Einstellungen (Local ↔ API) wird das lokale Modell sofort aus dem VRAM entladen (Local → API) bzw. auf Anforderung geladen (API → Local). Siehe [MODELL_UND_PROVIDER_WECHSEL.md](MODELL_UND_PROVIDER_WECHSEL.md).
 
 ## Usage
 

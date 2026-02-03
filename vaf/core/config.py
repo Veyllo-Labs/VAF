@@ -323,8 +323,8 @@ class Config:
                 cls._observers.append(callback)
 
     @classmethod
-    def notify_observers(cls, key: str, value):
-        """Notify all observers of a change."""
+    def notify_observers(cls, key: str, value, old_value=None):
+        """Notify all observers of a change. Optional old_value for provider etc."""
         if cls._observers_lock is None:
             # Should already be init by add_observer or safe execution
             return
@@ -335,7 +335,7 @@ class Config:
         
         for callback in observers_copy:
             try:
-                callback(key, value)
+                callback(key, value, old_value)
             except Exception as e:
                 print(f"[Config] Observer callback failed: {e}")
 
@@ -356,12 +356,12 @@ class Config:
             json.dump(config, f, indent=4)
             
         # Detect and notify changes for critical keys
-        # We specifically care about local_network_enabled for now
-        critical_keys = ["local_network_enabled", "local_network_port", "local_network_port_frontend"]
+        # local_network_* for server restart; provider for tray VRAM load/unload
+        critical_keys = ["local_network_enabled", "local_network_port", "local_network_port_frontend", "provider"]
         
         for key in critical_keys:
             old_val = existing_config.get(key)
             new_val = config.get(key)
             if old_val != new_val:
-                cls.notify_observers(key, new_val)
+                cls.notify_observers(key, new_val, old_val)
 

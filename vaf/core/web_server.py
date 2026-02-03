@@ -173,8 +173,8 @@ except Exception as e:
 # Add authentication middleware if local network is enabled
 if Config.get("local_network_enabled", False):
     try:
-        from vaf.auth.middleware import AuthMiddleware, IPValidationMiddleware
-        from vaf.auth.rate_limit import RateLimitMiddleware
+        from vaf.auth.middleware import AuthMiddleware, IPValidationMiddleware  # type: ignore[import-untyped]
+        from vaf.auth.rate_limit import RateLimitMiddleware  # type: ignore[import-untyped]
         
         # Add rate limiting first (outermost)
         app.add_middleware(RateLimitMiddleware)
@@ -222,6 +222,80 @@ def get_autosuggest():
         log("WebServer", "Lazy loading SmartAutoSuggest...")
         autosuggest = SmartAutoSuggest()
     return autosuggest
+
+
+def _get_trusted_sources_for_ui():
+    """
+    Build trusted sources list for Web UI from vaf/sources/*.json and config overrides.
+    Order: custom categories first (right after creation box), then predefined from JSON.
+    Returns: { "categories": [ { "id", "name", "description", "is_custom", "sources": [...] } ] }
+    """
+    import json as _json
+    try:
+        from vaf.core import sources as _sources_mod
+        sources_dir = Path(_sources_mod.__file__).resolve().parent.parent / "sources"
+    except Exception:
+        sources_dir = Path(__file__).resolve().parents[1] / "sources"
+    disabled = set(Config.get("trusted_sources_disabled") or [])
+    custom = Config.get("trusted_sources_custom") or {}
+    custom_only = []
+    predefined = []
+    seen_category_ids = set()
+    # 1) Custom-only categories first (so they appear right after the creation box)
+    for cid, cust_list in custom.items():
+        custom_only.append({
+            "id": cid,
+            "name": cid if isinstance(cid, str) else cid.replace("_", " ").title(),
+            "description": "Custom category",
+            "is_custom": True,
+            "sources": [
+                {"name": c.get("name", ""), "url": c.get("url", ""), "domains": c.get("domains") or [], "trust_score": c.get("trust_score", 6), "is_custom": True}
+                for c in (cust_list or [])
+            ],
+        })
+        seen_category_ids.add(cid)
+    # 2) Predefined categories from JSON
+    if sources_dir.exists():
+        for jpath in sources_dir.glob("*.json"):
+            try:
+                with open(jpath, "r", encoding="utf-8") as f:
+                    data = _json.load(f)
+                for cid, cdata in (data.get("categories") or {}).items():
+                    if cid in seen_category_ids:
+                        continue
+                    seen_category_ids.add(cid)
+                    sources_list = []
+                    for s in (cdata.get("sources") or []):
+                        doms = s.get("domains") or []
+                        if any(d.lower() in disabled for d in doms):
+                            continue
+                        sources_list.append({
+                            "name": s.get("name", ""),
+                            "url": s.get("url", ""),
+                            "domains": doms,
+                            "trust_score": s.get("trust_score", 5),
+                            "is_custom": False,
+                        })
+                    for cust in (custom.get(cid) or []):
+                        doms = cust.get("domains") or []
+                        sources_list.append({
+                            "name": cust.get("name", ""),
+                            "url": cust.get("url", ""),
+                            "domains": doms,
+                            "trust_score": cust.get("trust_score", 6),
+                            "is_custom": True,
+                        })
+                    predefined.append({
+                        "id": cid,
+                        "name": cdata.get("name", cid),
+                        "description": cdata.get("description", ""),
+                        "is_custom": False,
+                        "sources": sources_list,
+                    })
+            except Exception:
+                continue
+    categories_out = custom_only + predefined
+    return {"categories": categories_out}
 
 @app.on_event("startup")
 async def startup_event():
@@ -440,7 +514,53 @@ async def get_tool_source(name: str):
         return {"error": str(e)}
     return {"error": "Tool not found"}
 
+# Sounds directory for Web UI completion/notification (vaf/media/sounds)
+SOUNDS_DIR = Path(__file__).resolve().parents[1] / "media" / "sounds"
+ALLOWED_SOUND_FILES = {"tts01.mp3", "sst.mp3"}  # Only serve known files
+
 @app.get("/api/file")
+async def get_file(path: str = Query(..., description="Absolute path to local file")):
+    """Serve a local file by path (allowed roots: documents, downloads, data dir). Used by Web UI."""
+    from vaf.core.platform import Platform
+    import mimetypes
+    try:
+        target = Platform.normalize_path(path)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    allowed_roots = [
+        Platform.documents_dir().resolve(),
+        Platform.downloads_dir().resolve(),
+        Platform.data_dir().resolve(),
+    ]
+    if not any(target.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Access denied")
+    mime_type, _ = mimetypes.guess_type(str(target))
+    return FileResponse(
+        path=str(target),
+        media_type=mime_type or "application/octet-stream",
+        filename=target.name,
+    )
+
+@app.get("/sounds/{filename}")
+async def get_sound(filename: str):
+    """Serve sound files from vaf/media/sounds for Web UI (e.g. answer-complete notification)."""
+    if filename not in ALLOWED_SOUND_FILES:
+        raise HTTPException(status_code=404, detail="Sound not found")
+    path = SOUNDS_DIR / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Sound not found")
+    import mimetypes
+    mime_type, _ = mimetypes.guess_type(filename)
+    return FileResponse(
+        path=str(path),
+        media_type=mime_type or "audio/mpeg",
+        filename=filename,
+    )
+
+
+@app.get("/api/download")
 async def download_file(path: str = Query(..., description="Absolute path to local file")):
     from vaf.core.platform import Platform
     from pathlib import Path
@@ -1157,9 +1277,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "save_config":
                     new_config = cmd.get("config")
                     if new_config:
+                        existing = Config.load()
                         # Save config (Config.save will notify observers if critical keys changed)
                         Config.save(new_config)
-                        
+                        provider_changed = existing.get("provider") != new_config.get("provider")
+
                         try:
                             if "tray_autostart" in new_config:
                                 from vaf.core.platform import Platform
@@ -1174,7 +1296,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({
                             "type": "config_saved",
                             "status": "success",
-                            "requires_refresh": False
+                            "requires_refresh": provider_changed
                         })
 
                 elif type == "get_autosuggest":
@@ -1327,7 +1449,113 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "workflows": [],
                             "error": str(e)
                         })
-                
+
+                elif type == "get_trusted_sources":
+                    try:
+                        payload = _get_trusted_sources_for_ui()
+                        await websocket.send_json({
+                            "type": "trusted_sources_list",
+                            **payload
+                        })
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "trusted_sources_list",
+                            "categories": [],
+                            "error": str(e)
+                        })
+
+                elif type == "add_trusted_source":
+                    try:
+                        from urllib.parse import urlparse
+                        category_id = (cmd.get("category_id") or "").strip() or "custom"
+                        name = (cmd.get("name") or "").strip()
+                        url = (cmd.get("url") or "").strip()
+                        if not name or not url:
+                            await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": "name and url required"})
+                        else:
+                            try:
+                                parsed = urlparse(url if "://" in url else "https://" + url)
+                                netloc = parsed.netloc or parsed.path.split("/")[0]
+                                domain = netloc.lower().lstrip("www.")
+                            except Exception:
+                                domain = url.replace("https://", "").replace("http://", "").split("/")[0].lower().lstrip("www.")
+                            custom = Config.get("trusted_sources_custom") or {}
+                            if category_id not in custom:
+                                custom[category_id] = []
+                            custom[category_id].append({"name": name, "url": url, "domains": [domain], "trust_score": 6})
+                            cfg = Config.load()
+                            cfg["trusted_sources_custom"] = custom
+                            Config.save(cfg)
+                            payload = _get_trusted_sources_for_ui()
+                            await websocket.send_json({"type": "trusted_source_updated", "ok": True, "categories": payload.get("categories", [])})
+                    except Exception as e:
+                        await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": str(e)})
+
+                elif type == "create_trusted_category":
+                    try:
+                        name = (cmd.get("name") or "").strip()
+                        if not name:
+                            await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": "Category name required"})
+                        else:
+                            payload = _get_trusted_sources_for_ui()
+                            existing_names = { (c.get("name") or c.get("id") or "").strip() for c in payload.get("categories", []) }
+                            if name in existing_names:
+                                await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": "Category name already exists"})
+                            else:
+                                custom = Config.get("trusted_sources_custom") or {}
+                                custom[name] = []
+                                cfg = Config.load()
+                                cfg["trusted_sources_custom"] = custom
+                                Config.save(cfg)
+                                payload = _get_trusted_sources_for_ui()
+                                await websocket.send_json({"type": "trusted_source_updated", "ok": True, "categories": payload.get("categories", [])})
+                    except Exception as e:
+                        await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": str(e)})
+
+                elif type == "delete_trusted_category":
+                    try:
+                        category_id = (cmd.get("category_id") or cmd.get("categoryId") or "").strip()
+                        if not category_id:
+                            await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": "category_id required"})
+                        else:
+                            custom = dict(Config.get("trusted_sources_custom") or {})
+                            if category_id not in custom:
+                                await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": "Only custom categories can be deleted"})
+                            else:
+                                del custom[category_id]
+                                cfg = Config.load()
+                                cfg["trusted_sources_custom"] = custom
+                                Config.save(cfg)
+                                payload = _get_trusted_sources_for_ui()
+                                await websocket.send_json({"type": "trusted_source_updated", "ok": True, "categories": payload.get("categories", [])})
+                    except Exception as e:
+                        await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": str(e)})
+
+                elif type == "remove_trusted_source":
+                    try:
+                        domain = (cmd.get("domain") or "").strip().lower()
+                        is_custom = bool(cmd.get("is_custom"))
+                        if not domain:
+                            await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": "domain required"})
+                        elif is_custom:
+                            custom = Config.get("trusted_sources_custom") or {}
+                            for cid in list(custom.keys()):
+                                custom[cid] = [s for s in custom[cid] if domain not in (s.get("domains") or [])]
+                            cfg = Config.load()
+                            cfg["trusted_sources_custom"] = custom
+                            Config.save(cfg)
+                        else:
+                            disabled = list(Config.get("trusted_sources_disabled") or [])
+                            if domain not in disabled:
+                                disabled.append(domain)
+                            cfg = Config.load()
+                            cfg["trusted_sources_disabled"] = disabled
+                            Config.save(cfg)
+                        payload = _get_trusted_sources_for_ui()
+                        await websocket.send_json({"type": "trusted_source_updated", "ok": True, "categories": payload.get("categories", [])})
+                    except Exception as e:
+                        await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": str(e)})
+
                 elif type == "get_automations":
                     # Return list of saved automations
                     try:

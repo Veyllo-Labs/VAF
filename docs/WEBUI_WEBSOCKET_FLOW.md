@@ -68,7 +68,8 @@ Key rules:
 - `subagent_update`: sub-agent window payload
 - `subagent_output`: final sub-agent output block
 - `subagent_output_stream`: live stdout/stderr lines from headless sub-agents
-- `model_state`: local model load/unload status (`loaded`, `persistent`, `provider`)
+- `model_state`: Status des lokalen Modells (`loaded`, `persistent`, `provider`)
+- `config_saved`: Bestätigung nach Speichern der Einstellungen; bei Provider-Änderung enthält die Antwort `requires_refresh: true`, die Web-UI zeigt dann das Overlay „Changing model“ und lädt nach 5 Sekunden neu (siehe [MODELL_UND_PROVIDER_WECHSEL.md](MODELL_UND_PROVIDER_WECHSEL.md)).
 
 ## Troubleshooting Checklist
 

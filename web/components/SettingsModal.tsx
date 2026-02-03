@@ -41,6 +41,13 @@ export interface SettingsModalProps {
     onRefreshLocalModels: () => void;
     tools?: Array<{ name: string; description: string; category: string }>;
     workflows?: Array<{ id: string; name: string; description: string; steps: number }>;
+    trustedSources?: { categories: Array<{ id: string; name: string; description: string; is_custom?: boolean; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> };
+    onAddTrustedSource?: (categoryId: string, name: string, url: string) => void;
+    onRemoveTrustedSource?: (domain: string, is_custom: boolean) => void;
+    onDeleteTrustedCategory?: (categoryId: string) => void;
+    onRequestTrustedSources?: () => void;
+    onCreateTrustedCategory?: (name: string) => void;
+    trustedSourcesError?: string | null;
     automations?: Array<{ id: string; name: string; description: string; frequency: string; time: string; enabled: boolean }>;
     currentUser?: { id: string; username: string; role: string };
     onLogout?: () => void;
@@ -69,7 +76,7 @@ const PROVIDERS = [
 ];
 
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], automations = [], currentUser, onLogout, apiBase }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase }: SettingsModalProps) {
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [activeTab, setActiveTab] = useState('general');
     const [changed, setChanged] = useState(false);
@@ -79,6 +86,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // Modals State
     const [showToolsModal, setShowToolsModal] = useState(false);
     const [showWorkflowsModal, setShowWorkflowsModal] = useState(false);
+    const [showTrustedSourcesModal, setShowTrustedSourcesModal] = useState(false);
     const [showNetworkModal, setShowNetworkModal] = useState(false);
     const [showMemoryModal, setShowMemoryModal] = useState(false);
     const [showUserIdentityModal, setShowUserIdentityModal] = useState(false);
@@ -86,6 +94,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
     const [toolsSearch, setToolsSearch] = useState('');
     const [workflowsSearch, setWorkflowsSearch] = useState('');
+    const [trustedSourceForm, setTrustedSourceForm] = useState<{ categoryId: string; name: string; url: string }>({ categoryId: '', name: '', url: '' });
+    const [addFormCategoryId, setAddFormCategoryId] = useState<string | null>(null);
+    const [newCategoryName, setNewCategoryName] = useState('');
+    const [showCreateCategoryForm, setShowCreateCategoryForm] = useState(false);
     const [codeModal, setCodeModal] = useState<{name: string, code: string} | null>(null);
     
     // Memory System State
@@ -310,6 +322,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     e.stopPropagation();
                     return;
                 }
+                if (showTrustedSourcesModal) {
+                    setShowTrustedSourcesModal(false);
+                    e.stopPropagation();
+                    return;
+                }
                 // Finally close settings
                 if (isOpen) {
                     onClose();
@@ -321,7 +338,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             window.addEventListener('keydown', handleKeyDown);
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, codeModal, workflowModal, showMemoryModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, onClose]);
+    }, [isOpen, codeModal, workflowModal, showMemoryModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, onClose]);
 
     const handleLogoutYes = useCallback(() => {
         setShowLogoutConfirm(false);
@@ -1395,6 +1412,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </div>
                                         <ChevronRight size={16} className="text-gray-400" />
                                     </button>
+                                    <div className="h-4" />
+                                    <button
+                                        onClick={() => {
+                                            onRequestTrustedSources?.();
+                                            setShowTrustedSourcesModal(true);
+                                        }}
+                                        className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-100 transition-colors"
+                                    >
+                                        <div className="flex flex-col items-start">
+                                            <span className="text-sm font-medium text-gray-700">Trusted Sources</span>
+                                            <span className="text-xs text-gray-500">{trustedSources.categories?.length ?? 0} categories · used for safe search</span>
+                                        </div>
+                                        <ChevronRight size={16} className="text-gray-400" />
+                                    </button>
                                 </Section>
                             </div>
                         )}
@@ -1782,6 +1813,197 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </div>
                                     <h3 className="text-lg font-medium text-gray-900">No workflows found</h3>
                                     <p className="text-sm text-gray-500 mt-1">Try adjusting your search terms.</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Trusted Sources Modal - same size as Tools/Workflows */}
+            {showTrustedSourcesModal && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowTrustedSourcesModal(false)}>
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div
+                        className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
+                            <div>
+                                <h2 className="text-2xl font-bold text-gray-800">Trusted Sources</h2>
+                                <p className="text-sm text-gray-500">Categories used for safe search (nur vertrauenswürdige Quellen)</p>
+                            </div>
+                            <button onClick={() => setShowTrustedSourcesModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
+                                <X size={24} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-6 bg-gray-50/30 space-y-4">
+                            {trustedSourcesError && (
+                                <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+                                    {trustedSourcesError}
+                                </div>
+                            )}
+                            {(trustedSources.categories ?? []).length === 0 && !onCreateTrustedCategory ? (
+                                <div className="flex flex-col items-center justify-center py-12 text-center">
+                                    <div className="w-14 h-14 rounded-xl bg-gray-100 flex items-center justify-center mb-3 text-gray-400">
+                                        <Link2 size={28} />
+                                    </div>
+                                    <p className="text-sm text-gray-600">No categories loaded. Check backend connection.</p>
+                                </div>
+                            ) : (
+                            <div className="flex flex-wrap gap-6 justify-center">
+                                {onCreateTrustedCategory && (
+                                    <div className="w-[320px] min-w-[280px] flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col min-h-[180px]">
+                                        {!showCreateCategoryForm ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowCreateCategoryForm(true)}
+                                                className="flex-1 flex flex-col items-center justify-center gap-2 py-6 rounded-lg border-2 border-dashed border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-600 hover:bg-gray-50/50 transition-colors w-full"
+                                            >
+                                                <Plus size={40} className="shrink-0" />
+                                                <span className="text-sm font-medium">New category</span>
+                                            </button>
+                                        ) : (
+                                            <div className="space-y-3">
+                                                <p className="text-sm font-medium text-gray-700">Category name (unique)</p>
+                                                <input
+                                                    type="text"
+                                                    placeholder="e.g. Meine News"
+                                                    value={newCategoryName}
+                                                    onChange={(e) => setNewCategoryName(e.target.value)}
+                                                    className="w-full px-4 py-3 rounded-xl bg-white border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 text-sm"
+                                                    autoFocus
+                                                />
+                                                <div className="flex gap-2">
+                                                    <button
+                                                        onClick={() => {
+                                                            const name = newCategoryName.trim();
+                                                            if (name) {
+                                                                onCreateTrustedCategory(name);
+                                                                setNewCategoryName('');
+                                                                setShowCreateCategoryForm(false);
+                                                            }
+                                                        }}
+                                                        className="px-4 py-2 rounded-lg font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors"
+                                                    >
+                                                        Create
+                                                    </button>
+                                                    <button
+                                                        onClick={() => { setShowCreateCategoryForm(false); setNewCategoryName(''); }}
+                                                        className="px-4 py-2 rounded-lg font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                                {([...(trustedSources.categories ?? [])]
+                                    .sort((a, b) => {
+                                        const aCustom = a.is_custom === true || a.description === 'Custom category';
+                                        const bCustom = b.is_custom === true || b.description === 'Custom category';
+                                        if (aCustom && !bCustom) return -1;
+                                        if (!aCustom && bCustom) return 1;
+                                        return 0;
+                                    })
+                                    .map((cat) => (
+                                        <div key={cat.id} className="w-[320px] min-w-[280px] flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col">
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div>
+                                                    <h3 className="text-lg font-semibold text-gray-900">{cat.name}</h3>
+                                                    {cat.description && <p className="text-xs text-gray-500 mt-0.5">{cat.description}</p>}
+                                                </div>
+                                                <div className="flex items-center gap-1 shrink-0">
+                                                    {onAddTrustedSource && (
+                                                        <button
+                                                            onClick={() => { setAddFormCategoryId(cat.id); setTrustedSourceForm({ categoryId: cat.id, name: '', url: '' }); }}
+                                                            className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                                                            title="Add link to this category"
+                                                        >
+                                                            <Plus size={18} />
+                                                        </button>
+                                                    )}
+                                                    {(Boolean(cat.is_custom || cat.description === 'Custom category') && onDeleteTrustedCategory) ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.preventDefault();
+                                                                e.stopPropagation();
+                                                                onDeleteTrustedCategory(cat.id);
+                                                            }}
+                                                            className="p-2 cursor-pointer relative z-10 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                                            title="Delete category"
+                                                        >
+                                                            <Trash2 size={18} />
+                                                        </button>
+                                                    ) : null}
+                                                </div>
+                                            </div>
+                                            <ul className="mt-3 space-y-2 flex-1">
+                                                {(cat.sources ?? []).map((src, idx) => (
+                                                    <li key={idx} className="flex items-center justify-between gap-2 py-2 px-3 rounded-lg bg-gray-50 border border-gray-100">
+                                                        <div className="min-w-0 flex-1">
+                                                            <a href={src.url} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-gray-900 hover:text-blue-600 truncate block">{src.name}</a>
+                                                            <span className="text-xs text-gray-500 truncate block">{src.url}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-2 shrink-0">
+                                                            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600" title="Trust score (1–10)">Trust {src.trust_score}</span>
+                                                            {onRemoveTrustedSource && (
+                                                                <button
+                                                                    onClick={() => onRemoveTrustedSource((src.domains && src.domains[0]) || '', src.is_custom)}
+                                                                    className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                                                    title="Remove"
+                                                                >
+                                                                    <Trash2 size={16} />
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                            {/* Inline add form for this category */}
+                                            {onAddTrustedSource && addFormCategoryId === cat.id && (
+                                                <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
+                                                    <p className="text-sm font-medium text-gray-700">Add link to {cat.name}</p>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Name (e.g. My Source)"
+                                                        value={trustedSourceForm.categoryId === cat.id ? trustedSourceForm.name : ''}
+                                                        onChange={(e) => setTrustedSourceForm((f) => ({ ...f, name: e.target.value }))}
+                                                        className="w-full px-4 py-3 rounded-xl bg-white border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 text-sm"
+                                                    />
+                                                    <input
+                                                        type="url"
+                                                        placeholder="https://..."
+                                                        value={trustedSourceForm.categoryId === cat.id ? trustedSourceForm.url : ''}
+                                                        onChange={(e) => setTrustedSourceForm((f) => ({ ...f, url: e.target.value }))}
+                                                        className="w-full px-4 py-3 rounded-xl bg-white border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 text-sm"
+                                                    />
+                                                    <div className="flex gap-2">
+                                                        <button
+                                                            onClick={() => {
+                                                                if (trustedSourceForm.name.trim() && trustedSourceForm.url.trim()) {
+                                                                    onAddTrustedSource(cat.id, trustedSourceForm.name.trim(), trustedSourceForm.url.trim());
+                                                                    setTrustedSourceForm({ categoryId: '', name: '', url: '' });
+                                                                    setAddFormCategoryId(null);
+                                                                }
+                                                            }}
+                                                            className="px-4 py-2 rounded-lg font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors"
+                                                        >
+                                                            Save
+                                                        </button>
+                                                        <button
+                                                            onClick={() => { setAddFormCategoryId(null); setTrustedSourceForm({ categoryId: '', name: '', url: '' }); }}
+                                                            className="px-4 py-2 rounded-lg font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+                                                        >
+                                                            Cancel
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )))}
                                 </div>
                             )}
                         </div>

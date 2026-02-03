@@ -20,6 +20,7 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 ### Integration & APIs
 - **API_INTEGRATION.md**: Integration with various LLM providers and APIs.
 - **WEBUI_WEBSOCKET_FLOW.md**: WebSocket flow, session scoping, and debugging.
+- **MODELL_UND_PROVIDER_WECHSEL.md**: Wechsel zwischen lokalem Modell und API (Overlay, VRAM-Entladen/-Laden).
 
 ### Security & Execution
 - **SANDBOXING.md**: Secure code execution using Docker.

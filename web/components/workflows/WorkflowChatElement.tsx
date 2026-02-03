@@ -7,25 +7,28 @@ interface WorkflowChatElementProps {
   workflowId: string;
   name: string;
   initialSteps?: number;
+  /** When set (e.g. from WORKFLOW_ASYNC text), show this state instead of store; avoids card jumping to 100% before updates */
+  forceStatus?: 'running' | 'completed' | 'failed';
 }
 
-export const WorkflowChatElement: React.FC<WorkflowChatElementProps> = ({ workflowId, name, initialSteps }) => {
+export const WorkflowChatElement: React.FC<WorkflowChatElementProps> = ({ workflowId, name, initialSteps, forceStatus }) => {
   const { workflow, openWorkflow } = useWorkflowStore();
   
   // Check if this component corresponds to the active/latest workflow in store
   const isMatch = workflow?.id === workflowId;
   const data = isMatch ? workflow : null;
   
-  const status = data?.status || 'completed'; // Default to completed for history items if store is cleared/changed
+  const status = forceStatus ?? (data?.status || 'completed');
   const steps = data?.steps || [];
   const currentStepIndex = steps.findIndex(s => s.status === 'running');
   const activeStep = steps[currentStepIndex];
   
-  // Progress calculation
+  // Progress calculation: when forceStatus is running, show 0% until store has updates
   const total = steps.length || initialSteps || 1;
   const completed = steps.filter(s => s.status === 'success' || s.status === 'skipped').length;
-  // If we don't have store data (history), assume 100%
-  const progress = isMatch ? Math.round((completed / total) * 100) : 100;
+  const progress = forceStatus === 'running'
+    ? 0
+    : (isMatch ? Math.round((completed / total) * 100) : 100);
 
   return (
     <div 

@@ -11,7 +11,7 @@ Sources are categorized and rated by trust score for quality filtering.
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
 
 
@@ -240,6 +240,27 @@ class SourceManager:
     def get_all_domains(self) -> Set[str]:
         """Get all trusted domains as a set."""
         return set(self.domains_index.keys())
+
+    def get_domains_with_min_trust(self, min_score: int, limit: int = 15) -> List[str]:
+        """
+        Get trusted domains with trust_score >= min_score, sorted by score (highest first).
+        Used for "safe search" / trusted-sources-only web search.
+
+        Args:
+            min_score: Minimum trust score (1-10). Typical: 7 or 8 for "reliable" only.
+            limit: Max number of domains to return (avoids overly long search queries).
+
+        Returns:
+            List of domain names, highest trust first.
+        """
+        scored: List[Tuple[int, str]] = []
+        seen: Set[str] = set()
+        for domain, source in self.domains_index.items():
+            if source.trust_score >= min_score and domain not in seen:
+                seen.add(domain)
+                scored.append((source.trust_score, domain))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return [d for _, d in scored[:limit]]
     
     def get_categories(self) -> List[str]:
         """Get all available category names."""

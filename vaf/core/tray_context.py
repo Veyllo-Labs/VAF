@@ -38,7 +38,9 @@ class TrayContext:
         self.model_loaded = False
         self.server_port = 8001
         self.should_exit = False
-        
+        # Request to load model when switching from API to local (set by config observer)
+        self.request_model_load = False
+
         # Callbacks (for Tray App to update UI)
         self.on_status_change = None
 

@@ -175,6 +175,7 @@ call web_search 2-3 times IN THE SAME RESPONSE! Don't use workflows or sub-agent
 
 **TIP:** For multiple web_search calls, use max_results=3 to keep context manageable:
 - Example: web_search("weather Berlin", max_results=3) + web_search("news", max_results=3)
+- **Trusted/safe search:** If user wants only trusted sources (e.g. "nur vertrauenswürdige Quellen", "only safe/trusted sites"), use web_search(..., trusted_sources_only=true).
 
 ---
 
@@ -451,7 +452,7 @@ You have **long-term memory** (RAG). Use it to remember things about the user an
             user_identity_parts = ["\n## User identity (current user)\n"]
             user_identity_parts.append(
                 "Use this so you know who you're talking to (e.g. greet by name). "
-                "You can update it with the **update_user_identity** tool when the user tells you their name, language, preferences, or do's/don'ts.\n"
+                "You can update it with the **update_user_identity** tool when the user tells you their name, language, preferences, or do's/don'ts :"
             )
             if username:
                 try:
@@ -463,13 +464,13 @@ You have **long-term memory** (RAG). Use it to remember things about the user an
                         user_identity_parts.append(f"- [LANGUAGE] {user_identity.get('preferred_language')}")
                     prefs = user_identity.get("preferences") or []
                     if prefs:
-                        user_identity_parts.append("\n**Preferences:** " + "; ".join(prefs))
+                        user_identity_parts.append("**Preferences:** " + "; ".join(prefs))
                     dos = user_identity.get("dos") or []
                     if dos:
-                        user_identity_parts.append("\n**Do:** " + "; ".join(dos))
+                        user_identity_parts.append("**Do:** " + "; ".join(dos))
                     donts = user_identity.get("donts") or []
                     if donts:
-                        user_identity_parts.append("\n**Don't:** " + "; ".join(donts))
+                        user_identity_parts.append("**Don't:** " + "; ".join(donts))
                 except Exception:
                     user_identity_parts.append(f"- [NAME] {username}")
             if user_scope_id:
@@ -480,12 +481,13 @@ You have **long-term memory** (RAG). Use it to remember things about the user an
                     if cache_file.exists():
                         cached = cache_file.read_text(encoding="utf-8").strip()
                         if cached:
-                            user_identity_parts.append("\nKnown facts from memory:\n")
-                            user_identity_parts.append(cached)
+                            user_identity_parts.append("Known facts from memory:\n" + cached)
+                        else:
+                            user_identity_parts.append("Known facts from memory: (None yet)")
                     else:
-                        user_identity_parts.append("\nKnown facts from memory: (None yet)")
+                        user_identity_parts.append("Known facts from memory: (None yet)")
                 except Exception:
-                    user_identity_parts.append("\nKnown facts from memory: (unavailable)")
+                    user_identity_parts.append("Known facts from memory: (unavailable)")
             parts.append("\n".join(user_identity_parts))
 
         # ═══════════════════════════════════════════════════════════════════════

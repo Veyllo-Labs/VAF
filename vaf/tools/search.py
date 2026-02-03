@@ -33,6 +33,8 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
 
 **TIP:** For multiple searches, consider max_results=3 to keep context manageable.
 
+**Safe search:** If the user wants only trusted/safer websites (e.g. "nur vertrauenswürdige Quellen", "only trusted sites"), use trusted_sources_only=true.
+
 **DON'T use research_agent or workflows for simple lookups!**"""
 
     parameters = {
@@ -51,6 +53,10 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
                 "type": "boolean",
                 "description": "If true, open result links in the default browser (tabs). Default: from settings.",
             },
+            "trusted_sources_only": {
+                "type": "boolean",
+                "description": "If true, restrict results to trusted sources only (news, tech, academic from VAF sources). Safer search. Default: false",
+            },
         },
         "required": ["query"]
     }
@@ -60,6 +66,7 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
         max_results = int(kwargs.get("max_results", 5) or 5)
         deep = bool(kwargs.get("deep", True))  # Changed from False to True - always fetch full pages!
         open_in_browser = kwargs.get("open_in_browser", None)
+        trusted_sources_only = bool(kwargs.get("trusted_sources_only", False))
         return_raw = bool(kwargs.get("return_raw", False))  # Internal: return raw results dict
         user_question = kwargs.get("user_question", query)  # Extract original user question (fallback to query)
         if not query:
@@ -69,26 +76,39 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
             max_results = max(1, min(max_results, 10))
 
             # ═══════════════════════════════════════════════════════════════
-            # SMART SOURCE SELECTION (New Feature)
+            # SOURCE FILTERING: trusted_sources_only OR smart intent-based
             # ═══════════════════════════════════════════════════════════════
-            # Analyze query to detect intent and suggest relevant sources
-            try:
-                from vaf.core.query_analyzer import analyze_query
-                intent = analyze_query(query)
-                
-                # If we have suggested sources and high confidence, add site: filter
-                if intent.suggested_sources and intent.confidence > 0.7:
-                    # Build site: filter for DuckDuckGo
-                    # Format: (site:domain1.com OR site:domain2.com OR ...)
-                    site_filter = " (" + " OR ".join(f"site:{domain}" for domain in intent.suggested_sources[:10]) + ")"
-                    query_with_filter = query + site_filter
-                    
-                    UI.event("Smart Search", f"Using {intent.intent_type} sources ({len(intent.suggested_sources)} sites)", style="dim")
-                else:
-                    query_with_filter = query
-            except Exception:
-                # If QueryAnalyzer fails, fall back to normal search
-                query_with_filter = query
+            query_with_filter = query
+            if trusted_sources_only:
+                # Restrict to high-trust domains (built-in + user custom from settings), exclude disabled
+                try:
+                    from vaf.core.sources import get_source_manager
+                    disabled = set(Config.get("trusted_sources_disabled") or [])
+                    domains = [d for d in get_source_manager().get_domains_with_min_trust(min_score=7, limit=12) if d.lower() not in disabled]
+                    custom = Config.get("trusted_sources_custom") or {}
+                    for cat_sources in custom.values():
+                        for s in cat_sources:
+                            for d in (s.get("domains") or []):
+                                if d and d.lower() not in disabled and d not in domains:
+                                    domains.append(d)
+                    domains = domains[:15]
+                    if domains:
+                        site_filter = " (" + " OR ".join(f"site:{d}" for d in domains) + ")"
+                        query_with_filter = query + site_filter
+                        UI.event("Web Search", f"Trusted sources only ({len(domains)} sites)", style="dim")
+                except Exception:
+                    pass
+            else:
+                # Smart source selection by intent (news/tech/academic)
+                try:
+                    from vaf.core.query_analyzer import analyze_query
+                    intent = analyze_query(query)
+                    if intent.suggested_sources and intent.confidence > 0.7:
+                        site_filter = " (" + " OR ".join(f"site:{domain}" for domain in intent.suggested_sources[:10]) + ")"
+                        query_with_filter = query + site_filter
+                        UI.event("Smart Search", f"Using {intent.intent_type} sources ({len(intent.suggested_sources)} sites)", style="dim")
+                except Exception:
+                    pass
 
             # 1) Search (with or without site filter)
             raw = DDGS().text(query_with_filter, max_results=max_results, safesearch="strict")

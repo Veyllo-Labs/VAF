@@ -120,6 +120,14 @@ const parseContent = (content: string): { thought: string | null; answer: string
     return { thought: null, answer: merged, isThinkingComplete: true };
 };
 
+// Parse [WORKFLOW_ASYNC:taskId:workflowId] Workflow 'Name' ... from assistant text for card display
+const WORKFLOW_ASYNC_REGEX = /\[WORKFLOW_ASYNC:([^:]+):([^\]]+)\]\s*Workflow\s+'([^']+)'[^\n]*(?:\n\n)?([\s\S]*)/;
+function parseWorkflowAsync(answer: string): { taskId: string; workflowId: string; name: string; rest: string } | null {
+    const m = (answer || '').trim().match(WORKFLOW_ASYNC_REGEX);
+    if (!m) return null;
+    return { taskId: m[1], workflowId: m[2], name: m[3], rest: m[4].trim() };
+}
+
 const normalizeDownloadHref = (rawHref: string): string => {
     if (!rawHref) return rawHref;
     const base = getApiBase();
@@ -385,8 +393,11 @@ export default function VAFDashboard() {
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [apiModels, setApiModels] = useState<Record<string, string[]>>({});
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [showChangingModelOverlay, setShowChangingModelOverlay] = useState(false);
     const [tools, setTools] = useState<Array<{ name: string; description: string; category: string }>>([]);
     const [workflows, setWorkflows] = useState<Array<{ id: string; name: string; description: string; steps: number }>>([]);
+    const [trustedSources, setTrustedSources] = useState<{ categories: Array<{ id: string; name: string; description: string; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> }>({ categories: [] });
+    const [trustedSourcesError, setTrustedSourcesError] = useState<string | null>(null);
     const [automations, setAutomations] = useState<Array<{ id: string; name: string; description: string; frequency: string; time: string; enabled: boolean }>>([]);
     // const [activeTools, setActiveTools] = useState<ToolState[]>([]); // REPLACED BY INLINE MESSAGES
 
@@ -404,9 +415,11 @@ export default function VAFDashboard() {
         output_tokens?: number;
     };
     const [tokenStats, setTokenStats] = useState<TokenStats | null>(null);
-    const [contextStats, setContextStats] = useState<any | null>(null); // New X-Ray Stats
+    const [contextStats, setContextStats] = useState<any | null>(null); // New X-Ray Stats (Estimated)
+    const [realContext, setRealContext] = useState<any | null>(null); // REAL Payload (The Truth)
     const [ragResults, setRagResults] = useState<any | null>(null); // RAG Results
     const [isContextModalOpen, setIsContextModalOpen] = useState(false);
+    const [xraySection, setXraySection] = useState<'overview' | 'system' | 'rag' | 'history'>('overview'); // Active X-Ray View
 
     // Sub-Agent Window State
     const [subAgentState, setSubAgentState] = useState<{
@@ -631,9 +644,12 @@ export default function VAFDashboard() {
         if (!line) return;
         if (subAgentLogSetRef.current.has(line)) return;
         subAgentLogSetRef.current.add(line);
+        const lineLower = line.toLowerCase();
+        const isFailure = lineLower.includes('failed') || lineLower.includes('timeout') || lineLower.includes('error');
         setSubAgentState(prev => ({
             ...prev,
-            consoleLines: [...prev.consoleLines, line].slice(-500)
+            consoleLines: [...prev.consoleLines, line].slice(-500),
+            ...(isFailure ? { status: line.trim().slice(0, 120) } : {})
         }));
     };
 
@@ -878,6 +894,9 @@ export default function VAFDashboard() {
                 else if (data.type === 'context_status') {
                     setContextStats(data.stats);
                 }
+                else if (data.type === 'real_context_payload') {
+                    setRealContext(data);
+                }
                 else if (data.type === 'rag_results') {
                     setRagResults(data);
                 }
@@ -991,6 +1010,16 @@ export default function VAFDashboard() {
                     }
                 }
                 else if (data.type === 'message_complete') {
+                    // Completion sound: play when model has finished (Web UI only)
+                    try {
+                        const base = getApiBase() || 'http://localhost:8001';
+                        const soundUrl = `${base}/sounds/tts01.mp3`;
+                        const audio = new Audio(soundUrl);
+                        audio.volume = 0.6;
+                        audio.play().catch(() => { /* ignore autoplay policy / user mute */ });
+                    } catch {
+                        // ignore if Audio or play fails
+                    }
                     // Auto-TTS: Speak the response if enabled
                     if (config.tts_auto_speak && config.speech_tts_enabled && data.content) {
                         // Don't auto-speak if already playing/loading
@@ -1218,15 +1247,14 @@ export default function VAFDashboard() {
                     setConfig(data.config);
                 }
                 else if (data.type === 'config_saved') {
-                    // Refresh config to confirm save
                     ws?.send(JSON.stringify({ type: 'get_config' }));
-                    // If network settings changed, page needs refresh after frontend restart
+                    // Provider or other critical change: show overlay and reload after 5s
                     if (data.requires_refresh) {
-                        // Show notification and reload after servers restart (both frontend and backend)
-                        alert('Network settings changed. Both servers will restart. The page will reload in a few seconds...');
+                        setShowChangingModelOverlay(true);
                         setTimeout(() => {
+                            setShowChangingModelOverlay(false);
                             window.location.reload();
-                        }, 8000); // Wait for both frontend and backend to fully restart (2s stop + startup time)
+                        }, 5000);
                     }
                 }
                 else if (data.type === 'models_list') {
@@ -1241,6 +1269,18 @@ export default function VAFDashboard() {
                 else if (data.type === 'workflows_list') {
                     console.log('[Workflows]', data.workflows);
                     setWorkflows(data.workflows || []);
+                }
+                else if (data.type === 'trusted_sources_list') {
+                    setTrustedSources({ categories: data.categories || [] });
+                    setTrustedSourcesError(null);
+                }
+                else if (data.type === 'trusted_source_updated') {
+                    if (data.ok) {
+                        setTrustedSources({ categories: data.categories || [] });
+                        setTrustedSourcesError(null);
+                    } else {
+                        setTrustedSourcesError(data.error || 'Error');
+                    }
                 }
                 else if (data.type === 'config') {
                     setConfig(data.config);
@@ -1336,6 +1376,21 @@ export default function VAFDashboard() {
         }
     }, [config, contextStats]);
 
+    // ESC: close diagram section or close context modal
+    useEffect(() => {
+        if (!isContextModalOpen) return;
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape') return;
+            if (xraySection !== 'overview') {
+                setXraySection('overview');
+            } else {
+                setIsContextModalOpen(false);
+            }
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [isContextModalOpen, xraySection]);
+
     const stopGeneration = () => {
         if (!ws || !currentSessionId) return;
         ws.send(JSON.stringify({
@@ -1429,12 +1484,14 @@ export default function VAFDashboard() {
                 );
                 return;
             }
-            if (e.key === 'Enter' || e.key === 'Tab') {
-                e.preventDefault();
-                handleSuggestionClick(suggestionList[selectedSuggestionIndex]);
-                return;
-            }
-            if (e.key === 'Escape') {
+                          if (e.key === 'Enter' || e.key === 'Tab') {
+                              if (suggestionList.length > 0) {
+                                  e.preventDefault();
+                                  handleSuggestionClick(suggestionList[selectedSuggestionIndex]);
+                                  return;
+                              }
+                              // If no suggestions, let it fall through to normal form submit
+                          }            if (e.key === 'Escape') {
                 e.preventDefault();
                 setSuggestionList([]);
                 setSuggestionType(null);
@@ -1662,8 +1719,15 @@ export default function VAFDashboard() {
     };
 
     const handleSaveConfig = (newConfig: any) => {
+        const providerChanged = newConfig.provider !== config?.provider;
+        if (providerChanged) {
+            setShowChangingModelOverlay(true);
+            setTimeout(() => {
+                setShowChangingModelOverlay(false);
+                window.location.reload();
+            }, 5000);
+        }
         ws?.send(JSON.stringify({ type: 'save_config', config: newConfig }));
-        // Optimistically update
         setConfig(newConfig);
     };
 
@@ -1677,10 +1741,18 @@ export default function VAFDashboard() {
 
     const subAgentStatusLower = subAgentState.status.toLowerCase();
     const hasRunningSubAgentStep = subAgentState.steps.some(step => step.status === 'running');
+    const hasCompletedOrDoneStep = subAgentState.steps.some(
+        (step: { status?: string }) =>
+            step.status === 'completed' || step.status === 'failed' || step.status === 'timeout'
+    );
+    // Allow close when subagent finished, failed, or timed out (so user can always close on error)
     const subAgentCanClose = !hasRunningSubAgentStep && (
         subAgentStatusLower.includes('completed') ||
-        subAgentStatusLower.includes('idle') ||
-        subAgentStatusLower.includes('done')
+        subAgentStatusLower.includes('done') ||
+        subAgentStatusLower.includes('failed') ||
+        subAgentStatusLower.includes('timeout') ||
+        subAgentStatusLower.includes('error') ||
+        (subAgentStatusLower.includes('idle') && hasCompletedOrDoneStep)
     );
     const subAgentHasContent = Boolean(
         subAgentState.steps.length ||
@@ -1913,6 +1985,7 @@ export default function VAFDashboard() {
                                 // Fetch tools, workflows, and automations when opening settings
                                 ws?.send(JSON.stringify({ type: 'get_tools' }));
                                 ws?.send(JSON.stringify({ type: 'get_workflows' }));
+                                ws?.send(JSON.stringify({ type: 'get_trusted_sources' }));
                                 ws?.send(JSON.stringify({ type: 'get_automations' }));
                             }}
                             className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/settings transition-all justify-start"
@@ -2012,39 +2085,76 @@ export default function VAFDashboard() {
                                 return (
                                     <div key={i} className={cn("flex gap-4 pt-4", isBot ? "justify-start" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
                                         {isBot && <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>}
-                                        <div className={cn("max-w-[85%] flex flex-col w-full", isBot ? "items-start" : "items-end")}>
+                                        <div className={cn("max-w-[85%] flex flex-col", isBot ? "w-full items-start" : "items-end shrink-0")}>
 
                                             {isBot && thought && <ThinkingDetails thought={thought} isComplete={thinkingDone} />}
 
                                             {/* Show answer bubble: always for user, for bot if there's an answer OR if there's no thought (fallback) */}
                                             {(answer || !isBot || (isBot && !thought)) && (
-                                                <div className="relative group flex items-end">
-                                                    <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed",
-                                                        isBot ? "bg-white text-gray-800 rounded-tl-none border border-gray-200" : "bg-gray-800 text-white rounded-tr-none")}>
-                                                        <p className="whitespace-pre-wrap">{renderMarkdownLinks(answer)}</p>
-                                                    </div>
-                                                    {isBot && (
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                if (playingMessageId === i) handleStopSpeech();
-                                                                else handleSpeak(i, answer);
-                                                            }}
-                                                            className="ml-2 mb-1 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all opacity-40 hover:opacity-100 data-[active=true]:opacity-100 shrink-0"
-                                                            data-active={playingMessageId === i || loadingMessageId === i}
-                                                            title={playingMessageId === i ? "Stop Speaking" : "Read Aloud"}
-                                                        >
-                                                            {loadingMessageId === i ? (
-                                                                <Loader2 size={14} className="animate-spin" />
-                                                            ) : playingMessageId === i ? (
-                                                                <div className="relative">
-                                                                    <Volume2 size={14} className="text-gray-600" />
-                                                                    <span className="absolute -inset-1 rounded-full bg-gray-400/20 animate-ping" />
-                                                                </div>
-                                                            ) : (
-                                                                <Volume2 size={14} />
+                                                <div className="flex flex-col gap-3 w-full">
+                                                    {isBot && parseWorkflowAsync(answer) ? (() => {
+                                                        const wf = parseWorkflowAsync(answer)!;
+                                                        return (
+                                                            <>
+                                                                <WorkflowChatElement
+                                                                    workflowId={wf.taskId}
+                                                                    name={wf.name}
+                                                                    initialSteps={1}
+                                                                    forceStatus="running"
+                                                                />
+                                                                {wf.rest ? (
+                                                                    <div className="relative group flex items-end">
+                                                                        <div className="px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed bg-white text-gray-800 rounded-tl-none border border-gray-200">
+                                                                            <p className="whitespace-pre-wrap">{renderMarkdownLinks(wf.rest)}</p>
+                                                                        </div>
+                                                                        <button
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                if (playingMessageId === i) handleStopSpeech();
+                                                                                else handleSpeak(i, wf.rest);
+                                                                            }}
+                                                                            className="ml-2 mb-1 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all opacity-40 hover:opacity-100 data-[active=true]:opacity-100 shrink-0"
+                                                                            data-active={playingMessageId === i || loadingMessageId === i}
+                                                                            title={playingMessageId === i ? "Stop Speaking" : "Read Aloud"}
+                                                                        >
+                                                                            {loadingMessageId === i ? <Loader2 size={14} className="animate-spin" /> : playingMessageId === i ? (
+                                                                                <div className="relative"><Volume2 size={14} className="text-gray-600" /><span className="absolute -inset-1 rounded-full bg-gray-400/20 animate-ping" /></div>
+                                                                            ) : <Volume2 size={14} />}
+                                                                        </button>
+                                                                    </div>
+                                                                ) : null}
+                                                            </>
+                                                        );
+                                                    })() : (
+                                                        <div className="relative group flex items-end">
+                                                            <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed",
+                                                                isBot ? "bg-white text-gray-800 rounded-tl-none border border-gray-200" : "bg-gray-800 text-white rounded-tr-none")}>
+                                                                <p className="whitespace-pre-wrap">{renderMarkdownLinks(answer)}</p>
+                                                            </div>
+                                                            {isBot && (
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        if (playingMessageId === i) handleStopSpeech();
+                                                                        else handleSpeak(i, answer);
+                                                                    }}
+                                                                    className="ml-2 mb-1 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all opacity-40 hover:opacity-100 data-[active=true]:opacity-100 shrink-0"
+                                                                    data-active={playingMessageId === i || loadingMessageId === i}
+                                                                    title={playingMessageId === i ? "Stop Speaking" : "Read Aloud"}
+                                                                >
+                                                                    {loadingMessageId === i ? (
+                                                                        <Loader2 size={14} className="animate-spin" />
+                                                                    ) : playingMessageId === i ? (
+                                                                        <div className="relative">
+                                                                            <Volume2 size={14} className="text-gray-600" />
+                                                                            <span className="absolute -inset-1 rounded-full bg-gray-400/20 animate-ping" />
+                                                                        </div>
+                                                                    ) : (
+                                                                        <Volume2 size={14} />
+                                                                    )}
+                                                                </button>
                                                             )}
-                                                        </button>
+                                                        </div>
                                                     )}
                                                 </div>
                                             )}
@@ -2159,21 +2269,19 @@ export default function VAFDashboard() {
                             )}
                         </div>
 
-                        {/* Stop Generation Button - Absolute overlay (prevents layout shift) */}
-                        {loading && (
-                            <div className="absolute left-1/2 -translate-x-1/2 -top-10 z-50">
+                        {/* Stop button left of message box */}
+                        <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
+                            {loading && (
                                 <button
                                     type="button"
                                     onClick={stopGeneration}
-                                    className="px-4 py-1.5 rounded-full bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-all shadow-md flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2"
+                                    title="Stop"
+                                    className="shrink-0 p-2 rounded-full bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-all shadow-md flex items-center justify-center animate-in fade-in slide-in-from-bottom-2"
                                 >
                                     <Square size={12} fill="currentColor" />
-                                    Stop
                                 </button>
-                            </div>
-                        )}
-
-                        <form onSubmit={sendMessage} className={cn(chatWidthClass, "mx-auto flex items-center bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden")}>
+                            )}
+                            <form onSubmit={sendMessage} className="flex-1 min-w-0 flex items-center bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden">
                             <input
                                 type="file"
                                 ref={fileInputRef}
@@ -2232,6 +2340,7 @@ export default function VAFDashboard() {
                                 )}
                             </button>
                         </form>
+                        </div>
                     </div>
                 </div>
                     {showSubAgentPanel && (
@@ -2272,91 +2381,280 @@ export default function VAFDashboard() {
             {/* Active Tools Panel Moved Inline */}
             <VAFWorkflowRuntime />
 
-            {/* Context X-Ray Modal */}
+            {/* Context X-Ray Modal (Super Edition - Full Screen) */}
             {isContextModalOpen && contextStats && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
-                    <div className="bg-white w-full max-w-4xl max-h-[85vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
-                        {/* Header */}
-                        <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
-                                    <Activity size={20} />
-                                </div>
-                                <div>
-                                    <h3 className="text-lg font-bold text-gray-900">Context X-Ray</h3>
-                                    <p className="text-xs text-gray-500">Live view of LLM input state</p>
-                                </div>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+                    <div className="bg-white w-full max-w-[95vw] h-full max-h-[95vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200">
+                        {/* Header - fixed height */}
+                        <div className="shrink-0 px-8 py-6 border-b border-gray-100 bg-gray-50/80">
+                            <div className="flex justify-between items-start">
+                                                                <div>
+                                                                    <div className="flex items-center gap-4">
+                                                                        <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                                                                            <Activity className="text-blue-600" />
+                                                                            Context Architecture
+                                                                        </h3>
+                                                                        <div className="flex items-center gap-2 px-3 py-1 bg-white rounded-lg border border-gray-200 shadow-sm self-center">
+                                                                            <span className="text-xs font-mono font-bold text-gray-700">{contextStats.tokens.toLocaleString()} / {contextStats.max_tokens.toLocaleString()}</span>
+                                                                            <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{contextStats.percent}%</span>
+                                                                            <span className="w-px h-3 bg-gray-200 mx-1"></span>
+                                                                            <span className="text-xs font-medium text-gray-500">Depth: <span className="text-gray-900 font-bold">{contextStats.message_count}</span></span>
+                                                                        </div>
+                                                                    </div>
+                                                                    <p className="text-sm text-gray-500 mt-1">
+                                                                        Active View: <span className="font-bold uppercase text-blue-600">{xraySection}</span> — Click diagram nodes to inspect details.
+                                                                    </p>
+                                                                </div>                                <button 
+                                    onClick={() => setIsContextModalOpen(false)}
+                                    className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-400 hover:text-gray-700"
+                                >
+                                    <span className="sr-only">Close</span>
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                </button>
                             </div>
-                            <button 
-                                onClick={() => setIsContextModalOpen(false)}
-                                className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-500"
-                            >
-                                <span className="sr-only">Close</span>
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                            </button>
                         </div>
 
-                        {/* Content */}
-                        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                            
-                            {/* Stats Grid */}
-                            <div className="grid grid-cols-3 gap-4">
-                                <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
-                                    <div className="text-xs font-semibold text-blue-500 uppercase tracking-wider mb-1">Context Usage</div>
-                                    <div className="text-2xl font-bold text-blue-700">{contextStats.percent}%</div>
-                                    <div className="text-xs text-blue-600 mt-1">{contextStats.tokens} / {contextStats.max_tokens} tokens</div>
-                                </div>
-                                <div className="p-4 bg-purple-50 rounded-xl border border-purple-100">
-                                    <div className="text-xs font-semibold text-purple-500 uppercase tracking-wider mb-1">Messages</div>
-                                    <div className="text-2xl font-bold text-purple-700">{contextStats.message_count}</div>
-                                    <div className="text-xs text-purple-600 mt-1">Chat History</div>
-                                </div>
-                                <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
-                                    <div className="text-xs font-semibold text-emerald-500 uppercase tracking-wider mb-1">RAG Sources</div>
-                                    <div className="text-2xl font-bold text-emerald-700">{ragResults?.sources?.length || 0}</div>
-                                    <div className="text-xs text-emerald-600 mt-1">Active snippets</div>
-                                </div>
+                        {/* Diagram area - fills space in overview, only content height when section selected */}
+                        <div className={cn(
+                            "flex flex-col px-8 overflow-hidden",
+                            xraySection === 'overview' ? "flex-1 min-h-0 py-6" : "shrink-0 pt-6 pb-0"
+                        )}>
+                            {(() => {
+                                // 1. Calculate Data
+                                const totalCap = contextStats.max_tokens;
+                                const used = contextStats.tokens;
+                                const ragEst = ragResults?.sources ? ragResults.sources.reduce((acc: number, s: any) => acc + (s.text.length / 3.5), 0) : 0;
+                                const historyEst = (messages.length * 50);
+                                const systemEst = Math.max(0, used - ragEst - historyEst);
+                                const freeEst = totalCap - used;
+
+                                // 2. Layout Configuration - taller diagram in overview
+                                const isBig = xraySection === 'overview';
+                                const w = 800;
+                                const h = isBig ? 700 : 160;
+                                const pad = 20;
+                                const nodeW = 20;
+                                const leftX = pad;
+                                const rightX = w - pad - nodeW;
+                                const gap = isBig ? 40 : 15;
+
+                                // 3. Scale Factor (map tokens to pixels)
+                                // Available height for left nodes (minus gaps)
+                                const totalAvailableH = h - (pad * 2);
+                                // We map 'totalCap' to 'totalAvailableH' to keep scale consistent
+                                const scale = totalAvailableH / totalCap;
+
+                                // 4. Calculate Node Heights & Positions
+                                // Left Nodes (Source) - We stack them with gaps, but scale them correctly
+                                const hSystem = Math.max(2, systemEst * scale);
+                                const hRag = Math.max(2, ragEst * scale);
+                                const hHistory = Math.max(2, historyEst * scale);
+                                
+                                // Center the source group vertically
+                                const totalLeftH = hSystem + hRag + hHistory + (2 * gap);
+                                let currentY = (h - totalLeftH) / 2;
+
+                                const ySystem = currentY;
+                                currentY += hSystem + gap;
+                                const yRag = currentY;
+                                currentY += hRag + gap;
+                                const yHistory = currentY;
+
+                                // Right Nodes (Target) - Stacked without gaps (it's one memory block)
+                                const hUsed = used * scale;
+                                const hFree = freeEst * scale;
+                                const totalRightH = hUsed + hFree;
+                                const yRightStart = (h - totalRightH) / 2;
+                                
+                                const yUsed = yRightStart;
+                                const yFree = yUsed + hUsed;
+
+                                // Target Offsets for Flow (where the ribbon lands on the right bar)
+                                // They stack up exactly on the right side
+                                const yTargetSystem = yUsed;
+                                const yTargetRag = yTargetSystem + hSystem; // Simplified: usually calculated by exact proportion
+                                // Recalculate target heights based on exact left heights to ensure perfect alignment
+                                // Actually, 'used' on right might slightly differ from sum(left) due to estimates.
+                                // For visual coherence, we force the Right Used Bar to match the sum of inputs visually here.
+                                
+                                // Better approach for flow:
+                                // Map Left Height -> Target Height directly
+                                
+                                // 5. Path Generator (Bezier Ribbon)
+                                const makeRibbon = (yLeft: number, hLeft: number, yRight: number, color: string, section: string) => {
+                                    const c1x = leftX + nodeW + 150; // Control point 1
+                                    const c2x = rightX - 150;        // Control point 2
+                                    
+                                    const p1 = `M ${leftX + nodeW} ${yLeft}`;
+                                    const c1 = `C ${c1x} ${yLeft}, ${c2x} ${yRight}, ${rightX} ${yRight}`;
+                                    const l1 = `L ${rightX} ${yRight + hLeft}`;
+                                    const c2 = `C ${c2x} ${yRight + hLeft}, ${c1x} ${yLeft + hLeft}, ${leftX + nodeW} ${yLeft + hLeft}`;
+                                    const z = `Z`;
+
+                                    const isActive = xraySection === section;
+                                    const isOverview = xraySection === 'overview';
+
+                                    return (
+                                        <path 
+                                            d={`${p1} ${c1} ${l1} ${c2} ${z}`} 
+                                            fill={color} 
+                                            opacity={isActive ? 0.8 : (isOverview ? 0.3 : 0.1)}
+                                            className="hover:opacity-60 transition-all duration-300 cursor-pointer pointer-events-auto"
+                                            onClick={(e) => { e.stopPropagation(); setXraySection(section as any); }}
+                                        />
+                                    );
+                                };
+
+                                const makeNode = (x: number, y: number, w: number, h: number, color: string, label: string, sub: string, section: string) => {
+                                    const isActive = xraySection === section;
+                                    return (
+                                        <g 
+                                            className="cursor-pointer hover:opacity-80 transition-opacity pointer-events-auto"
+                                            onClick={(e) => { e.stopPropagation(); setXraySection(section as any); }}
+                                        >
+                                            <rect x={x} y={y} width={w} height={h} fill={color} rx="4" 
+                                                  stroke={isActive ? "black" : "none"} strokeWidth={isActive ? 2 : 0} />
+                                            {h > 15 && (
+                                                <>
+                                                    <text x={x + 25} y={y + (h/2) + 4} className="text-[10px] font-bold fill-slate-600 uppercase pointer-events-none">{label}</text>
+                                                    <text x={x + 25} y={y + (h/2) + 16} className="text-[9px] fill-slate-400 pointer-events-none">{sub}</text>
+                                                </>
+                                            )}
+                                        </g>
+                                    );
+                                };
+
+                                return (
+                                    <div className={cn(
+                                        "w-full bg-slate-50 rounded-xl border border-slate-200 overflow-hidden relative transition-all duration-500 ease-in-out",
+                                        isBig ? "flex-1 min-h-[50vh] flex flex-col" : "h-auto"
+                                    )}>
+                                        <svg viewBox={`0 0 ${w} ${h}`} className={cn(
+                                            "w-full select-none transition-all duration-500",
+                                            isBig ? "flex-1 min-h-[400px]" : "h-auto max-h-[160px]"
+                                        )}>
+                                            <defs>
+                                                <linearGradient id="gradUsed" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                    <stop offset="0%" stopColor="#3b82f6" />
+                                                    <stop offset="100%" stopColor="#a855f7" />
+                                                </linearGradient>
+                                            </defs>
+
+                                            {/* --- RIBBONS (Flows) --- */}
+                                            <g>
+                                                {makeRibbon(ySystem, hSystem, yUsed, "#3b82f6", 'system')}
+                                                {makeRibbon(yRag, hRag, yUsed + hSystem, "#10b981", 'rag')}
+                                                {makeRibbon(yHistory, hHistory, yUsed + hSystem + hRag, "#a855f7", 'history')}
+                                            </g>
+
+                                            {/* --- NODES (Rects) --- */}
+                                            {makeNode(leftX, ySystem, nodeW, hSystem, "#3b82f6", "System", `${Math.round(systemEst)} tok`, 'system')}
+                                            {makeNode(leftX, yRag, nodeW, hRag, "#10b981", "RAG", `${Math.round(ragEst)} tok`, 'rag')}
+                                            {makeNode(leftX, yHistory, nodeW, hHistory, "#a855f7", "History", `${Math.round(historyEst)} tok`, 'history')}
+
+                                            {/* RIGHT: Used Context (Click to reset) */}
+                                            <g onClick={() => setXraySection('overview')} className="cursor-pointer pointer-events-auto">
+                                                <rect x={rightX} y={yUsed} width={nodeW} height={hUsed} fill="url(#gradUsed)" rx="2" />
+                                                <rect x={rightX} y={yFree} width={nodeW} height={hFree} fill="#e2e8f0" rx="2" />
+                                                
+                                                <text x={rightX - 10} y={yUsed + (hUsed/2)} textAnchor="end" className="text-[12px] font-bold fill-slate-700">Used Memory</text>
+                                                <text x={rightX - 10} y={yUsed + (hUsed/2) + 14} textAnchor="end" className="text-[10px] fill-slate-500">{used.toLocaleString()} tokens ({contextStats.percent}%)</text>
+
+                                                <text x={rightX - 10} y={yFree + (hFree/2)} textAnchor="end" className="text-[12px] font-bold fill-slate-400">Free Space</text>
+                                                <text x={rightX - 10} y={yFree + (hFree/2) + 14} textAnchor="end" className="text-[10px] fill-slate-300">{Math.round(freeEst).toLocaleString()} tokens</text>
+                                            </g>
+                                        </svg>
+                                    </div>
+                                );
+                            })()}
+                        </div>
+
+                        {/* Scrolling Content Area - Only visible when a section is selected, sits directly under diagram */}
+                        {xraySection !== 'overview' && (
+                            <div className="flex-1 overflow-y-auto p-8 pt-4 bg-gray-50/30 min-h-0">
+                                
+                                                            {/* SYSTEM VIEW */}
+                                                            {xraySection === 'system' && (
+                                                                <div className="space-y-4 animate-in slide-in-from-right-4 duration-300 h-full flex flex-col">
+                                                                    <h4 className="text-sm font-bold text-blue-600 uppercase tracking-wider flex items-center gap-2 shrink-0">
+                                                                        <div className="w-3 h-3 rounded-full bg-blue-500"></div> System Prompt Inspection (Raw Truth)
+                                                                    </h4>
+                                                                    <div className="flex-1 bg-gray-50 text-gray-700 p-6 rounded-2xl font-mono text-xs overflow-auto border border-gray-200 shadow-inner leading-relaxed whitespace-pre-wrap">
+                                                                        {realContext?.system || contextStats.rag_preview || "(No System context available)"}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                
+                                                            {/* RAG VIEW */}
+                                                            {xraySection === 'rag' && (
+                                                                <div className="space-y-4 animate-in slide-in-from-right-4 duration-300 h-full flex flex-col">
+                                                                    <h4 className="text-sm font-bold text-emerald-600 uppercase tracking-wider flex items-center gap-2 shrink-0">
+                                                                        <div className="w-3 h-3 rounded-full bg-emerald-500"></div> RAG Context (Raw Truth)
+                                                                    </h4>
+                                                                    
+                                                                    <div className="flex-1 bg-gray-50 text-gray-700 p-6 rounded-2xl font-mono text-xs overflow-auto border border-gray-200 shadow-inner leading-relaxed whitespace-pre-wrap">
+                                                                        {realContext?.rag_preview ? (
+                                                                            realContext.rag_preview
+                                                                        ) : ragResults?.sources && ragResults.sources.length > 0 ? (
+                                                                            ragResults.sources.map((src: any, idx: number) => (
+                                                                                `[Source ${idx + 1}] (Score: ${src.score.toFixed(2)})\n${src.full_text || src.text}\n\n`
+                                                                            )).join("---\n\n")
+                                                                        ) : (
+                                                                            "(No RAG sources active)"
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                
+                                                            {/* HISTORY VIEW */}
+                                                            {xraySection === 'history' && (
+                                                                <div className="space-y-4 animate-in slide-in-from-right-4 duration-300 h-full flex flex-col">
+                                                                    <h4 className="text-sm font-bold text-purple-600 uppercase tracking-wider flex items-center gap-2 shrink-0">
+                                                                        <div className="w-3 h-3 rounded-full bg-purple-500"></div> Chat History (Raw Truth)
+                                                                    </h4>
+                                                                    <div className="flex-1 bg-gray-50 text-gray-700 p-6 rounded-2xl font-mono text-xs overflow-auto border border-gray-200 shadow-inner leading-relaxed whitespace-pre-wrap">
+                                                                        {realContext?.history ? (
+                                                                            realContext.history.map((msg: any, idx: number) => (
+                                                                                `${msg.role.toUpperCase()}:\n${msg.content}\n\n`
+                                                                            )).join("")
+                                                                        ) : (
+                                                                            messages
+                                                                                .filter(msg => {
+                                                                                    if (msg.role !== 'system') return true;
+                                                                                    const content = msg.content || "";
+                                                                                    const ignorePatterns = [
+                                                                                        "System:", "Info:", "Step ", "Router:", "Queued input",
+                                                                                        "Initializing Standalone Server", "Starting chat_step",
+                                                                                        "Generation stopped", "Empty response detected"
+                                                                                    ];
+                                                                                    return !ignorePatterns.some(p => content.includes(p)) || content.includes("## PROJECT CONTEXT");
+                                                                                })
+                                                                                .map((msg, idx) => (
+                                                                                    `${msg.role.toUpperCase()}:\n${msg.content}\n\n`
+                                                                                )).join("")
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            )}                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Changing model overlay (API ↔ Local): show ~5s then reload */}
+            {showChangingModelOverlay && (
+                <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm cursor-wait" />
+                    <div className="relative bg-white rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-4 animate-in fade-in zoom-in-95 duration-300">
+                        <div className="relative">
+                            <div className="w-16 h-16 border-4 border-gray-100 border-t-gray-900 rounded-full animate-spin" />
+                            <div className="absolute inset-0 flex items-center justify-center">
+                                <Loader2 size={24} className="text-gray-900" />
                             </div>
-
-                            {/* RAG Preview */}
-                            {contextStats.rag_preview && (
-                                <div className="space-y-2">
-                                    <div className="flex items-center gap-2 text-sm font-bold text-gray-800">
-                                        <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                                        Active RAG Context
-                                    </div>
-                                    <div className="bg-slate-900 text-slate-300 p-4 rounded-xl font-mono text-xs overflow-x-auto border border-slate-800 shadow-inner leading-relaxed whitespace-pre-wrap">
-                                        {contextStats.rag_preview}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Detailed RAG Sources */}
-                            {ragResults?.sources && ragResults.sources.length > 0 && (
-                                <div className="space-y-3">
-                                    <div className="flex items-center gap-2 text-sm font-bold text-gray-800">
-                                        <div className="w-2 h-2 rounded-full bg-orange-500"></div>
-                                        Source Details
-                                    </div>
-                                    <div className="grid gap-3">
-                                        {ragResults.sources.map((src: any, idx: number) => (
-                                            <div key={idx} className="bg-white border border-gray-200 rounded-lg p-3 hover:border-orange-200 transition-colors">
-                                                <div className="flex justify-between items-start mb-2">
-                                                    <span className="text-xs font-bold text-gray-700 bg-gray-100 px-2 py-0.5 rounded">Source {idx + 1}</span>
-                                                    <span className="text-[10px] font-mono text-gray-400">Score: {src.score}</span>
-                                                </div>
-                                                <p className="text-xs text-gray-600 line-clamp-3">{src.text}</p>
-                                                {src.metadata?.source && (
-                                                    <div className="mt-2 pt-2 border-t border-gray-50 text-[10px] text-gray-400 flex items-center gap-1">
-                                                        <Paperclip size={10} />
-                                                        {src.metadata.source}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
+                        </div>
+                        <div className="text-center">
+                            <h3 className="text-lg font-bold text-gray-900">Changing model</h3>
+                            <p className="text-sm text-gray-500 mt-1">Switching provider and updating model…</p>
                         </div>
                     </div>
                 </div>
@@ -2373,6 +2671,13 @@ export default function VAFDashboard() {
                 onRefreshLocalModels={refreshLocalModels}
                 tools={tools}
                 workflows={workflows}
+                trustedSources={trustedSources}
+                onAddTrustedSource={(categoryId, name, url) => ws?.send(JSON.stringify({ type: 'add_trusted_source', category_id: categoryId, name, url }))}
+                onRemoveTrustedSource={(domain, is_custom) => ws?.send(JSON.stringify({ type: 'remove_trusted_source', domain, is_custom }))}
+                onDeleteTrustedCategory={(categoryId) => ws?.send(JSON.stringify({ type: 'delete_trusted_category', category_id: categoryId }))}
+                onRequestTrustedSources={() => { setTrustedSourcesError(null); ws?.send(JSON.stringify({ type: 'get_trusted_sources' })); }}
+                onCreateTrustedCategory={(name) => ws?.send(JSON.stringify({ type: 'create_trusted_category', name }))}
+                trustedSourcesError={trustedSourcesError}
                 automations={automations}
                 currentUser={currentUser}
                 onLogout={() => {

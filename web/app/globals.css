@@ -55,3 +55,12 @@
   background: #cbd5e1;
 }
 
+/* Scrollbar unsichtbar (z. B. Sidebar Chat-Liste), Scroll bleibt möglich */
+.scrollbar-hide {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Edge */
+}
+

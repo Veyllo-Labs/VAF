@@ -374,6 +374,7 @@ export default function VAFDashboard() {
         files: Array<{ name: string; data: string; mimeType: string }>;
     } | null>(null);
     const pendingSessionRequestRef = useRef(false);
+    const sidebarListRef = useRef<HTMLDivElement>(null);
 
     const [ws, setWs] = useState<WebSocket | null>(null);
     const [loading, setLoading] = useState(false);
@@ -719,6 +720,13 @@ export default function VAFDashboard() {
         // 3. Request Sync
         ws?.send(JSON.stringify({ type: 'load_session', id }));
     };
+
+    // Gewählten Chat in der Sidebar sichtbar halten (nicht nach oben springen)
+    useEffect(() => {
+        if (!currentSessionId || !sidebarListRef.current) return;
+        const el = sidebarListRef.current.querySelector(`[data-session-id="${currentSessionId}"]`);
+        if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, [currentSessionId]);
 
     const [reconnectAttempt, setReconnectAttempt] = useState(0);
     useEffect(() => {
@@ -1753,8 +1761,8 @@ export default function VAFDashboard() {
     return (
         <main className="h-screen flex flex-col bg-gray-50 text-gray-900 font-sans overflow-hidden">
 
-            <div className="flex-1 flex overflow-hidden">
-                <aside className="group flex flex-col h-full bg-white border-r border-gray-200 w-16 hover:w-72 transition-all duration-300 z-20 shadow-lg overflow-hidden">
+            <div className="flex-1 flex min-h-0 overflow-hidden">
+                <aside className="group flex flex-col min-h-0 h-full bg-white border-r border-gray-200 w-16 hover:w-72 transition-all duration-300 z-20 shadow-lg overflow-hidden">
 
                     {/* App Header / Logo */}
                     <div className="h-16 flex items-center px-4 gap-3 shrink-0">
@@ -1764,7 +1772,13 @@ export default function VAFDashboard() {
                         <span className="font-bold text-gray-800 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity delay-100 duration-300 overflow-hidden">Veyllo Agentic Framework</span>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 pt-0 space-y-1">
+                    {/* Session-Liste: äußere Box overflow-hidden = feste Höhe, innere Box scrollt */}
+                    <div className="flex-1 min-h-0 relative overflow-hidden">
+                        <div
+                            ref={sidebarListRef}
+                            className="absolute inset-0 overflow-y-auto overflow-x-hidden p-2 pt-0 space-y-1 scrollbar-hide"
+                            style={{ WebkitOverflowScrolling: 'touch' }}
+                        >
                         {/* New Chat Button */}
                         <div
                             onClick={() => ws?.send(JSON.stringify({ type: 'new_session' }))}
@@ -1775,7 +1789,7 @@ export default function VAFDashboard() {
                         </div>
 
                         {sessions.map(s => (
-                            <div key={s.id} onClick={() => handleSessionSwitch(s.id)}
+                            <div key={s.id} data-session-id={s.id} onClick={() => handleSessionSwitch(s.id)}
                                 className={cn("flex items-center gap-3 p-2 pl-3 rounded-lg cursor-pointer group/item relative", currentSessionId === s.id ? 'bg-transparent' : 'hover:bg-gray-100')}>
 
                                 {/* Active Indicator (Dot) */}
@@ -1812,24 +1826,18 @@ export default function VAFDashboard() {
                                                 <Edit2 size={12} className="text-gray-400 hover:text-gray-900" onClick={(e) => { e.stopPropagation(); startEditing(s); }} />
                                                 <Trash2 size={12} className="text-gray-400 hover:text-red-600" onClick={(e) => {
                                                     e.stopPropagation();
-                                                    if (confirm('Delete?')) {
-                                                        ws?.send(JSON.stringify({ type: 'delete_session', id: s.id }));
-                                                        // If we are deleting the current session, find a new home
-                                                        if (currentSessionId === s.id) {
-                                                            const remaining = sessions.filter(sess => sess.id !== s.id);
-                                                            // Prefer an empty session
-                                                            const empty = remaining.find(sess => (sess.messageCount || 0) === 0);
-
-                                                            if (empty) {
-                                                                handleSessionSwitch(empty.id);
-                                                            } else if (remaining.length > 0) {
-                                                                handleSessionSwitch(remaining[0].id);
-                                                            } else {
-                                                                // Truly empty list, trigger new session
-                                                                setTimeout(() => {
-                                                                    ws?.send(JSON.stringify({ type: 'new_session' }));
-                                                                }, 100);
-                                                            }
+                                                    ws?.send(JSON.stringify({ type: 'delete_session', id: s.id }));
+                                                    if (currentSessionId === s.id) {
+                                                        const remaining = sessions.filter(sess => sess.id !== s.id);
+                                                        const empty = remaining.find(sess => (sess.messageCount || 0) === 0);
+                                                        if (empty) {
+                                                            handleSessionSwitch(empty.id);
+                                                        } else if (remaining.length > 0) {
+                                                            handleSessionSwitch(remaining[0].id);
+                                                        } else {
+                                                            setTimeout(() => {
+                                                                ws?.send(JSON.stringify({ type: 'new_session' }));
+                                                            }, 100);
                                                         }
                                                     }
                                                 }} />
@@ -1839,10 +1847,20 @@ export default function VAFDashboard() {
                                 </div>
                             </div>
                         ))}
+                            <div className="h-28 shrink-0" aria-hidden />
+                        </div>
+                        {/* Nebel: weißer Fade (statt grau), letzter sichtbarer Chat „verschwindet“ */}
+                        <div
+                            className="absolute bottom-0 left-0 right-0 h-28 pointer-events-none"
+                            style={{
+                                zIndex: 50,
+                                background: 'linear-gradient(to top, #ffffff 0%, rgba(255,255,255,0.92) 35%, rgba(255,255,255,0.5) 65%, transparent 100%)',
+                            }}
+                        />
                     </div>
 
                     {/* Status Footer - Redesigned */}
-                    <div className="p-3 mt-auto mb-2 flex flex-col gap-1 w-full overflow-hidden">
+                    <div className="shrink-0 p-3 mt-auto mb-2 flex flex-col gap-1 w-full overflow-hidden">
 
                         {/* Connection Indicator – click to reconnect when disconnected */}
                         <div

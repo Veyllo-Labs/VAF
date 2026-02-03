@@ -46,6 +46,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Max sessions sent to Web UI (sidebar list); increase if users have many chats.
+SESSION_LIST_LIMIT = 500
+
 log("WebServer", "Getting WebInterfaceManager...")
 manager = get_web_interface()
 
@@ -771,7 +774,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         raise e
     try:
         # Send initial session list
-        sessions = session_mgr.list(limit=20)
+        sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
         await websocket.send_json({
             "type": "session_list", 
             "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
@@ -874,7 +877,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 # --- SESSION MANAGEMENT ---
                 
                 if type == "get_sessions":
-                    sessions = session_mgr.list(limit=20)
+                    sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
                     await websocket.send_json({
                         "type": "session_list", 
                         "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
@@ -984,7 +987,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     sid = cmd.get("id")
                     session_mgr.delete(sid)
                     # Broadcast update
-                    sessions = session_mgr.list(limit=20)
+                    sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
                     await manager.broadcast({
                         "type": "session_list", 
                         "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
@@ -1004,7 +1007,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     manager.subscribe_to_session(websocket, new_sess.id)
                     
                     # Refresh list
-                    sessions = session_mgr.list(limit=20)
+                    sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
                     
                     await websocket.send_json({
                         "type": "session_list", 
@@ -1028,7 +1031,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         tq.add(session_id="system", input_text=f"__CMD__:RENAME_SESSION:{sid}:{new_name}", source="web")
                         
                         # Broadcast update
-                        sessions = session_mgr.list(limit=20)
+                        sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
                         await manager.broadcast({
                             "type": "session_list", 
                             "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]

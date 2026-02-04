@@ -46,12 +46,14 @@ class MemoryProfiler:
             return
 
         self._running = True
-        if not tracemalloc.is_tracing():
-            tracemalloc.start(25)
+        # DISABLED: tracemalloc causes massive memory leaks (100MB+ per minute)
+        # It tracks every allocation and the tracking data itself leaks
+        # if not tracemalloc.is_tracing():
+        #     tracemalloc.start(3)
         self._start_memory = self._get_memory_mb()
         self._thread = threading.Thread(target=self._profile_loop, daemon=True, name="MemoryProfiler")
         self._thread.start()
-        self._log(f"Memory Profiler started. Initial memory: {self._start_memory:.0f}MB")
+        self._log(f"Memory Profiler started (tracemalloc DISABLED). Initial memory: {self._start_memory:.0f}MB")
 
     def stop(self):
         """Stop the profiler."""
@@ -70,7 +72,7 @@ class MemoryProfiler:
             time.sleep(PROFILE_INTERVAL)
 
     def _format_allocation_site(self, stat) -> str:
-        """Format a tracemalloc Statistic as 'path:line in name' (project-relative when possible)."""
+        """Format a tracemalloc Statistic as 'path:line' (project-relative when possible)."""
         if not stat.traceback:
             return "?"
         frame = stat.traceback[0]
@@ -78,7 +80,8 @@ class MemoryProfiler:
             path = Path(frame.filename).relative_to(PROJECT_ROOT)
         except ValueError:
             path = Path(frame.filename)
-        return f"{path}:{frame.lineno} in {frame.name}"
+        # Note: tracemalloc Frame objects only have filename and lineno, not name
+        return f"{path}:{frame.lineno}"
 
     def _take_snapshot(self):
         """Take a memory snapshot and log it."""

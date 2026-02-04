@@ -409,5 +409,24 @@ class TextChunker:
     def estimate_tokens(self, text: str) -> int:
         return len(text) // self.CHARS_PER_TOKEN
 
+# Singleton chunker instance
+_default_chunker: Optional[TextChunker] = None
+
 def get_chunker(chunk_size: Optional[int] = None, chunk_overlap: Optional[int] = None) -> TextChunker:
-    return TextChunker(chunk_size=chunk_size or Config.get("memory_chunk_size", 512), chunk_overlap=chunk_overlap or Config.get("memory_chunk_overlap", 50))
+    """Get or create a TextChunker (singleton for default params to reduce memory)."""
+    global _default_chunker
+
+    # Use singleton for default params (most common case)
+    if chunk_size is None and chunk_overlap is None:
+        if _default_chunker is None:
+            _default_chunker = TextChunker(
+                chunk_size=Config.get("memory_chunk_size", 512),
+                chunk_overlap=Config.get("memory_chunk_overlap", 50)
+            )
+        return _default_chunker
+
+    # Custom params = new instance
+    return TextChunker(
+        chunk_size=chunk_size or Config.get("memory_chunk_size", 512),
+        chunk_overlap=chunk_overlap or Config.get("memory_chunk_overlap", 50)
+    )

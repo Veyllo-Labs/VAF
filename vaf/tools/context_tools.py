@@ -183,10 +183,10 @@ class MemorySearchTool(BaseTool):
     """
     name = "memory_search"
     description = (
-        "Search long-term memory for facts about the user or system. "
-        "Call this when the user asks 'who am I?', 'what do you remember about me?', 'was hast du über mich gespeichert?', or similar. "
-        "Returns matching snippets or a message that no memories were found. Use the result to answer. "
-        "Do NOT use memory_save for lookup – memory_save only saves NEW facts when the user asks to remember something."
+        "🔍 SEARCH your long-term memory database (RAG) for stored facts, notes, preferences, or past conversations. "
+        "USE THIS when user asks: 'who am I?', 'what do you know about me?', 'was hast du über mich gespeichert?', 'what have I told you?'. "
+        "This is like searching a personal knowledge base - it retrieves previously saved information. "
+        "Returns matching snippets from the vector database. If nothing found, tell user you have no stored info yet."
     )
     parameters = {
         "type": "object",
@@ -246,10 +246,10 @@ class MemorySaveTool(BaseTool):
     """
     name = "memory_save"
     description = (
-        "Save NEW information in long-term memory. Use ONLY when the user explicitly asks to remember or save something "
-        "(e.g. 'remember that...', 'speichere...', 'merke dir...'). "
-        "Do NOT use for 'who am I?', 'what do you remember about me?', or to look up facts – use memory_search for that, "
-        "or use the 'Memory context' block injected in this turn. memory_save only saves new facts."
+        "💾 SAVE new information to your long-term memory database (RAG). "
+        "USE THIS when user explicitly asks: 'remember that...', 'merke dir...', 'save this...', 'speichere...'. "
+        "This stores facts, preferences, notes permanently in the vector database for future retrieval. "
+        "Do NOT use for lookups - use memory_search to retrieve stored information."
     )
     parameters = {
         "type": "object",

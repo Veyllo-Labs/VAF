@@ -76,15 +76,32 @@ async def get_engine() -> AsyncEngine:
     Cached per-loop so tools (e.g. memory_save) running in another thread's loop get their own engine.
     """
     loop = asyncio.get_running_loop()
+
+    # Cleanup stale engines from dead loops to prevent memory leak
+    # Each asyncio.run() in a daemon thread creates a new loop
+    if len(_engine_by_loop) > 10:
+        dead_loops = [l for l in _engine_by_loop.keys() if l.is_closed()]
+        for dead_loop in dead_loops:
+            try:
+                old_engine = _engine_by_loop.pop(dead_loop, None)
+                if old_engine:
+                    # Note: can't await dispose() for closed loop, just remove reference
+                    pass
+                _session_factory_by_loop.pop(dead_loop, None)
+            except Exception:
+                pass
+        if dead_loops:
+            logger.debug(f"Cleaned up {len(dead_loops)} stale DB engines from dead loops")
+
     if loop not in _engine_by_loop:
         url = get_database_url()
         _engine_by_loop[loop] = create_async_engine(
             url,
             echo=Config.get("memory_db_echo", False),
-            pool_size=5,
-            max_overflow=10,
+            pool_size=2,  # Reduced from 5 - we use short-lived connections
+            max_overflow=3,  # Reduced from 10
             pool_timeout=30,
-            pool_recycle=1800,  # Recycle connections after 30 minutes
+            pool_recycle=300,  # Recycle connections after 5 minutes (was 30)
         )
         await _run_schema_migrations(_engine_by_loop[loop])
     return _engine_by_loop[loop]

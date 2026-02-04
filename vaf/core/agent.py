@@ -2480,16 +2480,32 @@ class Agent:
                  # Router-style: short output only (number), no chat
                  payload = {"messages": messages, "max_tokens": 32, "temperature": 0.0}
                  try:
-                     res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=120).json()
+                     res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=30).json()
                      content = res['choices'][0]['message']['content']
-                 except: pass
-            
+                     try:
+                         append_domain_log("backend", f"intent_analysis_response content={content[:50] if content else 'EMPTY'}")
+                     except Exception:
+                         pass
+                 except Exception as e:
+                     try:
+                         append_domain_log("backend", f"intent_analysis_failed error={str(e)[:100]}")
+                     except Exception:
+                         pass
+
             # Parse Float
             match = re.search(r"\d+(\.\d+)?", content)
             if match:
                 temp = float(match.group())
+                try:
+                    append_domain_log("backend", f"intent_temp_parsed temp={temp}")
+                except Exception:
+                    pass
                 return max(0.2, min(0.9, temp))
-                
+
+            try:
+                append_domain_log("backend", f"intent_temp_fallback content_was={content[:30] if content else 'EMPTY'}")
+            except Exception:
+                pass
             return 0.7
             
         except Exception as e:

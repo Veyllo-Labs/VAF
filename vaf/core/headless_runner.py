@@ -621,6 +621,31 @@ def run_headless_agent():
                         pass
                     print("[Headless] Task complete.")
 
+                    # Save session with updated history (persist chat across restarts)
+                    try:
+                        session = session_mgr.load(task.session_id)
+                        # Sync agent history to session messages
+                        # Only add new messages (compare lengths to avoid duplicates)
+                        agent_history = agent.history or []
+                        session_len = len(session.messages)
+                        # Filter out system prompts from history (they're regenerated on load)
+                        user_assistant_msgs = [
+                            m for m in agent_history
+                            if m.get("role") in ("user", "assistant", "tool")
+                        ]
+                        if len(user_assistant_msgs) > session_len:
+                            # Add only new messages
+                            for msg in user_assistant_msgs[session_len:]:
+                                session.add_message(
+                                    role=msg.get("role", "user"),
+                                    content=str(msg.get("content", ""))
+                                )
+                            session_mgr.save(session)
+                    except Exception as e:
+                        # Don't fail the task if session save fails
+                        import logging
+                        logging.getLogger(__name__).warning(f"Failed to save session: {e}")
+
                     # Memory cleanup: clear response parts list
                     if 'response_parts' in dir():
                         response_parts.clear()

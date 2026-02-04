@@ -1614,6 +1614,12 @@ class Agent:
             self.current_session_id = session_id
             set_current_session_id(session_id)
             
+        # CRITICAL: Compress history immediately upon load to match context limits
+        # Otherwise UI shows massive "Raw Truth" (e.g. 17k tokens) which looks broken,
+        # even though chat_step would compress it before sending.
+        # We want the UI to show the "Ready State".
+        self.manage_context()
+            
         # Broadcast new context stats to WebUI immediately
         self._broadcast_context_status()
 
@@ -2095,7 +2101,12 @@ class Agent:
 
         # Convert chars to tokens (conservative: ~4 chars per token)
         estimated_tokens = total_chars // 4
-        max_tokens = self.config.get("n_ctx", 8192)
+        
+        # Use actual context manager limit if available (handles API boosts to 128k)
+        if hasattr(self, 'context_manager'):
+            max_tokens = self.context_manager.max_tokens
+        else:
+            max_tokens = self.config.get("n_ctx", 8192)
 
         return estimated_tokens, max_tokens
 
@@ -2104,11 +2115,11 @@ class Agent:
         Calculates a precise token usage by using the model's tokenizer.
         This includes the chat history and the schemas of all active tools.
         """
-        # API Backend: Return real token usage from API
+        # API Backend: Return ESTIMATED current context usage (Snapshot)
+        # We cannot use session_usage because that is CUMULATIVE (billing), 
+        # which breaks the context bar and management logic (shows >100% full).
         if self.api_backend:
-            usage = self.api_backend.session_usage
-            total_used = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-            return total_used, self.context_manager.max_tokens
+            return self._estimate_token_usage()
 
         # Server Mode: Use server /tokenize API for precise count (no local model load).
         # If server is not ready or tokenize fails, fall back to estimation.
@@ -2355,16 +2366,37 @@ class Agent:
         """Send context debug info to WebUI (X-Ray Vision)."""
         try:
             from vaf.core.web_interface import get_web_interface
-            
+
             tokens, max_tokens = self.get_token_usage()
-            
+
+            # Calculate detailed token breakdown for X-Ray visualization
+            system_tokens = 0
+            history_tokens = 0
+            tools_tokens = 0
             system_content = ""
-            if self.history and self.history[0]["role"] == "system":
-                system_content = self.history[0].get("content", "")
-            
-            # Send FULL system content for X-Ray visibility
-            # (Frontend can format/truncate if needed, but for debugging we want raw truth)
-            
+
+            for msg in self.history:
+                content = str(msg.get("content", ""))
+                role = msg.get("role", "")
+                # Estimate tokens: ~4 chars per token
+                msg_tokens = (len(content) + len(role) + 20) // 4
+
+                if role == "system":
+                    system_tokens += msg_tokens
+                    if not system_content:
+                        system_content = content
+                else:
+                    history_tokens += msg_tokens
+
+            # Estimate tool schema tokens
+            if hasattr(self, 'TOOLS') and self.TOOLS:
+                try:
+                    import json
+                    schema_str = json.dumps(self.TOOLS)
+                    tools_tokens = len(schema_str) // 4
+                except Exception:
+                    tools_tokens = len(self.tools) * 200 if hasattr(self, 'tools') else 0
+
             get_web_interface().push_update({
                 "type": "context_status",
                 "stats": {
@@ -2372,7 +2404,11 @@ class Agent:
                     "max_tokens": max_tokens,
                     "percent": round((tokens / max_tokens) * 100, 1) if max_tokens else 0,
                     "message_count": len(self.history),
-                    "rag_preview": system_content  # Send FULL content here
+                    "rag_preview": system_content,
+                    # Detailed breakdown for X-Ray visualization
+                    "system_tokens": system_tokens,
+                    "history_tokens": history_tokens,
+                    "tools_tokens": tools_tokens
                 }
             })
         except Exception:

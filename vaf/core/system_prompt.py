@@ -54,23 +54,13 @@ class SystemPromptManager:
             self.mpm = None
         
         # ═══════════════════════════════════════════════════════════════════════
-        # CORE IDENTITY PROMPTS (Fallbacks)
+        # CORE IDENTITY PROMPTS (Fallbacks - ONLY used if soul.md is missing!)
         # ═══════════════════════════════════════════════════════════════════════
-        
-        # Determine base identity based on model name
-        is_vq1 = "vq-1" in model_name.lower() or "vq1" in model_name.lower()
-        
-        if is_vq1:
-            self.identity = "Du bist VQ-1, ein hilfreicher Assistent von Veyllo Labs."
-        else:
-            self.identity = (
-                f"You are **{model_name}**,  an AI model running within the **VAF** (Veyllo Agentic Framework) "
-                "(Veyllo Agentic Framework)."
-            )
+        # IMPORTANT: These fallbacks do NOT mention "AI", "VAF", "model", "assistant"
+        # The model should not know what it is - only the soul.md defines its identity.
+        # If soul.md exists, these are NEVER used.
 
-        self.vq1_identity = f"""{self.identity}
-
-## Core Principles
+        self.fallback_identity = """## Core Principles
 - Be helpful, accurate, and concise
 - **Clarify Ambiguity:** If critical information is missing (e.g., location for weather, specific file for reading), **ASK FIRST** before calling any tools. Do not guess parameters.
 - When uncertain, acknowledge it rather than guessing
@@ -106,26 +96,6 @@ Your actual response to the user here.
 - Use markdown formatting for clarity
 - Code blocks with syntax highlighting
 - Structured responses for complex topics"""
-
-        self.generic_identity = f"""{self.identity}
-
-## Core Principles
-- Be helpful, accurate, and concise
-- **Clarify Ambiguity:** If critical information is missing, **ASK FIRST** before calling tools.
-- When uncertain, acknowledge it
-- **🔥 ALWAYS RESPOND IN THE USER'S LANGUAGE!** (German user → German answer! English user → English answer!)
-- Use available tools effectively
-- **YOU CAN CALL MULTIPLE TOOLS IN ONE RESPONSE!** (e.g., web_search twice for "weather + news")
-
-## 🧠 Thinking Format
-When reasoning through a problem, wrap your thoughts in `<think>` tags:
-```
-<think>Your internal reasoning...</think>
-Your actual response here.
-```
-- Content in `<think>` tags is shown separately in the UI
-- Your final answer comes AFTER `</think>`
-- Tool calls must be in the main response (after `</think>`), not inside `<think>`, so they are executed"""
 
         # ═══════════════════════════════════════════════════════════════════════
         # MODULAR PROMPT SECTIONS
@@ -397,9 +367,14 @@ Sub-agents run asynchronously - results arrive later
             
             # Construct identity
             persona_parts = []
-            persona_parts.append(f"You are **{identity.get('name', 'VAF')}**.")
-            if identity.get('emoji'):
-                persona_parts.append(f"Your symbol is {identity.get('emoji')}.")
+            # Use the name from identity.json - this is the Soul's name, not "AI" or "VAF"
+            soul_name = identity.get('name') or 'Assistant'  # Neutral fallback, not "VAF" or "AI"
+            soul_emoji = identity.get('emoji') or ''
+            # Combine name and emoji in one clean line: "You are **Nobel933DarkBlue** 🧿."
+            if soul_emoji:
+                persona_parts.append(f"You are **{soul_name}** {soul_emoji}.")
+            else:
+                persona_parts.append(f"You are **{soul_name}**.")
             persona_parts.append(
                 "\nYour Soul determines the way and voice of every answer. "
                 "Every answer must be thought through with the Soul – in this personality, not as a generic assistant. "
@@ -417,34 +392,51 @@ Sub-agents run asynchronously - results arrive later
             parts.append("\n".join(persona_parts))
             persona_loaded = True
             soul_len = len(soul) if soul else 0
-            _log_soul(f"Soul/identity loaded name={identity.get('name', 'VAF')} soul_len={soul_len}")
+            _log_soul(f"Soul/identity loaded name={soul_name} soul_len={soul_len}")
         except Exception as e:
             _log_soul(f"Soul/identity load failed: {e}")
 
         if not persona_loaded:
-            _log_soul("Using fallback identity (VQ-1 or generic)")
-            # Use VQ-1 identity for VQ-1 models; otherwise use generic model identity
-            use_vq1_identity = False
-            if filename and ("vaf" in filename.lower() or "vq" in filename.lower()):
-                use_vq1_identity = True
-            if "vq-1" in self.model_name.lower() or "vq1" in self.model_name.lower():
-                use_vq1_identity = True
+            _log_soul("Using fallback identity (soul.md not found)")
+            # Use generic fallback that does NOT reveal what model/system this is
+            # The model should not know it's "AI", "VAF", "VQ-1" etc. - only soul.md defines identity
+            parts.append(self.fallback_identity)
 
-            if use_vq1_identity:
-                parts.append(self.vq1_identity)
-            else:
-                parts.append(self.generic_identity)
-
-        # Memory & RAG instructions (always present so model knows to remember user/system)
+        # Memory Recall instructions (Clawbot-inspired approach)
         parts.append("""
-## Memory & What You Remember (RAG)
-You have **long-term memory** (RAG). Use it to remember things about the user and the system:
-- **Memory context** for this turn is injected in a separate block below (## Memory context (relevant to this query)). Use that block first; it is already filled from the user's message before you think or answer.
-- **memory_search**: Only if you need a different search. Pass a SHORT query only (e.g. "user name", "user preferences", "facts about user"). NEVER pass your full thinking, reasoning, or <think> text as the query. Do NOT use memory_save for lookup.
-- **memory_save**: Save NEW facts only when the user explicitly asks to remember something (e.g. "remember that...", "merke dir..."). Do NOT use for "who am I?" or "what do you remember?" – use the **Memory context** block or **memory_search** with a short query.
-- When the user asks "who am I?" or "what do you remember?", use the **Memory context** block injected this turn (if any) or call **memory_search** with a short query; then answer from that. If none is shown, say so and offer to remember things from now on.
-- **add_memory** / **update_working_memory**: Short-term notes and plan. **memory_save**: Long-term facts (save only). **memory_search**: Look up facts (short query only). Use both; memory_save is for saving, memory_search for looking up.
-- **update_user_identity**: Update the current user's name, language, preferences, do's and don'ts so you can greet them correctly (e.g. \"Hey Mert\") and follow their rules. Use when the user tells you their name or how they want to be treated.
+## 🧠 Memory Recall
+**BEFORE answering anything about:**
+- Prior conversations, work, or decisions
+- Dates, deadlines, or scheduled events
+- People, names, or relationships
+- User preferences, habits, or settings
+- Todos, tasks, or projects
+- Facts the user told you before
+
+**→ FIRST run `memory_search` with a SHORT query** (e.g. "user name", "project deadline", "last conversation about X").
+Then use the results to answer. Do NOT guess from your training data!
+
+### Memory Tools:
+| Tool | When to Use | Examples |
+|------|-------------|----------|
+| `memory_search` | **Look up** any stored facts | "user name", "project X", "last meeting" |
+| `memory_save` | **Save** general facts, projects, notes | "Project VAF uses Docker", "Meeting scheduled for Friday" |
+| `update_user_identity` | **Save PERSONAL user info** (name, language, preferences, do's/don'ts) | "My name is Mert", "I prefer German", "Don't use emojis" |
+
+### When to use which SAVE tool:
+- **Personal info about the USER** → `update_user_identity`
+  - Name, nickname, language, preferences, do's, don'ts
+  - Example: "Ich heiße Mert" → `update_user_identity(name="Mert")`
+  - Example: "Antworte immer auf Deutsch" → `update_user_identity(preferred_language="de")`
+- **Everything else** → `memory_save`
+  - Projects, facts, deadlines, notes, decisions
+  - Example: "Merke dir: VAF nutzt PostgreSQL" → `memory_save(content="VAF uses PostgreSQL")`
+
+### Rules:
+- **Memory context** for this turn is injected below as `## Memory context (relevant to this query)`. Check it FIRST before calling memory_search.
+- Pass SHORT queries to memory_search (e.g. "user preferences", NOT your full reasoning)
+- Do NOT use memory_save for lookups - it's for SAVING only
+- When user asks "who am I?" or "what do you remember?" → check Memory context below, then memory_search if needed
 """)
 
         # User identity (current user): name, language, preferences, do's/don'ts + cached RAG summary

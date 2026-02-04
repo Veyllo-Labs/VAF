@@ -419,7 +419,7 @@ export default function VAFDashboard() {
     const [realContext, setRealContext] = useState<any | null>(null); // REAL Payload (The Truth)
     const [ragResults, setRagResults] = useState<any | null>(null); // RAG Results
     const [isContextModalOpen, setIsContextModalOpen] = useState(false);
-    const [xraySection, setXraySection] = useState<'overview' | 'system' | 'rag' | 'history'>('overview'); // Active X-Ray View
+    // xraySection state removed - Context Window modal now shows only overview diagram
 
     // Sub-Agent Window State
     const [subAgentState, setSubAgentState] = useState<{
@@ -1376,20 +1376,17 @@ export default function VAFDashboard() {
         }
     }, [config, contextStats]);
 
-    // ESC: close diagram section or close context modal
+    // ESC: close context modal
     useEffect(() => {
         if (!isContextModalOpen) return;
         const onKeyDown = (e: KeyboardEvent) => {
-            if (e.key !== 'Escape') return;
-            if (xraySection !== 'overview') {
-                setXraySection('overview');
-            } else {
+            if (e.key === 'Escape') {
                 setIsContextModalOpen(false);
             }
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [isContextModalOpen, xraySection]);
+    }, [isContextModalOpen]);
 
     const stopGeneration = () => {
         if (!ws || !currentSessionId) return;
@@ -2381,30 +2378,31 @@ export default function VAFDashboard() {
             {/* Active Tools Panel Moved Inline */}
             <VAFWorkflowRuntime />
 
-            {/* Context X-Ray Modal (Super Edition - Full Screen) */}
+            {/* Context Window Modal - Clean & Professional */}
             {isContextModalOpen && contextStats && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
-                    <div className="bg-white w-full max-w-[95vw] h-full max-h-[95vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200">
-                        {/* Header - fixed height */}
+                    <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200">
+                        {/* Header */}
                         <div className="shrink-0 px-8 py-6 border-b border-gray-100 bg-gray-50/80">
                             <div className="flex justify-between items-start">
-                                                                <div>
-                                                                    <div className="flex items-center gap-4">
-                                                                        <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                                                                            <Activity className="text-blue-600" />
-                                                                            Context Architecture
-                                                                        </h3>
-                                                                        <div className="flex items-center gap-2 px-3 py-1 bg-white rounded-lg border border-gray-200 shadow-sm self-center">
-                                                                            <span className="text-xs font-mono font-bold text-gray-700">{contextStats.tokens.toLocaleString()} / {contextStats.max_tokens.toLocaleString()}</span>
-                                                                            <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{contextStats.percent}%</span>
-                                                                            <span className="w-px h-3 bg-gray-200 mx-1"></span>
-                                                                            <span className="text-xs font-medium text-gray-500">Depth: <span className="text-gray-900 font-bold">{contextStats.message_count}</span></span>
-                                                                        </div>
-                                                                    </div>
-                                                                    <p className="text-sm text-gray-500 mt-1">
-                                                                        Active View: <span className="font-bold uppercase text-blue-600">{xraySection}</span> — Click diagram nodes to inspect details.
-                                                                    </p>
-                                                                </div>                                <button 
+                                <div>
+                                    <div className="flex items-center gap-4">
+                                        <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                                            <Activity className="text-blue-600" />
+                                            Context Window
+                                        </h3>
+                                        <div className="flex items-center gap-2 px-3 py-1 bg-white rounded-lg border border-gray-200 shadow-sm self-center">
+                                            <span className="text-xs font-mono font-bold text-gray-700">{contextStats.tokens.toLocaleString()} / {contextStats.max_tokens.toLocaleString()} tokens</span>
+                                            <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{contextStats.percent}%</span>
+                                            <span className="w-px h-3 bg-gray-200 mx-1"></span>
+                                            <span className="text-xs font-medium text-gray-500">{contextStats.message_count} messages</span>
+                                        </div>
+                                    </div>
+                                    <p className="text-sm text-gray-500 mt-1">
+                                        How your context window is being used
+                                    </p>
+                                </div>
+                                <button
                                     onClick={() => setIsContextModalOpen(false)}
                                     className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-400 hover:text-gray-700"
                                 >
@@ -2414,29 +2412,69 @@ export default function VAFDashboard() {
                             </div>
                         </div>
 
-                        {/* Diagram area - fills space in overview, only content height when section selected */}
-                        <div className={cn(
-                            "flex flex-col px-8 overflow-hidden",
-                            xraySection === 'overview' ? "flex-1 min-h-0 py-6" : "shrink-0 pt-6 pb-0"
-                        )}>
+                        {/* Diagram area with legend */}
+                        <div className="flex px-8 py-6 flex-1 min-h-0 gap-6">
+                            {/* Legend - Left side */}
+                            <div className="shrink-0 w-48 flex flex-col justify-center gap-3 text-sm">
+                                <div className="flex items-start gap-2">
+                                    <div className="w-3 h-3 rounded-sm bg-blue-500 mt-1 shrink-0"></div>
+                                    <div>
+                                        <div className="font-semibold text-slate-700">System Prompt</div>
+                                        <div className="text-xs text-slate-500">Instructions, persona, rules</div>
+                                    </div>
+                                </div>
+                                <div className="flex items-start gap-2">
+                                    <div className="w-3 h-3 rounded-sm bg-emerald-500 mt-1 shrink-0"></div>
+                                    <div>
+                                        <div className="font-semibold text-slate-700">Tool Schemas</div>
+                                        <div className="text-xs text-slate-500">Available functions & params</div>
+                                    </div>
+                                </div>
+                                <div className="flex items-start gap-2">
+                                    <div className="w-3 h-3 rounded-sm bg-purple-500 mt-1 shrink-0"></div>
+                                    <div>
+                                        <div className="font-semibold text-slate-700">Conversation</div>
+                                        <div className="text-xs text-slate-500">Chat history & tool results</div>
+                                    </div>
+                                </div>
+                                <div className="border-t border-slate-200 my-2"></div>
+                                <div className="flex items-start gap-2">
+                                    <div className="w-3 h-3 rounded-sm bg-gradient-to-b from-blue-500 to-purple-500 mt-1 shrink-0"></div>
+                                    <div>
+                                        <div className="font-semibold text-slate-700">Used</div>
+                                        <div className="text-xs text-slate-500">Total context consumed</div>
+                                    </div>
+                                </div>
+                                <div className="flex items-start gap-2">
+                                    <div className="w-3 h-3 rounded-sm bg-slate-200 mt-1 shrink-0"></div>
+                                    <div>
+                                        <div className="font-semibold text-slate-400">Free</div>
+                                        <div className="text-xs text-slate-400">Remaining capacity</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Diagram - Right side */}
+                            <div className="flex-1 flex flex-col min-h-0">
                             {(() => {
-                                // 1. Calculate Data
+                                // 1. Calculate Data - USE BACKEND VALUES (not frontend estimates!)
                                 const totalCap = contextStats.max_tokens;
                                 const used = contextStats.tokens;
-                                const ragEst = ragResults?.sources ? ragResults.sources.reduce((acc: number, s: any) => acc + (s.text.length / 3.5), 0) : 0;
-                                const historyEst = (messages.length * 50);
-                                const systemEst = Math.max(0, used - ragEst - historyEst);
+
+                                // Use real backend token counts if available, fallback to estimates
+                                const systemEst = contextStats.system_tokens ?? Math.round(used * 0.3);
+                                const historyEst = contextStats.history_tokens ?? Math.round(used * 0.5);
+                                const toolsEst = contextStats.tools_tokens ?? Math.round(used * 0.2);
                                 const freeEst = totalCap - used;
 
-                                // 2. Layout Configuration - taller diagram in overview
-                                const isBig = xraySection === 'overview';
+                                // 2. Layout Configuration
                                 const w = 800;
-                                const h = isBig ? 700 : 160;
+                                const h = 500;
                                 const pad = 20;
                                 const nodeW = 20;
                                 const leftX = pad;
                                 const rightX = w - pad - nodeW;
-                                const gap = isBig ? 40 : 15;
+                                const gap = 30;
 
                                 // 3. Scale Factor (map tokens to pixels)
                                 // Available height for left nodes (minus gaps)
@@ -2446,18 +2484,19 @@ export default function VAFDashboard() {
 
                                 // 4. Calculate Node Heights & Positions
                                 // Left Nodes (Source) - We stack them with gaps, but scale them correctly
+                                // Note: "RAG" node now shows Tools tokens (since RAG is part of System)
                                 const hSystem = Math.max(2, systemEst * scale);
-                                const hRag = Math.max(2, ragEst * scale);
+                                const hTools = Math.max(2, toolsEst * scale);  // Tools instead of RAG
                                 const hHistory = Math.max(2, historyEst * scale);
-                                
+
                                 // Center the source group vertically
-                                const totalLeftH = hSystem + hRag + hHistory + (2 * gap);
+                                const totalLeftH = hSystem + hTools + hHistory + (2 * gap);
                                 let currentY = (h - totalLeftH) / 2;
 
                                 const ySystem = currentY;
                                 currentY += hSystem + gap;
-                                const yRag = currentY;
-                                currentY += hRag + gap;
+                                const yTools = currentY;  // Renamed from yRag
+                                currentY += hTools + gap;
                                 const yHistory = currentY;
 
                                 // Right Nodes (Target) - Stacked without gaps (it's one memory block)
@@ -2480,44 +2519,36 @@ export default function VAFDashboard() {
                                 // Better approach for flow:
                                 // Map Left Height -> Target Height directly
                                 
-                                // 5. Path Generator (Bezier Ribbon)
-                                const makeRibbon = (yLeft: number, hLeft: number, yRight: number, color: string, section: string) => {
-                                    const c1x = leftX + nodeW + 150; // Control point 1
-                                    const c2x = rightX - 150;        // Control point 2
-                                    
+                                // 5. Path Generator (Bezier Ribbon) - Non-interactive
+                                const makeRibbon = (yLeft: number, hLeft: number, yRight: number, color: string) => {
+                                    const c1x = leftX + nodeW + 150;
+                                    const c2x = rightX - 150;
+
                                     const p1 = `M ${leftX + nodeW} ${yLeft}`;
                                     const c1 = `C ${c1x} ${yLeft}, ${c2x} ${yRight}, ${rightX} ${yRight}`;
                                     const l1 = `L ${rightX} ${yRight + hLeft}`;
                                     const c2 = `C ${c2x} ${yRight + hLeft}, ${c1x} ${yLeft + hLeft}, ${leftX + nodeW} ${yLeft + hLeft}`;
                                     const z = `Z`;
 
-                                    const isActive = xraySection === section;
-                                    const isOverview = xraySection === 'overview';
-
                                     return (
-                                        <path 
-                                            d={`${p1} ${c1} ${l1} ${c2} ${z}`} 
-                                            fill={color} 
-                                            opacity={isActive ? 0.8 : (isOverview ? 0.3 : 0.1)}
-                                            className="hover:opacity-60 transition-all duration-300 cursor-pointer pointer-events-auto"
-                                            onClick={(e) => { e.stopPropagation(); setXraySection(section as any); }}
+                                        <path
+                                            d={`${p1} ${c1} ${l1} ${c2} ${z}`}
+                                            fill={color}
+                                            opacity={0.35}
+                                            className="transition-all duration-300"
                                         />
                                     );
                                 };
 
-                                const makeNode = (x: number, y: number, w: number, h: number, color: string, label: string, sub: string, section: string) => {
-                                    const isActive = xraySection === section;
+                                // Node renderer - Non-interactive
+                                const makeNode = (x: number, y: number, w: number, h: number, color: string, label: string, sub: string) => {
                                     return (
-                                        <g 
-                                            className="cursor-pointer hover:opacity-80 transition-opacity pointer-events-auto"
-                                            onClick={(e) => { e.stopPropagation(); setXraySection(section as any); }}
-                                        >
-                                            <rect x={x} y={y} width={w} height={h} fill={color} rx="4" 
-                                                  stroke={isActive ? "black" : "none"} strokeWidth={isActive ? 2 : 0} />
+                                        <g>
+                                            <rect x={x} y={y} width={w} height={h} fill={color} rx="4" />
                                             {h > 15 && (
                                                 <>
-                                                    <text x={x + 25} y={y + (h/2) + 4} className="text-[10px] font-bold fill-slate-600 uppercase pointer-events-none">{label}</text>
-                                                    <text x={x + 25} y={y + (h/2) + 16} className="text-[9px] fill-slate-400 pointer-events-none">{sub}</text>
+                                                    <text x={x + 25} y={y + (h/2) + 4} className="text-[11px] font-bold fill-slate-700 uppercase">{label}</text>
+                                                    <text x={x + 25} y={y + (h/2) + 18} className="text-[10px] fill-slate-500">{sub}</text>
                                                 </>
                                             )}
                                         </g>
@@ -2525,14 +2556,8 @@ export default function VAFDashboard() {
                                 };
 
                                 return (
-                                    <div className={cn(
-                                        "w-full bg-slate-50 rounded-xl border border-slate-200 overflow-hidden relative transition-all duration-500 ease-in-out",
-                                        isBig ? "flex-1 min-h-[50vh] flex flex-col" : "h-auto"
-                                    )}>
-                                        <svg viewBox={`0 0 ${w} ${h}`} className={cn(
-                                            "w-full select-none transition-all duration-500",
-                                            isBig ? "flex-1 min-h-[400px]" : "h-auto max-h-[160px]"
-                                        )}>
+                                    <div className="w-full bg-slate-50 rounded-xl border border-slate-200 overflow-hidden relative flex-1 min-h-[300px] flex flex-col">
+                                        <svg viewBox={`0 0 ${w} ${h}`} className="w-full flex-1 select-none">
                                             <defs>
                                                 <linearGradient id="gradUsed" x1="0%" y1="0%" x2="0%" y2="100%">
                                                     <stop offset="0%" stopColor="#3b82f6" />
@@ -2542,101 +2567,34 @@ export default function VAFDashboard() {
 
                                             {/* --- RIBBONS (Flows) --- */}
                                             <g>
-                                                {makeRibbon(ySystem, hSystem, yUsed, "#3b82f6", 'system')}
-                                                {makeRibbon(yRag, hRag, yUsed + hSystem, "#10b981", 'rag')}
-                                                {makeRibbon(yHistory, hHistory, yUsed + hSystem + hRag, "#a855f7", 'history')}
+                                                {makeRibbon(ySystem, hSystem, yUsed, "#3b82f6")}
+                                                {makeRibbon(yTools, hTools, yUsed + hSystem, "#10b981")}
+                                                {makeRibbon(yHistory, hHistory, yUsed + hSystem + hTools, "#a855f7")}
                                             </g>
 
-                                            {/* --- NODES (Rects) --- */}
-                                            {makeNode(leftX, ySystem, nodeW, hSystem, "#3b82f6", "System", `${Math.round(systemEst)} tok`, 'system')}
-                                            {makeNode(leftX, yRag, nodeW, hRag, "#10b981", "RAG", `${Math.round(ragEst)} tok`, 'rag')}
-                                            {makeNode(leftX, yHistory, nodeW, hHistory, "#a855f7", "History", `${Math.round(historyEst)} tok`, 'history')}
+                                            {/* --- LEFT: Source Components --- */}
+                                            {makeNode(leftX, ySystem, nodeW, hSystem, "#3b82f6", "System Prompt", `${Math.round(systemEst).toLocaleString()} tokens`)}
+                                            {makeNode(leftX, yTools, nodeW, hTools, "#10b981", "Tool Schemas", `${Math.round(toolsEst).toLocaleString()} tokens`)}
+                                            {makeNode(leftX, yHistory, nodeW, hHistory, "#a855f7", "Conversation", `${Math.round(historyEst).toLocaleString()} tokens`)}
 
-                                            {/* RIGHT: Used Context (Click to reset) */}
-                                            <g onClick={() => setXraySection('overview')} className="cursor-pointer pointer-events-auto">
-                                                <rect x={rightX} y={yUsed} width={nodeW} height={hUsed} fill="url(#gradUsed)" rx="2" />
-                                                <rect x={rightX} y={yFree} width={nodeW} height={hFree} fill="#e2e8f0" rx="2" />
-                                                
-                                                <text x={rightX - 10} y={yUsed + (hUsed/2)} textAnchor="end" className="text-[12px] font-bold fill-slate-700">Used Memory</text>
-                                                <text x={rightX - 10} y={yUsed + (hUsed/2) + 14} textAnchor="end" className="text-[10px] fill-slate-500">{used.toLocaleString()} tokens ({contextStats.percent}%)</text>
+                                            {/* --- RIGHT: Context Usage --- */}
+                                            <g>
+                                                <rect x={rightX} y={yUsed} width={nodeW} height={hUsed} fill="url(#gradUsed)" rx="4" />
+                                                <rect x={rightX} y={yFree} width={nodeW} height={hFree} fill="#e2e8f0" rx="4" />
 
-                                                <text x={rightX - 10} y={yFree + (hFree/2)} textAnchor="end" className="text-[12px] font-bold fill-slate-400">Free Space</text>
-                                                <text x={rightX - 10} y={yFree + (hFree/2) + 14} textAnchor="end" className="text-[10px] fill-slate-300">{Math.round(freeEst).toLocaleString()} tokens</text>
+                                                <text x={rightX - 10} y={yUsed + (hUsed/2)} textAnchor="end" className="text-[12px] font-bold fill-slate-700">Used</text>
+                                                <text x={rightX - 10} y={yUsed + (hUsed/2) + 16} textAnchor="end" className="text-[11px] fill-slate-500">{used.toLocaleString()} tokens ({contextStats.percent}%)</text>
+
+                                                <text x={rightX - 10} y={yFree + (hFree/2)} textAnchor="end" className="text-[12px] font-bold fill-slate-400">Free</text>
+                                                <text x={rightX - 10} y={yFree + (hFree/2) + 16} textAnchor="end" className="text-[11px] fill-slate-300">{Math.round(freeEst).toLocaleString()} tokens</text>
                                             </g>
                                         </svg>
                                     </div>
                                 );
                             })()}
+                            </div>
                         </div>
 
-                        {/* Scrolling Content Area - Only visible when a section is selected, sits directly under diagram */}
-                        {xraySection !== 'overview' && (
-                            <div className="flex-1 overflow-y-auto p-8 pt-4 bg-gray-50/30 min-h-0">
-                                
-                                                            {/* SYSTEM VIEW */}
-                                                            {xraySection === 'system' && (
-                                                                <div className="space-y-4 animate-in slide-in-from-right-4 duration-300 h-full flex flex-col">
-                                                                    <h4 className="text-sm font-bold text-blue-600 uppercase tracking-wider flex items-center gap-2 shrink-0">
-                                                                        <div className="w-3 h-3 rounded-full bg-blue-500"></div> System Prompt Inspection (Raw Truth)
-                                                                    </h4>
-                                                                    <div className="flex-1 bg-gray-50 text-gray-700 p-6 rounded-2xl font-mono text-xs overflow-auto border border-gray-200 shadow-inner leading-relaxed whitespace-pre-wrap">
-                                                                        {realContext?.system || contextStats.rag_preview || "(No System context available)"}
-                                                                    </div>
-                                                                </div>
-                                                            )}
-                                
-                                                            {/* RAG VIEW */}
-                                                            {xraySection === 'rag' && (
-                                                                <div className="space-y-4 animate-in slide-in-from-right-4 duration-300 h-full flex flex-col">
-                                                                    <h4 className="text-sm font-bold text-emerald-600 uppercase tracking-wider flex items-center gap-2 shrink-0">
-                                                                        <div className="w-3 h-3 rounded-full bg-emerald-500"></div> RAG Context (Raw Truth)
-                                                                    </h4>
-                                                                    
-                                                                    <div className="flex-1 bg-gray-50 text-gray-700 p-6 rounded-2xl font-mono text-xs overflow-auto border border-gray-200 shadow-inner leading-relaxed whitespace-pre-wrap">
-                                                                        {realContext?.rag_preview ? (
-                                                                            realContext.rag_preview
-                                                                        ) : ragResults?.sources && ragResults.sources.length > 0 ? (
-                                                                            ragResults.sources.map((src: any, idx: number) => (
-                                                                                `[Source ${idx + 1}] (Score: ${src.score.toFixed(2)})\n${src.full_text || src.text}\n\n`
-                                                                            )).join("---\n\n")
-                                                                        ) : (
-                                                                            "(No RAG sources active)"
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-                                                            )}
-                                
-                                                            {/* HISTORY VIEW */}
-                                                            {xraySection === 'history' && (
-                                                                <div className="space-y-4 animate-in slide-in-from-right-4 duration-300 h-full flex flex-col">
-                                                                    <h4 className="text-sm font-bold text-purple-600 uppercase tracking-wider flex items-center gap-2 shrink-0">
-                                                                        <div className="w-3 h-3 rounded-full bg-purple-500"></div> Chat History (Raw Truth)
-                                                                    </h4>
-                                                                    <div className="flex-1 bg-gray-50 text-gray-700 p-6 rounded-2xl font-mono text-xs overflow-auto border border-gray-200 shadow-inner leading-relaxed whitespace-pre-wrap">
-                                                                        {realContext?.history ? (
-                                                                            realContext.history.map((msg: any, idx: number) => (
-                                                                                `${msg.role.toUpperCase()}:\n${msg.content}\n\n`
-                                                                            )).join("")
-                                                                        ) : (
-                                                                            messages
-                                                                                .filter(msg => {
-                                                                                    if (msg.role !== 'system') return true;
-                                                                                    const content = msg.content || "";
-                                                                                    const ignorePatterns = [
-                                                                                        "System:", "Info:", "Step ", "Router:", "Queued input",
-                                                                                        "Initializing Standalone Server", "Starting chat_step",
-                                                                                        "Generation stopped", "Empty response detected"
-                                                                                    ];
-                                                                                    return !ignorePatterns.some(p => content.includes(p)) || content.includes("## PROJECT CONTEXT");
-                                                                                })
-                                                                                .map((msg, idx) => (
-                                                                                    `${msg.role.toUpperCase()}:\n${msg.content}\n\n`
-                                                                                )).join("")
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-                                                            )}                            </div>
-                        )}
                     </div>
                 </div>
             )}

@@ -439,48 +439,7 @@ Then use the results to answer. Do NOT guess from your training data!
 - When user asks "who am I?" or "what do you remember?" → check Memory context below, then memory_search if needed
 """)
 
-        # User identity (current user): name, language, preferences, do's/don'ts + cached RAG summary
-        if username or user_scope_id:
-            user_identity_parts = ["\n## User identity (current user)\n"]
-            user_identity_parts.append(
-                "Use this so you know who you're talking to (e.g. greet by name). "
-                "You can update it with the **update_user_identity** tool when the user tells you their name, language, preferences, or do's/don'ts :"
-            )
-            if username:
-                try:
-                    from vaf.auth.user_workspace import get_user_workspace
-                    ws = get_user_workspace(username)
-                    user_identity = ws.get_user_identity()
-                    user_identity_parts.append(f"- [NAME] {user_identity.get('name', username)}")
-                    if user_identity.get("preferred_language"):
-                        user_identity_parts.append(f"- [LANGUAGE] {user_identity.get('preferred_language')}")
-                    prefs = user_identity.get("preferences") or []
-                    if prefs:
-                        user_identity_parts.append("**Preferences:** " + "; ".join(prefs))
-                    dos = user_identity.get("dos") or []
-                    if dos:
-                        user_identity_parts.append("**Do:** " + "; ".join(dos))
-                    donts = user_identity.get("donts") or []
-                    if donts:
-                        user_identity_parts.append("**Don't:** " + "; ".join(donts))
-                except Exception:
-                    user_identity_parts.append(f"- [NAME] {username}")
-            if user_scope_id:
-                try:
-                    scope_str = str(user_scope_id)
-                    cache_dir = Path(Config.APP_DIR) / "user_profile_cache"
-                    cache_file = cache_dir / f"{scope_str}.txt"
-                    if cache_file.exists():
-                        cached = cache_file.read_text(encoding="utf-8").strip()
-                        if cached:
-                            user_identity_parts.append("Known facts from memory:\n" + cached)
-                        else:
-                            user_identity_parts.append("Known facts from memory: (None yet)")
-                    else:
-                        user_identity_parts.append("Known facts from memory: (None yet)")
-                except Exception:
-                    user_identity_parts.append("Known facts from memory: (unavailable)")
-            parts.append("\n".join(user_identity_parts))
+
 
         # ═══════════════════════════════════════════════════════════════════════
         # 2. CURRENT TIME & DATE
@@ -542,6 +501,65 @@ Then use the results to answer. Do NOT guess from your training data!
             if tool_docs:
                 parts.append(tool_docs)
         
+        # ═══════════════════════════════════════════════════════════════════════
+        # 6. USER IDENTITY & INSTRUCTIONS (High Priority - End of Prompt)
+        # ═══════════════════════════════════════════════════════════════════════
+        if username or user_scope_id:
+            user_data = {}
+            known_facts = ""
+            
+            if username:
+                try:
+                    from vaf.auth.user_workspace import get_user_workspace
+                    ws = get_user_workspace(username)
+                    ui = ws.get_user_identity()
+                    user_data["name"] = ui.get("name", username)
+                    if ui.get("preferred_language"):
+                        user_data["preferred_language"] = ui.get("preferred_language")
+                    if ui.get("preferences"):
+                        user_data["preferences"] = ui.get("preferences")
+                    if ui.get("dos"):
+                        user_data["dos"] = ui.get("dos")
+                    if ui.get("donts"):
+                        user_data["donts"] = ui.get("donts")
+                except Exception:
+                    user_data["name"] = username
+
+            if user_scope_id:
+                try:
+                    scope_str = str(user_scope_id)
+                    cache_dir = Path(Config.APP_DIR) / "user_profile_cache"
+                    cache_file = cache_dir / f"{scope_str}.txt"
+                    if cache_file.exists():
+                        known_facts = cache_file.read_text(encoding="utf-8").strip()
+                except Exception:
+                    pass
+
+            # Construct JSON-like block
+            import json
+            user_json = json.dumps(user_data, indent=2, ensure_ascii=False)
+            
+            identity_block = f"""
+## 👤 CURRENT USER CONTEXT (High Priority)
+You are talking to the following user. 
+**CRITICAL:** You MUST adapt your personality, language, and behavior to this profile.
+
+```json
+{user_json}
+```
+"""
+            if known_facts:
+                identity_block += f"\n**Known facts from memory:**\n{known_facts}\n"
+
+            identity_block += """
+**INSTRUCTIONS:**
+1. **CHECK** the `dos` and `donts` list above before generating every response.
+2. **ADAPT** your tone to the `preferences` (e.g. if 'concise', be concise).
+3. **LANGUAGE:** If `preferred_language` is set, **ALWAYS** answer in that language (unless explicitly asked otherwise).
+4. **GREETING:** If this is the start of a conversation, greet the user by their `name` naturally (don't say "Hello [Name]", say "Hey [Name]" or similar based on your Soul).
+"""
+            parts.append(identity_block)
+
         full_prompt = "\n".join(parts)
         try:
             append_domain_log_block("prompt", "[SYSTEM_FULL]", full_prompt.splitlines())

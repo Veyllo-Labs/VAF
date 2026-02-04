@@ -2478,22 +2478,33 @@ class Agent:
             content = ""
             if self.use_server:
                  # Router-style: short output only (number), no chat
-                 payload = {"messages": messages, "max_tokens": 32, "temperature": 0.0}
+                 # Note: max_tokens increased to 128 because Qwen3 uses <think> blocks which consume tokens
+                 payload = {"messages": messages, "max_tokens": 128, "temperature": 0.0}
                  try:
                      res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=30).json()
-                     content = res['choices'][0]['message']['content']
                      try:
-                         append_domain_log("backend", f"intent_analysis_response content={content[:50] if content else 'EMPTY'}")
-                     except Exception:
-                         pass
+                         # Debug: Log full response structure
+                         choices = res.get('choices', [])
+                         if choices:
+                             msg = choices[0].get('message', {})
+                             content = msg.get('content', '')
+                             # Also check for 'text' field (some models use this)
+                             if not content:
+                                 content = choices[0].get('text', '')
+                         append_domain_log("backend", f"intent_analysis_raw choices_len={len(choices)} content={content[:50] if content else 'EMPTY'}")
+                     except Exception as parse_err:
+                         append_domain_log("backend", f"intent_analysis_parse_error error={str(parse_err)[:50]} res_keys={list(res.keys()) if isinstance(res, dict) else 'not_dict'}")
                  except Exception as e:
                      try:
                          append_domain_log("backend", f"intent_analysis_failed error={str(e)[:100]}")
                      except Exception:
                          pass
 
-            # Parse Float
-            match = re.search(r"\d+(\.\d+)?", content)
+            # Strip <think> blocks from content before parsing
+            clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+            # Parse Float from cleaned content
+            match = re.search(r"\d+(\.\d+)?", clean_content)
             if match:
                 temp = float(match.group())
                 try:

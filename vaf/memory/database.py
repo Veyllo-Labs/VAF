@@ -4,11 +4,12 @@ Database connection and initialization for VAF Memory System.
 Supports:
 - PostgreSQL with pgvector extension
 - Async operations via asyncpg
-- Connection pooling
+- Connection pooling (main thread) / NullPool (daemon threads)
 - Schema migrations
 """
 
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
 from sqlalchemy.ext.asyncio import (
@@ -25,25 +26,32 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Engine and session factory per event loop (avoids "attached to a different loop" when tools run in another thread)
-_engine_by_loop: dict = {}
-_session_factory_by_loop: dict = {}
+# Main thread engine (with connection pooling)
+_main_engine: Optional[AsyncEngine] = None
+_main_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+_main_thread_id: Optional[int] = None
+_engine_lock = threading.Lock()
+
+# Track which thread is the main thread
+def _is_main_thread() -> bool:
+    """Check if we're running in the main thread."""
+    return threading.current_thread() is threading.main_thread()
 
 
 def get_database_url() -> str:
     """
     Get database URL from config.
-    
+
     Converts postgresql:// to postgresql+asyncpg:// for async support.
     """
     url = Config.get("memory_db_url", "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory")
-    
+
     # Ensure async driver
     if url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
     elif not url.startswith("postgresql+asyncpg://"):
         url = f"postgresql+asyncpg://{url}"
-    
+
     return url
 
 
@@ -72,68 +80,99 @@ async def _run_schema_migrations(engine: AsyncEngine) -> None:
 
 async def get_engine() -> AsyncEngine:
     """
-    Get or create the async database engine for the current event loop.
-    Cached per-loop so tools (e.g. memory_save) running in another thread's loop get their own engine.
+    Get or create the async database engine.
+
+    CRITICAL FOR MEMORY LEAK PREVENTION:
+    - Main thread: uses connection pooling (pool_size=2)
+    - Daemon threads: uses NullPool (no pooling, connections close immediately)
+
+    This prevents memory leaks from daemon threads creating new event loops
+    with their own connection pools that never get disposed.
     """
-    loop = asyncio.get_running_loop()
+    global _main_engine, _main_thread_id
 
-    # Cleanup stale engines from dead loops to prevent memory leak
-    # Each asyncio.run() in a daemon thread creates a new loop
-    if len(_engine_by_loop) > 10:
-        dead_loops = [l for l in _engine_by_loop.keys() if l.is_closed()]
-        for dead_loop in dead_loops:
-            try:
-                old_engine = _engine_by_loop.pop(dead_loop, None)
-                if old_engine:
-                    # Note: can't await dispose() for closed loop, just remove reference
-                    pass
-                _session_factory_by_loop.pop(dead_loop, None)
-            except Exception:
-                pass
-        if dead_loops:
-            logger.debug(f"Cleaned up {len(dead_loops)} stale DB engines from dead loops")
+    url = get_database_url()
 
-    if loop not in _engine_by_loop:
-        url = get_database_url()
-        _engine_by_loop[loop] = create_async_engine(
+    # Daemon threads get NullPool engines (no pooling = no leak)
+    # These engines are created fresh each time and disposed immediately after use
+    if not _is_main_thread():
+        # Create a throwaway engine with NullPool - closes connections immediately
+        engine = create_async_engine(
             url,
-            echo=Config.get("memory_db_echo", False),
-            pool_size=2,  # Reduced from 5 - we use short-lived connections
-            max_overflow=3,  # Reduced from 10
-            pool_timeout=30,
-            pool_recycle=300,  # Recycle connections after 5 minutes (was 30)
+            echo=False,  # Never log in daemon threads
+            poolclass=NullPool,  # No pooling! Connections close immediately.
         )
-        await _run_schema_migrations(_engine_by_loop[loop])
-    return _engine_by_loop[loop]
+        # Don't run migrations from daemon threads
+        return engine
+
+    # Main thread: use cached pooled engine
+    with _engine_lock:
+        if _main_engine is None:
+            _main_thread_id = threading.current_thread().ident
+            _main_engine = create_async_engine(
+                url,
+                echo=Config.get("memory_db_echo", False),
+                pool_size=2,  # Small pool for main thread
+                max_overflow=3,
+                pool_timeout=30,
+                pool_recycle=300,
+            )
+
+    # Run migrations only once from main thread
+    if _main_engine is not None:
+        try:
+            await _run_schema_migrations(_main_engine)
+        except Exception:
+            pass  # Already migrated or error - continue anyway
+
+    return _main_engine
 
 
 async def get_session_factory() -> async_sessionmaker[AsyncSession]:
-    """Get or create the async session factory for the current event loop."""
-    loop = asyncio.get_running_loop()
-    if loop not in _session_factory_by_loop:
-        engine = await get_engine()
-        _session_factory_by_loop[loop] = async_sessionmaker(
+    """Get or create the async session factory."""
+    global _main_session_factory
+
+    engine = await get_engine()
+
+    # Daemon threads: create fresh factory each time (uses NullPool engine)
+    if not _is_main_thread():
+        return async_sessionmaker(
             engine,
             class_=AsyncSession,
             expire_on_commit=False,
             autoflush=False,
         )
-    return _session_factory_by_loop[loop]
+
+    # Main thread: cache the factory
+    with _engine_lock:
+        if _main_session_factory is None:
+            _main_session_factory = async_sessionmaker(
+                engine,
+                class_=AsyncSession,
+                expire_on_commit=False,
+                autoflush=False,
+            )
+
+    return _main_session_factory
 
 
 @asynccontextmanager
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
     Async context manager for database sessions.
-    
+
+    MEMORY LEAK FIX: For daemon threads, disposes engine after session closes.
+
     Usage:
         async with get_db() as db:
             result = await db.execute(select(Memory))
             memories = result.scalars().all()
     """
+    engine = await get_engine()
     factory = await get_session_factory()
     session = factory()
-    
+    is_daemon = not _is_main_thread()
+
     try:
         yield session
         await session.commit()
@@ -142,6 +181,12 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         raise
     finally:
         await session.close()
+        # CRITICAL: Dispose NullPool engine immediately for daemon threads
+        if is_daemon:
+            try:
+                await engine.dispose()
+            except Exception:
+                pass
 
 
 async def init_db(drop_existing: bool = False):
@@ -209,15 +254,15 @@ async def check_db_connection() -> bool:
 
 
 async def close_db():
-    """Close database connections and clean up (all loops)."""
-    global _engine_by_loop, _session_factory_by_loop
-    for loop, engine in list(_engine_by_loop.items()):
+    """Close database connections and clean up."""
+    global _main_engine, _main_session_factory
+    if _main_engine is not None:
         try:
-            await engine.dispose()
+            await _main_engine.dispose()
         except Exception:
             pass
-    _engine_by_loop.clear()
-    _session_factory_by_loop.clear()
+    _main_engine = None
+    _main_session_factory = None
     logger.info("Database connections closed")
 
 

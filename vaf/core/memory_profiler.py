@@ -45,6 +45,11 @@ class MemoryProfiler:
         if self._running:
             return
 
+        # Skip profiler entirely if debug logs disabled (performance boost)
+        from vaf.core.log_helper import is_debug_logging_enabled
+        if not is_debug_logging_enabled():
+            return
+
         self._running = True
         # DISABLED: tracemalloc causes massive memory leaks (100MB+ per minute)
         # It tracks every allocation and the tracking data itself leaks

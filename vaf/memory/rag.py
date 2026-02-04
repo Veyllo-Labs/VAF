@@ -9,6 +9,7 @@ Provides:
 """
 
 import asyncio
+import threading
 from typing import List, Optional, Dict, Any, AsyncGenerator, Tuple
 from uuid import UUID, uuid4
 from datetime import datetime
@@ -816,8 +817,6 @@ def run_session_compaction_sync(
                 )
 
     # Run in a daemon thread with timeout - never block the main thread
-    import threading
-
     def _run_ingest():
         try:
             asyncio.run(_ingest_all())
@@ -864,35 +863,68 @@ def refresh_user_profile_summary(user_scope_id: Optional[UUID]) -> None:
         logger.warning("User profile summary refresh failed: %s", e)
 
 
+# Global semaphore to prevent concurrent auto-capture operations (memory leak prevention)
+_auto_capture_semaphore = threading.Semaphore(1)
+_auto_capture_in_progress = False
+
+
 def run_auto_capture_sync(
     user_input: str,
     assistant_response: str,
     user_scope_id: Optional[UUID],
 ) -> None:
-    """Run auto_capture_memory from sync code (e.g. headless runner). Swallows errors."""
+    """
+    Run auto_capture_memory from sync code (e.g. headless runner). Swallows errors.
+
+    ⚠️ TEMPORARILY DISABLED - Memory leak investigation
+    Auto-capture with daemon threads + asyncio.run() causes 20GB+ memory spikes.
+    Re-enable after root cause is found.
+    """
+    # DISABLED FOR MEMORY LEAK DEBUGGING
+    # The daemon thread + asyncio.run() + ONNX/asyncpg combination causes massive leaks
+    logger.debug("Auto-capture DISABLED for memory leak investigation")
+    return
+
+    # Original code below - commented out for debugging
+    """
+    global _auto_capture_in_progress
+
     if not Config.get("memory_enabled", True) or not Config.get("memory_auto_capture", True):
         return
     if user_scope_id is None:
         return
 
-    # Run in a daemon thread with timeout - never block the main thread
-    import threading
+    # Non-blocking check: skip if another capture is running
+    if _auto_capture_in_progress:
+        logger.debug("Auto-capture skipped: another capture already in progress")
+        return
+
+    # Try to acquire semaphore without blocking
+    if not _auto_capture_semaphore.acquire(blocking=False):
+        logger.debug("Auto-capture skipped: semaphore not available")
+        return
 
     def _run_capture():
+        global _auto_capture_in_progress
+        _auto_capture_in_progress = True
         try:
             asyncio.run(auto_capture_memory(user_input, assistant_response, user_scope_id))
         except Exception as e:
             logger.warning("Auto-capture inner error: %s", e)
+        finally:
+            _auto_capture_in_progress = False
+            _auto_capture_semaphore.release()
 
     try:
-        thread = threading.Thread(target=_run_capture, daemon=True)
+        thread = threading.Thread(target=_run_capture, daemon=True, name="AutoCapture")
         thread.start()
-        thread.join(timeout=15)  # Wait max 15s
-        if thread.is_alive():
-            logger.warning("Auto-capture timed out (15s) - continuing without waiting")
-            # Thread is daemon, will be killed when process exits
+        # Don't wait - let it run in background. Semaphore prevents concurrent runs.
+        # The daemon thread will be killed when process exits if still running.
     except Exception as e:
-        logger.warning("Auto-capture failed: %s", e)
+        _auto_capture_in_progress = False
+        _auto_capture_semaphore.release()
+        logger.warning("Auto-capture failed to start: %s", e)
+    """
 
 
 def refine_rag_request(query: str) -> Tuple[str, Optional[Dict[str, Any]]]:

@@ -24,9 +24,11 @@ logger = logging.getLogger(__name__)
 MAX_EMBED_INPUT_CHARS = 2512
 MAX_EMBED_BATCH_SIZE = 64
 
-# Global model instance
+# Global model instance with thread-safe loading
+import threading
 _model = None
 _model_name = None
+_model_lock = threading.Lock()
 
 class OnnxEmbeddingModel:
     """
@@ -117,26 +119,38 @@ class OnnxEmbeddingModel:
 def get_model():
     """
     Get or load the embedding model (ONNX preferred).
+
+    THREAD-SAFE: Uses lock to prevent multiple threads from loading the model simultaneously.
+    This prevents memory leaks from multiple model instances being created.
     """
     global _model, _model_name
 
     # Default to Xenova's optimized ONNX version of MiniLM
     default_onnx = "Xenova/all-MiniLM-L6-v2"
     config_model = Config.get("memory_embedding_model", "all-MiniLM-L6-v2")
-    
+
     # If config is default, switch to ONNX ID
     if config_model == "all-MiniLM-L6-v2":
         model_id = default_onnx
         use_onnx = True
     else:
         model_id = config_model
-        use_onnx = False # Fallback to PyTorch for custom models unless we implement dynamic export
+        use_onnx = False  # Fallback to PyTorch for custom models
 
-    if _model is None or _model_name != model_id:
+    # Fast path: model already loaded (no lock needed for read)
+    if _model is not None and _model_name == model_id:
+        return _model
+
+    # Slow path: need to load model (acquire lock)
+    with _model_lock:
+        # Double-check after acquiring lock (another thread may have loaded it)
+        if _model is not None and _model_name == model_id:
+            return _model
+
         # Log memory BEFORE loading
         mem_before = get_memory_usage_mb()
         logger.info(f"Loading embedding model: {model_id} (Memory before: {mem_before:.0f}MB)")
-        
+
         try:
             if use_onnx:
                 try:
@@ -146,7 +160,7 @@ def get_model():
                 except Exception as e:
                     logger.warning(f"ONNX load failed ({e}), falling back to PyTorch...")
                     use_onnx = False
-            
+
             if not use_onnx:
                 # Fallback to PyTorch
                 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")

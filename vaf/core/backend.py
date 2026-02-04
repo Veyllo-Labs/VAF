@@ -621,9 +621,14 @@ class ServerManager:
             # - --reasoning-format deepseek: Parses <think>...</think> blocks into reasoning_content field
             "--jinja",
             "--reasoning-format", "deepseek",
-            # Keep server.log small: default verbosity (3=info) or 2=warning; --verbose would log every token -> 14+ MB
-            "--log-verbosity", "2",
         ]
+
+        # Server log verbosity: 2=warning (small logs) or 3=info (detailed logs for debugging)
+        # Only use verbose logging when Debug Logs is enabled in settings
+        if is_debug_logging_enabled():
+            cmd.extend(["--log-verbosity", "3"])  # Info level - logs requests/responses
+        else:
+            cmd.extend(["--log-verbosity", "2"])  # Warning level - minimal output
         
         # Prompt cache RAM (MB): configurable to avoid OOM on limited systems
         cache_ram_mb = Config.get("llama_cache_ram", 4096)

@@ -814,8 +814,23 @@ def run_session_compaction_sync(
                     user_scope_id=user_scope_id,
                     auto_connect=False,
                 )
+
+    # Run in a daemon thread with timeout - never block the main thread
+    import threading
+
+    def _run_ingest():
+        try:
+            asyncio.run(_ingest_all())
+        except Exception as e:
+            logger.warning("Compaction ingest inner error: %s", e)
+
     try:
-        asyncio.run(_ingest_all())
+        thread = threading.Thread(target=_run_ingest, daemon=True)
+        thread.start()
+        thread.join(timeout=30)  # Wait max 30s
+        if thread.is_alive():
+            logger.warning("Compaction ingest timed out (30s) - continuing without waiting")
+            _compaction_log("COMPACTION_TIMEOUT", session_id=session_id)
     except Exception as e:
         logger.warning("Compaction ingest failed: %s", e)
         _compaction_log("COMPACTION_INGEST_FAIL", session_id=session_id, error=str(e)[:200])
@@ -859,8 +874,23 @@ def run_auto_capture_sync(
         return
     if user_scope_id is None:
         return
+
+    # Run in a daemon thread with timeout - never block the main thread
+    import threading
+
+    def _run_capture():
+        try:
+            asyncio.run(auto_capture_memory(user_input, assistant_response, user_scope_id))
+        except Exception as e:
+            logger.warning("Auto-capture inner error: %s", e)
+
     try:
-        asyncio.run(auto_capture_memory(user_input, assistant_response, user_scope_id))
+        thread = threading.Thread(target=_run_capture, daemon=True)
+        thread.start()
+        thread.join(timeout=15)  # Wait max 15s
+        if thread.is_alive():
+            logger.warning("Auto-capture timed out (15s) - continuing without waiting")
+            # Thread is daemon, will be killed when process exits
     except Exception as e:
         logger.warning("Auto-capture failed: %s", e)
 
@@ -1011,7 +1041,43 @@ def run_memory_search_sync(
 
     try:
         _t_async = _time.time()
-        result = asyncio.run(_run_with_timeout())
+        # Check if we're already in an event loop (e.g., called from async headless runner)
+        # If so, use nest_asyncio or run in a new thread to avoid deadlock
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None:
+            # Already in an async context - run in a daemon thread to avoid deadlock
+            import threading
+            result_container = [None]
+            error_container = [None]
+
+            def _run_in_thread():
+                try:
+                    result_container[0] = asyncio.run(_run_with_timeout())
+                except Exception as e:
+                    error_container[0] = e
+
+            thread = threading.Thread(target=_run_in_thread, daemon=True)
+            thread.start()
+            thread.join(timeout=_RAG_TIMEOUT + 5)  # Extra buffer for thread overhead
+
+            if thread.is_alive():
+                _dur = _time.time() - _t_async
+                _rag_timing_log(f"RAG_TIMEOUT duration_sec={_dur:.1f} timeout_sec={_RAG_TIMEOUT}")
+                logger.warning("RAG search timed out after %.0fs (chat continues without memory)", _RAG_TIMEOUT)
+                return ""
+
+            if error_container[0] is not None:
+                raise error_container[0]
+
+            result = result_container[0] or ""
+        else:
+            # Not in an async context - safe to use asyncio.run()
+            result = asyncio.run(_run_with_timeout())
+
         _dur = _time.time() - _t_async
         _rag_timing_log(f"RAG_ASYNC_END duration_sec={_dur:.1f} result_len={len(result)}")
         return result

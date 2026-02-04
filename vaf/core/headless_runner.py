@@ -477,6 +477,13 @@ def run_headless_agent():
                         skip_input=False,
                         memory_context=memory_context or None,
                     )
+                    try:
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} CHAT_STEP_RETURNED session_id={task.session_id} response_len={len(str(response)) if response else 0}\n")
+                    except Exception:
+                        pass
 
                     # Handle async-ack markers (sub-agent dispatched, no stream output)
                     response_text = str(response) if response is not None else ""
@@ -533,6 +540,13 @@ def run_headless_agent():
 
                     # Auto-capture: optionally store high-value snippets to Memory-DB
                     try:
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} AUTO_CAPTURE_START session_id={task.session_id}\n")
+                    except Exception:
+                        pass
+                    try:
                         from vaf.memory.rag import run_auto_capture_sync
                         from uuid import UUID
                         _scope = (task.metadata or {}).get("user_scope_id") if getattr(task, "metadata", None) else None
@@ -546,9 +560,23 @@ def run_headless_agent():
                             run_auto_capture_sync(input_text or "", _assistant_text, _scope)
                     except Exception:
                         pass
+                    try:
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} AUTO_CAPTURE_END session_id={task.session_id}\n")
+                    except Exception:
+                        pass
 
                     # Session compaction: every N turns store durable memories (MEMORY:/NO_REPLY), ingest to RAG.
                     # When using a local LLM, enqueue compaction so it runs in the same queue (no parallel LLM use).
+                    try:
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} COMPACTION_CHECK_START session_id={task.session_id}\n")
+                    except Exception:
+                        pass
                     try:
                         from uuid import UUID
                         from vaf.memory.rag import run_session_compaction_sync
@@ -574,6 +602,13 @@ def run_headless_agent():
                     except Exception as e:
                         import logging
                         logging.getLogger(__name__).warning("Session compaction failed: %s", e)
+                    try:
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} COMPACTION_CHECK_END session_id={task.session_id}\n")
+                    except Exception:
+                        pass
 
                     # Result is already added to history and broadcast to WebUI by agent logic
                     _duration = time.time() - _chat_start

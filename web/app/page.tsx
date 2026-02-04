@@ -714,7 +714,11 @@ export default function VAFDashboard() {
         // Debounce save to disk
         if (cacheSaveTimeout.current) clearTimeout(cacheSaveTimeout.current);
         cacheSaveTimeout.current = setTimeout(() => {
-            localStorage.setItem('vaf_session_cache_v1', JSON.stringify(sessionCache.current));
+            try {
+                localStorage.setItem('vaf_session_cache_v1', JSON.stringify(sessionCache.current));
+            } catch (e) {
+                console.warn("LocalStorage quota exceeded, failed to save session cache.", e);
+            }
         }, 1000);
     }, [messages, currentSessionId]);
 

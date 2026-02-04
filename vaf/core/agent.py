@@ -4020,13 +4020,22 @@ class Agent:
                         except Exception:
                             pass
                         # (connect_sec, read_sec): read applies per chunk so we don't hang forever if server stalls
+                        # Reduced from 300s to 60s - if no data for 60s, something is wrong
+                        try:
+                            append_domain_log("backend", f"sending_request payload_size={len(str(payload))}")
+                        except Exception:
+                            pass
                         response = requests.post(
-                            "http://127.0.0.1:8080/v1/chat/completions", 
-                            json=payload, 
+                            "http://127.0.0.1:8080/v1/chat/completions",
+                            json=payload,
                             stream=True,
-                            timeout=(60, 300)
+                            timeout=(30, 60)
                         )
-                        
+                        try:
+                            append_domain_log("backend", f"response_received status={response.status_code}")
+                        except Exception:
+                            pass
+
                         # DEBUG TRACER
                         # UI.event("Debug", f"Raw Response: {response.status_code}")
 
@@ -4169,10 +4178,10 @@ class Agent:
                          continue
                     except requests.exceptions.ReadTimeout:
                          try:
-                             append_domain_log("backend", "server(8080) read_timeout no_data_300s")
+                             append_domain_log("backend", "server(8080) read_timeout no_data_60s")
                          except Exception:
                              pass
-                         UI.event("Server", "Local model took too long (no data for 5 min). Retrying...", style="warning")
+                         UI.event("Server", "Local model took too long (no data for 60s). Retrying...", style="warning")
                          time.sleep(2)
                          continue
                     
@@ -4186,8 +4195,11 @@ class Agent:
 
                 # DIAGNOSTIC: Check what the server actually gave us
                 # UI.event("Debug", f"Status: {response.status_code} | History: {len(self.history)}")
-                
+
                 first_token = True
+                # Chunk-level heartbeat: if no meaningful data for 30s, abort
+                CHUNK_HEARTBEAT_TIMEOUT = 30
+                last_chunk_time = time.time()
                 try:
                     chunk_count = 0
                     for line in response.iter_lines():
@@ -4205,13 +4217,25 @@ class Agent:
                                 break
 
                         chunk_count += 1
-                        if not line: continue
+                        if not line:
+                            # Empty line - check heartbeat timeout
+                            if time.time() - last_chunk_time > CHUNK_HEARTBEAT_TIMEOUT:
+                                try:
+                                    append_domain_log("backend", f"server(8080) heartbeat_timeout no_data_{CHUNK_HEARTBEAT_TIMEOUT}s")
+                                except Exception:
+                                    pass
+                                UI.event("Server", f"No data from server for {CHUNK_HEARTBEAT_TIMEOUT}s. Aborting...", style="warning")
+                                if stream_callback:
+                                    stream_callback("\n\n[Server stalled - no response data]")
+                                break
+                            continue
                         line_text = line.decode('utf-8')
+                        last_chunk_time = time.time()  # Reset heartbeat on any data
 
                         if line_text.startswith("data: "):
                             raw_data = line_text[6:]
                             if raw_data.strip() == "[DONE]": break
-                            
+
                             try:
                                 chunk = json.loads(raw_data)
                                 choices = chunk.get('choices', [])
@@ -4277,6 +4301,11 @@ class Agent:
                     if is_reasoning and stream_callback:
                         stream_callback("</think>")
                         is_reasoning = False
+
+                    try:
+                        append_domain_log("backend", f"stream_complete chunks={chunk_count} content_len={len(full_content)}")
+                    except Exception:
+                        pass
 
                 except requests.exceptions.ReadTimeout:
                     try:
@@ -4374,7 +4403,12 @@ class Agent:
 
             # --- Unified Post-Processing ---
             if stream_callback: stream_callback("\n")
-            
+
+            try:
+                append_domain_log("backend", f"post_stream full_response_len={len(full_response)} tools={len(streaming_tools)}")
+            except Exception:
+                pass
+
             # 0. FALSE PROMISE DETECTION (Anti-Hallucination)
             # Check if model claimed to use a tool but didn't emit a tool call
             # Only check if we have content and NO tools
@@ -4411,6 +4445,10 @@ class Agent:
 
             # 1. Handle Tool Calls
             # ... (Tool logic unchanged) ...
+            try:
+                append_domain_log("backend", f"before_tool_loop streaming_tools={len(streaming_tools)}")
+            except Exception:
+                pass
             if streaming_tools:
                  for idx in sorted(streaming_tools.keys()):
                     tool_data = streaming_tools[idx]
@@ -4590,10 +4628,13 @@ class Agent:
                                     "function": {"name": func_name, "arguments": json.dumps(args)}
                                 })
 
+            try:
+                append_domain_log("backend", f"after_regex_fallback tool_calls={len(tool_calls_detected)}")
+            except Exception:
+                pass
             if tool_calls_detected:
-                cleaned_response = self._strip_tool_calls_text(full_response) if full_response else full_response
-                content_for_history = cleaned_response if cleaned_response else "Thinking..."
-                if self.use_server and not cleaned_response:
+                content_for_history = full_content if full_content else "Thinking..."
+                if self.use_server and not full_content:
                     content_for_history = None
                 
                 msg = {"role": "assistant", "content": content_for_history, "tool_calls": tool_calls_detected}
@@ -4925,8 +4966,16 @@ class Agent:
                 return full_content.strip() or "[Generation stopped by user]"
 
             # Skip empty-response filter during compaction (every ~15 msgs); compaction reply is short (NO_REPLY / MEMORY:)
+            try:
+                append_domain_log("backend", f"empty_check has_final={has_final_answer} tools={len(tool_calls_detected)} content_len={len(full_content)} clean_len={len(temp_final)}")
+            except Exception:
+                pass
             if (not has_final_answer) and not tool_calls_detected and not getattr(self, "_compaction_in_progress", False):
                 UI.event("System", "Empty response detected. Applying snapshot and retry...", style="warning")
+                try:
+                    append_domain_log("backend", f"empty_response_retry full_content_preview={full_content[:100] if full_content else 'NONE'}")
+                except Exception:
+                    pass
                 # Ensure Web UI shows retry message (UI.event may be no-op in headless/Docker)
                 try:
                     from vaf.core.web_interface import get_web_interface
@@ -5069,13 +5118,21 @@ class Agent:
             
             # 🛡️ FINAL ANSWER VALIDATION (Intent Lock)
             # Before accepting the answer, check if it's just meta-talk/status drift
+            try:
+                append_domain_log("backend", f"before_validation tools={len(tool_calls_detected)} auto_retry={auto_retry}")
+            except Exception:
+                pass
             if not tool_calls_detected and not auto_retry:
                 user_intent = ""
                 if hasattr(self, 'main_persistence') and self.main_persistence:
                     user_intent = self.main_persistence.get_user_intent()
                 elif user_input:
                     user_intent = user_input
-                
+
+                try:
+                    append_domain_log("backend", f"calling_validate intent_len={len(user_intent)}")
+                except Exception:
+                    pass
                 if not self._validate_final_answer(history_content, user_intent):
                     UI.event("Validation", "Meta-Response detected. Forcing content-focused answer...", style="warning")
                     self.history.append({
@@ -5092,7 +5149,11 @@ class Agent:
                     continue
 
             self.history.append({"role": "assistant", "content": history_content})
-            
+            try:
+                append_domain_log("backend", f"after_history_append content_len={len(history_content)}")
+            except Exception:
+                pass
+
             # NOTE: Language mismatch auto-retry is currently disabled.
             # To re-enable, uncomment the block below.
             #
@@ -5129,7 +5190,15 @@ class Agent:
             
             # Context Management: Check after adding assistant response
             # Long reasoning phases can push us over the limit
+            try:
+                append_domain_log("backend", "before_manage_context")
+            except Exception:
+                pass
             self.manage_context()
+            try:
+                append_domain_log("backend", "after_manage_context")
+            except Exception:
+                pass
             
             # --- Proactive Context Compression (User Request) ---
             # "Only Questions and Answers remain in Context"
@@ -5181,8 +5250,12 @@ class Agent:
             except Exception as e:
                 UI.event("Debug", f"Compression Warning: {e}", style="dim")
 
+            try:
+                append_domain_log("backend", "chat_step_break_reached")
+            except Exception:
+                pass
             break
-            
+
         # Emergency Fallback: If we exhausted retries and STILL have no answer
         if not clean_content:
              # Check if we have a tool result immediately preceding this "silent" thought block
@@ -5244,7 +5317,20 @@ class Agent:
             except Exception:
                 pass  # Silently fail - sound is optional
         
+        try:
+            append_domain_log("backend", "before_speak")
+        except Exception:
+            pass
         self._speak(tts_source)
+        try:
+            append_domain_log("backend", "after_speak")
+        except Exception:
+            pass
+
+        try:
+            append_domain_log("backend", f"chat_step_complete response_len={len(full_response)}")
+        except Exception:
+            pass
 
         # Return CLEANED response for the UI (Answer Box)
         # The raw response is already stored in history, so we don't lose information.

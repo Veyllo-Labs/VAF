@@ -4,6 +4,8 @@ import traceback
 import os
 import sys
 import gc
+import re
+import logging
 
 # CRITICAL: Disable CUDA for PyTorch BEFORE any torch import to prevent memory explosion
 # PyTorch pre-allocates GPU memory even when using CPU-only models!
@@ -622,28 +624,62 @@ def run_headless_agent():
                     print("[Headless] Task complete.")
 
                     # Save session with updated history (persist chat across restarts)
+                    # CONTEXT EFFICIENCY: Only save clean content (no <think> blocks, no system overhead)
+                    # - User messages: as-is
+                    # - Assistant messages: stripped of <think>...</think> reasoning blocks
+                    # - Tool responses: preserved for context
+                    # - RAG context: preserved (injected by chat_step)
                     try:
                         session = session_mgr.load(task.session_id)
-                        # Sync agent history to session messages
-                        # Only add new messages (compare lengths to avoid duplicates)
-                        agent_history = agent.history or []
-                        session_len = len(session.messages)
-                        # Filter out system prompts from history (they're regenerated on load)
-                        user_assistant_msgs = [
-                            m for m in agent_history
-                            if m.get("role") in ("user", "assistant", "tool")
-                        ]
-                        if len(user_assistant_msgs) > session_len:
-                            # Add only new messages
-                            for msg in user_assistant_msgs[session_len:]:
-                                session.add_message(
-                                    role=msg.get("role", "user"),
-                                    content=str(msg.get("content", ""))
-                                )
-                            session_mgr.save(session)
+
+                        # Get the user input and assistant response from this turn
+                        _user_input = input_text or ""
+                        _assistant_response = "".join(response_parts) if response_parts else str(response_text or "")
+
+                        # Clean assistant response: remove <think> blocks for efficient context
+                        def _clean_for_session(text: str) -> str:
+                            """Remove reasoning blocks to keep session context efficient."""
+                            if not text:
+                                return ""
+                            # Remove <think>...</think> blocks (model reasoning)
+                            cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+                            # Remove <redacted_reasoning>...</redacted_reasoning> blocks
+                            cleaned = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', cleaned, flags=re.DOTALL)
+                            # Collapse multiple newlines
+                            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+                            return cleaned.strip()
+
+                        _clean_response = _clean_for_session(_assistant_response)
+
+                        # Only save if we have actual content
+                        if _user_input.strip():
+                            # Check if this exact user message is already the last user message in session
+                            # (prevents duplicates on retries/reloads)
+                            last_user_msg = None
+                            for msg in reversed(session.messages):
+                                if msg.get("role") == "user":
+                                    last_user_msg = msg.get("content", "")
+                                    break
+
+                            if last_user_msg != _user_input.strip():
+                                session.add_message(role="user", content=_user_input.strip())
+                                if _clean_response:
+                                    session.add_message(role="assistant", content=_clean_response)
+                                session_mgr.save(session)
+                                if is_debug_logging_enabled():
+                                    logging.getLogger(__name__).debug(f"Session saved: +1 user, +1 assistant for {task.session_id}")
+                            elif _clean_response:
+                                # User message exists but maybe assistant was missing (retry case)
+                                last_assistant_msg = None
+                                for msg in reversed(session.messages):
+                                    if msg.get("role") == "assistant":
+                                        last_assistant_msg = msg.get("content", "")
+                                        break
+                                if last_assistant_msg != _clean_response:
+                                    session.add_message(role="assistant", content=_clean_response)
+                                    session_mgr.save(session)
                     except Exception as e:
                         # Don't fail the task if session save fails
-                        import logging
                         logging.getLogger(__name__).warning(f"Failed to save session: {e}")
 
                     # Memory cleanup: clear response parts list

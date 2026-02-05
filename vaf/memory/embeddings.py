@@ -53,11 +53,14 @@ class OnnxEmbeddingModel:
         self.tokenizer.enable_padding(pad_id=0, pad_token="[PAD]", length=512)
         self.tokenizer.enable_truncation(max_length=512)
         
-        # Load ONNX Session (CPU)
+        # Load ONNX Session (CPU) - Memory-leak-safe configuration
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.intra_op_num_threads = 1  # Keep it light
-        
+        sess_options.intra_op_num_threads = 1  # Single thread for operators
+        sess_options.inter_op_num_threads = 1  # Single thread between operators
+        sess_options.enable_mem_pattern = False  # Disable memory pattern (reduces memory fragmentation)
+        sess_options.enable_cpu_mem_arena = False  # Disable memory arena (prevents memory accumulation)
+
         self.session = ort.InferenceSession(model_path, sess_options, providers=["CPUExecutionProvider"])
         self.input_names = [i.name for i in self.session.get_inputs()]
         self.output_names = [o.name for o in self.session.get_outputs()]

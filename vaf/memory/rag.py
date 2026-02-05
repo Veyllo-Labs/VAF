@@ -863,9 +863,33 @@ def refresh_user_profile_summary(user_scope_id: Optional[UUID]) -> None:
         logger.warning("User profile summary refresh failed: %s", e)
 
 
-# Global semaphore to prevent concurrent auto-capture operations (memory leak prevention)
-_auto_capture_semaphore = threading.Semaphore(1)
-_auto_capture_in_progress = False
+# ═══════════════════════════════════════════════════════════════════════════════
+# AUTO-CAPTURE QUEUE SYSTEM (Memory-Leak-Safe)
+#
+# PROBLEM: Daemon threads + asyncio.run() + ONNX + asyncpg = 20GB+ memory leaks
+# - ONNX Runtime doesn't release memory properly when sessions aren't closed
+# - asyncpg connection pools leak in daemon thread event loops
+# - asyncio.run() in daemon threads creates orphaned resources
+#
+# SOLUTION: Queue-based approach that processes in the MAIN event loop
+# - No daemon threads for async work
+# - Reuses main event loop (no orphaned loops)
+# - ONNX model is singleton with proper session management
+# - asyncpg uses main thread's connection pool
+# ═══════════════════════════════════════════════════════════════════════════════
+from queue import Queue, Empty
+from typing import NamedTuple
+
+
+class _AutoCaptureTask(NamedTuple):
+    """Queued auto-capture task."""
+    user_input: str
+    assistant_response: str
+    user_scope_id: UUID
+
+
+# Queue for pending auto-capture tasks (processed in main event loop)
+_auto_capture_queue: "Queue[_AutoCaptureTask]" = Queue(maxsize=20)
 
 
 def run_auto_capture_sync(
@@ -874,57 +898,74 @@ def run_auto_capture_sync(
     user_scope_id: Optional[UUID],
 ) -> None:
     """
-    Run auto_capture_memory from sync code (e.g. headless runner). Swallows errors.
+    Queue auto-capture for later processing in the main event loop.
 
-    ⚠️ TEMPORARILY DISABLED - Memory leak investigation
-    Auto-capture with daemon threads + asyncio.run() causes 20GB+ memory spikes.
-    Re-enable after root cause is found.
+    This is MEMORY-LEAK SAFE because:
+    - No daemon threads (which leak with asyncio.run() + ONNX + asyncpg)
+    - Tasks are processed in the main event loop via process_auto_capture_queue()
+    - ONNX model and DB connections are reused from main thread
+
+    The queue is processed by the web_server's WebSocket handler after each chat.
     """
-    # DISABLED FOR MEMORY LEAK DEBUGGING
-    # The daemon thread + asyncio.run() + ONNX/asyncpg combination causes massive leaks
-    logger.debug("Auto-capture DISABLED for memory leak investigation")
-    return
-
-    # Original code below - commented out for debugging
-    """
-    global _auto_capture_in_progress
-
     if not Config.get("memory_enabled", True) or not Config.get("memory_auto_capture", True):
         return
     if user_scope_id is None:
         return
 
-    # Non-blocking check: skip if another capture is running
-    if _auto_capture_in_progress:
-        logger.debug("Auto-capture skipped: another capture already in progress")
-        return
-
-    # Try to acquire semaphore without blocking
-    if not _auto_capture_semaphore.acquire(blocking=False):
-        logger.debug("Auto-capture skipped: semaphore not available")
-        return
-
-    def _run_capture():
-        global _auto_capture_in_progress
-        _auto_capture_in_progress = True
-        try:
-            asyncio.run(auto_capture_memory(user_input, assistant_response, user_scope_id))
-        except Exception as e:
-            logger.warning("Auto-capture inner error: %s", e)
-        finally:
-            _auto_capture_in_progress = False
-            _auto_capture_semaphore.release()
-
     try:
-        thread = threading.Thread(target=_run_capture, daemon=True, name="AutoCapture")
-        thread.start()
-        # Don't wait - let it run in background. Semaphore prevents concurrent runs.
-        # The daemon thread will be killed when process exits if still running.
+        task = _AutoCaptureTask(
+            user_input=user_input,
+            assistant_response=assistant_response,
+            user_scope_id=user_scope_id,
+        )
+        # Non-blocking put - drop if queue full (prevents memory buildup)
+        _auto_capture_queue.put_nowait(task)
+        logger.debug("Auto-capture queued (queue size: %d)", _auto_capture_queue.qsize())
     except Exception as e:
-        _auto_capture_in_progress = False
-        _auto_capture_semaphore.release()
-        logger.warning("Auto-capture failed to start: %s", e)
+        # Queue full or other error - just skip this capture
+        logger.debug("Auto-capture queue full, skipping: %s", e)
+
+
+async def process_auto_capture_queue(max_tasks: int = 2) -> int:
     """
+    Process pending auto-capture tasks from queue.
+
+    MUST be called from the main async context (e.g., web_server WebSocket handler).
+    This ensures ONNX and asyncpg run in the main event loop, avoiding memory leaks.
+
+    Args:
+        max_tasks: Max tasks to process per call (prevents blocking chat responses)
+
+    Returns:
+        Number of tasks processed
+    """
+    processed = 0
+
+    for _ in range(max_tasks):
+        try:
+            task = _auto_capture_queue.get_nowait()
+        except Empty:
+            break
+
+        try:
+            await auto_capture_memory(
+                task.user_input,
+                task.assistant_response,
+                task.user_scope_id,
+            )
+            processed += 1
+            logger.debug("Auto-capture processed successfully")
+        except Exception as e:
+            logger.warning("Auto-capture processing error: %s", e)
+        finally:
+            _auto_capture_queue.task_done()
+
+    return processed
+
+
+def get_auto_capture_queue_size() -> int:
+    """Get current auto-capture queue size (for monitoring)."""
+    return _auto_capture_queue.qsize()
 
 
 def refine_rag_request(query: str) -> Tuple[str, Optional[Dict[str, Any]]]:

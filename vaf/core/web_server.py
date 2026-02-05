@@ -372,6 +372,36 @@ async def startup_event():
             import traceback
             log("WebServer", traceback.format_exc())
 
+    # Start Auto-Capture Queue Worker (processes memory captures in main event loop)
+    # This prevents memory leaks from daemon threads + asyncio.run() + ONNX + asyncpg
+    if Config.get("memory_enabled", True) and Config.get("memory_auto_capture", True):
+        asyncio.create_task(_auto_capture_worker())
+        log("WebServer", "Auto-capture queue worker started")
+
+
+async def _auto_capture_worker():
+    """
+    Background worker that processes auto-capture queue in the main event loop.
+
+    This is MEMORY-LEAK SAFE because:
+    - Runs in main event loop (no daemon threads with asyncio.run())
+    - ONNX model and DB connections are reused from main thread
+    - Processes max 2 tasks per cycle to avoid blocking
+    """
+    from vaf.memory.rag import process_auto_capture_queue, get_auto_capture_queue_size
+
+    while True:
+        try:
+            # Process pending captures (max 2 per cycle)
+            processed = await process_auto_capture_queue(max_tasks=2)
+            if processed > 0:
+                log("WebServer", f"Auto-capture: processed {processed} tasks")
+        except Exception as e:
+            log("WebServer", f"Auto-capture worker error: {e}")
+
+        # Check queue every 5 seconds (balance between responsiveness and CPU)
+        await asyncio.sleep(5)
+
 def _detect_language_simple(text: str) -> str:
     """Detect language for TTS: use langid when available, else simple heuristic (de/en)."""
     if not (text and text.strip()):

@@ -2,15 +2,18 @@
 
 /**
  * Memory Graph visualization using ReactFlow.
- * 
+ *
  * Features:
  * - Custom memory nodes with preview
  * - Edge thickness based on connection strength
  * - Node highlighting for RAG sources
  * - Interactive selection and navigation
+ * - Position persistence (localStorage)
+ * - Connected node highlighting with fade effect
+ * - Collision detection for node positioning
  */
 
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import ReactFlow, {
     Node,
     Edge,
@@ -20,25 +23,128 @@ import ReactFlow, {
     useNodesState,
     useEdgesState,
     NodeTypes,
-    EdgeTypes,
     NodeProps,
     Handle,
     Position,
     MarkerType,
+    Connection,
+    ConnectionLineType,
+    NodeChange,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { useMemoryStore, MemoryNode, MemoryEdge } from './stores/memoryStore';
 import { FileText, Tag, Calendar, Link2, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+// Constants for collision detection
+const NODE_WIDTH = 240;
+const NODE_HEIGHT = 120;
+const TAG_NODE_WIDTH = 150;
+const TAG_NODE_HEIGHT = 60;
+const COLLISION_PADDING = 20;
+
+// localStorage key for positions
+const POSITIONS_STORAGE_KEY = 'vaf-memory-graph-positions';
+
+// Helper: Load saved positions from localStorage
+function loadSavedPositions(): Record<string, { x: number; y: number }> {
+    if (typeof window === 'undefined') return {};
+    try {
+        const saved = localStorage.getItem(POSITIONS_STORAGE_KEY);
+        return saved ? JSON.parse(saved) : {};
+    } catch {
+        return {};
+    }
+}
+
+// Helper: Save positions to localStorage
+function savePositions(positions: Record<string, { x: number; y: number }>) {
+    if (typeof window === 'undefined') return;
+    try {
+        localStorage.setItem(POSITIONS_STORAGE_KEY, JSON.stringify(positions));
+    } catch {
+        // Ignore storage errors
+    }
+}
+
+// Helper: Check if two rectangles overlap
+function rectsOverlap(
+    r1: { x: number; y: number; width: number; height: number },
+    r2: { x: number; y: number; width: number; height: number }
+): boolean {
+    return !(
+        r1.x + r1.width + COLLISION_PADDING < r2.x ||
+        r2.x + r2.width + COLLISION_PADDING < r1.x ||
+        r1.y + r1.height + COLLISION_PADDING < r2.y ||
+        r2.y + r2.height + COLLISION_PADDING < r1.y
+    );
+}
+
+// Helper: Apply collision detection to prevent overlapping
+function applyCollisionDetection(nodes: Node[]): Node[] {
+    const result = [...nodes];
+    const maxIterations = 50;
+
+    for (let iter = 0; iter < maxIterations; iter++) {
+        let hasCollision = false;
+
+        for (let i = 0; i < result.length; i++) {
+            const nodeA = result[i];
+            const widthA = nodeA.type === 'tagNode' ? TAG_NODE_WIDTH : NODE_WIDTH;
+            const heightA = nodeA.type === 'tagNode' ? TAG_NODE_HEIGHT : NODE_HEIGHT;
+
+            for (let j = i + 1; j < result.length; j++) {
+                const nodeB = result[j];
+                const widthB = nodeB.type === 'tagNode' ? TAG_NODE_WIDTH : NODE_WIDTH;
+                const heightB = nodeB.type === 'tagNode' ? TAG_NODE_HEIGHT : NODE_HEIGHT;
+
+                const rectA = { x: nodeA.position.x, y: nodeA.position.y, width: widthA, height: heightA };
+                const rectB = { x: nodeB.position.x, y: nodeB.position.y, width: widthB, height: heightB };
+
+                if (rectsOverlap(rectA, rectB)) {
+                    hasCollision = true;
+
+                    // Calculate push direction
+                    const centerAX = rectA.x + rectA.width / 2;
+                    const centerAY = rectA.y + rectA.height / 2;
+                    const centerBX = rectB.x + rectB.width / 2;
+                    const centerBY = rectB.y + rectB.height / 2;
+
+                    const dx = centerBX - centerAX;
+                    const dy = centerBY - centerAY;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                    // Push apart
+                    const pushForce = 30;
+                    const pushX = (dx / dist) * pushForce;
+                    const pushY = (dy / dist) * pushForce;
+
+                    result[i] = {
+                        ...result[i],
+                        position: {
+                            x: result[i].position.x - pushX,
+                            y: result[i].position.y - pushY
+                        }
+                    };
+                    result[j] = {
+                        ...result[j],
+                        position: {
+                            x: result[j].position.x + pushX,
+                            y: result[j].position.y + pushY
+                        }
+                    };
+                }
+            }
+        }
+
+        if (!hasCollision) break;
+    }
+
+    return result;
+}
+
 // Custom Memory Node Component
 const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
-    const { selectMemory } = useMemoryStore();
-    
-    const handleClick = useCallback(() => {
-        // ID is passed via the node, not data
-    }, []);
-    
     const typeColors: Record<string, string> = {
         note: 'border-blue-400 bg-blue-50',
         document: 'border-purple-400 bg-purple-50',
@@ -46,30 +152,56 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
         conversation: 'border-orange-400 bg-orange-50',
         default: 'border-gray-400 bg-gray-50'
     };
-    
+
     const typeColor = typeColors[data.type] || typeColors.default;
-    
+    const isFaded = data.isFaded;
+
     return (
         <div
             className={cn(
-                'min-w-[200px] max-w-[280px] rounded-xl border-2 shadow-sm transition-all duration-200',
+                'min-w-[200px] max-w-[280px] rounded-xl border-2 shadow-sm transition-all duration-300',
                 typeColor,
                 selected && 'ring-2 ring-gray-400 shadow-md',
                 data.isHighlighted && 'ring-2 ring-yellow-500 shadow-lg scale-105 z-10'
             )}
+            style={{ opacity: isFaded ? 0.4 : 1 }}
         >
-            {/* Connection handles */}
+            {/* Connection handles - all sides for flexible connections */}
             <Handle
                 type="target"
                 position={Position.Top}
-                className="w-3 h-3 bg-gray-400 border-2 border-white"
+                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
+            />
+            <Handle
+                type="source"
+                position={Position.Top}
+                id="top-source"
+                className="w-2 h-2 bg-purple-400 border border-white opacity-30 hover:opacity-100"
+            />
+            <Handle
+                type="target"
+                position={Position.Bottom}
+                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
             />
             <Handle
                 type="source"
                 position={Position.Bottom}
-                className="w-3 h-3 bg-gray-400 border-2 border-white"
+                id="bottom-source"
+                className="w-2 h-2 bg-purple-400 border border-white opacity-30 hover:opacity-100"
             />
-            
+            <Handle
+                type="source"
+                position={Position.Left}
+                id="left-source"
+                className="w-2 h-2 bg-purple-400 border border-white opacity-30 hover:opacity-100"
+            />
+            <Handle
+                type="source"
+                position={Position.Right}
+                id="right-source"
+                className="w-2 h-2 bg-purple-400 border border-white opacity-30 hover:opacity-100"
+            />
+
             {/* Header */}
             <div className="px-3 py-2 border-b border-gray-200 bg-white/50 rounded-t-xl">
                 <div className="flex items-center gap-2">
@@ -78,7 +210,7 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
                         {data.label}
                     </span>
                 </div>
-                
+
                 {/* Relevance badge */}
                 {data.relevance > 0 && (
                     <div className="mt-1">
@@ -88,7 +220,7 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
                     </div>
                 )}
             </div>
-            
+
             {/* Body */}
             <div className="px-3 py-2">
                 {/* Preview text */}
@@ -97,7 +229,7 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
                         {data.preview}
                     </p>
                 )}
-                
+
                 {/* Tags */}
                 {data.tags && data.tags.length > 0 && (
                     <div className="flex flex-wrap gap-1 mb-2">
@@ -117,7 +249,7 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
                         )}
                     </div>
                 )}
-                
+
                 {/* Footer meta */}
                 <div className="flex items-center justify-between text-[10px] text-gray-500">
                     <div className="flex items-center gap-1">
@@ -136,69 +268,53 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
     );
 };
 
-// Custom Tag Master Node Component - Size scales with memory count
+// Custom Tag Master Node Component - Rectangular style matching popup design
 const TagNodeComponent = ({ data, selected }: NodeProps) => {
-    // Dynamic size based on sizeScale (1.0 to 2.5)
-    const sizeScale = data.sizeScale || 1.0;
-    const baseSize = 80; // Base diameter in pixels
-    const nodeSize = baseSize * sizeScale;
-    const fontSize = Math.max(12, 14 * sizeScale);
-    const iconSize = Math.max(16, 20 * sizeScale);
+    const isFaded = data.isFaded;
 
     return (
         <div
             className={cn(
-                'rounded-full border-2 shadow-lg transition-all duration-300 flex items-center justify-center',
-                'bg-gradient-to-br from-purple-500 via-purple-600 to-indigo-600 border-purple-300',
-                'hover:shadow-2xl hover:border-purple-200',
-                selected && 'ring-4 ring-purple-300/50 shadow-2xl border-purple-200'
+                'min-w-[120px] max-w-[180px] rounded-xl border-2 shadow-sm transition-all duration-300',
+                'border-gray-300 bg-gray-50',
+                selected && 'ring-2 ring-purple-400 shadow-md',
+                data.isHighlighted && 'ring-2 ring-yellow-500 shadow-lg scale-105 z-10'
             )}
-            style={{
-                width: nodeSize,
-                height: nodeSize,
-                minWidth: nodeSize,
-                minHeight: nodeSize,
-            }}
+            style={{ opacity: isFaded ? 0.4 : 1 }}
         >
-            {/* Connection handles positioned around the circle */}
+            {/* Connection handles */}
             <Handle
                 type="target"
                 position={Position.Top}
-                className="w-2 h-2 bg-purple-300 border border-white opacity-0 hover:opacity-100"
+                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
             />
             <Handle
-                type="target"
-                position={Position.Right}
-                className="w-2 h-2 bg-purple-300 border border-white opacity-0 hover:opacity-100"
-            />
-            <Handle
-                type="target"
+                type="source"
                 position={Position.Bottom}
-                className="w-2 h-2 bg-purple-300 border border-white opacity-0 hover:opacity-100"
+                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
             />
             <Handle
                 type="target"
                 position={Position.Left}
-                className="w-2 h-2 bg-purple-300 border border-white opacity-0 hover:opacity-100"
+                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
+            />
+            <Handle
+                type="target"
+                position={Position.Right}
+                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
             />
 
-            {/* Tag content - centered */}
-            <div className="flex flex-col items-center justify-center text-center p-2">
-                <Tag style={{ width: iconSize, height: iconSize }} className="text-white/90 mb-1" />
-                <span
-                    className="font-bold text-white leading-tight"
-                    style={{ fontSize: fontSize }}
-                >
-                    {data.label}
-                </span>
-                {data.memoryCount > 0 && (
-                    <span
-                        className="text-purple-200/80 mt-0.5"
-                        style={{ fontSize: Math.max(9, fontSize * 0.7) }}
-                    >
-                        {data.memoryCount}
+            {/* Tag content - matching popup style */}
+            <div className="px-3 py-2">
+                <div className="flex items-center gap-2">
+                    <Tag className="w-4 h-4 text-purple-500 flex-shrink-0" />
+                    <span className="font-medium text-sm text-gray-800 truncate">
+                        {data.label}
                     </span>
-                )}
+                </div>
+                <div className="text-[10px] text-gray-500 mt-1">
+                    {data.memoryCount || 0} memories
+                </div>
             </div>
         </div>
     );
@@ -218,29 +334,121 @@ interface MemoryGraphProps {
 }
 
 export default function MemoryGraph({ className, onNodeSelect, showTagConnections = true }: MemoryGraphProps) {
-    const { 
-        nodes: storeNodes, 
-        edges: storeEdges, 
+    const {
+        nodes: storeNodes,
+        edges: storeEdges,
         selectedNodeId,
         setSelectedNodeId,
         selectMemory,
         isLoading,
         stats,
         fetchGraph,
+        addTagToMemory,
     } = useMemoryStore();
-    
-    // Convert store nodes to ReactFlow format
-    const initialNodes: Node[] = useMemo(() => 
-        storeNodes.map(node => ({
-            id: node.id,
-            type: node.type,
-            position: node.position,
-            data: node.data,
-            selected: node.id === selectedNodeId,
-        })),
-        [storeNodes, selectedNodeId]
-    );
-    
+
+    // Toast state for connection feedback
+    const [connectionToast, setConnectionToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' }>({
+        show: false,
+        message: '',
+        type: 'success'
+    });
+
+    // Track saved positions
+    const savedPositionsRef = useRef<Record<string, { x: number; y: number }>>(loadSavedPositions());
+
+    // Get connected node IDs for highlighting
+    const connectedNodeIds = useMemo(() => {
+        if (!selectedNodeId) return new Set<string>();
+
+        const connected = new Set<string>();
+        connected.add(selectedNodeId);
+
+        // Find all edges connected to selected node
+        storeEdges.forEach(edge => {
+            if (edge.source === selectedNodeId) {
+                connected.add(edge.target);
+            }
+            if (edge.target === selectedNodeId) {
+                connected.add(edge.source);
+            }
+        });
+
+        // If a tag is selected, also include all memories connected to that tag
+        const selectedNode = storeNodes.find(n => n.id === selectedNodeId);
+        if (selectedNode?.type === 'tagNode') {
+            // Tag connections - edges go from memory (source) to tag (target)
+            storeEdges.forEach(edge => {
+                if (edge.target === selectedNodeId) {
+                    connected.add(edge.source); // Add the memory
+                }
+                if (edge.source === selectedNodeId) {
+                    connected.add(edge.target); // Add the memory
+                }
+            });
+        }
+
+        // If a memory is selected, include its connected tags and other memories via those tags
+        if (selectedNode?.type === 'memoryNode') {
+            // Get connected tags
+            const connectedTags = new Set<string>();
+            storeEdges.forEach(edge => {
+                if (edge.source === selectedNodeId && edge.target.startsWith('tag-')) {
+                    connectedTags.add(edge.target);
+                    connected.add(edge.target);
+                }
+                if (edge.target === selectedNodeId && edge.source.startsWith('tag-')) {
+                    connectedTags.add(edge.source);
+                    connected.add(edge.source);
+                }
+            });
+
+            // Get all memories connected to those tags
+            connectedTags.forEach(tagId => {
+                storeEdges.forEach(edge => {
+                    if (edge.target === tagId) {
+                        connected.add(edge.source);
+                    }
+                    if (edge.source === tagId) {
+                        connected.add(edge.target);
+                    }
+                });
+            });
+        }
+
+        return connected;
+    }, [selectedNodeId, storeEdges, storeNodes]);
+
+    // Convert store nodes to ReactFlow format with saved positions and collision detection
+    const initialNodes: Node[] = useMemo(() => {
+        let nodes = storeNodes.map(node => {
+            // Use saved position if available
+            const savedPos = savedPositionsRef.current[node.id];
+            const position = savedPos || node.position;
+
+            // Determine if this node should be faded
+            const isFaded = selectedNodeId !== null && !connectedNodeIds.has(node.id);
+
+            return {
+                id: node.id,
+                type: node.type,
+                position,
+                data: {
+                    ...node.data,
+                    isFaded,
+                },
+                selected: node.id === selectedNodeId,
+            };
+        });
+
+        // Apply collision detection only if no saved positions exist
+        const hasSavedPositions = Object.keys(savedPositionsRef.current).length > 0;
+        if (!hasSavedPositions && nodes.length > 0) {
+            nodes = applyCollisionDetection(nodes);
+        }
+
+        return nodes;
+    }, [storeNodes, selectedNodeId, connectedNodeIds]);
+
     // Convert store edges to ReactFlow format (filter tag edges based on showTagConnections)
     const initialEdges: Edge[] = useMemo(() =>
         storeEdges
@@ -254,6 +462,11 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                     strokeColor = '#8b5cf6'; // purple for tag connections
                 }
 
+                // Fade edges that are not connected to selected node
+                const isFaded = selectedNodeId !== null &&
+                    !connectedNodeIds.has(edge.source) &&
+                    !connectedNodeIds.has(edge.target);
+
                 return {
                     id: edge.id,
                     source: edge.source,
@@ -262,7 +475,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                     animated: edge.animated,
                     style: {
                         strokeWidth: edge.style.strokeWidth,
-                        opacity: edge.style.opacity,
+                        opacity: isFaded ? 0.15 : edge.style.opacity,
                         stroke: (edge.style as any).stroke || strokeColor,
                         strokeDasharray: edge.data.connectionType === 'tag' ? '5,5' : undefined,
                     },
@@ -279,35 +492,105 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                     },
                 };
             }),
-        [storeEdges, showTagConnections]
+        [storeEdges, showTagConnections, selectedNodeId, connectedNodeIds]
     );
-    
+
     const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
     const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
-    
-    // Update local state when store changes
-    React.useEffect(() => {
+
+    // Update local state when store changes or selection changes
+    useEffect(() => {
+        // Update nodes with new isFaded state
+        setNodes(currentNodes =>
+            currentNodes.map(node => ({
+                ...node,
+                data: {
+                    ...node.data,
+                    isFaded: selectedNodeId !== null && !connectedNodeIds.has(node.id),
+                },
+                selected: node.id === selectedNodeId,
+            }))
+        );
+    }, [selectedNodeId, connectedNodeIds, setNodes]);
+
+    // Update when store nodes change (new data from backend)
+    useEffect(() => {
         setNodes(initialNodes);
-    }, [initialNodes, setNodes]);
-    
-    React.useEffect(() => {
+    }, [storeNodes, setNodes]);
+
+    useEffect(() => {
         setEdges(initialEdges);
     }, [initialEdges, setEdges]);
-    
+
+    // Handle node position changes and save to localStorage
+    const handleNodesChange = useCallback((changes: NodeChange[]) => {
+        onNodesChange(changes);
+
+        // Save positions when nodes are dragged
+        changes.forEach(change => {
+            if (change.type === 'position' && change.position && change.dragging === false) {
+                savedPositionsRef.current[change.id] = change.position;
+                savePositions(savedPositionsRef.current);
+            }
+        });
+    }, [onNodesChange]);
+
     // Handle node selection
     const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
         setSelectedNodeId(node.id);
-        selectMemory(node.id);
+        // Only select memory if it's a memory node, not a tag node
+        if (node.type === 'memoryNode') {
+            selectMemory(node.id);
+        } else {
+            // For tag nodes, set selected but don't try to fetch memory details
+            selectMemory(null);
+        }
         onNodeSelect?.(node.id);
     }, [setSelectedNodeId, selectMemory, onNodeSelect]);
-    
+
     // Handle background click (deselect)
     const onPaneClick = useCallback(() => {
         setSelectedNodeId(null);
         selectMemory(null);
         onNodeSelect?.(null);
     }, [setSelectedNodeId, selectMemory, onNodeSelect]);
-    
+
+    // Handle connection between memory and tag node (drag to connect)
+    const onConnect = useCallback(async (connection: Connection) => {
+        const { source, target } = connection;
+        if (!source || !target) return;
+
+        // Find source and target nodes to determine types
+        const sourceNode = storeNodes.find(n => n.id === source);
+        const targetNode = storeNodes.find(n => n.id === target);
+
+        if (!sourceNode || !targetNode) {
+            return;
+        }
+
+        // Check if connecting memory to tag
+        const isMemoryToTag = sourceNode.type === 'memoryNode' && targetNode.type === 'tagNode';
+        const isTagToMemory = sourceNode.type === 'tagNode' && targetNode.type === 'memoryNode';
+
+        if (isMemoryToTag || isTagToMemory) {
+            const memoryId = isMemoryToTag ? source : target;
+            const tagNode = isMemoryToTag ? targetNode : sourceNode;
+            const tag = tagNode.data.tag;
+
+            if (tag) {
+                const success = await addTagToMemory(memoryId, tag);
+                setConnectionToast({
+                    show: true,
+                    message: success ? `Added tag #${tag} to memory` : 'Failed to add tag',
+                    type: success ? 'success' : 'error'
+                });
+
+                // Hide toast after 2 seconds
+                setTimeout(() => setConnectionToast(prev => ({ ...prev, show: false })), 2000);
+            }
+        }
+    }, [storeNodes, addTagToMemory]);
+
     if (isLoading && nodes.length === 0) {
         return (
             <div className={cn('flex items-center justify-center bg-gray-50 rounded-xl', className)}>
@@ -318,7 +601,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
             </div>
         );
     }
-    
+
     if (nodes.length === 0) {
         const graphFailed = (stats?.memories ?? 0) > 0;
         return (
@@ -353,21 +636,24 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
             </div>
         );
     }
-    
+
     return (
-        <div className={cn('rounded-xl overflow-hidden border border-gray-200', className)}>
+        <div className={cn('rounded-xl overflow-hidden border border-gray-200 relative', className)}>
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
-                onNodesChange={onNodesChange}
+                onNodesChange={handleNodesChange}
                 onEdgesChange={onEdgesChange}
                 onNodeClick={onNodeClick}
                 onPaneClick={onPaneClick}
+                onConnect={onConnect}
                 nodeTypes={nodeTypes}
                 fitView
                 fitViewOptions={{ padding: 0.2 }}
                 minZoom={0.1}
                 maxZoom={2}
+                connectionLineStyle={{ stroke: '#8b5cf6', strokeWidth: 2 }}
+                connectionLineType={ConnectionLineType.SmoothStep}
                 defaultEdgeOptions={{
                     type: 'smoothstep',
                 }}
@@ -386,6 +672,24 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                     className="bg-white rounded-lg shadow-lg"
                 />
             </ReactFlow>
+
+            {/* Connection Toast Notification */}
+            {connectionToast.show && (
+                <div className={cn(
+                    'absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg shadow-lg',
+                    'text-sm font-medium transition-all duration-300 z-50',
+                    connectionToast.type === 'success'
+                        ? 'bg-green-500 text-white'
+                        : 'bg-red-500 text-white'
+                )}>
+                    {connectionToast.message}
+                </div>
+            )}
+
+            {/* Connection Hint */}
+            <div className="absolute top-2 left-2 px-3 py-1.5 bg-white/90 rounded-lg shadow text-xs text-gray-500 z-10">
+                <span className="font-medium text-purple-600">Tip:</span> Drag from memory to tag to connect
+            </div>
         </div>
     );
 }

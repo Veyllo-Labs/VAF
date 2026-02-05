@@ -17,8 +17,7 @@ import MemoryDetailPanel from '@/components/memory/MemoryDetailPanel';
 import RagQueryPanel from '@/components/memory/RagQueryPanel';
 import {
     Plus, RefreshCw, Brain, Link2,
-    ChevronLeft, AlertTriangle, CheckCircle,
-    FileText, Sparkles, X, Tag
+    ChevronLeft, FileText, Sparkles, X, Tag, AlertTriangle
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
@@ -189,6 +188,7 @@ function StatsBadge({ label, value, icon: Icon }: { label: string; value: number
 export default function MemoryPage() {
     const {
         nodes,
+        edges,
         stats,
         error,
         isLoading,
@@ -255,20 +255,7 @@ export default function MemoryPage() {
                                 <div className="hidden md:flex items-center gap-2">
                                     <StatsBadge label="Memories" value={stats.memories} icon={FileText} />
                                     <StatsBadge label="Chunks" value={stats.chunks} icon={Sparkles} />
-                                    <StatsBadge label="Connections" value={stats.connections} icon={Link2} />
-                                    <span className={cn(
-                                        'inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full',
-                                        stats.db_connected 
-                                            ? 'bg-green-100 text-green-700'
-                                            : 'bg-red-100 text-red-600'
-                                    )}>
-                                        {stats.db_connected ? (
-                                            <CheckCircle className="w-3 h-3" />
-                                        ) : (
-                                            <AlertTriangle className="w-3 h-3" />
-                                        )}
-                                        {stats.db_connected ? 'Connected' : 'Disconnected'}
-                                    </span>
+                                    <StatsBadge label="Connections" value={edges.length} icon={Link2} />
                                 </div>
                             )}
                             

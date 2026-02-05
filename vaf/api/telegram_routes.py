@@ -5,8 +5,10 @@ Handles Telegram bot setup, verification, whitelist (per-user), and bridge manag
 All responses and user-facing messages in English.
 """
 import asyncio
+import json
 import logging
 import threading
+from pathlib import Path
 from typing import Optional, Any, Dict, List
 
 from fastapi import APIRouter, HTTPException, Request, Depends
@@ -364,9 +366,28 @@ async def relay_whitelist_add(request: Request, body: RelayWhitelistAddRequest):
     return {"status": "ok", "relay_whitelist_count": len(relay_whitelist)}
 
 
+def _get_compaction_info(session_id: str) -> tuple:
+    """Return (last_compaction_at_turn, compaction_interval) for session."""
+    interval = int(Config.get("memory_compaction_interval", 15))
+    last = 0
+    try:
+        path = Path(Config.APP_DIR) / "compaction_state.json"
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            v = state.get(session_id)
+            if isinstance(v, dict) and "turn" in v:
+                last = int(v.get("turn", 0))
+            elif isinstance(v, (int, float)):
+                last = int(v)
+    except Exception:
+        pass
+    return (last, interval)
+
+
 @router.get("/session/{session_id}/history")
 async def get_telegram_session_history(session_id: str):
-    """Return message history for a Telegram session (session_id must start with 'telegram_')."""
+    """Return message history and compaction stats for a Telegram session (session_id must start with 'telegram_')."""
     if not session_id.startswith("telegram_"):
         raise HTTPException(status_code=400, detail="Invalid session id")
     try:
@@ -374,9 +395,24 @@ async def get_telegram_session_history(session_id: str):
         session_mgr = SessionManager()
         session = session_mgr.load(session_id)
         messages = [{"role": m.role, "content": (m.content or "")[:2000], "timestamp": getattr(m, "timestamp", None)} for m in (session.messages or [])]
-        return {"session_id": session_id, "messages": messages}
+        user_turn_count = sum(1 for m in (session.messages or []) if getattr(m, "role", None) == "user")
+        last_compaction_at_turn, compaction_interval = _get_compaction_info(session_id)
+        return {
+            "session_id": session_id,
+            "messages": messages,
+            "user_turn_count": user_turn_count,
+            "compaction_interval": compaction_interval,
+            "last_compaction_at_turn": last_compaction_at_turn,
+        }
     except FileNotFoundError:
-        return {"session_id": session_id, "messages": []}
+        last_compaction_at_turn, compaction_interval = _get_compaction_info(session_id)
+        return {
+            "session_id": session_id,
+            "messages": [],
+            "user_turn_count": 0,
+            "compaction_interval": compaction_interval,
+            "last_compaction_at_turn": last_compaction_at_turn,
+        }
     except Exception as e:
         logger.exception("Session history error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

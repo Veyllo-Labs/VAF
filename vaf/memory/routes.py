@@ -70,6 +70,11 @@ class ConnectionUpdate(BaseModel):
     connection_type: str = Field(default="manual", description="Connection type")
 
 
+class AddTagRequest(BaseModel):
+    """Request model for adding a tag to a memory."""
+    tag: str = Field(..., min_length=1, description="Tag to add")
+
+
 class RagQueryRequest(BaseModel):
     """Request model for RAG queries."""
     query: str = Field(..., min_length=1, description="Query text")
@@ -397,11 +402,11 @@ async def update_connections(memory_id: str, request: ConnectionUpdate):
         memory_uuid = UUID(memory_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid memory ID")
-    
+
     try:
         async with get_db() as db:
             graph_manager = GraphManager(db)
-            
+
             connections = await graph_manager.update_connections(
                 memory_uuid,
                 request.related_ids,
@@ -415,6 +420,100 @@ async def update_connections(memory_id: str, request: ConnectionUpdate):
             }
     except Exception as e:
         logger.error(f"Failed to update connections: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@memory_router.post("/{memory_id}/tags")
+async def add_tag_to_memory(memory_id: str, request: AddTagRequest):
+    """Add a tag to a memory's metadata."""
+    try:
+        memory_uuid = UUID(memory_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid memory ID")
+
+    try:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+
+            # Get current memory (decrypt=False since we only need metadata)
+            memory = await pipeline.get_memory(memory_uuid, decrypt=False)
+            if not memory:
+                raise HTTPException(status_code=404, detail="Memory not found")
+
+            # Get current tags and add new one (memory is a dict with "metadata" key)
+            current_meta = memory.get("metadata") or {}
+            current_tags = list(current_meta.get("tags", []))
+
+            # Normalize all existing tags to lowercase (migration for old data)
+            current_tags = [t.strip().lower() for t in current_tags if t and t.strip()]
+
+            # Normalize new tag (lowercase, strip whitespace)
+            new_tag = request.tag.strip().lower()
+
+            # Only add if not already present (case-insensitive)
+            if new_tag not in current_tags:
+                current_tags.append(new_tag)
+
+            # Always update to ensure normalization is saved
+            current_meta["tags"] = current_tags
+
+            # Update memory with new metadata
+            await pipeline.update_memory(memory_uuid, metadata=current_meta)
+            await get_cache().invalidate_graph()
+
+            return {
+                "status": "updated",
+                "memory_id": memory_id,
+                "tags": current_tags
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to add tag: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@memory_router.delete("/{memory_id}/tags/{tag}")
+async def remove_tag_from_memory(memory_id: str, tag: str):
+    """Remove a tag from a memory's metadata."""
+    try:
+        memory_uuid = UUID(memory_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid memory ID")
+
+    try:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+
+            # Get current memory (decrypt=False since we only need metadata)
+            memory = await pipeline.get_memory(memory_uuid, decrypt=False)
+            if not memory:
+                raise HTTPException(status_code=404, detail="Memory not found")
+
+            # Get current tags and remove the specified one (memory is a dict with "metadata" key)
+            current_meta = memory.get("metadata") or {}
+            current_tags = list(current_meta.get("tags", []))
+
+            # Normalize tag
+            tag_to_remove = tag.strip().lower()
+
+            if tag_to_remove in current_tags:
+                current_tags.remove(tag_to_remove)
+                current_meta["tags"] = current_tags
+
+                # Update memory with new metadata
+                await pipeline.update_memory(memory_uuid, metadata=current_meta)
+                await get_cache().invalidate_graph()
+
+            return {
+                "status": "updated",
+                "memory_id": memory_id,
+                "tags": current_tags
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to remove tag: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

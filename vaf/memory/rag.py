@@ -113,19 +113,23 @@ class RagPipeline:
             raise ValueError("Cannot ingest empty content")
         
         metadata = metadata or {}
-        
+
         # Set default title if not provided
         if "title" not in metadata:
             # Use first 50 chars as title
             metadata["title"] = content[:50].strip().replace('\n', ' ')
             if len(content) > 50:
                 metadata["title"] += "..."
-        
+
+        # Normalize tags to lowercase for case-insensitive matching
+        if "tags" in metadata and isinstance(metadata["tags"], list):
+            metadata["tags"] = [t.strip().lower() for t in metadata["tags"] if t and t.strip()]
+
         # Store a preview in metadata (unencrypted, for display)
         metadata["preview"] = content[:200].strip().replace('\n', ' ')
         if len(content) > 200:
             metadata["preview"] += "..."
-        
+
         metadata["type"] = metadata.get("type", "note")
         metadata["created_at"] = datetime.utcnow().isoformat()
         
@@ -418,9 +422,9 @@ Always cite which source(s) you used."""
         """Generate answer using VAF's API backend."""
         try:
             from vaf.core.api_backend import APIBackendManager
-            
-            backend = APIBackendManager()
+
             provider = Config.get("provider", "local")
+            backend = APIBackendManager(provider)
             
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
@@ -441,9 +445,9 @@ Always cite which source(s) you used."""
         """Stream answer tokens using VAF's API backend."""
         try:
             from vaf.core.api_backend import APIBackendManager
-            
-            backend = APIBackendManager()
+
             provider = Config.get("provider", "local")
+            backend = APIBackendManager(provider)
             
             # Use streaming API
             for chunk in backend.chat_completion_stream(
@@ -523,8 +527,11 @@ Always cite which source(s) you used."""
         
         if not memory:
             raise ValueError(f"Memory {memory_id} not found")
-        
+
         if metadata:
+            # Normalize tags to lowercase for case-insensitive matching
+            if "tags" in metadata and isinstance(metadata["tags"], list):
+                metadata["tags"] = [t.strip().lower() for t in metadata["tags"] if t and t.strip()]
             memory.meta = {**(memory.meta or {}), **metadata}
         
         if content:
@@ -641,11 +648,16 @@ Always cite which source(s) you used."""
         result = await self.db.execute(query)
         memories = result.unique().scalars().all()
 
-        # Apply tag filter if specified
+        # Apply tag filter if specified (case-insensitive)
         if tag_filter:
+            # Normalize filter tags to lowercase
+            normalized_filter = [t.strip().lower() for t in tag_filter if t and t.strip()]
             memories = [
                 m for m in memories
-                if any(tag in (m.meta or {}).get("tags", []) for tag in tag_filter)
+                if any(
+                    filter_tag in [t.lower() for t in (m.meta or {}).get("tags", [])]
+                    for filter_tag in normalized_filter
+                )
             ]
 
         return [m.to_dict() for m in memories]

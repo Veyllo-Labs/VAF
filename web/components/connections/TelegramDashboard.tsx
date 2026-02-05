@@ -45,6 +45,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
     const [sessionHistoryPopoutChatId, setSessionHistoryPopoutChatId] = useState<string | null>(null);
     const [sessionHistory, setSessionHistory] = useState<Array<{ role: string; content: string; timestamp?: string }>>([]);
+    const [historyCompaction, setHistoryCompaction] = useState<{ user_turn_count: number; compaction_interval: number; last_compaction_at_turn: number } | null>(null);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [relayAddId, setRelayAddId] = useState('');
     const [relayAddUsername, setRelayAddUsername] = useState('');
@@ -74,14 +75,25 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
         const chatId = sessionHistoryPopoutChatId ?? selectedChatId;
         if (!chatId || !isOpen) {
             setSessionHistory([]);
+            setHistoryCompaction(null);
             return;
         }
         const sessionId = `telegram_${chatId}`;
         setHistoryLoading(true);
         fetch(api(`api/telegram/session/${encodeURIComponent(sessionId)}/history`), { credentials: 'include' })
             .then((r) => r.json())
-            .then((json) => setSessionHistory(Array.isArray(json.messages) ? json.messages : []))
-            .catch(() => setSessionHistory([]))
+            .then((json) => {
+                setSessionHistory(Array.isArray(json.messages) ? json.messages : []);
+                setHistoryCompaction(
+                    typeof json.user_turn_count === 'number' && typeof json.compaction_interval === 'number' && typeof json.last_compaction_at_turn === 'number'
+                        ? { user_turn_count: json.user_turn_count, compaction_interval: json.compaction_interval, last_compaction_at_turn: json.last_compaction_at_turn }
+                        : null
+                );
+            })
+            .catch(() => {
+                setSessionHistory([]);
+                setHistoryCompaction(null);
+            })
             .finally(() => setHistoryLoading(false));
     }, [sessionHistoryPopoutChatId, selectedChatId, isOpen]);
 
@@ -303,8 +315,14 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                             {/* Line chart: messages per 4-hour interval */}
                             {renderLineChart()}
 
-                            {/* Activity: all or for selected session */}
-                            <div>
+                            {/* Activity: all or for selected session; when a chat is selected, whole block opens same DIN A4 Verlauf popup on click */}
+                            <div
+                                role={selectedChatId ? 'button' : undefined}
+                                tabIndex={selectedChatId ? 0 : undefined}
+                                onClick={selectedChatId ? () => setSessionHistoryPopoutChatId(selectedChatId) : undefined}
+                                onKeyDown={selectedChatId ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSessionHistoryPopoutChatId(selectedChatId); } } : undefined}
+                                className={cn(selectedChatId && 'cursor-pointer hover:bg-gray-50/80 rounded-lg transition-colors -m-1 p-1')}
+                            >
                                 <p className="text-sm font-medium text-gray-700 mb-2">
                                     {selectedChatId ? 'Activity for this chat' : 'Recent activity'}
                                 </p>
@@ -437,6 +455,22 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                                 <X className="w-4 h-4 text-gray-500" />
                             </button>
                         </div>
+                        {/* Memory Learning: X/Y bis nächstes, letztes Mal */}
+                        {historyCompaction && (
+                            <div className="shrink-0 px-4 py-2 bg-violet-50/80 border-b border-violet-100 text-xs text-gray-700 flex flex-wrap items-center gap-x-4 gap-y-1">
+                                <span>
+                                    <span className="font-medium text-violet-700">{Math.max(0, historyCompaction.user_turn_count - historyCompaction.last_compaction_at_turn)}</span>
+                                    <span className="text-gray-500"> / </span>
+                                    <span className="font-medium">{historyCompaction.compaction_interval}</span>
+                                    {' '}Nachrichten bis Memory Learning
+                                </span>
+                                <span className="text-gray-500">
+                                    {historyCompaction.last_compaction_at_turn === 0
+                                        ? 'Letztes Memory Learning: noch keins'
+                                        : `Letztes Memory Learning: nach Turn ${historyCompaction.last_compaction_at_turn}`}
+                                </span>
+                            </div>
+                        )}
                         <div className="flex-1 min-h-0 overflow-y-auto p-4 bg-gray-50/50">
                             {historyLoading ? (
                                 <p className="text-sm text-gray-500 py-4 text-center">Lade Verlauf…</p>

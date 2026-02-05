@@ -8,7 +8,7 @@ Provides:
 - ReactFlow-compatible data export
 """
 
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Set
 from uuid import UUID
 from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -151,7 +151,9 @@ class GraphManager:
 
         # Build Tag Master Nodes and edges
         # Collect all unique tags and which memories use them
-        tag_to_memories: Dict[str, List[str]] = {}
+        # Tags are normalized to lowercase to avoid duplicates like "VAF" and "vaf"
+        # Using Set to prevent duplicate memory IDs per tag
+        tag_to_memories: Dict[str, Set[str]] = {}
         memory_tag_count: Dict[str, int] = {}  # Track how many tags each memory has
 
         for memory in memories:
@@ -159,9 +161,13 @@ class GraphManager:
             memory_id_str = str(memory.id)
             memory_tag_count[memory_id_str] = len(tags)
             for tag in tags:
-                if tag not in tag_to_memories:
-                    tag_to_memories[tag] = []
-                tag_to_memories[tag].append(memory_id_str)
+                # Normalize tag to lowercase for case-insensitive grouping
+                normalized_tag = tag.strip().lower()
+                if not normalized_tag:
+                    continue
+                if normalized_tag not in tag_to_memories:
+                    tag_to_memories[normalized_tag] = set()
+                tag_to_memories[normalized_tag].add(memory_id_str)  # Use add() for Set
 
         # Find max memory count for scaling tag node sizes
         max_memory_count = max((len(mids) for mids in tag_to_memories.values()), default=1)

@@ -2,19 +2,21 @@
 
 /**
  * Memory Detail Panel - View and edit memory content.
- * 
+ * Also displays Tag details when a tag node is selected.
+ *
  * Features:
  * - Display decrypted content
  * - Edit metadata and content
  * - Delete confirmation
  * - Tag management
+ * - Tag node details (connected memories count, list)
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useMemoryStore, Memory } from './stores/memoryStore';
-import { 
-    X, Edit2, Trash2, Save, Tag, Calendar, Link2, 
-    ChevronDown, ChevronUp, FileText, AlertTriangle 
+import {
+    X, Edit2, Trash2, Save, Tag, Calendar, Link2,
+    ChevronDown, ChevronUp, FileText, AlertTriangle, Hash
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -24,16 +26,102 @@ interface MemoryDetailPanelProps {
     onToggleExpand?: (expanded: boolean) => void;
 }
 
+// Tag Details Component
+function TagDetailsView({
+    tagNode,
+    connectedMemories,
+    onMemoryClick,
+}: {
+    tagNode: { id: string; data: { label: string; tag: string; memoryCount: number } };
+    connectedMemories: Array<{ id: string; label: string; type?: string }>;
+    onMemoryClick: (memoryId: string) => void;
+}) {
+    return (
+        <div className="space-y-4">
+            {/* Tag Info */}
+            <div className="flex items-center gap-3 pb-3 border-b border-gray-200">
+                <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center">
+                    <Hash className="w-5 h-5 text-purple-600" />
+                </div>
+                <div>
+                    <h4 className="font-medium text-gray-900">{tagNode.data.label}</h4>
+                    <p className="text-xs text-gray-500">Tag Master Node</p>
+                </div>
+            </div>
+
+            {/* Stats */}
+            <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-purple-50 rounded-lg">
+                    <div className="text-2xl font-bold text-purple-700">
+                        {tagNode.data.memoryCount || 0}
+                    </div>
+                    <div className="text-xs text-purple-600">Connected Memories</div>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-lg">
+                    <div className="text-2xl font-bold text-gray-700">
+                        {connectedMemories.length}
+                    </div>
+                    <div className="text-xs text-gray-600">Visible Connections</div>
+                </div>
+            </div>
+
+            {/* Connected Memories List */}
+            <div>
+                <label className="block text-xs font-medium text-gray-500 mb-2">
+                    <Link2 className="w-3 h-3 inline mr-1" />
+                    Connected Memories
+                </label>
+                <div className="max-h-[200px] overflow-y-auto space-y-1">
+                    {connectedMemories.length > 0 ? (
+                        connectedMemories.map((memory) => (
+                            <button
+                                key={memory.id}
+                                onClick={() => onMemoryClick(memory.id)}
+                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors flex items-center gap-2"
+                            >
+                                <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                                <span className="text-sm text-gray-700 truncate">
+                                    {memory.label}
+                                </span>
+                                {memory.type && (
+                                    <span className="text-[10px] px-1.5 py-0.5 bg-gray-200 text-gray-500 rounded ml-auto">
+                                        {memory.type}
+                                    </span>
+                                )}
+                            </button>
+                        ))
+                    ) : (
+                        <p className="text-xs text-gray-400 text-center py-4">
+                            No connected memories
+                        </p>
+                    )}
+                </div>
+            </div>
+
+            {/* Tip */}
+            <div className="p-3 bg-purple-50 rounded-lg border border-purple-100">
+                <p className="text-xs text-purple-700">
+                    <span className="font-medium">Tip:</span> Drag from a memory node to this tag to add the tag to that memory.
+                </p>
+            </div>
+        </div>
+    );
+}
+
 export default function MemoryDetailPanel({ className, onClose, onToggleExpand }: MemoryDetailPanelProps) {
-    const { 
-        selectedMemory, 
+    const {
+        selectedMemory,
+        selectedNodeId,
+        nodes,
+        edges,
         selectMemory,
-        updateMemory, 
+        setSelectedNodeId,
+        updateMemory,
         deleteMemory,
         isLoading,
-        error 
+        error
     } = useMemoryStore();
-    
+
     const [isEditing, setIsEditing] = useState(false);
     const [editContent, setEditContent] = useState('');
     const [editTitle, setEditTitle] = useState('');
@@ -41,12 +129,44 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [expanded, setExpanded] = useState(true);
 
+    // Determine if selected node is a tag
+    const selectedNode = useMemo(() => {
+        return nodes.find(n => n.id === selectedNodeId);
+    }, [nodes, selectedNodeId]);
+
+    const isTagSelected = selectedNode?.type === 'tagNode';
+
+    // Get connected memories for tag node
+    const connectedMemories = useMemo(() => {
+        if (!isTagSelected || !selectedNodeId) return [];
+
+        // Find all edges connected to this tag
+        const connectedNodeIds = new Set<string>();
+        edges.forEach(edge => {
+            if (edge.source === selectedNodeId) {
+                connectedNodeIds.add(edge.target);
+            }
+            if (edge.target === selectedNodeId) {
+                connectedNodeIds.add(edge.source);
+            }
+        });
+
+        // Get node info for connected memories
+        return nodes
+            .filter(n => n.type === 'memoryNode' && connectedNodeIds.has(n.id))
+            .map(n => ({
+                id: n.id,
+                label: n.data.label,
+                type: n.data.type,
+            }));
+    }, [isTagSelected, selectedNodeId, edges, nodes]);
+
     const toggleExpand = () => {
         const next = !expanded;
         setExpanded(next);
         onToggleExpand?.(next);
     };
-    
+
     // Update local state when selected memory changes
     useEffect(() => {
         if (selectedMemory) {
@@ -59,35 +179,86 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
             onToggleExpand?.(true);
         }
     }, [selectedMemory]);
-    
+
+    // Handle click on connected memory from tag view
+    const handleMemoryClick = (memoryId: string) => {
+        setSelectedNodeId(memoryId);
+        selectMemory(memoryId);
+    };
+
     const handleSave = async () => {
         if (!selectedMemory) return;
-        
+
         const tags = editTags.split(',').map(t => t.trim()).filter(Boolean);
-        
+
         await updateMemory(
             selectedMemory.id,
             editContent !== selectedMemory.content ? editContent : undefined,
             { title: editTitle, tags }
         );
-        
+
         setIsEditing(false);
     };
-    
+
     const handleDelete = async () => {
         if (!selectedMemory) return;
-        
+
         const success = await deleteMemory(selectedMemory.id, false);
         if (success) {
             onClose?.();
         }
     };
-    
+
     const handleClose = () => {
         selectMemory(null);
+        setSelectedNodeId(null);
         onClose?.();
     };
-    
+
+    // Show tag details if a tag node is selected
+    if (isTagSelected && selectedNode) {
+        return (
+            <div className={cn('bg-white rounded-xl border border-gray-200 overflow-hidden', className)}>
+                {/* Header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-purple-50">
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={toggleExpand}
+                            className="p-2 hover:bg-purple-100 rounded-lg transition-colors"
+                            title={expanded ? 'Collapse' : 'Expand'}
+                        >
+                            {expanded ? (
+                                <ChevronDown className="w-4 h-4 text-purple-600" />
+                            ) : (
+                                <ChevronUp className="w-4 h-4 text-purple-600" />
+                            )}
+                        </button>
+                        <h3 className="font-medium text-purple-800">Tag Details</h3>
+                    </div>
+                    <button
+                        onClick={handleClose}
+                        className="p-2 hover:bg-purple-100 rounded-lg transition-colors text-purple-600"
+                        title="Close"
+                    >
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+
+                {/* Content */}
+                {expanded && (
+                    <div className="flex-1 p-4 overflow-y-auto">
+                        <TagDetailsView
+                            tagNode={selectedNode as any}
+                            connectedMemories={connectedMemories}
+                            onMemoryClick={handleMemoryClick}
+                        />
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // Show placeholder if nothing selected
     if (!selectedMemory) {
         return (
             <div className={cn('bg-white rounded-xl border border-gray-200 p-6', className)}>
@@ -103,7 +274,8 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
             </div>
         );
     }
-    
+
+    // Show memory details
     return (
         <div className={cn('bg-white rounded-xl border border-gray-200 overflow-hidden', className)}>
             {/* Header */}
@@ -115,9 +287,9 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                         title={expanded ? 'Collapse' : 'Expand'}
                     >
                         {expanded ? (
-                            <ChevronDown className="w-4 h-4 text-gray-50" />
+                            <ChevronDown className="w-4 h-4 text-gray-500" />
                         ) : (
-                            <ChevronUp className="w-4 h-4 text-gray-50" />
+                            <ChevronUp className="w-4 h-4 text-gray-500" />
                         )}
                     </button>
                     <h3 className="font-medium text-gray-800">Memory Details</h3>
@@ -159,7 +331,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                     </button>
                 </div>
             </div>
-            
+
             {/* Delete confirmation */}
             {showDeleteConfirm && (
                 <div className="px-4 py-3 bg-red-50 border-b border-red-200">
@@ -186,7 +358,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                     </div>
                 </div>
             )}
-            
+
             {/* Content */}
             {expanded && (
                 <div className="flex-1 p-4 space-y-4 overflow-y-auto">
@@ -218,7 +390,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                             </p>
                         </div>
                     </div>
-                    
+
                     {/* Title */}
                     <div>
                         <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -237,7 +409,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                             </p>
                         )}
                     </div>
-                    
+
                     {/* Tags */}
                     <div>
                         <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -267,7 +439,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                             </div>
                         )}
                     </div>
-                    
+
                     {/* Content */}
                     <div>
                         <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -288,7 +460,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                             </div>
                         )}
                     </div>
-                    
+
                     {/* Metadata */}
                     <div className="grid grid-cols-2 gap-4 pt-3 border-t border-gray-200">
                         <div>
@@ -297,7 +469,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                                 Created
                             </label>
                             <p className="text-xs text-gray-600">
-                                {selectedMemory.created_at 
+                                {selectedMemory.created_at
                                     ? new Date(selectedMemory.created_at).toLocaleString()
                                     : 'Unknown'}
                             </p>
@@ -308,7 +480,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                                 Updated
                             </label>
                             <p className="text-xs text-gray-600">
-                                {selectedMemory.updated_at 
+                                {selectedMemory.updated_at
                                     ? new Date(selectedMemory.updated_at).toLocaleString()
                                     : 'Never'}
                             </p>

@@ -52,6 +52,7 @@ export interface MemoryNode {
         tag?: string;
         memoryCount?: number;
         isTagNode?: boolean;
+        sizeScale?: number;  // Dynamic size multiplier (1.0 to 2.5)
     };
 }
 
@@ -135,6 +136,10 @@ interface MemoryActions {
     createMemory: (content: string, metadata?: Partial<MemoryMetadata>) => Promise<Memory | null>;
     updateMemory: (id: string, content?: string, metadata?: Partial<MemoryMetadata>) => Promise<Memory | null>;
     deleteMemory: (id: string, hard?: boolean) => Promise<boolean>;
+
+    // Tag management
+    addTagToMemory: (memoryId: string, tag: string) => Promise<boolean>;
+    removeTagFromMemory: (memoryId: string, tag: string) => Promise<boolean>;
     
     // Selection
     selectMemory: (id: string | null) => void;
@@ -323,19 +328,62 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
         }
     },
     
+    // Tag management
+    addTagToMemory: async (memoryId, tag) => {
+        try {
+            const response = await fetch(`${getMemoryApiBase()}/api/memory/${memoryId}/tags`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tag })
+            });
+
+            if (!response.ok) {
+                const errorBody = await response.json().catch(() => ({}));
+                const detail = (errorBody as { detail?: string })?.detail || `HTTP ${response.status}`;
+                console.error('Failed to add tag:', detail, 'memoryId:', memoryId, 'tag:', tag);
+                throw new Error(detail);
+            }
+
+            // Refresh graph to show new connection
+            await get().fetchGraph();
+            return true;
+        } catch (error) {
+            console.error('addTagToMemory error:', error);
+            set({ error: (error as Error).message });
+            return false;
+        }
+    },
+
+    removeTagFromMemory: async (memoryId, tag) => {
+        try {
+            const response = await fetch(`${getMemoryApiBase()}/api/memory/${memoryId}/tags/${encodeURIComponent(tag)}`, {
+                method: 'DELETE'
+            });
+
+            if (!response.ok) throw new Error('Failed to remove tag');
+
+            // Refresh graph to update connections
+            await get().fetchGraph();
+            return true;
+        } catch (error) {
+            set({ error: (error as Error).message });
+            return false;
+        }
+    },
+
     // Selection
     selectMemory: async (id) => {
         if (!id) {
             set({ selectedMemory: null, selectedNodeId: null });
             return;
         }
-        
+
         set({ selectedNodeId: id });
         await get().fetchMemory(id);
     },
-    
+
     setSelectedNodeId: (id) => set({ selectedNodeId: id }),
-    
+
     // RAG actions
     setRagQuery: (query) => set({ ragQuery: query }),
     

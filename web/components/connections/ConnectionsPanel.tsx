@@ -13,6 +13,7 @@ interface ConnectionsPanelProps {
     onConfigChange: (key: string, value: any) => void;
     onOpenDiscordWizard: () => void;
     onOpenTelegramWizard: () => void;
+    onOpenTelegramDashboard?: () => void;
 }
 
 export interface ConnectionApp {
@@ -198,7 +199,7 @@ export const CATEGORIES = [
 /** Use relative /api/ so Next.js rewrites to backend. */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard, onOpenTelegramWizard }: ConnectionsPanelProps) {
+export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard, onOpenTelegramWizard, onOpenTelegramDashboard }: ConnectionsPanelProps) {
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'disconnected' | 'checking'>>({});
 
     useEffect(() => {
@@ -387,7 +388,10 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                     <button
                                                         onClick={() => {
                                                             if (app.id === 'discord') onOpenDiscordWizard();
-                                                            if (app.id === 'telegram') onOpenTelegramWizard();
+                                                            if (app.id === 'telegram') {
+                                                                if (onOpenTelegramDashboard && configured) onOpenTelegramDashboard();
+                                                                else onOpenTelegramWizard();
+                                                            }
                                                         }}
                                                         className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                                                         title="Settings"

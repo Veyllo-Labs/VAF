@@ -15,7 +15,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
 import requests
 from vaf.core.agent import Agent
 from vaf.core.task_queue import TaskQueue
-from vaf.core.session import SessionManager
+from vaf.core.session import SessionManager, Session
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
 from vaf.core.platform import Platform
@@ -309,6 +309,8 @@ def run_headless_agent():
                         except (ValueError, TypeError):
                             _scope = None
                     try:
+                        # Load the correct session context (important for queued compaction, e.g. Telegram)
+                        agent.load_session_context(task.session_id)
                         run_session_compaction_sync(agent, _scope, task.session_id, _turn)
                     except Exception as e:
                         logging.getLogger(__name__).warning("Session compaction (queued) failed: %s", e)
@@ -317,6 +319,26 @@ def run_headless_agent():
                             from datetime import datetime as _dt
                             with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
                                 f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (compaction)\n")
+                    except Exception:
+                        pass
+                    tq.task_done()
+                    continue
+
+                # Telegram relay: contact can only send messages to the main user (no tools, safe reply only)
+                meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                if meta.get("relay") and meta.get("telegram_chat_id"):
+                    try:
+                        from vaf.core.telegram_reply import send_telegram_reply
+                        to_user = meta.get("relay_to_username") or meta.get("username") or "the user"
+                        reply = f"Got it. I'll pass that on to {to_user}. Thanks."
+                        send_telegram_reply(str(meta["telegram_chat_id"]), reply)
+                    except Exception:
+                        pass
+                    try:
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (relay)\n")
                     except Exception:
                         pass
                     tq.task_done()
@@ -536,6 +558,13 @@ def run_headless_agent():
                             out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
                             out = re.sub(r'\n{3,}', '\n\n', out).strip()
                             if not out:
+                                try:
+                                    log_telegram_reply(
+                                        f"HEADLESS reply empty after strip → [No reply text] "
+                                        f"raw_len={len(str(final_text))} chat_id={chat_id}"
+                                    )
+                                except Exception:
+                                    pass
                                 out = "[No reply text]"
                             send_telegram_reply(str(chat_id), out)
                     except Exception:
@@ -582,7 +611,14 @@ def run_headless_agent():
                     except Exception:
                         pass
                     try:
-                        session = session_mgr.load(task.session_id)
+                        try:
+                            session = session_mgr.load(task.session_id)
+                        except FileNotFoundError:
+                            # New Telegram (or other) session: create so first exchange is persisted
+                            session = Session(
+                                id=task.session_id,
+                                name=f"Telegram {task.session_id.replace('telegram_', '', 1)}",
+                            )
                         _user_input = input_text or ""
                         _assistant_response = "".join(response_parts) if response_parts else str(response_text or "")
 
@@ -687,6 +723,7 @@ def run_headless_agent():
                             from vaf.memory.rag import run_session_compaction_sync
                             from vaf.core.config import Config
                             if Config.get("memory_enabled", True) and Config.get("memory_compaction_enabled", True):
+                                # Only main-user messages (role=user) count; each session is single-user (relay/other bots have separate sessions)
                                 turn_count = len([m for m in agent.history if _msg_role(m) == "user"])
                                 _scope = (task.metadata or {}).get("user_scope_id") if getattr(task, "metadata", None) else None
                                 if _scope is not None and not isinstance(_scope, UUID):

@@ -98,6 +98,7 @@ class Config:
         "debug_logs_enabled": False,           # Write domain logs and queue.log when enabled; off by default to reduce I/O
         "server_idle_timeout": 15,             # Unload local model after idle seconds (Web UI / CLI)
         "telegram_idle_timeout": 120,          # Keep model loaded this long after last Telegram prompt when no Web connections (seconds)
+        "telegram_debounce_seconds": 5,        # Wait this long for follow-up messages; combine into one prompt per chat
         
         # Memory System Settings (RAG + Vector Search)
         "memory_enabled": True,                                    # Enable memory system

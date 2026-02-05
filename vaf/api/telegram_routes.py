@@ -217,6 +217,188 @@ async def get_telegram_status():
     }
 
 
+def _get_bot_username() -> Optional[str]:
+    """Return bot username from Telegram getMe (cached in config or fetched). No token in response."""
+    telegram_config = Config.get("telegram_config") or {}
+    if not isinstance(telegram_config, dict):
+        return None
+    cached = telegram_config.get("bot_username")
+    if cached:
+        return cached
+    token = (telegram_config.get("bot_token") or "").strip()
+    if not token:
+        return None
+    try:
+        import requests
+        r = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=5)
+        if r.ok:
+            data = r.json()
+            username = (data.get("result") or {}).get("username")
+            if username:
+                config = Config.load()
+                if "telegram_config" not in config or not isinstance(config["telegram_config"], dict):
+                    config["telegram_config"] = {}
+                config["telegram_config"]["bot_username"] = username
+                Config.save(config)
+                return username
+    except Exception:
+        pass
+    return None
+
+
+@router.get("/dashboard")
+async def get_telegram_dashboard():
+    """
+    Data for the Telegram settings dashboard: bot link, sessions (chats for this bot only),
+    admin whitelist, relay whitelist, activity. No sensitive data (no tokens).
+    Sessions = one per Telegram user who can chat with our bot (from whitelist + relay), with last_ts and count.
+    """
+    telegram_config = Config.get("telegram_config") or {}
+    if not isinstance(telegram_config, dict):
+        telegram_config = {}
+    bot_username = _get_bot_username()
+    bot_link = f"https://t.me/{bot_username}" if bot_username else None
+    admin_whitelist = list(telegram_config.get("whitelist") or [])
+    relay_whitelist = list(telegram_config.get("relay_whitelist") or [])
+    activity = list(telegram_config.get("chat_activity") or [])[-100:]
+
+    # Sessions: one per chat (our bot only = whitelist + relay). Enrich with last_ts and message_count from activity.
+    sessions_by_chat: Dict[str, Dict[str, Any]] = {}
+    for e in admin_whitelist:
+        uid = str(e.get("telegram_user_id") or "")
+        if not uid:
+            continue
+        # Private chat: chat_id == telegram_user_id
+        sessions_by_chat[uid] = {
+            "chat_id": uid,
+            "telegram_user_id": uid,
+            "telegram_username": e.get("telegram_username"),
+            "vaf_username": e.get("vaf_username"),
+            "type": "admin",
+        }
+    for e in relay_whitelist:
+        uid = str(e.get("telegram_user_id") or "")
+        if not uid:
+            continue
+        if uid not in sessions_by_chat:
+            sessions_by_chat[uid] = {
+                "chat_id": uid,
+                "telegram_user_id": uid,
+                "telegram_username": e.get("telegram_username"),
+                "vaf_username": e.get("vaf_username"),
+                "type": "relay",
+            }
+    for a in activity:
+        cid = str(a.get("chat_id") or "")
+        if not cid:
+            continue
+        if cid not in sessions_by_chat:
+            sessions_by_chat[cid] = {
+                "chat_id": cid,
+                "telegram_user_id": cid,
+                "telegram_username": None,
+                "vaf_username": None,
+                "type": "unknown",
+            }
+        rec = sessions_by_chat[cid]
+        ts = a.get("ts") or 0
+        rec["last_ts"] = max(rec.get("last_ts") or 0, ts)
+        rec["message_count"] = rec.get("message_count", 0) + 1
+    for rec in sessions_by_chat.values():
+        rec.setdefault("last_ts", 0)
+        rec.setdefault("message_count", 0)
+    sessions = sorted(sessions_by_chat.values(), key=lambda s: (s.get("last_ts") or 0), reverse=True)
+
+    # Stats: messages per 4-hour bucket (last 7 days). Bucket key = floor(ts / 14400) * 14400 (4h = 14400s).
+    import time as _time
+    bucket_seconds = 4 * 3600
+    now_ts = int(_time.time())
+    buckets: Dict[int, int] = {}
+    for i in range(42):  # 7 days * 6 buckets per day
+        bucket_ts = ((now_ts - (41 - i) * bucket_seconds) // bucket_seconds) * bucket_seconds
+        buckets[bucket_ts] = 0
+    for a in activity:
+        ts = a.get("ts") or 0
+        bucket_ts = (int(ts) // bucket_seconds) * bucket_seconds
+        if bucket_ts in buckets:
+            buckets[bucket_ts] += 1
+    stats_4h = [{"bucket_ts": ts, "count": c} for ts, c in sorted(buckets.items())]
+
+    return {
+        "bot_username": bot_username,
+        "bot_link": bot_link,
+        "sessions": sessions,
+        "stats_4h": stats_4h,
+        "admin_whitelist": [{"telegram_user_id": e.get("telegram_user_id"), "telegram_username": e.get("telegram_username"), "vaf_username": e.get("vaf_username")} for e in admin_whitelist],
+        "relay_whitelist": [{"telegram_user_id": e.get("telegram_user_id"), "telegram_username": e.get("telegram_username"), "vaf_username": e.get("vaf_username")} for e in relay_whitelist],
+        "activity": activity,
+    }
+
+
+class RelayWhitelistAddRequest(BaseModel):
+    telegram_user_id: str
+    telegram_username: Optional[str] = None
+
+
+@router.post("/relay-whitelist-add")
+async def relay_whitelist_add(request: Request, body: RelayWhitelistAddRequest):
+    """Add a contact who can only relay messages to the main user (no tools, safe replies only)."""
+    current_user = get_current_vaf_user(request)
+    telegram_user_id = (body.telegram_user_id or "").strip()
+    if not telegram_user_id:
+        raise HTTPException(status_code=400, detail="telegram_user_id required")
+    config = Config.load()
+    telegram_config = config.get("telegram_config") or {}
+    if not isinstance(telegram_config, dict):
+        telegram_config = {}
+    relay_whitelist = [e for e in (telegram_config.get("relay_whitelist") or []) if str(e.get("telegram_user_id")) != telegram_user_id]
+    relay_whitelist.append({
+        "telegram_user_id": telegram_user_id,
+        "telegram_username": (body.telegram_username or "").strip() or None,
+        "user_scope_id": current_user["user_scope_id"],
+        "vaf_username": current_user["username"],
+    })
+    telegram_config["relay_whitelist"] = relay_whitelist
+    config["telegram_config"] = telegram_config
+    Config.save(config)
+    return {"status": "ok", "relay_whitelist_count": len(relay_whitelist)}
+
+
+@router.get("/session/{session_id}/history")
+async def get_telegram_session_history(session_id: str):
+    """Return message history for a Telegram session (session_id must start with 'telegram_')."""
+    if not session_id.startswith("telegram_"):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+    try:
+        from vaf.core.session import SessionManager
+        session_mgr = SessionManager()
+        session = session_mgr.load(session_id)
+        messages = [{"role": m.role, "content": (m.content or "")[:2000], "timestamp": getattr(m, "timestamp", None)} for m in (session.messages or [])]
+        return {"session_id": session_id, "messages": messages}
+    except FileNotFoundError:
+        return {"session_id": session_id, "messages": []}
+    except Exception as e:
+        logger.exception("Session history error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/relay-whitelist-remove")
+async def relay_whitelist_remove(request: Request, body: WhitelistAddRequest):
+    """Remove a contact from the relay whitelist."""
+    telegram_user_id = (body.telegram_user_id or "").strip()
+    if not telegram_user_id:
+        raise HTTPException(status_code=400, detail="telegram_user_id required")
+    config = Config.load()
+    telegram_config = config.get("telegram_config") or {}
+    if not isinstance(telegram_config, dict):
+        telegram_config = {}
+    relay_whitelist = [e for e in (telegram_config.get("relay_whitelist") or []) if str(e.get("telegram_user_id")) != telegram_user_id]
+    telegram_config["relay_whitelist"] = relay_whitelist
+    config["telegram_config"] = telegram_config
+    Config.save(config)
+    return {"status": "ok", "relay_whitelist_count": len(relay_whitelist)}
+
+
 @router.post("/start")
 async def start_telegram_bridge():
     """Start the Telegram bridge with saved configuration."""

@@ -27,7 +27,7 @@ import {
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 
 export interface SettingsModalProps {
@@ -92,6 +92,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showUserIdentityModal, setShowUserIdentityModal] = useState(false);
     const [showDiscordWizard, setShowDiscordWizard] = useState(false);
     const [showTelegramWizard, setShowTelegramWizard] = useState(false);
+    const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
 
     const [toolsSearch, setToolsSearch] = useState('');
     const [workflowsSearch, setWorkflowsSearch] = useState('');
@@ -1082,6 +1083,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 onConfigChange={handleChange}
                                 onOpenDiscordWizard={() => setShowDiscordWizard(true)}
                                 onOpenTelegramWizard={() => setShowTelegramWizard(true)}
+                                onOpenTelegramDashboard={() => setShowTelegramDashboard(true)}
                             />
                         )}
 
@@ -2947,6 +2949,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onClose={() => setShowTelegramWizard(false)}
                 onComplete={handleTelegramComplete}
                 existingConfig={localConfig.telegram_config}
+            />
+
+            {/* Telegram Dashboard (when configured, Settings opens this) */}
+            <TelegramDashboard
+                isOpen={showTelegramDashboard}
+                onClose={() => setShowTelegramDashboard(false)}
+                config={localConfig}
+                onConfigChange={handleChange}
             />
 
             {/* Soul Wizard Modal */}

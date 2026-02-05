@@ -120,11 +120,11 @@ The Discord configuration is stored locally in your VAF config:
 
 ### Features
 
-- **Real-time chat**: Use VAF from Telegram like the Web UI; VAF can also reach you there
-- **Whitelist**: Only whitelisted Telegram users can use the bot; each maps to one VAF user (same isolation as Web UI)
-- **Secure**: Token stored locally; whitelist links Telegram identity to your VAF user (user_scope_id / username)
+- **Same pipeline as Web UI**: Messages are enqueued on the same task queue; the same agent, tools, RAG, and user scope apply.
+- **Whitelist**: Only whitelisted Telegram users can use the bot; each entry maps one Telegram user to one VAF user (user_scope_id, username).
+- **Local storage**: Bot token and whitelist are stored in your local VAF config only.
 
-### Setup (all in English)
+### Setup
 
 1. Go to **Settings → Connections**
 2. Click **Connect** on Telegram
@@ -132,14 +132,25 @@ The Discord configuration is stored locally in your VAF config:
    - Create a bot with [BotFather](https://t.me/BotFather) (`/newbot`)
    - Paste your bot token
    - Verify: send the 6-digit code to your bot in a Telegram DM
-   - **Whitelist**: Add your own Telegram (username or account). **Please enter your own number or username, not someone else's!**
-4. Turn the connection **on**; the bridge runs in the same process as the Web server
+   - **Whitelist**: Add your own Telegram (username or account). Enter only your own number or username.
+4. Turn the connection **on**; the bridge runs in the same process as the Web server and starts automatically on VAF restart when enabled.
+
+### Message handling
+
+- **Debouncing**: Incoming messages are buffered per chat. After each message, the bridge waits a short period (default 5 seconds, configurable). If another message arrives in that period, the timer resets and the new text is appended. When no further message arrives for the full period, the combined text is sent as a single prompt. This avoids multiple separate requests when the user sends several short messages in a row (e.g. "Hello" then "how are you").
+- **Replies**: You receive only the agent’s final reply or an error message. No intermediate "processing" notification. Internal reasoning blocks (e.g. `<think>...</think>`) are removed from replies so you see plain answer text only.
+- **Idle and model**: If the model is idle and a Telegram message is received, the model is loaded. It stays loaded for a configurable time after the last Telegram activity when there are no active Web connections (see `telegram_idle_timeout` in config).
 
 ### Whitelist and multi-user
 
-- Each whitelist entry links one Telegram user to one VAF user (user_scope_id and username from the current Web UI session when you add yourself).
-- Only whitelisted users get a response; others see: "You are not authorized…"
+- Each whitelist entry links one Telegram user to one VAF user (user_scope_id and username from the Web UI session when that user was added).
+- Only whitelisted users receive replies; others see an authorization message.
 - RAG, memories, and user identity are scoped per user, same as in the Web UI.
+
+### Session storage and memory compaction (15-message rule)
+
+- **Verlauf:** Telegram chat history is stored in the same place as Web UI sessions: `~/.vaf/sessions/`. Each Telegram user has one session file: `telegram_<user_id>.json`. The dashboard “Session-Verlauf” popup reads from this.
+- **Nach-15-Nachrichten-Regel:** The same **session compaction** as in the Web UI applies: every N **main-user** turns (default 15, configurable via `memory_compaction_interval`), the model is prompted to write durable memories into the memory DB (RAG). The count is **cumulative** (e.g. 4 today + 5 tomorrow = 9; at 15 total, compaction runs). Only role **user** (main user of that session) is counted; other participants (relay contacts, other bot users) have separate sessions. Memories are stored under the whitelist user’s `user_scope_id`, so they appear in the same Memory graph and are used in later Web and Telegram chats. See [MEMORY_SYSTEM.md](MEMORY_SYSTEM.md#session-compaction-background).
 
 ### Configuration
 
@@ -163,6 +174,13 @@ Stored in your VAF config (locally):
 }
 ```
 
+Global options (top-level in config):
+
+| Option | Default | Description |
+|--------|--------|-------------|
+| `telegram_idle_timeout` | 120 | Seconds to keep the model loaded after the last Telegram prompt when there are no Web connections. |
+| `telegram_debounce_seconds` | 5 | Seconds to wait for follow-up messages in the same chat before sending the combined text as one prompt. Minimum 1. |
+
 ### Requirements
 
 - Python package: `python-telegram-bot` (v21+)
@@ -171,7 +189,7 @@ Stored in your VAF config (locally):
 ### Troubleshooting
 
 - **"Not authorized"**: Add your Telegram in the wizard whitelist step (your own account only).
-- **Bot not replying**: Ensure the bridge is started (Settings → Connections, toggle Telegram on).
+- **No reply**: Ensure the bridge is running (Settings → Connections, Telegram toggle on). After a VAF restart, the bridge auto-starts if Telegram is enabled.
 - **Verification timeout**: Send the exact 6-digit code to the bot in a **private chat** (DM).
 
 ## Architecture
@@ -197,10 +215,11 @@ The Discord bridge:
 4. Sends responses back to Discord
 
 Telegram uses the same pipeline as the Web UI:
-1. Telegram bridge receives a message, looks up the sender in the whitelist (user_scope_id, username)
-2. Enqueues a task on the same TaskQueue as the Web UI, with metadata (user_scope_id, username, telegram_chat_id)
-3. Headless runner processes the task; RAG and user identity are scoped to that user
-4. When the agent responds, the reply is sent back to the Telegram chat via the bridge
+1. Telegram bridge receives messages, looks up the sender in the whitelist (user_scope_id, username)
+2. Messages are debounced per chat (wait for follow-up messages, then combine into one prompt)
+3. A single task is enqueued on the same TaskQueue as the Web UI, with metadata (user_scope_id, username, telegram_chat_id)
+4. Headless runner processes the task; RAG, tools, and user identity are scoped to that user
+5. The agent reply (without internal reasoning blocks) is sent back to the Telegram chat via the bridge
 
 ## Future Integrations
 

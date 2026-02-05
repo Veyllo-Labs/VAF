@@ -2,7 +2,9 @@
 Long-lived Telegram bridge: receives messages from Telegram, enqueues tasks with
 user_scope_id/username from whitelist, and sends replies via the telegram_reply hook.
 Started/stopped from telegram_routes (POST /api/telegram/start, /stop).
+Messages are debounced per chat: wait N seconds for follow-up messages, then send combined text.
 """
+import asyncio
 import logging
 import queue
 import threading
@@ -24,9 +26,13 @@ _bridge_stop = threading.Event()
 _bridge_stop_requested = False
 _outgoing_queue: Optional[queue.Queue] = None
 
+# Per-chat debounce: wait for follow-up messages, then enqueue combined text
+_pending_by_chat: Dict[str, Dict[str, Any]] = {}
+_pending_lock = threading.Lock()
+
 
 def _whitelist_lookup(telegram_user_id: str) -> Optional[Dict[str, Any]]:
-    """Return whitelist entry for this telegram_user_id or None."""
+    """Return admin whitelist entry for this telegram_user_id or None (full agent access)."""
     telegram_config = Config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict):
         return None
@@ -35,6 +41,34 @@ def _whitelist_lookup(telegram_user_id: str) -> Optional[Dict[str, Any]]:
         if str(entry.get("telegram_user_id")) == str(telegram_user_id):
             return entry
     return None
+
+
+def _relay_whitelist_lookup(telegram_user_id: str) -> Optional[Dict[str, Any]]:
+    """Return relay whitelist entry for this telegram_user_id or None (relay-only, no tools)."""
+    telegram_config = Config.get("telegram_config") or {}
+    if not isinstance(telegram_config, dict):
+        return None
+    relay: List[Dict[str, Any]] = telegram_config.get("relay_whitelist") or []
+    for entry in relay:
+        if str(entry.get("telegram_user_id")) == str(telegram_user_id):
+            return entry
+    return None
+
+
+def _append_chat_activity(chat_id: str, user_scope_id: Any, direction: str = "in") -> None:
+    """Append one activity entry for the dashboard timeline (keeps last 100)."""
+    try:
+        config = Config.load()
+        tc = config.get("telegram_config") or {}
+        if not isinstance(tc, dict):
+            return
+        activity = list(tc.get("chat_activity") or [])
+        activity.append({"chat_id": str(chat_id), "user_scope_id": str(user_scope_id) if user_scope_id else None, "ts": time.time(), "direction": direction})
+        tc["chat_activity"] = activity[-100:]
+        config["telegram_config"] = tc
+        Config.save(config)
+    except Exception:
+        pass
 
 
 def _sender_loop(bot_token: str):
@@ -110,6 +144,43 @@ def _run_bot():
 
     application = Application.builder().token(bot_token).build()
 
+    debounce_seconds = max(1, int(Config.get("telegram_debounce_seconds", 5)))
+
+    async def _delayed_flush(chat_id: str) -> None:
+        await asyncio.sleep(debounce_seconds)
+        with _pending_lock:
+            pending = _pending_by_chat.pop(chat_id, None)
+        if not pending:
+            return
+        text = pending.get("text", "").strip()
+        if not text:
+            return
+        user_scope_id = pending.get("user_scope_id")
+        vaf_username = pending.get("vaf_username") or "admin"
+        telegram_user_id = pending.get("telegram_user_id", "")
+        is_relay = pending.get("relay", False)
+        _append_chat_activity(chat_id, user_scope_id, "in")
+        session_id = f"telegram_{telegram_user_id}"
+        tq = TaskQueue()
+        metadata = {
+            "user_scope_id": user_scope_id,
+            "username": vaf_username,
+            "telegram_chat_id": str(chat_id),
+        }
+        if is_relay:
+            metadata["relay"] = True
+            metadata["relay_to_username"] = vaf_username
+        tq.add(
+            session_id=session_id,
+            input_text=text,
+            source="telegram",
+            metadata=metadata,
+        )
+        try:
+            TrayContext().register_telegram_activity()
+        except Exception:
+            pass
+
     async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not update.message.text:
             return
@@ -117,32 +188,43 @@ def _run_bot():
         if not user:
             return
         telegram_user_id = str(user.id)
-        chat_id = update.effective_chat.id if update.effective_chat else user.id
+        chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
         entry = _whitelist_lookup(telegram_user_id)
+        relay_entry = None
         if not entry:
-            await update.message.reply_text(
-                "You are not authorized to use this bot. Please add your Telegram in VAF Settings → Connections."
-            )
+            relay_entry = _relay_whitelist_lookup(telegram_user_id)
+            if not relay_entry:
+                await update.message.reply_text(
+                    "You are not authorized to use this bot. Please add your Telegram in VAF Settings → Connections."
+                )
+                return
+        if entry:
+            user_scope_id = entry.get("user_scope_id")
+            vaf_username = entry.get("vaf_username") or "admin"
+            is_relay = False
+        else:
+            user_scope_id = relay_entry.get("user_scope_id")
+            vaf_username = relay_entry.get("vaf_username") or "admin"
+            is_relay = True
+        msg_text = update.message.text.strip()
+        if not msg_text:
             return
-        user_scope_id = entry.get("user_scope_id")
-        vaf_username = entry.get("vaf_username") or "admin"
-        session_id = f"telegram_{telegram_user_id}"
-        tq = TaskQueue()
-        tq.add(
-            session_id=session_id,
-            input_text=update.message.text.strip(),
-            source="telegram",
-            metadata={
-                "user_scope_id": user_scope_id,
-                "username": vaf_username,
-                "telegram_chat_id": str(chat_id),
-            },
-        )
-        try:
-            TrayContext().register_telegram_activity()
-        except Exception:
-            pass
-        # No "Message received. Processing…" – user only gets the model reply or an error message
+
+        with _pending_lock:
+            if chat_id not in _pending_by_chat:
+                _pending_by_chat[chat_id] = {
+                    "text": "",
+                    "task": None,
+                    "user_scope_id": user_scope_id,
+                    "vaf_username": vaf_username,
+                    "telegram_user_id": telegram_user_id,
+                    "relay": is_relay,
+                }
+            rec = _pending_by_chat[chat_id]
+            rec["text"] = (rec["text"] + " " + msg_text).strip() if rec["text"] else msg_text
+            if rec.get("task") and not rec["task"].done():
+                rec["task"].cancel()
+            rec["task"] = asyncio.create_task(_delayed_flush(chat_id))
 
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)

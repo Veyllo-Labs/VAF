@@ -2256,7 +2256,7 @@ export default function VAFDashboard() {
                         {/* Token Stats (Clickable) */}
                         <div className={cn(chatWidthClass, "mx-auto mb-1 flex justify-end min-h-[16px]")}>
                             {contextStats && (
-                                <span 
+                                <span
                                     className="text-[10px] sm:text-xs font-mono text-gray-400 opacity-80 select-none cursor-pointer hover:text-black hover:opacity-100 transition-all"
                                     onClick={() => setIsContextModalOpen(true)}
                                 >
@@ -2401,6 +2401,23 @@ export default function VAFDashboard() {
                                             <span className="w-px h-3 bg-gray-200 mx-1"></span>
                                             <span className="text-xs font-medium text-gray-500">{contextStats.message_count} messages</span>
                                         </div>
+                                        {/* Memory Learning Badge */}
+                                        {contextStats.user_turn_count !== undefined && (
+                                            <div className="flex items-center gap-2 px-3 py-1 bg-purple-50 rounded-lg border border-purple-200 shadow-sm self-center" title="Memory Learning: After every 15 messages, VAF analyzes the conversation and stores important facts to long-term memory">
+                                                <span className="text-xs font-medium text-purple-700">Memory Learning:</span>
+                                                <div className="flex items-center gap-1">
+                                                    <div className="h-1.5 w-16 bg-purple-200 rounded-full overflow-hidden">
+                                                        <div
+                                                            className="h-full bg-purple-500 transition-all duration-300"
+                                                            style={{ width: `${((contextStats.user_turn_count % (contextStats.compaction_interval || 15)) / (contextStats.compaction_interval || 15)) * 100}%` }}
+                                                        />
+                                                    </div>
+                                                    <span className="text-xs font-mono font-bold text-purple-600">
+                                                        {contextStats.user_turn_count % (contextStats.compaction_interval || 15)}/{contextStats.compaction_interval || 15}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                     <p className="text-sm text-gray-500 mt-1">
                                         How your context window is being used
@@ -2456,6 +2473,24 @@ export default function VAFDashboard() {
                                         <div className="text-xs text-slate-400">Remaining capacity</div>
                                     </div>
                                 </div>
+                                {/* Memory Learning Info */}
+                                {contextStats.user_turn_count !== undefined && (
+                                    <>
+                                        <div className="border-t border-purple-200 my-2"></div>
+                                        <div className="flex items-start gap-2">
+                                            <div className="w-3 h-3 rounded-sm bg-purple-500 mt-1 shrink-0"></div>
+                                            <div>
+                                                <div className="font-semibold text-purple-700">Memory Learning</div>
+                                                <div className="text-xs text-purple-500">
+                                                    Every {contextStats.compaction_interval || 15} messages, VAF analyzes the chat and stores important facts to long-term memory.
+                                                </div>
+                                                <div className="text-xs text-purple-600 font-mono mt-1">
+                                                    Next save in {(contextStats.compaction_interval || 15) - (contextStats.user_turn_count % (contextStats.compaction_interval || 15))} messages
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
                             </div>
 
                             {/* Diagram - Right side */}

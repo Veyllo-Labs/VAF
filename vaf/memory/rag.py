@@ -956,7 +956,8 @@ async def process_auto_capture_queue(max_tasks: int = 2) -> int:
             processed += 1
             logger.debug("Auto-capture processed successfully")
         except Exception as e:
-            logger.warning("Auto-capture processing error: %s", e)
+            import traceback
+            logger.warning("Auto-capture processing error: %s\n%s", e, traceback.format_exc())
         finally:
             _auto_capture_queue.task_done()
 

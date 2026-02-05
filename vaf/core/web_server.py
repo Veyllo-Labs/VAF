@@ -372,11 +372,13 @@ async def startup_event():
             import traceback
             log("WebServer", traceback.format_exc())
 
-    # Start Auto-Capture Queue Worker (processes memory captures in main event loop)
-    # This prevents memory leaks from daemon threads + asyncio.run() + ONNX + asyncpg
-    if Config.get("memory_enabled", True) and Config.get("memory_auto_capture", True):
-        asyncio.create_task(_auto_capture_worker())
-        log("WebServer", "Auto-capture queue worker started")
+    # Start Auto-Capture Queue Worker - DISABLED: causes 13GB+ memory spikes
+    # The memory leak occurs during pipeline.ingest() ~13 seconds after embedding
+    # TODO: Investigate asyncpg/SQLAlchemy memory leak in auto_capture_memory()
+    # if Config.get("memory_enabled", True) and Config.get("memory_auto_capture", True):
+    #     asyncio.create_task(_auto_capture_worker())
+    #     log("WebServer", "Auto-capture queue worker started")
+    log("WebServer", "Auto-capture worker DISABLED (memory leak investigation)")
 
 
 async def _auto_capture_worker():

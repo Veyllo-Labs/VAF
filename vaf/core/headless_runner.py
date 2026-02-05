@@ -174,11 +174,13 @@ def run_headless_agent():
             print(f"[Headless] Memory check error: {e}")
 
     def _standard_memory_cleanup():
-        """Standard memory cleanup - clear caches, run gc."""
+        """Standard memory cleanup - clear caches, run gc (but KEEP models loaded)."""
         try:
-            # Clear embedding cache
-            from vaf.memory.embeddings import cleanup_embedding_memory
-            cleanup_embedding_memory()
+            # Clear embedding cache only (NOT the model - reloading is slow and fragments memory)
+            from vaf.memory.embeddings import get_embedding_service
+            svc = get_embedding_service()
+            if svc:
+                svc.clear_cache()
         except Exception as e:
             print(f"[Headless] Embedding cleanup error: {e}")
 
@@ -309,7 +311,6 @@ def run_headless_agent():
                     try:
                         run_session_compaction_sync(agent, _scope, task.session_id, _turn)
                     except Exception as e:
-                        import logging
                         logging.getLogger(__name__).warning("Session compaction (queued) failed: %s", e)
                     try:
                         if is_debug_logging_enabled():
@@ -540,77 +541,155 @@ def run_headless_agent():
                     except Exception:
                         pass  # Ignore stats errors
 
-                    # Auto-capture: optionally store high-value snippets to Memory-DB
+                    # === POST-CHAT PROCESSING ===
+                    # Order matters for memory safety:
+                    # 1. Session save (lightweight, critical for persistence)
+                    # 2. Auto-capture (queues ONNX work, can be skipped on error)
+                    # 3. Compaction (queues LLM work, can be skipped on error)
+                    # If any step fails, we skip subsequent memory-intensive operations
+                    _post_chat_ok = True
+
+                    # 1. Save session FIRST (before any memory-intensive operations)
+                    # CONTEXT EFFICIENCY: Only save clean content (no <think> blocks)
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
                             with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
-                                f.write(f"{_dt.now().isoformat()} AUTO_CAPTURE_START session_id={task.session_id}\n")
+                                f.write(f"{_dt.now().isoformat()} SESSION_SAVE_START session_id={task.session_id}\n")
                     except Exception:
                         pass
                     try:
-                        from vaf.memory.rag import run_auto_capture_sync
-                        from uuid import UUID
-                        _scope = (task.metadata or {}).get("user_scope_id") if getattr(task, "metadata", None) else None
-                        if _scope is not None and not isinstance(_scope, UUID):
-                            try:
-                                _scope = UUID(str(_scope))
-                            except (ValueError, TypeError):
-                                _scope = None
-                        if _scope is not None:
-                            _assistant_text = "".join(response_parts) if response_parts else str(response_text or "")
-                            run_auto_capture_sync(input_text or "", _assistant_text, _scope)
-                    except Exception:
-                        pass
+                        session = session_mgr.load(task.session_id)
+                        _user_input = input_text or ""
+                        _assistant_response = "".join(response_parts) if response_parts else str(response_text or "")
+
+                        def _clean_for_session(text: str) -> str:
+                            """Remove reasoning blocks to keep session context efficient."""
+                            if not text:
+                                return ""
+                            cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+                            cleaned = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', cleaned, flags=re.DOTALL)
+                            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+                            return cleaned.strip()
+
+                        _clean_response = _clean_for_session(_assistant_response)
+
+                        if _user_input.strip():
+                            # Helper to get role/content from Message object or dict
+                            def _msg_role(m):
+                                return m.role if hasattr(m, 'role') else m.get("role")
+                            def _msg_content(m):
+                                return m.content if hasattr(m, 'content') else m.get("content", "")
+
+                            last_user_msg = None
+                            for msg in reversed(session.messages):
+                                if _msg_role(msg) == "user":
+                                    last_user_msg = _msg_content(msg)
+                                    break
+
+                            if last_user_msg != _user_input.strip():
+                                session.add_message(role="user", content=_user_input.strip())
+                                if _clean_response:
+                                    session.add_message(role="assistant", content=_clean_response)
+                                session_mgr.save(session)
+                                if is_debug_logging_enabled():
+                                    logging.getLogger(__name__).debug(f"Session saved: +1 user, +1 assistant for {task.session_id}")
+                            elif _clean_response:
+                                last_assistant_msg = None
+                                for msg in reversed(session.messages):
+                                    if _msg_role(msg) == "assistant":
+                                        last_assistant_msg = _msg_content(msg)
+                                        break
+                                if last_assistant_msg != _clean_response:
+                                    session.add_message(role="assistant", content=_clean_response)
+                                    session_mgr.save(session)
+                    except Exception as e:
+                        logging.getLogger(__name__).warning(f"Failed to save session: {e}")
+                        _post_chat_ok = False  # Skip memory-intensive operations
+                        gc.collect()  # Defensive GC on error
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
                             with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
-                                f.write(f"{_dt.now().isoformat()} AUTO_CAPTURE_END session_id={task.session_id}\n")
+                                f.write(f"{_dt.now().isoformat()} SESSION_SAVE_END session_id={task.session_id} ok={_post_chat_ok}\n")
                     except Exception:
                         pass
 
-                    # Session compaction: every N turns store durable memories (MEMORY:/NO_REPLY), ingest to RAG.
-                    # When using a local LLM, enqueue compaction so it runs in the same queue (no parallel LLM use).
-                    try:
-                        if is_debug_logging_enabled():
-                            from datetime import datetime as _dt
-                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
-                                f.write(f"{_dt.now().isoformat()} COMPACTION_CHECK_START session_id={task.session_id}\n")
-                    except Exception:
-                        pass
-                    try:
-                        from uuid import UUID
-                        from vaf.memory.rag import run_session_compaction_sync
-                        from vaf.core.config import Config
-                        if Config.get("memory_enabled", True) and Config.get("memory_compaction_enabled", True):
-                            turn_count = len([m for m in agent.history if m.get("role") == "user"])
+                    # 2. Auto-capture: DISABLED - causes 13GB+ memory spikes
+                    # The memory leak occurs during pipeline.ingest() ~13 seconds after EMBED_DONE
+                    # TODO: Investigate asyncpg/SQLAlchemy memory leak in auto_capture_memory()
+                    if False and _post_chat_ok:  # HARD DISABLED
+                        try:
+                            if is_debug_logging_enabled():
+                                from datetime import datetime as _dt
+                                with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                    f.write(f"{_dt.now().isoformat()} AUTO_CAPTURE_START session_id={task.session_id}\n")
+                        except Exception:
+                            pass
+                        try:
+                            from vaf.memory.rag import run_auto_capture_sync
+                            from uuid import UUID
                             _scope = (task.metadata or {}).get("user_scope_id") if getattr(task, "metadata", None) else None
                             if _scope is not None and not isinstance(_scope, UUID):
                                 try:
                                     _scope = UUID(str(_scope))
                                 except (ValueError, TypeError):
                                     _scope = None
-                            if getattr(agent, "provider", "local") == "local":
-                                tq.add(
-                                    task.session_id,
-                                    "__COMPACTION__",
-                                    source="web",
-                                    priority=15,
-                                    metadata={"compaction": True, "user_scope_id": str(_scope) if _scope else None, "turn_count": turn_count},
-                                )
-                            else:
-                                run_session_compaction_sync(agent, _scope, task.session_id, turn_count)
-                    except Exception as e:
-                        import logging
-                        logging.getLogger(__name__).warning("Session compaction failed: %s", e)
-                    try:
-                        if is_debug_logging_enabled():
-                            from datetime import datetime as _dt
-                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
-                                f.write(f"{_dt.now().isoformat()} COMPACTION_CHECK_END session_id={task.session_id}\n")
-                    except Exception:
-                        pass
+                            if _scope is not None:
+                                _assistant_text = "".join(response_parts) if response_parts else str(response_text or "")
+                                run_auto_capture_sync(input_text or "", _assistant_text, _scope)
+                        except Exception as e:
+                            logging.getLogger(__name__).debug(f"Auto-capture skipped: {e}")
+                            _post_chat_ok = False
+                            gc.collect()
+                        try:
+                            if is_debug_logging_enabled():
+                                from datetime import datetime as _dt
+                                with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                    f.write(f"{_dt.now().isoformat()} AUTO_CAPTURE_END session_id={task.session_id}\n")
+                        except Exception:
+                            pass
+
+                    # 3. Session compaction: queue durable memories (ONLY if previous steps succeeded)
+                    if _post_chat_ok:
+                        try:
+                            if is_debug_logging_enabled():
+                                from datetime import datetime as _dt
+                                with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                    f.write(f"{_dt.now().isoformat()} COMPACTION_CHECK_START session_id={task.session_id}\n")
+                        except Exception:
+                            pass
+                        try:
+                            from uuid import UUID
+                            from vaf.memory.rag import run_session_compaction_sync
+                            from vaf.core.config import Config
+                            if Config.get("memory_enabled", True) and Config.get("memory_compaction_enabled", True):
+                                turn_count = len([m for m in agent.history if _msg_role(m) == "user"])
+                                _scope = (task.metadata or {}).get("user_scope_id") if getattr(task, "metadata", None) else None
+                                if _scope is not None and not isinstance(_scope, UUID):
+                                    try:
+                                        _scope = UUID(str(_scope))
+                                    except (ValueError, TypeError):
+                                        _scope = None
+                                if getattr(agent, "provider", "local") == "local":
+                                    tq.add(
+                                        task.session_id,
+                                        "__COMPACTION__",
+                                        source="web",
+                                        priority=15,
+                                        metadata={"compaction": True, "user_scope_id": str(_scope) if _scope else None, "turn_count": turn_count},
+                                    )
+                                else:
+                                    run_session_compaction_sync(agent, _scope, task.session_id, turn_count)
+                        except Exception as e:
+                            logging.getLogger(__name__).warning("Session compaction failed: %s", e)
+                        try:
+                            if is_debug_logging_enabled():
+                                from datetime import datetime as _dt
+                                with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                    f.write(f"{_dt.now().isoformat()} COMPACTION_CHECK_END session_id={task.session_id}\n")
+                        except Exception:
+                            pass
 
                     # Result is already added to history and broadcast to WebUI by agent logic
                     _duration = time.time() - _chat_start
@@ -622,65 +701,6 @@ def run_headless_agent():
                     except Exception:
                         pass
                     print("[Headless] Task complete.")
-
-                    # Save session with updated history (persist chat across restarts)
-                    # CONTEXT EFFICIENCY: Only save clean content (no <think> blocks, no system overhead)
-                    # - User messages: as-is
-                    # - Assistant messages: stripped of <think>...</think> reasoning blocks
-                    # - Tool responses: preserved for context
-                    # - RAG context: preserved (injected by chat_step)
-                    try:
-                        session = session_mgr.load(task.session_id)
-
-                        # Get the user input and assistant response from this turn
-                        _user_input = input_text or ""
-                        _assistant_response = "".join(response_parts) if response_parts else str(response_text or "")
-
-                        # Clean assistant response: remove <think> blocks for efficient context
-                        def _clean_for_session(text: str) -> str:
-                            """Remove reasoning blocks to keep session context efficient."""
-                            if not text:
-                                return ""
-                            # Remove <think>...</think> blocks (model reasoning)
-                            cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-                            # Remove <redacted_reasoning>...</redacted_reasoning> blocks
-                            cleaned = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', cleaned, flags=re.DOTALL)
-                            # Collapse multiple newlines
-                            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-                            return cleaned.strip()
-
-                        _clean_response = _clean_for_session(_assistant_response)
-
-                        # Only save if we have actual content
-                        if _user_input.strip():
-                            # Check if this exact user message is already the last user message in session
-                            # (prevents duplicates on retries/reloads)
-                            last_user_msg = None
-                            for msg in reversed(session.messages):
-                                if msg.get("role") == "user":
-                                    last_user_msg = msg.get("content", "")
-                                    break
-
-                            if last_user_msg != _user_input.strip():
-                                session.add_message(role="user", content=_user_input.strip())
-                                if _clean_response:
-                                    session.add_message(role="assistant", content=_clean_response)
-                                session_mgr.save(session)
-                                if is_debug_logging_enabled():
-                                    logging.getLogger(__name__).debug(f"Session saved: +1 user, +1 assistant for {task.session_id}")
-                            elif _clean_response:
-                                # User message exists but maybe assistant was missing (retry case)
-                                last_assistant_msg = None
-                                for msg in reversed(session.messages):
-                                    if msg.get("role") == "assistant":
-                                        last_assistant_msg = msg.get("content", "")
-                                        break
-                                if last_assistant_msg != _clean_response:
-                                    session.add_message(role="assistant", content=_clean_response)
-                                    session_mgr.save(session)
-                    except Exception as e:
-                        # Don't fail the task if session save fails
-                        logging.getLogger(__name__).warning(f"Failed to save session: {e}")
 
                     # Memory cleanup: clear response parts list
                     if 'response_parts' in dir():

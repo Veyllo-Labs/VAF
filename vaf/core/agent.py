@@ -2397,6 +2397,15 @@ class Agent:
                 except Exception:
                     tools_tokens = len(self.tools) * 200 if hasattr(self, 'tools') else 0
 
+            # Count user messages for compaction tracking
+            user_turn_count = sum(1 for m in self.history if m.get("role") == "user")
+            compaction_interval = 15  # From Config.get("memory_compaction_interval", 15)
+            try:
+                from vaf.core.config import Config
+                compaction_interval = int(Config.get("memory_compaction_interval", 15))
+            except Exception:
+                pass
+
             get_web_interface().push_update({
                 "type": "context_status",
                 "stats": {
@@ -2408,7 +2417,11 @@ class Agent:
                     # Detailed breakdown for X-Ray visualization
                     "system_tokens": system_tokens,
                     "history_tokens": history_tokens,
-                    "tools_tokens": tools_tokens
+                    "tools_tokens": tools_tokens,
+                    # Compaction tracking
+                    "user_turn_count": user_turn_count,
+                    "compaction_interval": compaction_interval,
+                    "compaction_progress": round((user_turn_count % compaction_interval) / compaction_interval * 100)
                 }
             })
         except Exception:

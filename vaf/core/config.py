@@ -101,7 +101,7 @@ class Config:
         # Memory System Settings (RAG + Vector Search)
         "memory_enabled": True,                                    # Enable memory system
         "memory_rag_refine_query": True,                           # Refine vague queries (e.g. "who am I") for better RAG hits
-        "memory_auto_capture": True,                                # Auto-store high-value snippets after agent response
+        "memory_auto_capture": False,                               # DISABLED: Auto-capture causes memory spikes (investigating)
         "memory_compaction_enabled": True,                          # Session compaction: prompt to store durable memories every N turns
         "memory_compaction_interval": 15,                           # Run compaction every N user/assistant turns
         "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",  # PostgreSQL connection URL

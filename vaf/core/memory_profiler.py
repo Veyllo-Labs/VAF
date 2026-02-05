@@ -181,11 +181,14 @@ class MemoryProfiler:
 
         before = self._get_memory_mb()
 
-        # Clear embedding cache
+        # Clear embedding cache (but KEEP the ONNX model loaded!)
+        # Unloading ONNX model causes it to be reloaded, wasting time and fragmenting memory
         try:
-            from vaf.memory.embeddings import cleanup_embedding_memory
-            cleanup_embedding_memory()
-            self._log("  - Cleared embedding cache")
+            from vaf.memory.embeddings import get_embedding_service
+            svc = get_embedding_service()
+            if svc:
+                svc.clear_cache()  # Only clear the text→embedding cache, not the model
+            self._log("  - Cleared embedding cache (kept model)")
         except Exception as e:
             self._log(f"  - Embedding cleanup failed: {e}")
 

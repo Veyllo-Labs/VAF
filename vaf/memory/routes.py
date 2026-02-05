@@ -271,11 +271,12 @@ async def list_memories(
 @memory_router.get("/graph", response_model=GraphResponse)
 async def get_graph(
     limit: int = Query(default=100, ge=1, le=500),
-    highlight: Optional[str] = Query(default=None, description="Comma-separated memory IDs to highlight")
+    highlight: Optional[str] = Query(default=None, description="Comma-separated memory IDs to highlight"),
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
 ):
     """Get memory graph data for ReactFlow visualization."""
     try:
-        use_cache = not highlight
+        use_cache = not highlight and user_scope_id is None
         highlight_ids = highlight.split(",") if highlight else None
         if use_cache:
             cache = get_cache()
@@ -287,7 +288,8 @@ async def get_graph(
             graph_manager = GraphManager(db)
             graph_data = await graph_manager.get_graph_data(
                 limit=limit,
-                highlight_ids=highlight_ids
+                highlight_ids=highlight_ids,
+                user_scope_id=user_scope_id
             )
             if use_cache:
                 cache = get_cache()

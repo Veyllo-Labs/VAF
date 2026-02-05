@@ -46,24 +46,31 @@ class GraphManager:
         limit: int = 100,
         include_deleted: bool = False,
         highlight_ids: Optional[List[str]] = None,
-        relevance_scores: Optional[Dict[str, float]] = None
+        relevance_scores: Optional[Dict[str, float]] = None,
+        user_scope_id: Optional[UUID] = None
     ) -> Dict[str, Any]:
         """
         Get memory graph data for ReactFlow visualization.
-        
+
         Args:
             limit: Maximum number of nodes to return
             include_deleted: Include soft-deleted memories
             highlight_ids: Memory IDs to highlight (e.g., RAG sources)
             relevance_scores: Dict mapping memory ID to relevance score
-            
+            user_scope_id: Filter to only show memories for this user scope
+
         Returns:
             Dict with 'nodes' and 'edges' arrays for ReactFlow
         """
         # Query memories (eager-load chunks so async session doesn't lazy-load)
+        # Filter by user_scope_id if provided
+        conditions = [Memory.is_deleted == include_deleted]
+        if user_scope_id is not None:
+            conditions.append(Memory.user_scope_id == user_scope_id)
+
         query = (
             select(Memory)
-            .where(Memory.is_deleted == include_deleted)
+            .where(and_(*conditions))
             .options(selectinload(Memory.chunks))
             .order_by(Memory.updated_at.desc())
             .limit(limit)

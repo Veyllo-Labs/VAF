@@ -136,18 +136,88 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
     );
 };
 
+// Custom Tag Master Node Component - Size scales with memory count
+const TagNodeComponent = ({ data, selected }: NodeProps) => {
+    // Dynamic size based on sizeScale (1.0 to 2.5)
+    const sizeScale = data.sizeScale || 1.0;
+    const baseSize = 80; // Base diameter in pixels
+    const nodeSize = baseSize * sizeScale;
+    const fontSize = Math.max(12, 14 * sizeScale);
+    const iconSize = Math.max(16, 20 * sizeScale);
+
+    return (
+        <div
+            className={cn(
+                'rounded-full border-2 shadow-lg transition-all duration-300 flex items-center justify-center',
+                'bg-gradient-to-br from-purple-500 via-purple-600 to-indigo-600 border-purple-300',
+                'hover:shadow-2xl hover:border-purple-200',
+                selected && 'ring-4 ring-purple-300/50 shadow-2xl border-purple-200'
+            )}
+            style={{
+                width: nodeSize,
+                height: nodeSize,
+                minWidth: nodeSize,
+                minHeight: nodeSize,
+            }}
+        >
+            {/* Connection handles positioned around the circle */}
+            <Handle
+                type="target"
+                position={Position.Top}
+                className="w-2 h-2 bg-purple-300 border border-white opacity-0 hover:opacity-100"
+            />
+            <Handle
+                type="target"
+                position={Position.Right}
+                className="w-2 h-2 bg-purple-300 border border-white opacity-0 hover:opacity-100"
+            />
+            <Handle
+                type="target"
+                position={Position.Bottom}
+                className="w-2 h-2 bg-purple-300 border border-white opacity-0 hover:opacity-100"
+            />
+            <Handle
+                type="target"
+                position={Position.Left}
+                className="w-2 h-2 bg-purple-300 border border-white opacity-0 hover:opacity-100"
+            />
+
+            {/* Tag content - centered */}
+            <div className="flex flex-col items-center justify-center text-center p-2">
+                <Tag style={{ width: iconSize, height: iconSize }} className="text-white/90 mb-1" />
+                <span
+                    className="font-bold text-white leading-tight"
+                    style={{ fontSize: fontSize }}
+                >
+                    {data.label}
+                </span>
+                {data.memoryCount > 0 && (
+                    <span
+                        className="text-purple-200/80 mt-0.5"
+                        style={{ fontSize: Math.max(9, fontSize * 0.7) }}
+                    >
+                        {data.memoryCount}
+                    </span>
+                )}
+            </div>
+        </div>
+    );
+};
+
 // Node types for ReactFlow
 const nodeTypes: NodeTypes = {
     memoryNode: MemoryNodeComponent,
+    tagNode: TagNodeComponent,
 };
 
 // Props for MemoryGraph component
 interface MemoryGraphProps {
     className?: string;
     onNodeSelect?: (nodeId: string | null) => void;
+    showTagConnections?: boolean;
 }
 
-export default function MemoryGraph({ className, onNodeSelect }: MemoryGraphProps) {
+export default function MemoryGraph({ className, onNodeSelect, showTagConnections = true }: MemoryGraphProps) {
     const { 
         nodes: storeNodes, 
         edges: storeEdges, 
@@ -171,28 +241,45 @@ export default function MemoryGraph({ className, onNodeSelect }: MemoryGraphProp
         [storeNodes, selectedNodeId]
     );
     
-    // Convert store edges to ReactFlow format
+    // Convert store edges to ReactFlow format (filter tag edges based on showTagConnections)
     const initialEdges: Edge[] = useMemo(() =>
-        storeEdges.map(edge => ({
-            id: edge.id,
-            source: edge.source,
-            target: edge.target,
-            type: edge.type,
-            animated: edge.animated,
-            style: {
-                strokeWidth: edge.style.strokeWidth,
-                opacity: edge.style.opacity,
-                stroke: edge.data.connectionType === 'semantic' ? '#6b7280' : '#9ca3af',
-            },
-            markerEnd: {
-                type: MarkerType.ArrowClosed,
-                width: 15,
-                height: 15,
-            },
-            label: edge.data.label || undefined,
-            labelStyle: { fontSize: 10, fill: '#666' },
-        })),
-        [storeEdges]
+        storeEdges
+            .filter(edge => showTagConnections || edge.data.connectionType !== 'tag')
+            .map(edge => {
+                // Determine edge color based on connection type
+                let strokeColor = '#9ca3af'; // default gray
+                if (edge.data.connectionType === 'semantic') {
+                    strokeColor = '#6b7280'; // darker gray for semantic
+                } else if (edge.data.connectionType === 'tag') {
+                    strokeColor = '#8b5cf6'; // purple for tag connections
+                }
+
+                return {
+                    id: edge.id,
+                    source: edge.source,
+                    target: edge.target,
+                    type: edge.type,
+                    animated: edge.animated,
+                    style: {
+                        strokeWidth: edge.style.strokeWidth,
+                        opacity: edge.style.opacity,
+                        stroke: (edge.style as any).stroke || strokeColor,
+                        strokeDasharray: edge.data.connectionType === 'tag' ? '5,5' : undefined,
+                    },
+                    markerEnd: edge.data.connectionType !== 'tag' ? {
+                        type: MarkerType.ArrowClosed,
+                        width: 15,
+                        height: 15,
+                    } : undefined,
+                    label: edge.data.label || undefined,
+                    labelStyle: {
+                        fontSize: 10,
+                        fill: edge.data.connectionType === 'tag' ? '#8b5cf6' : '#666',
+                        fontWeight: edge.data.connectionType === 'tag' ? 500 : 400,
+                    },
+                };
+            }),
+        [storeEdges, showTagConnections]
     );
     
     const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
@@ -289,6 +376,8 @@ export default function MemoryGraph({ className, onNodeSelect }: MemoryGraphProp
                 <Controls className="bg-white rounded-lg shadow-lg" />
                 <MiniMap
                     nodeColor={(node) => {
+                        // Tag nodes are purple
+                        if (node.data?.isTagNode) return '#8b5cf6';
                         if (node.data?.isHighlighted) return '#eab308';
                         if (node.selected) return '#374151';
                         return '#9ca3af';

@@ -244,23 +244,25 @@ async def list_memories(
     offset: int = Query(default=0, ge=0),
     type_filter: Optional[str] = Query(default=None),
     tag: Optional[str] = Query(default=None),
-    include_deleted: bool = Query(default=False)
+    include_deleted: bool = Query(default=False),
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
 ):
-    """List memories with pagination and filters."""
+    """List memories with pagination and filters (scoped to current user)."""
     try:
         async with get_db() as db:
             pipeline = RagPipeline(db)
-            
+
             tag_filter = [tag] if tag else None
-            
+
             memories = await pipeline.list_memories(
                 limit=limit,
                 offset=offset,
                 include_deleted=include_deleted,
                 tag_filter=tag_filter,
-                type_filter=type_filter
+                type_filter=type_filter,
+                user_scope_id=user_scope_id
             )
-            
+
             return [MemoryResponse(**m) for m in memories]
     except Exception as e:
         logger.error(f"Failed to list memories: {e}")

@@ -607,24 +607,30 @@ Always cite which source(s) you used."""
         offset: int = 0,
         include_deleted: bool = False,
         tag_filter: Optional[List[str]] = None,
-        type_filter: Optional[str] = None
+        type_filter: Optional[str] = None,
+        user_scope_id: Optional[UUID] = None
     ) -> List[Dict[str, Any]]:
         """
         List memories with pagination and filters.
-        
+
         Args:
             limit: Maximum number of results
             offset: Offset for pagination
             include_deleted: Include soft-deleted memories
             tag_filter: Filter by tags
             type_filter: Filter by type
-            
+            user_scope_id: Filter by user scope (only show user's memories)
+
         Returns:
             List of memory dicts (without content)
         """
+        conditions = [Memory.is_deleted == include_deleted]
+        if user_scope_id is not None:
+            conditions.append(Memory.user_scope_id == user_scope_id)
+
         query = (
             select(Memory)
-            .where(Memory.is_deleted == include_deleted)
+            .where(and_(*conditions))
             .options(selectinload(Memory.chunks))
         )
         if type_filter:
@@ -634,14 +640,14 @@ Always cite which source(s) you used."""
         query = query.order_by(Memory.updated_at.desc()).offset(offset).limit(limit)
         result = await self.db.execute(query)
         memories = result.unique().scalars().all()
-        
+
         # Apply tag filter if specified
         if tag_filter:
             memories = [
                 m for m in memories
                 if any(tag in (m.meta or {}).get("tags", []) for tag in tag_filter)
             ]
-        
+
         return [m.to_dict() for m in memories]
 
 

@@ -15,10 +15,10 @@ import { useMemoryStore } from '@/components/memory/stores/memoryStore';
 import MemoryGraph from '@/components/memory/MemoryGraph';
 import MemoryDetailPanel from '@/components/memory/MemoryDetailPanel';
 import RagQueryPanel from '@/components/memory/RagQueryPanel';
-import { 
-    Plus, RefreshCw, Brain, Link2, 
+import {
+    Plus, RefreshCw, Brain, Link2,
     ChevronLeft, AlertTriangle, CheckCircle,
-    FileText, Sparkles, X
+    FileText, Sparkles, X, Tag
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
@@ -202,6 +202,7 @@ export default function MemoryPage() {
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [isInitialized, setIsInitialized] = useState(false);
     const [detailsExpanded, setDetailsExpanded] = useState(true);
+    const [showTagConnections, setShowTagConnections] = useState(true);
     
     // Initialize on mount
     useEffect(() => {
@@ -272,6 +273,21 @@ export default function MemoryPage() {
                             )}
                             
                             {/* Actions */}
+                            {/* Tag Connections Toggle */}
+                            <button
+                                onClick={() => setShowTagConnections(!showTagConnections)}
+                                className={cn(
+                                    'flex items-center gap-2 px-3 py-2 rounded-lg transition-colors border',
+                                    showTagConnections
+                                        ? 'bg-purple-50 border-purple-200 text-purple-700'
+                                        : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                                )}
+                                title={showTagConnections ? 'Hide tag connections' : 'Show tag connections'}
+                            >
+                                <Tag className="w-4 h-4" />
+                                <span className="hidden sm:inline text-sm font-medium">Tags</span>
+                            </button>
+
                             <button
                                 onClick={handleRefresh}
                                 disabled={isLoading}
@@ -280,7 +296,7 @@ export default function MemoryPage() {
                             >
                                 <RefreshCw className={cn('w-5 h-5', isLoading && 'animate-spin')} />
                             </button>
-                            
+
                             <button
                                 onClick={() => setShowCreateModal(true)}
                                 className="flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors"
@@ -316,8 +332,9 @@ export default function MemoryPage() {
                 <div className="flex flex-col lg:flex-row gap-4 h-full">
                     {/* Graph – nimmt restlichen Platz */}
                     <div className="flex-1 min-w-0 h-full">
-                        <MemoryGraph 
+                        <MemoryGraph
                             className="h-full"
+                            showTagConnections={showTagConnections}
                             onNodeSelect={(id) => {
                                 // Selection handled by store
                             }}

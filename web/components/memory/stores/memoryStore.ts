@@ -33,20 +33,25 @@ export interface Memory {
 
 export interface MemoryNode {
     id: string;
-    type: string;
+    type: string;  // 'memoryNode' | 'tagNode'
     position: { x: number; y: number };
     data: {
         label: string;
-        tags: string[];
-        preview: string;
-        type: string;
-        createdAt: string | null;
-        updatedAt: string | null;
-        chunkCount: number;
-        isHighlighted: boolean;
-        relevance: number;
-        hasParent: boolean;
-        parentId: string | null;
+        // Memory node specific fields
+        tags?: string[];
+        preview?: string;
+        type?: string;
+        createdAt?: string | null;
+        updatedAt?: string | null;
+        chunkCount?: number;
+        isHighlighted?: boolean;
+        relevance?: number;
+        hasParent?: boolean;
+        parentId?: string | null;
+        // Tag node specific fields
+        tag?: string;
+        memoryCount?: number;
+        isTagNode?: boolean;
     };
 }
 
@@ -58,12 +63,14 @@ export interface MemoryEdge {
     animated: boolean;
     data: {
         strength: number;
-        connectionType: string;
+        connectionType: string;  // 'semantic' | 'manual' | 'tag'
         label: string | null;
     };
     style: {
         strokeWidth: number;
         opacity: number;
+        stroke?: string;         // Optional custom stroke color
+        strokeDasharray?: string; // Optional dash pattern (e.g., "5,5" for tag edges)
     };
 }
 

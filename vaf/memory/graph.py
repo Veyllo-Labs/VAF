@@ -128,7 +128,7 @@ class GraphManager:
             }
             nodes.append(node)
         
-        # Build edges
+        # Build edges from connections
         edges = []
         for conn in connections:
             edge = {
@@ -148,7 +148,116 @@ class GraphManager:
                 }
             }
             edges.append(edge)
-        
+
+        # Build Tag Master Nodes and edges
+        # Collect all unique tags and which memories use them
+        tag_to_memories: Dict[str, List[str]] = {}
+        memory_tag_count: Dict[str, int] = {}  # Track how many tags each memory has
+
+        for memory in memories:
+            tags = (memory.meta or {}).get("tags", [])
+            memory_id_str = str(memory.id)
+            memory_tag_count[memory_id_str] = len(tags)
+            for tag in tags:
+                if tag not in tag_to_memories:
+                    tag_to_memories[tag] = []
+                tag_to_memories[tag].append(memory_id_str)
+
+        # Find max memory count for scaling tag node sizes
+        max_memory_count = max((len(mids) for mids in tag_to_memories.values()), default=1)
+
+        # Create Tag Master Nodes with organic circular positioning
+        # Position tags in a circle around the center, memories will be pulled towards their tags
+        import math
+        tag_count = len(tag_to_memories)
+        center_x, center_y = 400, 300  # Center of the graph
+        radius = 350  # Radius for tag node circle
+
+        tag_node_counter = 0
+        for tag, memory_ids in tag_to_memories.items():
+            if len(memory_ids) == 0:
+                continue
+
+            tag_node_id = f"tag-{tag}"
+
+            # Position tag nodes in a circle for organic layout
+            angle = (2 * math.pi * tag_node_counter) / max(tag_count, 1)
+            tag_x = center_x + radius * math.cos(angle)
+            tag_y = center_y + radius * math.sin(angle)
+
+            # Calculate size based on memory count (min 1.0, max 2.5 scale)
+            size_scale = 1.0 + (len(memory_ids) / max(max_memory_count, 1)) * 1.5
+
+            tag_node = {
+                "id": tag_node_id,
+                "type": "tagNode",
+                "position": {"x": tag_x, "y": tag_y},
+                "data": {
+                    "label": f"#{tag}",
+                    "tag": tag,
+                    "memoryCount": len(memory_ids),
+                    "isTagNode": True,
+                    "sizeScale": size_scale,  # For dynamic sizing in frontend
+                }
+            }
+            nodes.append(tag_node)
+            tag_node_counter += 1
+
+            # Create edges from each memory to its tag node
+            for memory_id in memory_ids:
+                # Edge thickness based on how many tags this memory has (stronger connection = more tags)
+                tag_count_for_memory = memory_tag_count.get(memory_id, 1)
+                edge_strength = min(1.0, 0.3 + (tag_count_for_memory * 0.2))
+                stroke_width = max(1, min(5, tag_count_for_memory + 1))
+
+                edge = {
+                    "id": f"tag-edge-{tag}-{memory_id}",
+                    "source": memory_id,
+                    "target": tag_node_id,
+                    "type": "default",  # Straight lines for organic look
+                    "animated": False,
+                    "data": {
+                        "strength": edge_strength,
+                        "connectionType": "tag",
+                        "label": None,
+                    },
+                    "style": {
+                        "strokeWidth": stroke_width,
+                        "opacity": 0.4 + (edge_strength * 0.4),
+                        "stroke": "#8b5cf6",
+                    }
+                }
+                edges.append(edge)
+
+        # Reposition memory nodes towards their connected tags for organic clustering
+        for i, node in enumerate(nodes):
+            if node["type"] == "memoryNode":
+                memory_id = node["id"]
+                connected_tags = [tag for tag, mids in tag_to_memories.items() if memory_id in mids]
+
+                if connected_tags:
+                    # Calculate average position of connected tags
+                    avg_x, avg_y = 0, 0
+                    for tag in connected_tags:
+                        tag_node_id = f"tag-{tag}"
+                        for n in nodes:
+                            if n["id"] == tag_node_id:
+                                avg_x += n["position"]["x"]
+                                avg_y += n["position"]["y"]
+                                break
+                    avg_x /= len(connected_tags)
+                    avg_y /= len(connected_tags)
+
+                    # Position memory between center and average tag position with some randomness
+                    import random
+                    random.seed(hash(memory_id))  # Consistent positioning
+                    offset_x = random.uniform(-80, 80)
+                    offset_y = random.uniform(-80, 80)
+
+                    # Move memory 60% towards tag cluster
+                    node["position"]["x"] = center_x + (avg_x - center_x) * 0.5 + offset_x
+                    node["position"]["y"] = center_y + (avg_y - center_y) * 0.5 + offset_y
+
         return {"nodes": nodes, "edges": edges}
     
     async def create_connection(

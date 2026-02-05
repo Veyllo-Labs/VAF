@@ -387,6 +387,10 @@ export default function VAFDashboard() {
     const [ws, setWs] = useState<WebSocket | null>(null);
     const [loading, setLoading] = useState(false);
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
+
+    // Per-Session Animation State Tracking
+    // Tracks which sessions are actively loading so we can restore animation state on session switch
+    const sessionLoadingStates = useRef<Record<string, { loading: boolean; statusMessage: string; loadingMessageId: number | null }>>({});
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editName, setEditName] = useState('');
     const [config, setConfig] = useState<any>({});
@@ -725,9 +729,15 @@ export default function VAFDashboard() {
     const handleSessionSwitch = (id: string) => {
         if (currentSessionId === id) return;
 
-        // 1. Save current session state explicitly before switching
+        // 1. Save current session state explicitly before switching (including animation state)
         if (currentSessionId) {
             sessionCache.current[currentSessionId] = messages;
+            // Save animation/loading state for current session
+            sessionLoadingStates.current[currentSessionId] = {
+                loading,
+                statusMessage,
+                loadingMessageId
+            };
         }
 
         // 2. Optimistic Switch
@@ -735,12 +745,20 @@ export default function VAFDashboard() {
         const cached = sessionCache.current[id] || [];
         setMessages(cached);
 
-        // Assume idle/clean state until server updates us
-        // This prevents "loading" spinner flashes if we have cached content
-        setLoading(false);
-        setStatusMessage('');
+        // 3. Restore animation state for target session (or default to idle)
+        const targetState = sessionLoadingStates.current[id];
+        if (targetState) {
+            setLoading(targetState.loading);
+            setStatusMessage(targetState.statusMessage);
+            setLoadingMessageId(targetState.loadingMessageId);
+        } else {
+            // No saved state = assume idle
+            setLoading(false);
+            setStatusMessage('');
+            setLoadingMessageId(null);
+        }
 
-        // 3. Request Sync
+        // 4. Request Sync
         ws?.send(JSON.stringify({ type: 'load_session', id }));
     };
 
@@ -912,11 +930,29 @@ export default function VAFDashboard() {
                         setCurrentSessionId(data.sessionId);
                         ws?.send(JSON.stringify({ type: 'load_session', id: data.sessionId }));
                     } else if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
+                        // Update per-session state even if not the active session
+                        // So when user switches back, animations are correct
+                        if (data.sessionId) {
+                            sessionLoadingStates.current[data.sessionId] = {
+                                loading: false,
+                                statusMessage: '',
+                                loadingMessageId: null
+                            };
+                        }
                         return;
                     }
 
                     setLoading(false);
                     setStatusMessage(''); // Clear status when answer starts
+
+                    // Update per-session loading state
+                    if (activeSessionId) {
+                        sessionLoadingStates.current[activeSessionId] = {
+                            loading: false,
+                            statusMessage: '',
+                            loadingMessageId: null
+                        };
+                    }
                     setMessages(prev => {
                         const last = prev[prev.length - 1];
                         if (last && last.role === 'assistant') {
@@ -1171,8 +1207,17 @@ export default function VAFDashboard() {
                     setCurrentSessionId(data.sessionId);
 
                     // Restore active state
-                    setLoading(!!data.isActive);
-                    setStatusMessage(data.currentStatus && data.isActive ? `Agent: ${data.currentStatus}` : '');
+                    const isActive = !!data.isActive;
+                    const status = data.currentStatus && isActive ? `Agent: ${data.currentStatus}` : '';
+                    setLoading(isActive);
+                    setStatusMessage(status);
+
+                    // Update per-session loading state tracking
+                    sessionLoadingStates.current[data.sessionId] = {
+                        loading: isActive,
+                        statusMessage: status,
+                        loadingMessageId: isActive ? (data.messages?.length || 0) : null
+                    };
 
                     // Parse server messages
                     const serverMsgs = data.messages
@@ -1329,8 +1374,20 @@ export default function VAFDashboard() {
                     setSuggestion(data.suggestion || '');
                 }
                 else if (data.type === 'generation_stopped') {
-                    setLoading(false);
-                    setLoadingMessageId(null);
+                    // Update per-session loading state
+                    if (data.sessionId) {
+                        sessionLoadingStates.current[data.sessionId] = {
+                            loading: false,
+                            statusMessage: '',
+                            loadingMessageId: null
+                        };
+                    }
+                    // Only update UI if this is the active session
+                    const activeSessionId = currentSessionIdRef.current;
+                    if (!data.sessionId || data.sessionId === activeSessionId) {
+                        setLoading(false);
+                        setLoadingMessageId(null);
+                    }
                 }
             } catch (e) { console.error(e); }
         };
@@ -1399,6 +1456,13 @@ export default function VAFDashboard() {
             sessionId: currentSessionId
         }));
         setLoading(false);
+
+        // Update per-session loading state
+        sessionLoadingStates.current[currentSessionId] = {
+            loading: false,
+            statusMessage: '',
+            loadingMessageId: null
+        };
     };
 
     const sendMessage = async (e?: React.FormEvent, overrideText?: string) => {
@@ -1425,6 +1489,16 @@ export default function VAFDashboard() {
 
         setMessages(prev => [...prev, { role: 'user', content: textToSend, timestamp: Date.now() }]);
         setLoading(true);
+
+        // Update per-session loading state
+        if (currentSessionId) {
+            sessionLoadingStates.current[currentSessionId] = {
+                loading: true,
+                statusMessage: '',
+                loadingMessageId: null // Will be set when we get the message index
+            };
+        }
+
         if (!currentSessionId) {
             pendingSendRef.current = { text: textToSend, files: filesData };
             if (!pendingSessionRequestRef.current) {
@@ -2392,27 +2466,27 @@ export default function VAFDashboard() {
                                 <div>
                                     <div className="flex items-center gap-4">
                                         <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                                            <Activity className="text-blue-600" />
+                                            <Activity className="text-gray-800" />
                                             Context Window
                                         </h3>
                                         <div className="flex items-center gap-2 px-3 py-1 bg-white rounded-lg border border-gray-200 shadow-sm self-center">
                                             <span className="text-xs font-mono font-bold text-gray-700">{contextStats.tokens.toLocaleString()} / {contextStats.max_tokens.toLocaleString()} tokens</span>
-                                            <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{contextStats.percent}%</span>
+                                            <span className="text-[10px] font-bold text-violet-700 bg-violet-100 px-1.5 py-0.5 rounded">{contextStats.percent}%</span>
                                             <span className="w-px h-3 bg-gray-200 mx-1"></span>
                                             <span className="text-xs font-medium text-gray-500">{contextStats.message_count} messages</span>
                                         </div>
                                         {/* Memory Learning Badge */}
                                         {contextStats.user_turn_count !== undefined && (
-                                            <div className="flex items-center gap-2 px-3 py-1 bg-purple-50 rounded-lg border border-purple-200 shadow-sm self-center" title="Memory Learning: After every 15 messages, VAF analyzes the conversation and stores important facts to long-term memory">
-                                                <span className="text-xs font-medium text-purple-700">Memory Learning:</span>
+                                            <div className="flex items-center gap-2 px-3 py-1 bg-violet-50 rounded-lg border border-violet-200 shadow-sm self-center" title="Memory Learning: After every 15 messages, VAF analyzes the conversation and stores important facts to long-term memory">
+                                                <span className="text-xs font-medium text-violet-700">Memory Learning:</span>
                                                 <div className="flex items-center gap-1">
-                                                    <div className="h-1.5 w-16 bg-purple-200 rounded-full overflow-hidden">
+                                                    <div className="h-1.5 w-16 bg-violet-200 rounded-full overflow-hidden">
                                                         <div
-                                                            className="h-full bg-purple-500 transition-all duration-300"
+                                                            className="h-full bg-violet-500 transition-all duration-300"
                                                             style={{ width: `${((contextStats.user_turn_count % (contextStats.compaction_interval || 15)) / (contextStats.compaction_interval || 15)) * 100}%` }}
                                                         />
                                                     </div>
-                                                    <span className="text-xs font-mono font-bold text-purple-600">
+                                                    <span className="text-xs font-mono font-bold text-violet-600">
                                                         {contextStats.user_turn_count % (contextStats.compaction_interval || 15)}/{contextStats.compaction_interval || 15}
                                                     </span>
                                                 </div>
@@ -2438,53 +2512,53 @@ export default function VAFDashboard() {
                             {/* Legend - Left side */}
                             <div className="shrink-0 w-48 flex flex-col justify-center gap-3 text-sm">
                                 <div className="flex items-start gap-2">
-                                    <div className="w-3 h-3 rounded-sm bg-blue-500 mt-1 shrink-0"></div>
+                                    <div className="w-3 h-3 rounded-sm bg-gray-800 mt-1 shrink-0"></div>
                                     <div>
-                                        <div className="font-semibold text-slate-700">System Prompt</div>
-                                        <div className="text-xs text-slate-500">Instructions, persona, rules</div>
+                                        <div className="font-semibold text-gray-700">System Prompt</div>
+                                        <div className="text-xs text-gray-500">Instructions, persona, rules</div>
                                     </div>
                                 </div>
                                 <div className="flex items-start gap-2">
-                                    <div className="w-3 h-3 rounded-sm bg-emerald-500 mt-1 shrink-0"></div>
+                                    <div className="w-3 h-3 rounded-sm bg-violet-400 mt-1 shrink-0" title="Lilac"></div>
                                     <div>
-                                        <div className="font-semibold text-slate-700">Tool Schemas</div>
-                                        <div className="text-xs text-slate-500">Available functions & params</div>
+                                        <div className="font-semibold text-gray-700">Tool Schemas</div>
+                                        <div className="text-xs text-gray-500">Available functions & params</div>
                                     </div>
                                 </div>
                                 <div className="flex items-start gap-2">
-                                    <div className="w-3 h-3 rounded-sm bg-purple-500 mt-1 shrink-0"></div>
+                                    <div className="w-3 h-3 rounded-sm bg-violet-600 mt-1 shrink-0" title="Violet"></div>
                                     <div>
-                                        <div className="font-semibold text-slate-700">Conversation</div>
-                                        <div className="text-xs text-slate-500">Chat history & tool results</div>
+                                        <div className="font-semibold text-gray-700">Conversation</div>
+                                        <div className="text-xs text-gray-500">Chat history & tool results</div>
                                     </div>
                                 </div>
-                                <div className="border-t border-slate-200 my-2"></div>
+                                <div className="border-t border-gray-200 my-2"></div>
                                 <div className="flex items-start gap-2">
-                                    <div className="w-3 h-3 rounded-sm bg-gradient-to-b from-blue-500 to-purple-500 mt-1 shrink-0"></div>
+                                    <div className="w-3 h-3 rounded-sm bg-gradient-to-b from-gray-700 to-violet-600 mt-1 shrink-0"></div>
                                     <div>
-                                        <div className="font-semibold text-slate-700">Used</div>
-                                        <div className="text-xs text-slate-500">Total context consumed</div>
+                                        <div className="font-semibold text-gray-700">Used</div>
+                                        <div className="text-xs text-gray-500">Total context consumed</div>
                                     </div>
                                 </div>
                                 <div className="flex items-start gap-2">
-                                    <div className="w-3 h-3 rounded-sm bg-slate-200 mt-1 shrink-0"></div>
+                                    <div className="w-3 h-3 rounded-sm bg-gray-200 mt-1 shrink-0"></div>
                                     <div>
-                                        <div className="font-semibold text-slate-400">Free</div>
-                                        <div className="text-xs text-slate-400">Remaining capacity</div>
+                                        <div className="font-semibold text-gray-400">Free</div>
+                                        <div className="text-xs text-gray-400">Remaining capacity</div>
                                     </div>
                                 </div>
                                 {/* Memory Learning Info */}
                                 {contextStats.user_turn_count !== undefined && (
                                     <>
-                                        <div className="border-t border-purple-200 my-2"></div>
+                                        <div className="border-t border-violet-200 my-2"></div>
                                         <div className="flex items-start gap-2">
-                                            <div className="w-3 h-3 rounded-sm bg-purple-500 mt-1 shrink-0"></div>
+                                            <div className="w-3 h-3 rounded-sm bg-violet-600 mt-1 shrink-0"></div>
                                             <div>
-                                                <div className="font-semibold text-purple-700">Memory Learning</div>
-                                                <div className="text-xs text-purple-500">
+                                                <div className="font-semibold text-violet-700">Memory Learning</div>
+                                                <div className="text-xs text-gray-500">
                                                     Every {contextStats.compaction_interval || 15} messages, VAF analyzes the chat and stores important facts to long-term memory.
                                                 </div>
-                                                <div className="text-xs text-purple-600 font-mono mt-1">
+                                                <div className="text-xs text-violet-600 font-mono mt-1">
                                                     Next save in {(contextStats.compaction_interval || 15) - (contextStats.user_turn_count % (contextStats.compaction_interval || 15))} messages
                                                 </div>
                                             </div>
@@ -2584,10 +2658,10 @@ export default function VAFDashboard() {
                                     return (
                                         <g>
                                             <rect x={x} y={y} width={w} height={h} fill={color} rx="4" />
-                                            {h > 15 && (
+                                                {h > 15 && (
                                                 <>
-                                                    <text x={x + 25} y={y + (h/2) + 4} className="text-[11px] font-bold fill-slate-700 uppercase">{label}</text>
-                                                    <text x={x + 25} y={y + (h/2) + 18} className="text-[10px] fill-slate-500">{sub}</text>
+                                                    <text x={x + 25} y={y + (h/2) + 4} className="text-[11px] font-bold fill-gray-700 uppercase">{label}</text>
+                                                    <text x={x + 25} y={y + (h/2) + 18} className="text-[10px] fill-gray-500">{sub}</text>
                                                 </>
                                             )}
                                         </g>
@@ -2595,37 +2669,38 @@ export default function VAFDashboard() {
                                 };
 
                                 return (
-                                    <div className="w-full bg-slate-50 rounded-xl border border-slate-200 overflow-hidden relative flex-1 min-h-[300px] flex flex-col">
+                                    <div className="w-full bg-gray-50 rounded-xl border border-gray-200 overflow-hidden relative flex-1 min-h-[300px] flex flex-col">
                                         <svg viewBox={`0 0 ${w} ${h}`} className="w-full flex-1 select-none">
                                             <defs>
                                                 <linearGradient id="gradUsed" x1="0%" y1="0%" x2="0%" y2="100%">
-                                                    <stop offset="0%" stopColor="#3b82f6" />
-                                                    <stop offset="100%" stopColor="#a855f7" />
+                                                    <stop offset="0%" stopColor="#1f2937" />
+                                                    <stop offset="50%" stopColor="#a78bfa" />
+                                                    <stop offset="100%" stopColor="#7c3aed" />
                                                 </linearGradient>
                                             </defs>
 
-                                            {/* --- RIBBONS (Flows) --- */}
+                                            {/* --- RIBBONS (Flows): Gold, Lilac, Violet --- */}
                                             <g>
-                                                {makeRibbon(ySystem, hSystem, yUsed, "#3b82f6")}
-                                                {makeRibbon(yTools, hTools, yUsed + hSystem, "#10b981")}
-                                                {makeRibbon(yHistory, hHistory, yUsed + hSystem + hTools, "#a855f7")}
+                                                {makeRibbon(ySystem, hSystem, yUsed, "#1f2937")}
+                                                {makeRibbon(yTools, hTools, yUsed + hSystem, "#a78bfa")}
+                                                {makeRibbon(yHistory, hHistory, yUsed + hSystem + hTools, "#7c3aed")}
                                             </g>
 
                                             {/* --- LEFT: Source Components --- */}
-                                            {makeNode(leftX, ySystem, nodeW, hSystem, "#3b82f6", "System Prompt", `${Math.round(systemEst).toLocaleString()} tokens`)}
-                                            {makeNode(leftX, yTools, nodeW, hTools, "#10b981", "Tool Schemas", `${Math.round(toolsEst).toLocaleString()} tokens`)}
-                                            {makeNode(leftX, yHistory, nodeW, hHistory, "#a855f7", "Conversation", `${Math.round(historyEst).toLocaleString()} tokens`)}
+                                            {makeNode(leftX, ySystem, nodeW, hSystem, "#1f2937", "System Prompt", `${Math.round(systemEst).toLocaleString()} tokens`)}
+                                            {makeNode(leftX, yTools, nodeW, hTools, "#a78bfa", "Tool Schemas", `${Math.round(toolsEst).toLocaleString()} tokens`)}
+                                            {makeNode(leftX, yHistory, nodeW, hHistory, "#7c3aed", "Conversation", `${Math.round(historyEst).toLocaleString()} tokens`)}
 
                                             {/* --- RIGHT: Context Usage --- */}
                                             <g>
                                                 <rect x={rightX} y={yUsed} width={nodeW} height={hUsed} fill="url(#gradUsed)" rx="4" />
-                                                <rect x={rightX} y={yFree} width={nodeW} height={hFree} fill="#e2e8f0" rx="4" />
+                                                <rect x={rightX} y={yFree} width={nodeW} height={hFree} fill="#e5e7eb" rx="4" />
 
-                                                <text x={rightX - 10} y={yUsed + (hUsed/2)} textAnchor="end" className="text-[12px] font-bold fill-slate-700">Used</text>
-                                                <text x={rightX - 10} y={yUsed + (hUsed/2) + 16} textAnchor="end" className="text-[11px] fill-slate-500">{used.toLocaleString()} tokens ({contextStats.percent}%)</text>
+                                                <text x={rightX - 10} y={yUsed + (hUsed/2)} textAnchor="end" className="text-[12px] font-bold fill-gray-700">Used</text>
+                                                <text x={rightX - 10} y={yUsed + (hUsed/2) + 16} textAnchor="end" className="text-[11px] fill-gray-500">{used.toLocaleString()} tokens ({contextStats.percent}%)</text>
 
-                                                <text x={rightX - 10} y={yFree + (hFree/2)} textAnchor="end" className="text-[12px] font-bold fill-slate-400">Free</text>
-                                                <text x={rightX - 10} y={yFree + (hFree/2) + 16} textAnchor="end" className="text-[11px] fill-slate-300">{Math.round(freeEst).toLocaleString()} tokens</text>
+                                                <text x={rightX - 10} y={yFree + (hFree/2)} textAnchor="end" className="text-[12px] font-bold fill-gray-400">Free</text>
+                                                <text x={rightX - 10} y={yFree + (hFree/2) + 16} textAnchor="end" className="text-[11px] fill-gray-400">{Math.round(freeEst).toLocaleString()} tokens</text>
                                             </g>
                                         </svg>
                                     </div>

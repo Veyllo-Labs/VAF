@@ -492,6 +492,7 @@ def run_headless_agent():
                     response_text = str(response) if response is not None else ""
                     if response_text.startswith("[ASYNC_ACK]"):
                         clean_ack = response_text.replace("[ASYNC_ACK]", "").strip()
+                        final_text = clean_ack or response_text
                         if clean_ack:
                             get_web_interface().emit_agent_message(
                                 role="assistant",
@@ -512,9 +513,31 @@ def run_headless_agent():
                     # Emit message_complete event for Auto-TTS
                     try:
                         get_web_interface().emit_message_complete(
-                            content=str(final_text) if 'final_text' in dir() else str(response_text),
+                            content=str(final_text),
                             session_id=task.session_id
                         )
+                    except Exception:
+                        pass
+
+                    # If this task came from Telegram bridge, send reply back to Telegram
+                    try:
+                        task_source = getattr(task, "source", None)
+                        meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                        chat_id = meta.get("telegram_chat_id")
+                        try:
+                            from vaf.core.log_helper import log_telegram_reply
+                            log_telegram_reply(f"HEADLESS task_source={task_source!r} chat_id={chat_id!r} final_len={len(str(final_text))}")
+                        except Exception:
+                            pass
+                        if task_source == "telegram" and chat_id:
+                            from vaf.core.telegram_reply import send_telegram_reply
+                            # Strip <think>...</think> so Telegram gets clean text only (no reasoning block)
+                            out = str(final_text)
+                            out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
+                            out = re.sub(r'\n{3,}', '\n\n', out).strip()
+                            if not out:
+                                out = "[No reply text]"
+                            send_telegram_reply(str(chat_id), out)
                     except Exception:
                         pass
 
@@ -732,6 +755,16 @@ def run_headless_agent():
                             source="System",
                             session_id=task.session_id
                         )
+                    except Exception:
+                        pass
+                    # If task came from Telegram, send error reply so user sees something
+                    try:
+                        task_source = getattr(task, "source", None)
+                        meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                        if task_source == "telegram" and meta.get("telegram_chat_id"):
+                            from vaf.core.telegram_reply import send_telegram_reply
+                            err_msg = str(e).replace("\n", " ")[:400]
+                            send_telegram_reply(str(meta["telegram_chat_id"]), f"Sorry, something went wrong: {err_msg}")
                     except Exception:
                         pass
                 try:

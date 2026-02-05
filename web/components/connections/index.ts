@@ -2,3 +2,5 @@ export { default as ConnectionsPanel, CONNECTION_APPS, CATEGORIES } from './Conn
 export type { ConnectionApp } from './ConnectionsPanel';
 export { default as DiscordSetupWizard } from './DiscordSetupWizard';
 export type { DiscordConfig } from './DiscordSetupWizard';
+export { default as TelegramSetupWizard } from './TelegramSetupWizard';
+export type { TelegramConfig } from './TelegramSetupWizard';

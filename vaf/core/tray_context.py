@@ -35,6 +35,7 @@ class TrayContext:
         self.last_heartbeat = 0.0
         self.last_websocket_disconnect = 0.0
         self.last_websocket_activity = 0.0
+        self.last_telegram_activity = 0.0
         self.model_loaded = False
         self.server_port = 8001
         self.should_exit = False
@@ -61,6 +62,11 @@ class TrayContext:
         """Register any WebSocket activity (message received)."""
         self.last_websocket_activity = time.time()
 
+    def register_telegram_activity(self):
+        """Register Telegram prompt (so tray loads model and keeps it for telegram_idle_timeout)."""
+        self.last_telegram_activity = time.time()
+        self.register_activity()
+
     def is_active(self) -> bool:
         """
         Check if the system is currently 'Active'.
@@ -75,6 +81,13 @@ class TrayContext:
             return True
             
         return False
+
+    def has_recent_telegram_activity(self) -> bool:
+        """True if a Telegram prompt was received within telegram_idle_timeout (keeps model loaded)."""
+        if self.last_telegram_activity <= 0:
+            return False
+        timeout = Config.get("telegram_idle_timeout", 120)
+        return (time.time() - self.last_telegram_activity) < timeout
 
     def is_persistent(self) -> bool:
         """Check if persistent mode is enabled in Config."""

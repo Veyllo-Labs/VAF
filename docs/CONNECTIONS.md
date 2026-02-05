@@ -9,7 +9,7 @@ Connect external apps and services to interact with your VAF agent.
 | Platform | Status | Description |
 |----------|--------|-------------|
 | **Discord** | ✅ Available | Chat with your agent via Discord DMs or channels |
-| Telegram | 🔜 Coming Soon | Control your agent through Telegram bot |
+| **Telegram** | ✅ Available | Use VAF from Telegram; VAF can reach you there (whitelist, per-user) |
 | Slack | 🔜 Coming Soon | Integrate VAF into your Slack workspace |
 | WhatsApp | 🔜 Coming Soon | Chat with your agent on WhatsApp |
 | Email | 🔜 Coming Soon | Receive and respond to emails automatically |
@@ -116,6 +116,64 @@ The Discord configuration is stored locally in your VAF config:
 - Send the code via **Direct Message**, not in a server channel
 - Make sure you're sending the exact code (no extra spaces)
 
+## Telegram Integration
+
+### Features
+
+- **Real-time chat**: Use VAF from Telegram like the Web UI; VAF can also reach you there
+- **Whitelist**: Only whitelisted Telegram users can use the bot; each maps to one VAF user (same isolation as Web UI)
+- **Secure**: Token stored locally; whitelist links Telegram identity to your VAF user (user_scope_id / username)
+
+### Setup (all in English)
+
+1. Go to **Settings → Connections**
+2. Click **Connect** on Telegram
+3. Follow the setup wizard:
+   - Create a bot with [BotFather](https://t.me/BotFather) (`/newbot`)
+   - Paste your bot token
+   - Verify: send the 6-digit code to your bot in a Telegram DM
+   - **Whitelist**: Add your own Telegram (username or account). **Please enter your own number or username, not someone else's!**
+4. Turn the connection **on**; the bridge runs in the same process as the Web server
+
+### Whitelist and multi-user
+
+- Each whitelist entry links one Telegram user to one VAF user (user_scope_id and username from the current Web UI session when you add yourself).
+- Only whitelisted users get a response; others see: "You are not authorized…"
+- RAG, memories, and user identity are scoped per user, same as in the Web UI.
+
+### Configuration
+
+Stored in your VAF config (locally):
+
+```json
+{
+  "telegram_config": {
+    "bot_token": "your-bot-token",
+    "verified": true,
+    "enabled": true,
+    "whitelist": [
+      {
+        "telegram_user_id": "123456789",
+        "telegram_username": "your_username",
+        "user_scope_id": "uuid-from-auth",
+        "vaf_username": "your_vaf_username"
+      }
+    ]
+  }
+}
+```
+
+### Requirements
+
+- Python package: `python-telegram-bot` (v21+)
+- Install via: `pip install python-telegram-bot`
+
+### Troubleshooting
+
+- **"Not authorized"**: Add your Telegram in the wizard whitelist step (your own account only).
+- **Bot not replying**: Ensure the bridge is started (Settings → Connections, toggle Telegram on).
+- **Verification timeout**: Send the exact 6-digit code to the bot in a **private chat** (DM).
+
 ## Architecture
 
 ```
@@ -138,11 +196,16 @@ The Discord bridge:
 3. Receives responses from the agent
 4. Sends responses back to Discord
 
+Telegram uses the same pipeline as the Web UI:
+1. Telegram bridge receives a message, looks up the sender in the whitelist (user_scope_id, username)
+2. Enqueues a task on the same TaskQueue as the Web UI, with metadata (user_scope_id, username, telegram_chat_id)
+3. Headless runner processes the task; RAG and user identity are scoped to that user
+4. When the agent responds, the reply is sent back to the Telegram chat via the bridge
+
 ## Future Integrations
 
 We're working on additional integrations:
 
-- **Telegram**: Similar setup flow to Discord
 - **Slack**: OAuth-based workspace integration
 - **WhatsApp**: Via WhatsApp Business API
 - **Email**: IMAP/SMTP configuration for email automation

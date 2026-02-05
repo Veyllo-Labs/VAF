@@ -124,6 +124,16 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount Discord routes: {e}")
 
+# Mount Telegram Integration routes
+try:
+    from vaf.api.telegram_routes import router as telegram_router
+    app.include_router(telegram_router)
+    log("WebServer", "Telegram integration routes mounted at /api/telegram")
+except ImportError as e:
+    log("WebServer", f"Telegram integration not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount Telegram routes: {e}")
+
 # Mount Auth routes (Local Network Authentication)
 try:
     from vaf.api.auth_routes import router as auth_router
@@ -379,6 +389,18 @@ async def startup_event():
     #     asyncio.create_task(_auto_capture_worker())
     #     log("WebServer", "Auto-capture queue worker started")
     log("WebServer", "Auto-capture worker DISABLED (memory leak investigation)")
+
+    # Auto-start Telegram bridge when configured and enabled (so Web UI shows "Connected" after restart)
+    try:
+        telegram_config = Config.get("telegram_config") or {}
+        if isinstance(telegram_config, dict) and telegram_config.get("verified") and telegram_config.get("bot_token") and telegram_config.get("enabled"):
+            from vaf.api.telegram_bridge import start_bridge, is_bridge_running
+            if not is_bridge_running() and start_bridge():
+                log("WebServer", "Telegram bridge auto-started (configured and enabled)")
+            elif is_bridge_running():
+                log("WebServer", "Telegram bridge already running")
+    except Exception as e:
+        log("WebServer", f"Telegram bridge auto-start skipped or failed: {e}")
 
 
 async def _auto_capture_worker():

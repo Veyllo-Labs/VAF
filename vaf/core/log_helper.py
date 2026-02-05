@@ -43,6 +43,17 @@ def get_app_log_dir() -> Path:
     return Path.cwd()
 
 
+def log_telegram_reply(message: str) -> None:
+    """Always append to logs/telegram_reply.log (for diagnosing Telegram delivery). No-op on error."""
+    try:
+        log_dir = get_app_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "telegram_reply.log", "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().isoformat()} {message}\n")
+    except Exception:
+        pass
+
+
 def append_domain_log(domain: str, message: str) -> None:
     """
     Append one timestamped line to {domain}.log.

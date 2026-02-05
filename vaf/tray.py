@@ -501,6 +501,7 @@ def check_activity_loop(update_icon_callback):
         time_since_disconnect = time.time() - tray_context.last_websocket_disconnect
         time_since_ws_activity = time.time() - tray_context.last_websocket_activity
         has_websocket = tray_context.active_websockets > 0
+        telegram_grace = tray_context.has_recent_telegram_activity()
         
         # Check provider type - cloud providers don't need local model loading
         provider = Config.get("provider", "local")
@@ -516,7 +517,8 @@ def check_activity_loop(update_icon_callback):
                 log("Tray", "Persistent mode enabled. Loading model...")
                 start_model_async("Persistent")
             update_icon_callback("persistent")
-        elif is_active:
+        elif is_active or telegram_grace:
+            # Load model for Web/CLI activity or recent Telegram prompt (keeps model for telegram_idle_timeout)
             if not is_loaded and not is_cloud_provider:
                 print("Activity detected. Loading model...")
                 log("Tray", "Activity detected. Loading model...")
@@ -525,6 +527,7 @@ def check_activity_loop(update_icon_callback):
         else:
             # When no active web connection: unload after idle_timeout from last ws activity/disconnect.
             # If we have never had a websocket, use last_heartbeat so we do not unload immediately.
+            # Do not unload while within telegram_idle_timeout of last Telegram prompt (e.g. 2 min).
             no_web = tray_context.active_websockets == 0
             had_web = tray_context.last_websocket_disconnect > 0 or tray_context.last_websocket_activity > 0
             idle_long_enough = (
@@ -535,7 +538,8 @@ def check_activity_loop(update_icon_callback):
                 is_loaded and
                 not is_cloud_provider and
                 no_web and
-                idle_long_enough
+                idle_long_enough and
+                not telegram_grace
             ):
                 print(f"Idle timeout ({tray_context.idle_timeout}s) reached. Unloading model...")
                 log("Tray", f"Idle timeout reached. Unloading model (loaded={is_loaded}).")
@@ -553,7 +557,7 @@ def check_activity_loop(update_icon_callback):
                 f"IdleCheck state: loaded={tray_context.model_loaded} "
                 f"persistent={is_persistent} ws={tray_context.active_websockets} "
                 f"lastHeartbeat={time_since_last:.1f}s lastWs={time_since_ws_activity:.1f}s "
-                f"lastDisconnect={time_since_disconnect:.1f}s"
+                f"lastDisconnect={time_since_disconnect:.1f}s telegramGrace={telegram_grace}"
             )
             log("Tray", state_line)
             try:

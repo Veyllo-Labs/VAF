@@ -96,7 +96,8 @@ class Config:
         "server_persistence_enabled": False,   # Keep server running after exit
         "tray_autostart": False,               # Auto-start tray on OS login
         "debug_logs_enabled": False,           # Write domain logs and queue.log when enabled; off by default to reduce I/O
-        "server_idle_timeout": 15,             # Unload local model after idle seconds
+        "server_idle_timeout": 15,             # Unload local model after idle seconds (Web UI / CLI)
+        "telegram_idle_timeout": 120,          # Keep model loaded this long after last Telegram prompt when no Web connections (seconds)
         
         # Memory System Settings (RAG + Vector Search)
         "memory_enabled": True,                                    # Enable memory system
@@ -139,6 +140,9 @@ class Config:
         # Note: CLI mode (vaf run) always runs natively with full host access
         # Docker mode is only for Desktop/Tray mode for isolation
         "use_docker": True,                                        # Desktop: Run backend/frontend in Docker
+
+        # Connections: Telegram (bot token, whitelist per user_scope_id)
+        "telegram_config": None,                                   # { bot_token, enabled, verified?, whitelist: [...] }
     }
 
     @classmethod

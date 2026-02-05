@@ -12,6 +12,7 @@ interface ConnectionsPanelProps {
     config: any;
     onConfigChange: (key: string, value: any) => void;
     onOpenDiscordWizard: () => void;
+    onOpenTelegramWizard: () => void;
 }
 
 export interface ConnectionApp {
@@ -43,10 +44,9 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         name: 'Telegram',
         icon: MessageCircle,
         category: 'communication',
-        description: 'Control your agent through Telegram bot',
+        description: 'Message VAF from Telegram; VAF can reach you there',
         configKey: 'telegram_config',
-        available: false,
-        comingSoon: true,
+        available: true,
         iconColor: 'bg-sky-500',
     },
     {
@@ -195,20 +195,21 @@ export const CATEGORIES = [
     { id: 'social', label: 'Social', description: 'Social media platforms' },
 ];
 
-export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard }: ConnectionsPanelProps) {
+/** Use relative /api/ so Next.js rewrites to backend. */
+const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
+
+export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard, onOpenTelegramWizard }: ConnectionsPanelProps) {
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'disconnected' | 'checking'>>({});
 
-    // Check connection status on mount
     useEffect(() => {
         checkConnectionStatus();
     }, [config]);
 
     const checkConnectionStatus = async () => {
-        // Check Discord status
         if (config.discord_config?.verified) {
             setConnectionStatus(prev => ({ ...prev, discord: 'checking' }));
             try {
-                const res = await fetch('http://localhost:8001/api/discord/status');
+                const res = await fetch(api('api/discord/status'), { credentials: 'include' });
                 const status = await res.json();
                 setConnectionStatus(prev => ({ ...prev, discord: status.running ? 'connected' : 'disconnected' }));
             } catch {
@@ -217,23 +218,47 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
         } else {
             setConnectionStatus(prev => ({ ...prev, discord: 'disconnected' }));
         }
+        if (config.telegram_config?.verified) {
+            setConnectionStatus(prev => ({ ...prev, telegram: 'checking' }));
+            try {
+                const res = await fetch(api('api/telegram/status'), { credentials: 'include' });
+                const status = await res.json();
+                setConnectionStatus(prev => ({ ...prev, telegram: status.running ? 'connected' : 'disconnected' }));
+            } catch {
+                setConnectionStatus(prev => ({ ...prev, telegram: 'disconnected' }));
+            }
+        } else {
+            setConnectionStatus(prev => ({ ...prev, telegram: 'disconnected' }));
+        }
     };
 
     const handleToggleConnection = async (appId: string, enabled: boolean) => {
         if (appId === 'discord') {
             const currentConfig = config.discord_config || {};
             onConfigChange('discord_config', { ...currentConfig, enabled });
-
-            // Start/stop the Discord bridge
             try {
                 if (enabled) {
-                    await fetch('http://localhost:8001/api/discord/start', { method: 'POST' });
+                    await fetch(api('api/discord/start'), { method: 'POST', credentials: 'include' });
                 } else {
-                    await fetch('http://localhost:8001/api/discord/stop', { method: 'POST' });
+                    await fetch(api('api/discord/stop'), { method: 'POST', credentials: 'include' });
                 }
                 setConnectionStatus(prev => ({ ...prev, discord: enabled ? 'connected' : 'disconnected' }));
             } catch (e) {
                 console.error('Failed to toggle Discord:', e);
+            }
+        }
+        if (appId === 'telegram') {
+            const currentConfig = config.telegram_config || {};
+            onConfigChange('telegram_config', { ...currentConfig, enabled });
+            try {
+                if (enabled) {
+                    await fetch(api('api/telegram/start'), { method: 'POST', credentials: 'include' });
+                } else {
+                    await fetch(api('api/telegram/stop'), { method: 'POST', credentials: 'include' });
+                }
+                setConnectionStatus(prev => ({ ...prev, telegram: enabled ? 'connected' : 'disconnected' }));
+            } catch (e) {
+                console.error('Failed to toggle Telegram:', e);
             }
         }
     };
@@ -242,6 +267,10 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
         if (appId === 'discord') {
             onConfigChange('discord_config', null);
             setConnectionStatus(prev => ({ ...prev, discord: 'disconnected' }));
+        }
+        if (appId === 'telegram') {
+            onConfigChange('telegram_config', null);
+            setConnectionStatus(prev => ({ ...prev, telegram: 'disconnected' }));
         }
     };
 
@@ -322,9 +351,16 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                     )}
                                                 </div>
                                                 <p className="text-sm text-gray-500">{app.description}</p>
-                                                {configured && config[app.configKey]?.admin_username && (
+                                                {configured && app.id === 'discord' && config[app.configKey]?.admin_username && (
                                                     <p className="text-xs text-gray-600 mt-1">
                                                         Admin: @{config[app.configKey].admin_username}
+                                                    </p>
+                                                )}
+                                                {configured && app.id === 'telegram' && (
+                                                    <p className="text-xs text-gray-600 mt-1">
+                                                        {(config[app.configKey]?.whitelist?.length ?? 0) > 0
+                                                            ? 'You can message from Telegram; VAF can reach you there.'
+                                                            : 'Add your Telegram in Settings to message and be reached.'}
                                                     </p>
                                                 )}
                                             </div>
@@ -349,7 +385,10 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
 
                                                     {/* Settings */}
                                                     <button
-                                                        onClick={() => app.id === 'discord' && onOpenDiscordWizard()}
+                                                        onClick={() => {
+                                                            if (app.id === 'discord') onOpenDiscordWizard();
+                                                            if (app.id === 'telegram') onOpenTelegramWizard();
+                                                        }}
                                                         className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                                                         title="Settings"
                                                     >
@@ -367,7 +406,10 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                 </>
                                             ) : (
                                                 <button
-                                                    onClick={() => app.id === 'discord' && !app.comingSoon && onOpenDiscordWizard()}
+                                                    onClick={() => {
+                                                        if (app.id === 'discord') onOpenDiscordWizard();
+                                                        if (app.id === 'telegram') onOpenTelegramWizard();
+                                                    }}
                                                     disabled={app.comingSoon || !app.available}
                                                     className={cn(
                                                         "flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors",

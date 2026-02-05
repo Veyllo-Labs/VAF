@@ -27,7 +27,7 @@ import {
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig } from './connections';
 import SoulWizard from './SoulWizard';
 
 export interface SettingsModalProps {
@@ -91,6 +91,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showMemoryModal, setShowMemoryModal] = useState(false);
     const [showUserIdentityModal, setShowUserIdentityModal] = useState(false);
     const [showDiscordWizard, setShowDiscordWizard] = useState(false);
+    const [showTelegramWizard, setShowTelegramWizard] = useState(false);
 
     const [toolsSearch, setToolsSearch] = useState('');
     const [workflowsSearch, setWorkflowsSearch] = useState('');
@@ -382,6 +383,27 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const handleDiscordComplete = (discordConfig: DiscordConfig) => {
         handleChange('discord_config', discordConfig);
         setShowDiscordWizard(false);
+    };
+
+    const handleTelegramComplete = (telegramConfig: TelegramConfig) => {
+        const merged = { ...(localConfig.telegram_config || {}), ...telegramConfig };
+        handleChange('telegram_config', merged);
+        setShowTelegramWizard(false);
+        // Persist immediately so the connection stays after closing/reopening the modal
+        onSave({ ...config, telegram_config: merged });
+        // Refetch to get latest whitelist from API; keep merged so connection stays visible
+        fetch(apiBase ? `${apiBase}/api/config` : '/api/config', { credentials: 'include' })
+            .then((r) => r.ok ? r.json() : null)
+            .then((full) => {
+                setLocalConfig((prev: any) => ({
+                    ...prev,
+                    telegram_config: {
+                        ...(prev.telegram_config || {}),
+                        whitelist: full?.telegram_config?.whitelist ?? prev.telegram_config?.whitelist,
+                    },
+                }));
+            })
+            .catch(() => {});
     };
 
     const handleViewCode = async (name: string) => {
@@ -1059,6 +1081,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 config={localConfig}
                                 onConfigChange={handleChange}
                                 onOpenDiscordWizard={() => setShowDiscordWizard(true)}
+                                onOpenTelegramWizard={() => setShowTelegramWizard(true)}
                             />
                         )}
 
@@ -2916,6 +2939,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onClose={() => setShowDiscordWizard(false)}
                 onComplete={handleDiscordComplete}
                 existingConfig={localConfig.discord_config}
+            />
+
+            {/* Telegram Setup Wizard */}
+            <TelegramSetupWizard
+                isOpen={showTelegramWizard}
+                onClose={() => setShowTelegramWizard(false)}
+                onComplete={handleTelegramComplete}
+                existingConfig={localConfig.telegram_config}
             />
 
             {/* Soul Wizard Modal */}

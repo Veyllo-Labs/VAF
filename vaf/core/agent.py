@@ -3657,17 +3657,34 @@ class Agent:
             ):
                 selected_tools = list(selected_tools) + ["list_tools"]
 
-            # Memory tools are ALWAYS included when we have a restricted set (so model can remember user/system).
+            # Memory/identity tools are ALWAYS included when we have a restricted set (no duplicates).
             # Only skipped when Safety Net = ALL tools (would be redundant).
             if selected_tools:
-                for name in ("update_intent", "update_working_memory", "memory_search", "memory_save"):
+                for name in ("update_intent", "update_working_memory", "memory_search", "memory_save", "update_user_identity"):
                     if name in self.tools and name not in selected_tools:
                         selected_tools = list(selected_tools) + [name]
 
-            # ALWAYS show final tools for debugging consistency
+            # ALWAYS show final tools as system message for debugging consistency
             final_list = ", ".join(selected_tools) if selected_tools else "None (Safety Net -> ALL)"
             UI.event("Router", f"Final tools: {final_list}", style="dim")
-            
+            # Push to Web UI directly so it is never dropped by log throttle
+            try:
+                from vaf.core.web_interface import get_web_interface
+                from vaf.core.subagent_ipc import get_current_session_id
+                from datetime import datetime
+                session_id = get_current_session_id()
+                get_web_interface()._push_session_update(session_id, {
+                    "type": "new_log",
+                    "entry": {
+                        "timestamp": datetime.now().isoformat(),
+                        "message": f"Final tools: {final_list}",
+                        "level": "info",
+                        "source": "Router"
+                    }
+                })
+            except Exception:
+                pass
+
             # SAFETY NET: If router returns empty list, fallback to ALL tools
             # Otherwise the model gets 0 tools and hallucinates using them.
             if not selected_tools:

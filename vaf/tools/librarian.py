@@ -1034,7 +1034,9 @@ Remove duplicates and ensure smooth flow.
                 except ImportError:
                     return f"[ERROR] PDF support not installed. Run: pip install PyPDF2"
                 except Exception as e:
-                    return f"[ERROR] Failed to read PDF: {e}"
+                    err_str = str(e)
+                    hint = " For AES-encrypted PDFs (e.g. bank statements) run: pip install pycryptodome" if ("PyCryptodome" in err_str or "AES" in err_str) else ""
+                    return f"[ERROR] Failed to read PDF: {e}{hint}"
             
             # ═══════════════════════════════════════════════════════════
             # Word Documents (.docx)
@@ -1225,7 +1227,9 @@ Remove duplicates and ensure smooth flow.
                 return f"[INFO] Chunked reading not supported for {ext} files yet."
                 
         except Exception as e:
-            return f"[ERROR] Failed to read file in chunks: {e}"
+            err_str = str(e)
+            hint = " For AES-encrypted PDFs run: pip install pycryptodome" if ("PyCryptodome" in err_str or "AES" in err_str) else ""
+            return f"[ERROR] Failed to read file in chunks: {e}{hint}"
     
     def _show_tree(self, path: Path, max_depth: int = 3) -> str:
         """Show directory tree."""

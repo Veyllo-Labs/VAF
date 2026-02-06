@@ -354,7 +354,9 @@ For detailed analysis of large files, consider using librarian_agent instead."""
                 except ImportError:
                     return "Error: PDF support not installed. Run: pip install PyPDF2"
                 except Exception as e:
-                    return f"Error reading PDF: {e}"
+                    err_str = str(e)
+                    hint = " For AES-encrypted PDFs run: pip install pycryptodome" if ("PyCryptodome" in err_str or "AES" in err_str) else ""
+                    return f"Error reading PDF: {e}{hint}"
             
             # ═══════════════════════════════════════════════════════════
             # Word Documents (.docx)

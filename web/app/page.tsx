@@ -20,6 +20,8 @@ type Message = {
     role: 'user' | 'assistant' | 'system' | 'tool' | 'workflow';
     content: string; // For tools: this is the result
     timestamp: number;
+    /** Attachments shown on user messages (name + mimeType only; data not stored) */
+    files?: { name: string; mimeType: string }[];
     // Extra fields for tools
     toolId?: string;
     toolName?: string;
@@ -38,6 +40,17 @@ type Session = {
     title: string;
     messageCount?: number;
 };
+
+/** Strip backend "--- FILE: name ---\n...\n----------------" blocks from message content for display. Returns cleaned text and parsed file names (for chips when msg.files is missing after reload). */
+function stripAttachmentBlocks(content: string): { text: string; fileNames: string[] } {
+    if (!content || !content.includes('--- FILE:')) return { text: content, fileNames: [] };
+    const fileNames: string[] = [];
+    const re = /\n\n--- FILE: ([^\n]+) ---\n[\s\S]*?\n----------------\n?/g;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(content)) !== null) fileNames.push(match[1].trim());
+    const text = content.replace(re, '').trim();
+    return { text, fileNames };
+}
 
 // Helper to parse and merge thinking blocks
 // Returns: { thought, answer, isThinkingComplete }
@@ -1516,7 +1529,8 @@ export default function VAFDashboard() {
             }
         }
 
-        setMessages(prev => [...prev, { role: 'user', content: textToSend, timestamp: Date.now() }]);
+        const fileMeta = filesData.map(f => ({ name: f.name, mimeType: f.mimeType }));
+        setMessages(prev => [...prev, { role: 'user', content: textToSend, timestamp: Date.now(), files: fileMeta.length ? fileMeta : undefined }]);
         setLoading(true);
 
         // Update per-session loading state
@@ -2182,6 +2196,10 @@ export default function VAFDashboard() {
                                 // Simple: thinking is done when the </think> tag is found (isThinkingComplete)
                                 // For non-last messages, always treat as complete
                                 const thinkingDone = !isLastMessage || isThinkingComplete;
+                                // For user messages: don't show attachment content in bubble (strip --- FILE: ... --- blocks); keep chips from msg.files or parsed from content after reload
+                                const attachmentStripped = !isBot ? stripAttachmentBlocks(msg.content) : null;
+                                const displayAnswer = !isBot && attachmentStripped ? attachmentStripped.text : answer;
+                                const displayFiles = !isBot && (msg.files?.length ? msg.files : (attachmentStripped?.fileNames.length ? attachmentStripped.fileNames.map(name => ({ name, mimeType: '' })) : undefined));
 
                                 // Add top margin if following a system step
                                 const prevWasSystem = i > 0 && messages[i - 1].role === 'system';
@@ -2194,7 +2212,7 @@ export default function VAFDashboard() {
                                             {isBot && thought && <ThinkingDetails thought={thought} isComplete={thinkingDone} />}
 
                                             {/* Show answer bubble: always for user, for bot if there's an answer OR if there's no thought (fallback) */}
-                                            {(answer || !isBot || (isBot && !thought)) && (
+                                                    {(displayAnswer || !isBot || (isBot && !thought)) && (
                                                 <div className="flex flex-col gap-3 w-full">
                                                     {isBot && parseWorkflowAsync(answer) ? (() => {
                                                         const wf = parseWorkflowAsync(answer)!;
@@ -2233,7 +2251,7 @@ export default function VAFDashboard() {
                                                         <div className="relative group flex items-end">
                                                             <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed",
                                                                 isBot ? "bg-white text-gray-800 rounded-tl-none border border-gray-200" : "bg-gray-800 text-white rounded-tr-none")}>
-                                                                <p className="whitespace-pre-wrap">{renderMarkdownLinks(answer)}</p>
+                                                                <p className="whitespace-pre-wrap">{renderMarkdownLinks(isBot ? answer : displayAnswer)}</p>
                                                             </div>
                                                             {isBot && (
                                                                 <button
@@ -2258,6 +2276,17 @@ export default function VAFDashboard() {
                                                                     )}
                                                                 </button>
                                                             )}
+                                                        </div>
+                                                    )}
+                                                    {/* User message: show attachment chips below the bubble (from msg.files or parsed from content after reload) */}
+                                                    {!isBot && displayFiles && displayFiles.length > 0 && (
+                                                        <div className="flex gap-2 flex-wrap mt-1 justify-end">
+                                                            {displayFiles.map((f, idx) => (
+                                                                <div key={idx} className="flex items-center gap-1.5 bg-gray-100 rounded-lg px-2.5 py-1 text-xs text-gray-600">
+                                                                    <Paperclip size={12} className="shrink-0 text-gray-400" />
+                                                                    <span className="truncate max-w-[140px]">{f.name}</span>
+                                                                </div>
+                                                            ))}
                                                         </div>
                                                     )}
                                                 </div>

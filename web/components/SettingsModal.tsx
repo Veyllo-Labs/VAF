@@ -1074,14 +1074,59 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 })}
 
                                 <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-100">
-                                    <label className="text-sm font-medium text-gray-700 mb-1 block">Temperature ({localConfig.temperature || 0.7})</label>
-                                    <input
-                                        type="range" min="0" max="2" step="0.1"
-                                        value={localConfig.temperature || 0.7}
-                                        onChange={(e) => handleChange('temperature', parseFloat(e.target.value))}
-                                        className="w-full accent-blue-500"
-                                    />
-                                    <p className="text-xs text-gray-400 mt-1">Controls creativity (0 = strict, 1 = creative).</p>
+                                    <div className="flex items-center justify-between mb-3">
+                                        <label className="text-sm font-medium text-gray-700">Temperature</label>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs text-gray-500">Auto</span>
+                                            <button
+                                                onClick={() => handleChange('temperature_auto', !localConfig.temperature_auto)}
+                                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                                    localConfig.temperature_auto ? 'bg-blue-500' : 'bg-gray-300'
+                                                }`}
+                                            >
+                                                <span
+                                                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                                        localConfig.temperature_auto ? 'translate-x-4' : 'translate-x-1'
+                                                    }`}
+                                                />
+                                            </button>
+                                        </div>
+                                    </div>
+                                    {localConfig.temperature_auto ? (
+                                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                            <div className="flex items-center gap-2 text-blue-700">
+                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                                </svg>
+                                                <span className="text-sm font-medium">Adaptive Temperature</span>
+                                            </div>
+                                            <p className="text-xs text-blue-600 mt-1">
+                                                Temperature is automatically adjusted based on task type:
+                                            </p>
+                                            <ul className="text-xs text-blue-600 mt-1 space-y-0.5 ml-4 list-disc">
+                                                <li><strong>0.1-0.3:</strong> Math, logic, code, factual queries</li>
+                                                <li><strong>0.4-0.6:</strong> General conversation, explanations</li>
+                                                <li><strong>0.7-0.9:</strong> Creative writing, brainstorming</li>
+                                            </ul>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div className="flex items-center justify-between mb-1">
+                                                <span className="text-xs text-gray-500">Manual: {localConfig.temperature ?? 0.7}</span>
+                                            </div>
+                                            <input
+                                                type="range" min="0" max="2" step="0.1"
+                                                value={localConfig.temperature ?? 0.7}
+                                                onChange={(e) => handleChange('temperature', parseFloat(e.target.value))}
+                                                className="w-full accent-blue-500"
+                                            />
+                                            <div className="flex justify-between text-xs text-gray-400 mt-1">
+                                                <span>Strict (0)</span>
+                                                <span>Balanced (0.7)</span>
+                                                <span>Creative (2)</span>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         )}

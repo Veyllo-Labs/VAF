@@ -648,11 +648,15 @@ def run_headless_agent():
 
                             if last_user_msg != _user_input.strip():
                                 session.add_message(role="user", content=_user_input.strip())
+                                # Increment persistent user_turn_count in runtime_state
+                                if not hasattr(session, 'runtime_state') or session.runtime_state is None:
+                                    session.runtime_state = {}
+                                session.runtime_state["user_turn_count"] = session.runtime_state.get("user_turn_count", 0) + 1
                                 if _clean_response:
                                     session.add_message(role="assistant", content=_clean_response)
                                 session_mgr.save(session)
                                 if is_debug_logging_enabled():
-                                    logging.getLogger(__name__).debug(f"Session saved: +1 user, +1 assistant for {task.session_id}")
+                                    logging.getLogger(__name__).debug(f"Session saved: +1 user, +1 assistant for {task.session_id}, turn_count={session.runtime_state.get('user_turn_count', 0)}")
                             elif _clean_response:
                                 last_assistant_msg = None
                                 for msg in reversed(session.messages):
@@ -723,24 +727,30 @@ def run_headless_agent():
                             from vaf.memory.rag import run_session_compaction_sync
                             from vaf.core.config import Config
                             if Config.get("memory_enabled", True) and Config.get("memory_compaction_enabled", True):
-                                # Only main-user messages (role=user) count; each session is single-user (relay/other bots have separate sessions)
-                                turn_count = len([m for m in agent.history if _msg_role(m) == "user"])
+                                # CRITICAL: Use PERSISTENT turn_count from session.runtime_state
+                                # NOT from agent.history (which can be compressed/truncated)
+                                try:
+                                    _session_for_count = session_mgr.load(task.session_id)
+                                    _runtime = getattr(_session_for_count, 'runtime_state', None) or {}
+                                    turn_count = _runtime.get("user_turn_count", 0)
+                                except Exception:
+                                    # Fallback to agent.history count if session load fails
+                                    turn_count = len([m for m in agent.history if _msg_role(m) == "user"])
                                 _scope = (task.metadata or {}).get("user_scope_id") if getattr(task, "metadata", None) else None
                                 if _scope is not None and not isinstance(_scope, UUID):
                                     try:
                                         _scope = UUID(str(_scope))
                                     except (ValueError, TypeError):
                                         _scope = None
-                                if getattr(agent, "provider", "local") == "local":
-                                    tq.add(
-                                        task.session_id,
-                                        "__COMPACTION__",
-                                        source="web",
-                                        priority=15,
-                                        metadata={"compaction": True, "user_scope_id": str(_scope) if _scope else None, "turn_count": turn_count},
-                                    )
-                                else:
-                                    run_session_compaction_sync(agent, _scope, task.session_id, turn_count)
+                                # Always queue compaction as low-priority task (priority=15)
+                                # This ensures new user messages (priority=10) are processed first
+                                tq.add(
+                                    task.session_id,
+                                    "__COMPACTION__",
+                                    source="web",
+                                    priority=15,
+                                    metadata={"compaction": True, "user_scope_id": str(_scope) if _scope else None, "turn_count": turn_count},
+                                )
                         except Exception as e:
                             logging.getLogger(__name__).warning("Session compaction failed: %s", e)
                         try:

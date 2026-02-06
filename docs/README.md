@@ -12,15 +12,20 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 - **GATEWAY.md**: Persistent gateway server and multi-channel access.
 - **WEB_UI.md**: Browser-based dashboard and WebSocket API.
 
+### Speech & Voice
+- **SPEECH_FEATURES.md**: Complete TTS/STT integration across CLI, Web UI, and Telegram.
+- **DOCKER_SERVICES.md**: Docker containers for TTS (Piper), STT (Whisper), database, and Redis.
+
+### Messaging & Integration
+- **TELEGRAM_INTEGRATION.md**: Telegram bot with voice message support and user whitelisting.
+- **CONNECTIONS.md**: External service connections and authentication.
+- **API_INTEGRATION.md**: Integration with various LLM providers and APIs.
+- **WEBUI_WEBSOCKET_FLOW.md**: WebSocket flow, session scoping, and debugging.
+
 ### Sub-Agents
 - **CODER_ARCHITECTURE.md**: Deep dive into the Coder sub-agent's design and logic.
 - **SUBAGENT_IPC.md**: Inter-process communication between agents.
 - **SUBAGENT_FILE_EXTRACTION.md**: File handling in sub-agents.
-
-### Integration & APIs
-- **API_INTEGRATION.md**: Integration with various LLM providers and APIs.
-- **WEBUI_WEBSOCKET_FLOW.md**: WebSocket flow, session scoping, and debugging.
-- **MODELL_UND_PROVIDER_WECHSEL.md**: Wechsel zwischen lokalem Modell und API (Overlay, VRAM-Entladen/-Laden).
 
 ### Security & Execution
 - **SANDBOXING.md**: Secure code execution using Docker.
@@ -29,21 +34,52 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 ### Platform & Setup
 - **WINDOWS_SETUP.md**: Windows-specific setup and troubleshooting.
 - **DESIGN.md**: UI design tokens and component styles.
+- **MODELL_UND_PROVIDER_WECHSEL.md**: Switching between local models and API providers.
 
 See individual files for detailed documentation.
+
+---
+
+## Quick Start
+
+### Start Docker Services
+```bash
+docker compose -f docker-compose.memory.yml up -d
+```
+
+### Verify Services
+```bash
+docker ps --filter "name=vaf-"
+```
+
+### Key Ports
+| Service | Port | Description |
+|---------|------|-------------|
+| PostgreSQL | 5432 | Memory database |
+| Redis | 6379 | Cache |
+| TTS | 5002 | Text-to-Speech |
+| STT | 5003 | Speech-to-Text |
+| Web UI | 3000 | Browser interface |
+| API | 8000 | Backend API |
+
+---
 
 ## Usage for Developers
 
 Developers should consult these documents when:
 - Implementing new tools or sub-agents.
 - Troubleshooting core system behavior (e.g., context compression).
-- Setting up external bridges like Discord.
+- Setting up external bridges like Telegram or Discord.
 - Modifying the Web UI or Gateway architecture.
+- Adding speech features or new TTS/STT engines.
+
+---
 
 ## Writing Style
 
 When adding new documentation:
 - Use clear, technical English.
-- Include architecture diagrams or flowcharts where applicable (using Mermaid or code blocks).
+- Include architecture diagrams or flowcharts where applicable (using ASCII art or code blocks).
 - Provide practical examples for configuration and usage.
+- Include troubleshooting sections for common issues.
 - Ensure all links between documents are maintained and valid.

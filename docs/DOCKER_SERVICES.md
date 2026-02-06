@@ -2,23 +2,25 @@
 
 VAF uses **one** Docker Compose file for auxiliary services: **`docker-compose.memory.yml`** (in the project root).
 
-## Which containers exist?
+## Service Overview
 
-| Service   | Container name   | Port(s) | Description                          |
-|-----------|------------------|---------|--------------------------------------|
-| Postgres  | `vaf-memory-db`  | 5432    | Database (pgvector) for Memory/RAG **and Auth/User DB** – do not remove volume |
-| Redis     | `vaf-redis`      | 6379    | Cache (embeddings, sessions)          |
-| Sandbox   | `vaf-sandbox`    | —       | Python sandbox for safe code execution |
-| TTS (DE)  | `vaf-tts`        | 5002    | Piper TTS German (Thorsten) |
-| TTS (EN)  | `vaf-tts-en`     | 5004    | Piper TTS English (Kusal) |
-| TTS (FR)  | `vaf-tts-fr`     | 5006    | Piper TTS French (Siwis) |
-| STT       | `vaf-stt`        | 5003    | Whisper STT HTTP |
+| Service | Container | Port(s) | Description |
+|---------|-----------|---------|-------------|
+| PostgreSQL | `vaf-memory-db` | 5432 | Database (pgvector) for Memory/RAG and Auth/User DB |
+| Redis | `vaf-redis` | 6379 | Cache (embeddings, sessions) |
+| Sandbox | `vaf-sandbox` | — | Python sandbox for safe code execution |
+| TTS Multi-Lang | `vaf-tts` | 5002 | Piper TTS with German, English, French voices + OGG output |
+| TTS English | `vaf-tts-en` | 5004 | Dedicated English TTS (Kusal) |
+| TTS French | `vaf-tts-fr` | 5006 | Dedicated French TTS (Siwis) |
+| STT | `vaf-stt` | 5003 | Whisper ASR for speech-to-text |
 
-All services (Postgres, Redis, Sandbox, TTS DE/EN/FR, STT) are started by default when you run `up -d`.
+All services start by default when you run `docker compose up -d`.
 
-## Starting DB, Redis, and Sandbox
+---
 
-From the project root (where `docker-compose.memory.yml` lives):
+## Quick Start
+
+### Start All Services
 
 ```bash
 docker compose -f docker-compose.memory.yml up -d
@@ -29,61 +31,303 @@ docker compose -f docker-compose.memory.yml up -d
 docker compose -f docker-compose.memory.yml up -d
 ```
 
-After starting you should see:
-
-- `vaf-memory-db` (PostgreSQL)
-- `vaf-redis` (Redis)
-- `vaf-sandbox` (Python sandbox)
-
-Check:
+### Verify Running Containers
 
 ```bash
 docker ps --filter "name=vaf-"
 ```
 
-## Stopping
+Expected output:
+```
+CONTAINER ID   IMAGE                      PORTS                    NAMES
+...            vaf-tts-multilang:latest   0.0.0.0:5002->5000/tcp   vaf-tts
+...            vaf-tts-en                 0.0.0.0:5004->5000/tcp   vaf-tts-en
+...            vaf-tts-fr                 0.0.0.0:5006->5000/tcp   vaf-tts-fr
+...            whisper-asr-webservice     0.0.0.0:5003->9000/tcp   vaf-stt
+...            postgres:15                0.0.0.0:5432->5432/tcp   vaf-memory-db
+...            redis:7-alpine             0.0.0.0:6379->6379/tcp   vaf-redis
+...            vaf-sandbox                                         vaf-sandbox
+```
+
+### Stop Services
 
 ```bash
 docker compose -f docker-compose.memory.yml down
 ```
 
-## If Docker wasn’t running during install
+---
 
-The installer starts the memory containers only when **Docker is running** during installation. If you start Docker later or the containers are missing:
+## Speech Services (TTS & STT)
 
-1. Start Docker Desktop (Windows/macOS) or the Docker daemon (Linux).
-2. From the VAF project root run:
+### Text-to-Speech (TTS)
+
+VAF provides multi-language TTS via Docker containers using Piper neural voices.
+
+#### Multi-Language Container (`vaf-tts`)
+
+The primary TTS container supports multiple languages with automatic voice selection:
+
+| Language | Voice Model | Quality |
+|----------|-------------|---------|
+| German (de) | `de_DE-thorsten-high` | High |
+| English (en) | `en_US-kusal-medium` | Medium |
+| French (fr) | `fr_FR-siwis-medium` | Medium |
+
+**API Endpoint:** `POST http://localhost:5002/synthesize`
+
+```bash
+# Test German TTS
+curl -X POST http://localhost:5002/synthesize \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hallo, das ist ein Test.", "language": "de"}' \
+  --output test_de.wav
+
+# Test English TTS
+curl -X POST http://localhost:5002/synthesize \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello, this is a test.", "language": "en"}' \
+  --output test_en.wav
+```
+
+**Parameters:**
+- `text` (required): Text to synthesize
+- `language` (optional): `de`, `en`, or `fr` (default: `de`)
+- `format` (optional): `wav` or `ogg` (default: `wav`)
+
+#### OGG/Opus Output for Telegram
+
+The TTS container supports OGG/Opus output for Telegram voice messages:
+
+```bash
+curl -X POST http://localhost:5002/synthesize \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello!", "language": "en", "format": "ogg"}' \
+  --output test.ogg
+```
+
+The conversion uses ffmpeg built into the container - no local installation required.
+
+#### Dedicated Language Containers
+
+For high-volume single-language deployments:
+
+| Container | Port | Voice |
+|-----------|------|-------|
+| `vaf-tts-en` | 5004 | English (Kusal) |
+| `vaf-tts-fr` | 5006 | French (Siwis) |
+
+### Speech-to-Text (STT)
+
+VAF uses the `onerahmet/openai-whisper-asr-webservice` container for Whisper-based transcription.
+
+**API Endpoint:** `POST http://localhost:5003/asr`
+
+```bash
+curl -X POST "http://localhost:5003/asr?encode=true&output=json" \
+  -F "audio_file=@recording.wav"
+```
+
+**Response:**
+```json
+{
+  "text": "This is the transcribed text.",
+  "language": "en"
+}
+```
+
+**Supported Input Formats:** WAV, MP3, OGG, WebM, OGA
+
+**Key Feature:** Automatic language detection via `language` field in response.
+
+---
+
+## Database & Cache Services
+
+### PostgreSQL (`vaf-memory-db`)
+
+- **Port:** 5432
+- **Purpose:** Memory/RAG storage and Auth/User database
+- **Extension:** pgvector for vector similarity search
+- **Volume:** `vaf_memory_pgdata`
+
+**Connection String:**
+```
+postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory
+```
+
+> **Warning:** Do not delete `vaf_memory_pgdata` volume - it contains user accounts and memories.
+
+### Redis (`vaf-redis`)
+
+- **Port:** 6379
+- **Purpose:** Cache for embeddings and sessions
+- **Volume:** `vaf_redis_data`
+
+**Connection URL:**
+```
+redis://localhost:6379/0
+```
+
+---
+
+## Sandbox Service
+
+The `vaf-sandbox` container provides a secure Python environment for code execution.
+
+- **Volume:** `vaf_sandbox_workspace`
+- **Purpose:** Safe execution of generated Python code
+
+---
+
+## Volume Management
+
+All data is preserved across container restarts:
+
+| Volume | Purpose | Can Delete? |
+|--------|---------|-------------|
+| `vaf_memory_pgdata` | PostgreSQL data (users, memories) | **NO** |
+| `vaf_redis_data` | Redis cache | Yes |
+| `vaf_sandbox_workspace` | Sandbox working directory | Yes |
+| `vaf_tts_models` | TTS German voice cache | Yes |
+| `vaf_tts_models_en` | TTS English voice cache | Yes |
+| `vaf_tts_models_fr` | TTS French voice cache | Yes |
+| `vaf_stt_models` | STT model cache | Yes |
+
+**Stop containers without removing data:**
+```bash
+docker compose -f docker-compose.memory.yml down
+```
+
+**Remove containers AND volumes (data loss):**
+```bash
+docker compose -f docker-compose.memory.yml down -v
+```
+
+---
+
+## Selective Service Management
+
+### Stop Only Speech Services
+
+```bash
+docker compose -f docker-compose.memory.yml stop tts tts-en tts-fr stt
+```
+
+### Start Only Database and Redis
+
+```bash
+docker compose -f docker-compose.memory.yml up -d db redis
+```
+
+### Restart TTS After Configuration Change
+
+```bash
+docker compose -f docker-compose.memory.yml restart tts
+```
+
+---
+
+## Auto-Start with VAF
+
+When you start VAF (Desktop shortcut or `vaf tray`), the tray will automatically bring up the Docker stack if Docker is available.
+
+### If Docker Wasn't Running During Install
+
+1. Start Docker Desktop (Windows/macOS) or Docker daemon (Linux)
+2. From VAF project root:
    ```bash
    docker compose -f docker-compose.memory.yml up -d
    ```
 
-DB, Redis, and Sandbox will then be available.
+---
 
-## TTS and STT
+## Configuration
 
-TTS (Piper) and STT (Whisper) start with the rest of the stack. VAF Tray brings up the full stack (DB, Redis, Sandbox, TTS, STT). This avoids extra memory use if you use local TTS/STT.
+VAF configuration for Docker services (`~/.vaf/config.json`):
 
-- **TTS (multi-language):** One user German, another English, another French – VAF detects language and calls the right TTS container. Run `docker compose -f docker-compose.memory.yml up -d` to start **tts** (German, port 5002), **tts-en** (English, 5004), **tts-fr** (French, 5006). In Settings → Voice set optional URLs: Docker TTS URL (default), URL German (5002), URL English (5004), URL French (5006). Defaults in config: `speech_tts_docker_url_de`, `_en`, `_fr`. Other languages use the default URL.
-- **STT:** Set `speech_stt_engine` to `"docker"` and `speech_stt_docker_url` to `http://localhost:5003`. The backend sends recorded audio to the STT container (POST /asr, multipart file). No local faster-whisper or ffmpeg required when using Docker STT.
+```json
+{
+  "speech_tts_enabled": true,
+  "speech_tts_engine": "docker",
+  "speech_tts_docker_url": "http://localhost:5002",
+  "speech_tts_docker_url_de": "http://localhost:5002",
+  "speech_tts_docker_url_en": "http://localhost:5004",
+  "speech_tts_docker_url_fr": "http://localhost:5006",
 
-TTS/STT use their own volumes and do **not** touch Postgres. Do **not** remove `vaf_memory_pgdata` (user/auth DB).
+  "speech_stt_enabled": true,
+  "speech_stt_engine": "docker",
+  "speech_stt_docker_url": "http://localhost:5003",
 
-## Auto-start with VAF
+  "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",
+  "redis_url": "redis://localhost:6379/0",
+  "redis_enabled": true
+}
+```
 
-When you start VAF (Desktop shortcut or `vaf tray`), the tray will try to bring up the memory stack automatically if Docker is available. You can also start it manually with the command above.
+---
 
-## Volumes (data is preserved)
+## Building Custom Containers
 
-- `vaf_memory_pgdata` – **PostgreSQL (Memory + Auth/User DB). Do not delete this volume or you lose user accounts and memories.**
-- `vaf_redis_data` – Redis data
-- `vaf_sandbox_workspace` – Sandbox working directory
-- `vaf_tts_models` – TTS German voice cache
-- `vaf_tts_models_en` – TTS English voice cache
-- `vaf_tts_models_fr` – TTS French voice cache
-- `vaf_stt_models` – STT model cache (optional)
-
-Running `docker compose -f docker-compose.memory.yml down` removes only the containers, not the volumes. Data is kept. To remove **only** the speech containers and keep DB/Redis/Sandbox:
+### Rebuild TTS Multi-Language Container
 
 ```bash
-docker compose -f docker-compose.memory.yml stop tts stt
+cd docker/tts-multilang
+docker build -t vaf-tts-multilang:latest .
 ```
+
+The container includes:
+- Piper TTS with ONNX runtime
+- Pre-downloaded voice models (DE, EN, FR)
+- ffmpeg for OGG/Opus conversion
+- Flask API server
+
+---
+
+## Troubleshooting
+
+### Containers Not Starting
+
+```bash
+# Check Docker status
+docker info
+
+# View container logs
+docker logs vaf-tts
+docker logs vaf-stt
+docker logs vaf-memory-db
+```
+
+### TTS Not Responding
+
+```bash
+# Test TTS health
+curl -X POST http://localhost:5002/synthesize \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Test"}' -o /dev/null -w "%{http_code}"
+# Should return: 200
+```
+
+### STT Returns 422 Error
+
+- Ensure audio file is valid (WAV, MP3, OGG)
+- Check field name is `audio_file` (not `file`)
+- View STT logs: `docker logs vaf-stt`
+
+### Database Connection Issues
+
+```bash
+# Test PostgreSQL
+docker exec -it vaf-memory-db psql -U vaf -d vaf_memory -c "SELECT 1;"
+
+# Test Redis
+docker exec -it vaf-redis redis-cli ping
+# Should return: PONG
+```
+
+---
+
+## Related Documentation
+
+- [SPEECH_FEATURES.md](./SPEECH_FEATURES.md) - Detailed speech integration documentation
+- [MEMORY_SYSTEM.md](./MEMORY_SYSTEM.md) - Memory and RAG documentation
+- [SANDBOXING.md](./SANDBOXING.md) - Sandbox security documentation

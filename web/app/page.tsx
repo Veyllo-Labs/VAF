@@ -41,6 +41,62 @@ type Session = {
     messageCount?: number;
 };
 
+/**
+ * Convert audio Blob (webm/opus) to WAV format for better Whisper compatibility.
+ * Uses Web Audio API to decode and re-encode as 16-bit PCM WAV.
+ */
+async function convertToWav(blob: Blob): Promise<Blob> {
+    const arrayBuffer = await blob.arrayBuffer();
+    const audioContext = new AudioContext({ sampleRate: 16000 });
+
+    try {
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        const numberOfChannels = 1; // Mono for STT
+        const sampleRate = 16000;
+        const length = audioBuffer.length;
+
+        // Get audio data (convert to mono if stereo)
+        const channelData = audioBuffer.getChannelData(0);
+
+        // Create WAV file
+        const wavBuffer = new ArrayBuffer(44 + length * 2);
+        const view = new DataView(wavBuffer);
+
+        // WAV header
+        const writeString = (offset: number, str: string) => {
+            for (let i = 0; i < str.length; i++) {
+                view.setUint8(offset + i, str.charCodeAt(i));
+            }
+        };
+
+        writeString(0, 'RIFF');
+        view.setUint32(4, 36 + length * 2, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true); // Subchunk1Size
+        view.setUint16(20, 1, true); // AudioFormat (PCM)
+        view.setUint16(22, numberOfChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * numberOfChannels * 2, true); // ByteRate
+        view.setUint16(32, numberOfChannels * 2, true); // BlockAlign
+        view.setUint16(34, 16, true); // BitsPerSample
+        writeString(36, 'data');
+        view.setUint32(40, length * 2, true);
+
+        // Write audio data as 16-bit PCM
+        let offset = 44;
+        for (let i = 0; i < length; i++) {
+            const sample = Math.max(-1, Math.min(1, channelData[i]));
+            view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+            offset += 2;
+        }
+
+        return new Blob([wavBuffer], { type: 'audio/wav' });
+    } finally {
+        await audioContext.close();
+    }
+}
+
 /** Strip backend "--- FILE: name ---\n...\n----------------" blocks from message content for display. Returns cleaned text and parsed file names (for chips when msg.files is missing after reload). */
 function stripAttachmentBlocks(content: string): { text: string; fileNames: string[] } {
     if (!content || !content.includes('--- FILE:')) return { text: content, fileNames: [] };
@@ -609,6 +665,7 @@ export default function VAFDashboard() {
     const [isRecording, setIsRecording] = useState(false);
     const [isProcessingAudio, setIsProcessingAudio] = useState(false);
     const [sttEnabled, setSttEnabled] = useState(false); // Track STT status
+    const [memoryLearning, setMemoryLearning] = useState<{ active: boolean; message: string } | null>(null);
     const [volume, setVolume] = useState(0);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
@@ -1437,6 +1494,16 @@ export default function VAFDashboard() {
                         setLoadingMessageId(null);
                     }
                 }
+                else if (data.type === 'memory_learning') {
+                    // Memory Learning status updates
+                    if (data.status === 'started') {
+                        setMemoryLearning({ active: true, message: data.message || 'Memory Learning in progress...' });
+                    } else if (data.status === 'completed' || data.status === 'error') {
+                        // Show completion message briefly, then hide
+                        setMemoryLearning({ active: false, message: data.message || 'Memory Learning complete!' });
+                        setTimeout(() => setMemoryLearning(null), 4000);
+                    }
+                }
             } catch (e) { console.error(e); }
         };
         socket.onclose = () => {
@@ -1689,7 +1756,17 @@ export default function VAFDashboard() {
             const source = audioContext.createMediaStreamSource(stream);
             source.connect(analyser);
 
-            const mediaRecorder = new MediaRecorder(stream);
+            // Try to use audio/wav or audio/ogg for better compatibility with Whisper
+            // Chrome default is webm/opus which some Whisper containers struggle with
+            let mimeType = 'audio/webm';
+            if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+                mimeType = 'audio/webm;codecs=opus';
+            } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+                mimeType = 'audio/ogg;codecs=opus';
+            }
+            console.log('[STT] Using MediaRecorder mimeType:', mimeType);
+
+            const mediaRecorder = new MediaRecorder(stream, { mimeType });
             mediaRecorderRef.current = mediaRecorder;
             audioChunksRef.current = [];
 
@@ -1700,20 +1777,41 @@ export default function VAFDashboard() {
             };
 
             mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
 
-                // Convert to base64
-                const reader = new FileReader();
-                reader.readAsDataURL(audioBlob);
-                reader.onloadend = () => {
-                    const base64Audio = reader.result as string;
-                    // Send to backend
-                    ws?.send(JSON.stringify({
-                        type: 'process_audio',
-                        audio: base64Audio.split(',')[1] // Remove data:audio/webm;base64, prefix
-                    }));
-                    setIsProcessingAudio(true);
-                };
+                try {
+                    // Convert webm/opus to WAV for better Whisper compatibility
+                    console.log('[STT] Converting audio to WAV...');
+                    const wavBlob = await convertToWav(audioBlob);
+                    console.log('[STT] WAV conversion complete, size:', wavBlob.size);
+
+                    // Convert to base64
+                    const reader = new FileReader();
+                    reader.readAsDataURL(wavBlob);
+                    reader.onloadend = () => {
+                        const base64Audio = reader.result as string;
+                        // Send to backend
+                        ws?.send(JSON.stringify({
+                            type: 'process_audio',
+                            audio: base64Audio.split(',')[1], // Remove data:audio/wav;base64, prefix
+                            format: 'wav'
+                        }));
+                        setIsProcessingAudio(true);
+                    };
+                } catch (conversionError) {
+                    console.warn('[STT] WAV conversion failed, sending original format:', conversionError);
+                    // Fallback: send original format
+                    const reader = new FileReader();
+                    reader.readAsDataURL(audioBlob);
+                    reader.onloadend = () => {
+                        const base64Audio = reader.result as string;
+                        ws?.send(JSON.stringify({
+                            type: 'process_audio',
+                            audio: base64Audio.split(',')[1]
+                        }));
+                        setIsProcessingAudio(true);
+                    };
+                }
 
                 // Stop all tracks
                 stream.getTracks().forEach(track => track.stop());
@@ -1776,7 +1874,9 @@ export default function VAFDashboard() {
             detectSilence(); // Start VAD loop
             setIsRecording(true);
         } catch (error) {
-            console.error('Error accessing microphone:', error);
+            // Use console.warn instead of console.error to avoid triggering Next.js error overlay
+            // This is an expected user-facing error (mic busy, permission denied, etc.)
+            console.warn('[STT] Microphone access failed:', error instanceof Error ? error.message : error);
             alert(getMicErrorMessage(error));
         }
     };
@@ -2387,6 +2487,27 @@ export default function VAFDashboard() {
                                             </div>
                                         </div>
                                     ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Memory Learning Banner */}
+                        {memoryLearning && (
+                            <div className={cn(chatWidthClass, "mx-auto mb-2")}>
+                                <div className={cn(
+                                    "flex items-center gap-2 px-4 py-2 rounded-xl border shadow-sm transition-all animate-in fade-in slide-in-from-bottom-2",
+                                    memoryLearning.active
+                                        ? "bg-violet-50 border-violet-300 text-violet-700"
+                                        : "bg-green-50 border-green-300 text-green-700"
+                                )}>
+                                    {memoryLearning.active ? (
+                                        <div className="w-4 h-4 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                                    ) : (
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                        </svg>
+                                    )}
+                                    <span className="text-sm font-medium">{memoryLearning.message}</span>
                                 </div>
                             </div>
                         )}

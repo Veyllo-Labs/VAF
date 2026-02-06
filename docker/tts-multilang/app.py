@@ -260,8 +260,16 @@ def detect_language(text: str) -> str:
         return DEFAULT_LANG
 
 
-def synthesize_speech(text: str, lang: str) -> Optional[bytes]:
-    """Synthesize speech using Piper. Returns WAV audio bytes."""
+def synthesize_speech(text: str, lang: str, output_format: str = "wav") -> Optional[bytes]:
+    """Synthesize speech using Piper.
+
+    Args:
+        text: Text to synthesize
+        lang: Language code
+        output_format: "wav" or "ogg" (OGG/Opus for Telegram)
+
+    Returns: Audio bytes in requested format
+    """
     model_path = get_model_path(lang)
     if not model_path or not model_path.exists():
         return None
@@ -296,12 +304,61 @@ def synthesize_speech(text: str, lang: str) -> Optional[bytes]:
             wav_file.writeframes(all_audio)
 
         audio_buffer.seek(0)
-        return audio_buffer.read()
+        wav_data = audio_buffer.read()
+
+        # Convert to OGG/Opus if requested (for Telegram voice messages)
+        if output_format.lower() == "ogg":
+            return convert_wav_to_ogg(wav_data)
+
+        return wav_data
 
     except Exception as e:
         print(f"Synthesis error: {e}")
         import traceback
         traceback.print_exc()
+        return None
+
+
+def convert_wav_to_ogg(wav_data: bytes) -> Optional[bytes]:
+    """Convert WAV audio to OGG/Opus format using ffmpeg."""
+    import tempfile
+
+    try:
+        # Write WAV to temp file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
+            wav_file.write(wav_data)
+            wav_path = wav_file.name
+
+        ogg_path = wav_path.replace(".wav", ".ogg")
+
+        try:
+            # Run ffmpeg to convert
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-i", wav_path, "-c:a", "libopus", "-b:a", "64k", ogg_path],
+                capture_output=True,
+                timeout=30
+            )
+
+            if result.returncode != 0:
+                print(f"ffmpeg conversion failed: {result.stderr.decode()[:200]}")
+                return None
+
+            # Read OGG file
+            with open(ogg_path, "rb") as f:
+                return f.read()
+
+        finally:
+            # Cleanup temp files
+            import os
+            for path in [wav_path, ogg_path]:
+                try:
+                    if os.path.exists(path):
+                        os.unlink(path)
+                except Exception:
+                    pass
+
+    except Exception as e:
+        print(f"WAV to OGG conversion error: {e}")
         return None
 
 
@@ -465,20 +522,27 @@ def synthesize():
     Request body (JSON):
         text: str - Text to synthesize
         language: str (optional) - Language code (auto-detected if not provided)
+        format: str (optional) - Output format: "wav" (default) or "ogg" (Opus, for Telegram)
 
-    Returns: audio/wav
+    Returns: audio/wav or audio/ogg
     """
     # Handle both JSON and form data
     if request.is_json:
         data = request.get_json() or {}
         text = data.get("text", "")
         lang = data.get("language")
+        output_format = data.get("format", "wav")
     else:
         text = request.form.get("text", "") or request.args.get("text", "")
         lang = request.form.get("language") or request.args.get("language")
+        output_format = request.form.get("format") or request.args.get("format", "wav")
 
     if not text:
         return jsonify({"error": "Missing 'text' parameter"}), 400
+
+    # Validate format
+    if output_format.lower() not in ("wav", "ogg"):
+        output_format = "wav"
 
     config = load_config()
 
@@ -508,15 +572,23 @@ def synthesize():
                 }), 400
 
     # Synthesize
-    audio_data = synthesize_speech(text, lang)
+    audio_data = synthesize_speech(text, lang, output_format)
     if not audio_data:
         return jsonify({"error": "Synthesis failed"}), 500
 
+    # Set MIME type based on format
+    if output_format.lower() == "ogg":
+        mimetype = "audio/ogg"
+        filename = "speech.ogg"
+    else:
+        mimetype = "audio/wav"
+        filename = "speech.wav"
+
     return Response(
         audio_data,
-        mimetype="audio/wav",
+        mimetype=mimetype,
         headers={
-            "Content-Disposition": "inline; filename=speech.wav",
+            "Content-Disposition": f"inline; filename={filename}",
             "X-TTS-Language": lang
         }
     )

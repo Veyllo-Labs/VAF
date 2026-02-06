@@ -2398,13 +2398,27 @@ class Agent:
                     tools_tokens = len(self.tools) * 200 if hasattr(self, 'tools') else 0
 
             # Count user messages for compaction tracking
-            user_turn_count = sum(1 for m in self.history if m.get("role") == "user")
-            compaction_interval = 15  # From Config.get("memory_compaction_interval", 15)
+            # CRITICAL: Use PERSISTENT count from session.runtime_state, NOT from compressed history
+            user_turn_count = 0
+            compaction_interval = 15
             try:
                 from vaf.core.config import Config
+                from vaf.core.session import SessionManager
                 compaction_interval = int(Config.get("memory_compaction_interval", 15))
+                # Try to get persistent count from session
+                if hasattr(self, 'current_session_id') and self.current_session_id:
+                    try:
+                        _sm = SessionManager()
+                        _session = _sm.load(self.current_session_id)
+                        _runtime = getattr(_session, 'runtime_state', None) or {}
+                        user_turn_count = _runtime.get("user_turn_count", 0)
+                    except Exception:
+                        pass
+                # Fallback to history count if no persistent count
+                if user_turn_count == 0:
+                    user_turn_count = sum(1 for m in self.history if m.get("role") == "user")
             except Exception:
-                pass
+                user_turn_count = sum(1 for m in self.history if m.get("role") == "user")
 
             get_web_interface().push_update({
                 "type": "context_status",
@@ -2470,72 +2484,144 @@ class Agent:
 
     def analyze_intent(self, user_input):
         '''
-        Determines the optimal temperature (0.2 - 0.9) for the user's request.
-        Uses a quick, lightweight inference.
+        Determines the optimal temperature (0.1 - 0.9) for the user's request.
+        Uses a hybrid approach: rule-based heuristics + optional LLM confirmation.
         '''
         try:
+            input_lower = user_input.lower()
+
+            # ============================================================
+            # PHASE 1: Fast rule-based heuristics (no LLM call needed)
+            # ============================================================
+
+            # LOW TEMPERATURE (0.1-0.3): Factual, logical, precise tasks
+            low_temp_patterns = [
+                # Math and calculations
+                r'\b(berechne|calculate|rechne|compute|solve|löse)\b',
+                r'\b\d+\s*[\+\-\*\/\^]\s*\d+',  # Math expressions like "5+3"
+                r'\b(math|mathematik|algebra|geometry|calculus)\b',
+                # Code and programming
+                r'\b(code|programmier|function|class|def |import |return |bug|fix|debug|error|fehler)\b',
+                r'\b(python|javascript|typescript|java|rust|go|cpp|c\+\+|sql)\b',
+                # Facts and definitions
+                r'\b(was ist|what is|define|definition|erkläre genau|explain exactly)\b',
+                r'\b(wieviel|how much|how many|wie viele|wann|when|where|wo|who|wer)\b',
+                # File operations and tools
+                r'\b(datei|file|ordner|folder|directory|lese|read|schreibe|write|erstelle|create)\b',
+                r'\b(suche nach|search for|find|finde|grep|look for)\b',
+                # Technical/precise
+                r'\b(convert|konvertiere|format|parse|validate|check|prüfe)\b',
+            ]
+
+            # HIGH TEMPERATURE (0.7-0.9): Creative, open-ended tasks
+            high_temp_patterns = [
+                # Creative writing
+                r'\b(schreibe|write|verfasse|compose|dichte|poem|gedicht|story|geschichte)\b',
+                r'\b(kreativ|creative|brainstorm|ideen|ideas|inspire|inspiration)\b',
+                r'\b(novel|roman|essay|artikel|article|blog)\b',
+                # Open-ended exploration
+                r'\b(was denkst du|what do you think|meinung|opinion|vorschlag|suggest)\b',
+                r'\b(wie wäre es|how about|was wäre wenn|what if|imagine|stell dir vor)\b',
+                r'\b(erzähl|tell me about|describe|beschreibe)\b',
+                # Humor and fun
+                r'\b(witz|joke|lustig|funny|humor|spaß|fun)\b',
+                # Roleplay
+                r'\b(roleplay|spiel|pretend|tu so als ob|act as|sei)\b',
+            ]
+
+            # Check patterns
+            for pattern in low_temp_patterns:
+                if re.search(pattern, input_lower):
+                    temp = 0.2
+                    try:
+                        append_domain_log("backend", f"intent_temp_rule_low pattern={pattern[:20]} temp={temp}")
+                    except Exception:
+                        pass
+                    return temp
+
+            for pattern in high_temp_patterns:
+                if re.search(pattern, input_lower):
+                    temp = 0.8
+                    try:
+                        append_domain_log("backend", f"intent_temp_rule_high pattern={pattern[:20]} temp={temp}")
+                    except Exception:
+                        pass
+                    return temp
+
+            # ============================================================
+            # PHASE 2: LLM-based analysis for ambiguous cases
+            # ============================================================
             prompt = (
-                f"You are a meta-cognitive strategist. Your ONLY job is to decide the creativity level (Temperature) for the Main Agent.\n"
-                f"Analyze the User Request and output ONLY the float value (0.2 - 0.9).\n"
-                f"Guidelines:\n"
-                f"- 0.2: Factual queries, Math, Logic, or when TOOLS (Web Search, Filesystem) are needed.\n"
-                f"- 0.5: General conversation, Explanations.\n"
-                f"- 0.9: Creative writing, Brainstorming.\n"
-                f"Request: {user_input}\n"
-                f"Output ONLY the float value."
+                "Analyze this request and output ONLY a number between 0.1 and 0.9.\n"
+                "0.1-0.3 = factual/logical/code tasks\n"
+                "0.4-0.6 = general conversation\n"
+                "0.7-0.9 = creative/brainstorming\n"
+                f"Request: {user_input[:200]}\n"  # Limit input length
+                "Temperature:"
             )
-            
-            # Quick Inference
+
             messages = [{"role": "user", "content": prompt}]
-            
             content = ""
+
+            # Try LLM call if server is available
             if self.use_server:
-                 # Router-style: short output only (number), no chat
-                 # Note: max_tokens increased to 128 because Qwen3 uses <think> blocks which consume tokens
-                 payload = {"messages": messages, "max_tokens": 128, "temperature": 0.0}
-                 try:
-                     res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=30).json()
-                     try:
-                         # Debug: Log full response structure
-                         choices = res.get('choices', [])
-                         if choices:
-                             msg = choices[0].get('message', {})
-                             content = msg.get('content', '')
-                             # Also check for 'text' field (some models use this)
-                             if not content:
-                                 content = choices[0].get('text', '')
-                         append_domain_log("backend", f"intent_analysis_raw choices_len={len(choices)} content={content[:50] if content else 'EMPTY'}")
-                     except Exception as parse_err:
-                         append_domain_log("backend", f"intent_analysis_parse_error error={str(parse_err)[:50]} res_keys={list(res.keys()) if isinstance(res, dict) else 'not_dict'}")
-                 except Exception as e:
-                     try:
-                         append_domain_log("backend", f"intent_analysis_failed error={str(e)[:100]}")
-                     except Exception:
-                         pass
+                payload = {"messages": messages, "max_tokens": 32, "temperature": 0.0}
+                try:
+                    res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=10).json()
+                    choices = res.get('choices', [])
+                    if choices:
+                        msg = choices[0].get('message', {})
+                        content = msg.get('content', '') or choices[0].get('text', '')
+                    try:
+                        append_domain_log("backend", f"intent_llm_response content={content[:30] if content else 'EMPTY'}")
+                    except Exception:
+                        pass
+                except requests.exceptions.Timeout:
+                    try:
+                        append_domain_log("backend", "intent_llm_timeout")
+                    except Exception:
+                        pass
+                except Exception as e:
+                    try:
+                        append_domain_log("backend", f"intent_llm_error error={str(e)[:50]}")
+                    except Exception:
+                        pass
 
-            # Strip <think> blocks from content before parsing
+            # Strip <think> blocks and parse
             clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-
-            # Parse Float from cleaned content
-            match = re.search(r"\d+(\.\d+)?", clean_content)
+            match = re.search(r"0?\.\d+|\d\.\d+", clean_content)
             if match:
                 temp = float(match.group())
+                temp = max(0.1, min(0.9, temp))
                 try:
-                    append_domain_log("backend", f"intent_temp_parsed temp={temp}")
+                    append_domain_log("backend", f"intent_llm_parsed temp={temp}")
                 except Exception:
                     pass
-                return max(0.2, min(0.9, temp))
+                return temp
+
+            # ============================================================
+            # PHASE 3: Fallback based on input length/complexity
+            # ============================================================
+            # Short inputs are often commands/queries (lower temp)
+            # Long inputs are often explanations/creative (higher temp)
+            word_count = len(user_input.split())
+            if word_count < 5:
+                temp = 0.4  # Short = likely a command
+            elif word_count > 50:
+                temp = 0.6  # Long = likely needs more creativity
+            else:
+                temp = 0.5  # Default balanced
 
             try:
-                append_domain_log("backend", f"intent_temp_fallback content_was={content[:30] if content else 'EMPTY'}")
+                append_domain_log("backend", f"intent_fallback_wordcount words={word_count} temp={temp}")
             except Exception:
                 pass
-            return 0.7
-            
+            return temp
+
         except Exception as e:
-             from vaf.cli.ui import UI
-             UI.event("Debug", f"Intent Analysis Failed: {e}", style="dim")
-             return 0.7
+            from vaf.cli.ui import UI
+            UI.event("Debug", f"Intent Analysis Failed: {e}", style="dim")
+            return 0.5  # Safe default
     
     def analyze_workflow(self, user_input):
         """
@@ -3703,16 +3789,21 @@ class Agent:
             self._refresh_language_hint(user_input)
 
         # 1. Adaptive Temperature Check
-        target_temp = self.config.get("temperature", 0.7)
-        if not auto_retry and not skip_input:
+        # Check if auto-temperature is enabled (default: True for backward compatibility)
+        temperature_auto = Config.get("temperature_auto", True)
+        target_temp = Config.get("temperature", 0.7)
+
+        if temperature_auto and not auto_retry and not skip_input:
              # Sub-Agent Intent Analysis (can take time)
              from vaf.cli.ui import UI as UI_Class
              UI_Class.event("Info", "Analyzing Intent...", style="dim")
              with UI_Class.console.status("[bold cyan](O_O)  Step 2/2: Analyzing Intent...[/bold cyan]", spinner="dots"):
                  dynamic_temp = self.analyze_intent(user_input)
-             
+
              UI.event("Step 2/2", f"Adaptive State: Temperature set to {dynamic_temp} based on intent.", style="dim")
              target_temp = dynamic_temp
+        elif not temperature_auto:
+             UI.event("Temperature", f"Manual: {target_temp}", style="dim")
 
         UI.event("Agent", "Thinking...", style="dim")
         

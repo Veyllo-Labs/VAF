@@ -370,6 +370,20 @@ def _get_compaction_info(session_id: str) -> tuple:
     """Return (last_compaction_at_turn, compaction_interval) for session."""
     interval = int(Config.get("memory_compaction_interval", 15))
     last = 0
+
+    # First try session.runtime_state (preferred, persistent)
+    try:
+        from vaf.core.session import SessionManager
+        _sm = SessionManager()
+        _session = _sm.load(session_id)
+        _runtime = getattr(_session, 'runtime_state', None) or {}
+        if "last_compaction_at_turn" in _runtime:
+            last = int(_runtime["last_compaction_at_turn"])
+            return (last, interval)
+    except Exception:
+        pass
+
+    # Fallback to compaction_state.json
     try:
         path = Path(Config.APP_DIR) / "compaction_state.json"
         if path.exists():
@@ -395,7 +409,12 @@ async def get_telegram_session_history(session_id: str):
         session_mgr = SessionManager()
         session = session_mgr.load(session_id)
         messages = [{"role": m.role, "content": (m.content or "")[:2000], "timestamp": getattr(m, "timestamp", None)} for m in (session.messages or [])]
-        user_turn_count = sum(1 for m in (session.messages or []) if getattr(m, "role", None) == "user")
+        # Use PERSISTENT user_turn_count from runtime_state (not from compressed messages)
+        runtime_state = getattr(session, 'runtime_state', None) or {}
+        user_turn_count = runtime_state.get("user_turn_count", 0)
+        # Fallback: if runtime_state has no count, compute from messages (for old sessions)
+        if user_turn_count == 0 and session.messages:
+            user_turn_count = sum(1 for m in (session.messages or []) if getattr(m, "role", None) == "user")
         last_compaction_at_turn, compaction_interval = _get_compaction_info(session_id)
         return {
             "session_id": session_id,

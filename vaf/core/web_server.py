@@ -1664,7 +1664,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             continue
 
                         audio_data = base64.b64decode(audio_b64)
-                        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as temp_audio:
+                        # Use format hint from frontend (wav preferred for Whisper compatibility)
+                        audio_format = cmd.get("format", "webm")
+                        suffix = ".wav" if audio_format == "wav" else ".webm"
+                        mime_type = "audio/wav" if audio_format == "wav" else "audio/webm"
+
+                        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_audio:
                             temp_audio.write(audio_data)
                             temp_path = temp_audio.name
 
@@ -1688,9 +1693,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 loop = asyncio.get_running_loop()
                                 def _post(endpoint: str):
                                     with open(temp_path, "rb") as f:
+                                        # whisper-asr-webservice expects "audio_file" field name
+                                        # Add encode=true to let ffmpeg handle the format conversion
+                                        # Add output=json to get JSON response
+                                        filename = f"audio{suffix}"
                                         return requests.post(
                                             endpoint,
-                                            files={"file": ("audio.webm", f, "audio/webm")},
+                                            files={"audio_file": (filename, f, mime_type)},
+                                            params={"encode": "true", "output": "json"},
                                             timeout=60,
                                         )
                                 asr_endpoint = f"{stt_url}/asr"
@@ -1698,9 +1708,22 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 if resp.status_code == 404:
                                     transcribe_endpoint = f"{stt_url}/transcribe"
                                     resp = await loop.run_in_executor(None, lambda: _post(transcribe_endpoint))
-                                resp.raise_for_status()
-                                data = resp.json()
-                                text = (data.get("text") or data.get("transcript") or "").strip()
+
+                                # Check for errors before parsing JSON
+                                if resp.status_code >= 400:
+                                    error_text = resp.text[:200] if resp.text else f"HTTP {resp.status_code}"
+                                    raise Exception(f"STT service error: {error_text}")
+
+                                # Try to parse JSON response
+                                try:
+                                    data = resp.json()
+                                except Exception:
+                                    # If response is plain text, use it directly
+                                    text = resp.text.strip() if resp.text else ""
+                                    data = {}
+
+                                if not text:
+                                    text = (data.get("text") or data.get("transcript") or "").strip()
                                 if not text and isinstance(data.get("results"), list) and data["results"]:
                                     text = (data["results"][0].get("transcript") or "").strip()
                             except Exception as docker_err:
@@ -1760,8 +1783,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "tts_state", "status": "loading"})
                             lang = _detect_language_simple(text)
                             print(f"[WebSocket] Detected language: {lang}")
-                            import asyncio
                             import base64
+                            # asyncio is already imported at top of file
                             loop = asyncio.get_running_loop()
                             _TTS_SYNTH_TIMEOUT = 35.0  # seconds; avoid blocking WebSocket if Docker TTS hangs
                             try:

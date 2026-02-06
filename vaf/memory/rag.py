@@ -799,6 +799,19 @@ def run_session_compaction_sync(
         _compaction_log("COMPACTION_SKIP", session_id=session_id, turn_count=str(current_turn_count), last=str(last), interval=str(interval), reason="interval_not_reached")
         return
     _compaction_log("COMPACTION_START", session_id=session_id, turn_count=str(current_turn_count), last=str(last), interval=str(interval))
+
+    # Broadcast to WebUI: Memory Learning started
+    try:
+        from vaf.core.web_interface import get_web_interface
+        get_web_interface().push_update({
+            "type": "memory_learning",
+            "status": "started",
+            "session_id": session_id,
+            "message": "Memory Learning in progress... Analyzing conversation for important facts."
+        })
+    except Exception:
+        pass
+
     date_str = datetime.utcnow().strftime("%Y-%m-%d")
     prompt = (
         "Session nearing compaction. Store durable memories now. "
@@ -811,12 +824,35 @@ def run_session_compaction_sync(
     except Exception as e:
         logger.warning("Compaction LLM call failed: %s", e)
         _compaction_log("COMPACTION_LLM_FAIL", session_id=session_id, error=str(e)[:200])
+        # Broadcast to WebUI: Learning failed
+        try:
+            from vaf.core.web_interface import get_web_interface
+            get_web_interface().push_update({
+                "type": "memory_learning",
+                "status": "error",
+                "session_id": session_id,
+                "message": "Memory Learning failed. Will retry later."
+            })
+        except Exception:
+            pass
         return
     memories = _parse_memory_reply(reply)
     if not memories:
         _compaction_log("COMPACTION_NO_REPLY", session_id=session_id)
         state[session_id] = current_turn_count
         _save_compaction_state(state)
+        # Broadcast to WebUI: No new memories to save
+        try:
+            from vaf.core.web_interface import get_web_interface
+            get_web_interface().push_update({
+                "type": "memory_learning",
+                "status": "completed",
+                "session_id": session_id,
+                "memories_saved": 0,
+                "message": "Memory Learning complete! No new facts to remember."
+            })
+        except Exception:
+            pass
         refresh_user_profile_summary(user_scope_id)
         return
     async def _ingest_all() -> None:
@@ -856,6 +892,32 @@ def run_session_compaction_sync(
     _compaction_log("COMPACTION_DONE", session_id=session_id, memories=str(len(memories)), date=date_str)
     state[session_id] = current_turn_count
     _save_compaction_state(state)
+
+    # Also save last_compaction_at_turn in session.runtime_state for UI display
+    try:
+        from vaf.core.session import SessionManager
+        _sm = SessionManager()
+        _session = _sm.load(session_id)
+        if not hasattr(_session, 'runtime_state') or _session.runtime_state is None:
+            _session.runtime_state = {}
+        _session.runtime_state["last_compaction_at_turn"] = current_turn_count
+        _sm.save(_session)
+    except Exception as e:
+        logger.debug("Failed to save compaction turn to session: %s", e)
+
+    # Broadcast to WebUI: Memory Learning completed
+    try:
+        from vaf.core.web_interface import get_web_interface
+        get_web_interface().push_update({
+            "type": "memory_learning",
+            "status": "completed",
+            "session_id": session_id,
+            "memories_saved": len(memories),
+            "message": f"Memory Learning complete! Saved {len(memories)} memories."
+        })
+    except Exception:
+        pass
+
     refresh_user_profile_summary(user_scope_id)
 
 

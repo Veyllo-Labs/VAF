@@ -110,34 +110,41 @@ services:
           memory: 64M
 
   # ==========================================================================
-  # TTS (Piper HTTP) – optional; use with speech_tts_engine=docker
-  # Set speech_tts_docker_url to http://localhost:5002 (or /synthesize if required by image)
+  # TTS Multi-Language (Piper) – All-in-One container for all languages
+  # Supports: de, en, fr, es, it, nl, pl, pt, ru, uk, zh, ja
+  # Languages are downloaded on-demand via the /install endpoint
+  # Set speech_tts_docker_url to http://localhost:5002
   # ==========================================================================
   tts:
-    image: artibex/piper-http:latest
+    build:
+      context: ./docker/tts-multilang
+      dockerfile: Dockerfile
+    image: vaf-tts-multilang:latest
     container_name: vaf-tts
     restart: unless-stopped
     ports:
       - "${TTS_PORT:-5002}:5000"
     environment:
-      # Piper voice: German (Thorsten) by default so German text sounds correct. Override with TTS_MODEL_URL for English etc.
-      MODEL_DOWNLOAD_LINK: ${TTS_MODEL_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx}
+      TTS_PORT: 5000
+      TTS_MODELS_DIR: /app/models
+      TTS_DEFAULT_LANG: ${TTS_DEFAULT_LANG:-de}
     volumes:
-      - vaf_tts_models:/root/.local/share/piper
+      - vaf_tts_models:/app/models
+      - vaf_tts_config:/app/config
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:5000/health 2>/dev/null || exit 0"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:5000/health || exit 1"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 120s
     networks:
       - vaf-network
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 2G
         reservations:
-          memory: 256M
+          memory: 512M
 
   # ==========================================================================
   # STT (Whisper HTTP) – optional; for local STT via Docker instead of in-process
@@ -180,11 +187,8 @@ volumes:
   vaf_tts_models:
     name: vaf_tts_models
     driver: local
-  vaf_tts_models_en:
-    name: vaf_tts_models_en
-    driver: local
-  vaf_tts_models_fr:
-    name: vaf_tts_models_fr
+  vaf_tts_config:
+    name: vaf_tts_config
     driver: local
   vaf_stt_models:
     name: vaf_stt_models

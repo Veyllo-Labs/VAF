@@ -13,6 +13,7 @@ import {
     MarkerType
 } from 'reactflow';
 import 'reactflow/dist/style.css';
+import TTSSettings from './settings/TTSSettings';
 
 // Loading fallback for lazy-loaded ReactFlow
 const ReactFlowFallback = () => (
@@ -1120,56 +1121,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 </Section>
 
                                 <Section title="Text to Speech">
-                                    <Switch
-                                        label="Enable Voice Output (TTS)"
-                                        description="Agent speaks responses aloud in your browser"
-                                        checked={localConfig.speech_tts_enabled || false}
-                                        onChange={(v: boolean) => {
+                                    <TTSSettings
+                                        ttsEnabled={localConfig.speech_tts_enabled || false}
+                                        ttsUrl={localConfig.speech_tts_docker_url || 'http://localhost:5002'}
+                                        autoSpeak={localConfig.tts_auto_speak || false}
+                                        onTtsEnabledChange={(v: boolean) => {
                                             handleChange('speech_tts_enabled', v);
                                             if (v) handleChange('speech_tts_engine', 'docker');
                                         }}
+                                        onTtsUrlChange={(v: string) => {
+                                            handleChange('speech_tts_docker_url', v);
+                                            handleChange('speech_tts_engine', 'docker');
+                                        }}
+                                        onAutoSpeakChange={(v: boolean) => handleChange('tts_auto_speak', v)}
                                     />
-                                    {localConfig.speech_tts_enabled && (
-                                        <div className="mt-4 space-y-4">
-                                            <Input
-                                                label="Docker TTS URL (default / fallback)"
-                                                placeholder="http://localhost:5002"
-                                                value={localConfig.speech_tts_docker_url || 'http://localhost:5002'}
-                                                onChange={(v: string) => {
-                                                    handleChange('speech_tts_docker_url', v);
-                                                    handleChange('speech_tts_engine', 'docker');
-                                                }}
-                                            />
-                                            <p className="text-xs text-gray-500 mt-1">Multi-language: set URLs per language so German/English/French text use the right voice.</p>
-                                            <Input
-                                                label="Docker TTS URL (German, optional)"
-                                                placeholder="http://localhost:5002"
-                                                value={localConfig.speech_tts_docker_url_de ?? 'http://localhost:5002'}
-                                                onChange={(v: string) => handleChange('speech_tts_docker_url_de', v)}
-                                            />
-                                            <Input
-                                                label="Docker TTS URL (English, optional)"
-                                                placeholder="http://localhost:5004"
-                                                value={localConfig.speech_tts_docker_url_en ?? 'http://localhost:5004'}
-                                                onChange={(v: string) => handleChange('speech_tts_docker_url_en', v)}
-                                            />
-                                            <Input
-                                                label="Docker TTS URL (French, optional)"
-                                                placeholder="http://localhost:5006"
-                                                value={localConfig.speech_tts_docker_url_fr ?? 'http://localhost:5006'}
-                                                onChange={(v: string) => handleChange('speech_tts_docker_url_fr', v)}
-                                            />
-                                            <p className="text-xs text-gray-500">
-                                                Web UI streams audio from server to your browser. Run <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">docker compose -f docker-compose.memory.yml up -d</code> for tts, tts-en, tts-fr.
-                                            </p>
-                                            <Switch
-                                                label="Auto-Speak Responses"
-                                                description="Automatically speak agent responses in browser (headless-friendly)"
-                                                checked={localConfig.tts_auto_speak || false}
-                                                onChange={(v: boolean) => handleChange('tts_auto_speak', v)}
-                                            />
-                                        </div>
-                                    )}
                                 </Section>
                             </div>
                         )}

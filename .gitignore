@@ -51,6 +51,11 @@ bin/
 # OS
 .DS_Store
 Thumbs.db
+# Windows reserved device names (nul, con, prn, aux, com1–9, lpt1–9)
+nul
+con
+prn
+aux
 
 # Python
 venv/

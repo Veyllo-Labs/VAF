@@ -1,0 +1,84 @@
+{
+  "description": "Available Piper TTS voice models",
+  "source": "https://huggingface.co/rhasspy/piper-voices",
+  "models": {
+    "de": {
+      "name": "German (Deutsch)",
+      "locale": "de_DE",
+      "voice": "thorsten",
+      "quality": "medium"
+    },
+    "en": {
+      "name": "English",
+      "locale": "en_US",
+      "voice": "amy",
+      "quality": "medium"
+    },
+    "fr": {
+      "name": "French (Français)",
+      "locale": "fr_FR",
+      "voice": "siwis",
+      "quality": "medium"
+    },
+    "es": {
+      "name": "Spanish (Español)",
+      "locale": "es_ES",
+      "voice": "carlfm",
+      "quality": "x_low"
+    },
+    "it": {
+      "name": "Italian (Italiano)",
+      "locale": "it_IT",
+      "voice": "riccardo",
+      "quality": "x_low"
+    },
+    "nl": {
+      "name": "Dutch (Nederlands)",
+      "locale": "nl_NL",
+      "voice": "mls",
+      "quality": "medium"
+    },
+    "pl": {
+      "name": "Polish (Polski)",
+      "locale": "pl_PL",
+      "voice": "gosia",
+      "quality": "medium"
+    },
+    "pt": {
+      "name": "Portuguese (Português)",
+      "locale": "pt_BR",
+      "voice": "faber",
+      "quality": "medium"
+    },
+    "ru": {
+      "name": "Russian (Русский)",
+      "locale": "ru_RU",
+      "voice": "irina",
+      "quality": "medium"
+    },
+    "uk": {
+      "name": "Ukrainian (Українська)",
+      "locale": "uk_UA",
+      "voice": "ukrainian_tts",
+      "quality": "medium"
+    },
+    "zh": {
+      "name": "Chinese (中文)",
+      "locale": "zh_CN",
+      "voice": "huayan",
+      "quality": "medium"
+    },
+    "ja": {
+      "name": "Japanese (日本語)",
+      "locale": "ja_JP",
+      "voice": "kokoro",
+      "quality": "medium"
+    },
+    "tr": {
+      "name": "Turkish (Türkçe)",
+      "locale": "tr_TR",
+      "voice": "dfki",
+      "quality": "medium"
+    }
+  }
+}

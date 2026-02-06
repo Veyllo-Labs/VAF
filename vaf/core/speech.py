@@ -139,10 +139,11 @@ class SpeechManager:
         self._init_mic()
 
     def is_tts_enabled(self) -> bool:
-        return self.config.get("speech_tts_enabled", False)
+        # Use Config.get() to always read the CURRENT setting (not cached self.config)
+        return Config.get("speech_tts_enabled", False)
 
     def is_stt_enabled(self) -> bool:
-        return bool(self.config.get("speech_stt_enabled") or self.config.get("stt_enabled", False))
+        return bool(Config.get("speech_stt_enabled") or Config.get("stt_enabled", False))
 
     def is_local_stt_enabled(self) -> bool:
         """Check if LOCAL STT (speech_recognition + microphone) is needed.
@@ -153,7 +154,7 @@ class SpeechManager:
         if not self.is_stt_enabled():
             return False
         # If engine is "docker", we don't need local STT at all
-        engine = self.config.get("speech_stt_engine", "docker")
+        engine = Config.get("speech_stt_engine", "docker")
         return engine != "docker"
 
     def _get_piper_binary(self) -> Optional[Path]:
@@ -484,56 +485,89 @@ $player.Close()
         """Synthesize text to audio bytes (WAV) without playing. Used for Web UI streaming.
         When force_engine is set (e.g. 'docker'), use that engine; otherwise use config.
         Web UI always uses force_engine='docker' so audio is streamed to the client, never played on server."""
-        if not self.is_tts_enabled(): return None
-        
+        # Skip TTS check if force_engine is set (caller already verified TTS is enabled)
+        if not force_engine and not self.is_tts_enabled():
+            print(f"[TTS Debug] TTS disabled, returning None")
+            return None
+
         clean_text = self._clean_markdown(text)
-        if not clean_text.strip(): return None
-        
-        preferred_engine = (force_engine or self.config.get("speech_tts_engine", "docker")).lower()
+        if not clean_text.strip():
+            print(f"[TTS Debug] Empty text after cleaning, returning None")
+            return None
+
+        preferred_engine = (force_engine or Config.get("speech_tts_engine", "docker")).lower()
         lang_short = (lang or "en")[:2].lower()
 
-        # Docker/Chatterbox TTS: HTTP service (e.g. Piper in Docker or Chatterbox). Multi-language: URL per lang (de/en/fr) or fallback.
+        print(f"[TTS Debug] Synthesizing: engine={preferred_engine}, lang={lang_short}, text_len={len(clean_text)}")
+
+        # Docker/Chatterbox TTS: HTTP service (e.g. Piper in Docker or Chatterbox).
+        # New: Multi-language All-in-One container uses /synthesize endpoint with language auto-detection.
         if preferred_engine in ("docker", "chatterbox"):
             # Chatterbox has its own URL config
             if preferred_engine == "chatterbox":
-                url = (self.config.get("speech_tts_chatterbox_url") or "http://localhost:4123").strip().rstrip("/")
+                url = (Config.get("speech_tts_chatterbox_url") or "http://localhost:4123").strip().rstrip("/")
             else:
-                url_by_lang = {
-                    "de": self.config.get("speech_tts_docker_url_de"),
-                    "en": self.config.get("speech_tts_docker_url_en"),
-                    "fr": self.config.get("speech_tts_docker_url_fr"),
-                }
-                url = (url_by_lang.get(lang_short) or self.config.get("speech_tts_docker_url") or "").strip().rstrip("/")
+                # Use the single TTS URL - multi-lang container handles language internally
+                url = (Config.get("speech_tts_docker_url") or "http://localhost:5002").strip().rstrip("/")
+
+            print(f"[TTS Debug] Docker TTS URL: {url}")
+
             if url:
                 try:
                     import urllib.request
                     import json as json_module
-                    data = json_module.dumps({"text": clean_text, "lang": lang_short}).encode("utf-8")
+
+                    # New multi-lang container uses /synthesize endpoint
+                    synth_url = f"{url}/synthesize"
+                    data = json_module.dumps({"text": clean_text, "language": lang_short}).encode("utf-8")
+                    print(f"[TTS Debug] Calling {synth_url}")
                     req = urllib.request.Request(
-                        url,
+                        synth_url,
                         data=data,
                         headers={"Content-Type": "application/json"},
                         method="POST",
                     )
-                    with urllib.request.urlopen(req, timeout=30) as resp:
-                        body = resp.read()
-                    # Response can be raw WAV bytes or JSON with "audio_base64"
-                    if body[:4] == b"RIFF":
-                        return body
+
                     try:
-                        out = json_module.loads(body.decode("utf-8"))
-                        if isinstance(out.get("audio_base64"), str):
-                            import base64
-                            return base64.b64decode(out["audio_base64"])
-                        if isinstance(out.get("audio"), str):
-                            import base64
-                            return base64.b64decode(out["audio"])
-                    except (ValueError, KeyError, TypeError):
-                        pass
+                        with urllib.request.urlopen(req, timeout=30) as resp:
+                            body = resp.read()
+                        print(f"[TTS Debug] Response size: {len(body)} bytes, starts with: {body[:4]}")
+                        # Response is raw WAV bytes
+                        if body[:4] == b"RIFF":
+                            print(f"[TTS Debug] SUCCESS - returning WAV audio")
+                            return body
+                        else:
+                            print(f"[TTS Debug] Response is not WAV, first bytes: {body[:50]}")
+                    except urllib.error.HTTPError as he:
+                        print(f"[TTS Debug] HTTPError: {he.code} - {he.reason}")
+                        # Fallback: Try old-style direct POST (for backwards compatibility)
+                        data = json_module.dumps({"text": clean_text, "lang": lang_short}).encode("utf-8")
+                        req = urllib.request.Request(
+                            url,
+                            data=data,
+                            headers={"Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(req, timeout=30) as resp:
+                            body = resp.read()
+                        if body[:4] == b"RIFF":
+                            return body
+                        # Try JSON response
+                        try:
+                            out = json_module.loads(body.decode("utf-8"))
+                            if isinstance(out.get("audio_base64"), str):
+                                import base64
+                                return base64.b64decode(out["audio_base64"])
+                            if isinstance(out.get("audio"), str):
+                                import base64
+                                return base64.b64decode(out["audio"])
+                        except (ValueError, KeyError, TypeError):
+                            pass
                     return None
                 except Exception as e:
-                    from vaf.cli.ui import UI
-                    UI.event("Debug", f"Docker TTS failed: {e}", style="dim")
+                    print(f"[TTS Debug] Docker TTS failed: {e}")
+                    import traceback
+                    traceback.print_exc()
             return None
 
         if preferred_engine == "piper" and self._check_piper():
@@ -640,7 +674,7 @@ $player.Close()
                     return
 
                 # Check user's preferred TTS engine
-                preferred_engine = self.config.get("speech_tts_engine", "docker")
+                preferred_engine = Config.get("speech_tts_engine", "docker")
 
                 # 1a. Docker/Chatterbox TTS (HTTP service – no local model, good for Docker stack)
                 # "chatterbox" is also HTTP-based, treat it like docker

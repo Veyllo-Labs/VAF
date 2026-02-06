@@ -2,13 +2,16 @@
 API Routes for User Persona and Workspace Management.
 
 Endpoints:
-- GET  /api/user/persona  - Get identity and soul
-- PUT  /api/user/identity - Update identity.json
-- PUT  /api/user/soul     - Update soul.md
+- GET  /api/user/persona        - Get identity and soul
+- PUT  /api/user/identity       - Update identity.json
+- PUT  /api/user/soul           - Update soul.md
+- PUT  /api/user/user-identity  - Update user_identity.json (full or partial)
+- DELETE /api/user/user-identity/entry - Delete a specific entry from user_identity
 """
 
 import logging
-from typing import Optional, Dict, Any, List
+from datetime import datetime
+from typing import Optional, Dict, Any, List, Literal
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from vaf.auth.user_workspace import get_user_workspace
@@ -30,6 +33,25 @@ class IdentityUpdate(BaseModel):
 
 class ContentUpdate(BaseModel):
     content: str
+
+class UserIdentityUpdate(BaseModel):
+    """Update user_identity.json fields."""
+    name: Optional[str] = None
+    preferred_language: Optional[str] = None
+    preferences: Optional[List[str]] = None
+    dos: Optional[List[str]] = None
+    donts: Optional[List[str]] = None
+
+class UserIdentityEntryUpdate(BaseModel):
+    """Update or delete a specific entry in a list field."""
+    field: Literal["preferences", "dos", "donts"]
+    index: int
+    value: Optional[str] = None  # None = delete, str = update
+
+class UserIdentityEntryDelete(BaseModel):
+    """Delete a specific entry from a list field."""
+    field: Literal["preferences", "dos", "donts"]
+    index: int
 
 def get_current_username(request: Request) -> str:
     user = getattr(request.state, "user", None)
@@ -63,3 +85,116 @@ async def update_soul(data: ContentUpdate, username: str = Depends(get_current_u
     ws = get_user_workspace(username)
     ws.save_soul(data.content)
     return {"status": "success"}
+
+@router.put("/user-identity")
+async def update_user_identity(data: UserIdentityUpdate, username: str = Depends(get_current_username)):
+    """Update user_identity.json with new values. Adds entry to change_log."""
+    ws = get_user_workspace(username)
+    current = ws.get_user_identity()
+
+    # Track what changed for the changelog
+    changes = []
+
+    # Update fields that are provided
+    update_dict = data.dict(exclude_none=True)
+    for key, value in update_dict.items():
+        if current.get(key) != value:
+            changes.append(key)
+            current[key] = value
+
+    # Add to change_log if something changed
+    if changes:
+        if "change_log" not in current or not isinstance(current["change_log"], list):
+            current["change_log"] = []
+        current["change_log"].append({
+            "at": datetime.now().isoformat(),
+            "action": f"Manual edit: updated {', '.join(changes)}",
+            "source": "settings_ui"
+        })
+
+    ws.save_user_identity(current)
+    return {"status": "success", "user_identity": current}
+
+@router.post("/user-identity/entry")
+async def update_user_identity_entry(data: UserIdentityEntryUpdate, username: str = Depends(get_current_username)):
+    """Update or delete a specific entry in a list field (preferences, dos, donts)."""
+    ws = get_user_workspace(username)
+    current = ws.get_user_identity()
+
+    field = data.field
+    index = data.index
+    value = data.value
+
+    # Ensure the field exists and is a list
+    if field not in current or not isinstance(current[field], list):
+        current[field] = []
+
+    field_list = current[field]
+
+    # Check index bounds
+    if index < 0 or index >= len(field_list):
+        raise HTTPException(status_code=400, detail=f"Index {index} out of bounds for {field}")
+
+    # Get old value for changelog
+    old_value = field_list[index]
+
+    # Add to change_log
+    if "change_log" not in current or not isinstance(current["change_log"], list):
+        current["change_log"] = []
+
+    if value is None:
+        # Delete
+        del field_list[index]
+        current["change_log"].append({
+            "at": datetime.now().isoformat(),
+            "action": f"Deleted from {field}: \"{old_value}\"",
+            "source": "settings_ui"
+        })
+    else:
+        # Update
+        field_list[index] = value
+        current["change_log"].append({
+            "at": datetime.now().isoformat(),
+            "action": f"Edited {field}: \"{old_value}\" → \"{value}\"",
+            "source": "settings_ui"
+        })
+
+    ws.save_user_identity(current)
+    return {"status": "success", "user_identity": current}
+
+@router.delete("/user-identity/entry")
+async def delete_user_identity_entry(data: UserIdentityEntryDelete, username: str = Depends(get_current_username)):
+    """Delete a specific entry from a list field (preferences, dos, donts)."""
+    ws = get_user_workspace(username)
+    current = ws.get_user_identity()
+
+    field = data.field
+    index = data.index
+
+    # Ensure the field exists and is a list
+    if field not in current or not isinstance(current[field], list):
+        raise HTTPException(status_code=400, detail=f"Field {field} not found or not a list")
+
+    field_list = current[field]
+
+    # Check index bounds
+    if index < 0 or index >= len(field_list):
+        raise HTTPException(status_code=400, detail=f"Index {index} out of bounds for {field}")
+
+    # Get old value for changelog
+    old_value = field_list[index]
+
+    # Delete entry
+    del field_list[index]
+
+    # Add to change_log
+    if "change_log" not in current or not isinstance(current["change_log"], list):
+        current["change_log"] = []
+    current["change_log"].append({
+        "at": datetime.now().isoformat(),
+        "action": f"Deleted from {field}: \"{old_value}\"",
+        "source": "settings_ui"
+    })
+
+    ws.save_user_identity(current)
+    return {"status": "success", "user_identity": current}

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, lazy, Suspense, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, lazy, Suspense, useMemo, useRef } from 'react';
 // PERFORMANCE: Lazy load ReactFlow - it's heavy and only needed for specific modals
 const ReactFlow = lazy(() => import('reactflow').then(mod => ({ default: mod.default })));
 import {
@@ -300,6 +300,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [personaData, setPersonaData] = useState<{identity: any, user_identity?: any, soul: string} | null>(null);
     const [personaLoading, setPersonaLoading] = useState(false);
 
+    // User Identity Edit State - Text-based editing
+    const [isEditingUserIdentity, setIsEditingUserIdentity] = useState(false);
+    const [userIdentityDraft, setUserIdentityDraft] = useState<{
+        name: string;
+        preferred_language: string;
+        preferences: string;
+        dos: string;
+        donts: string;
+    } | null>(null);
+    const [newTimelineEntryCount, setNewTimelineEntryCount] = useState(0); // Track new entries for animation
+    const timelineRef = useRef<HTMLDivElement>(null);
+
     useEffect(() => {
         if (activeTab === 'persona') {
             setPersonaLoading(true);
@@ -315,6 +327,82 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setLocalConfig(config || {});
         setChanged(false);
     }, [config, isOpen]);
+
+    // Reset user identity editing state when modal closes
+    useEffect(() => {
+        if (!isOpen) {
+            setIsEditingUserIdentity(false);
+            setUserIdentityDraft(null);
+        }
+    }, [isOpen]);
+
+    // User Identity: Start editing - convert arrays to newline-separated text
+    const startEditingUserIdentity = () => {
+        if (!personaData?.user_identity) return;
+        const ui = personaData.user_identity;
+        setUserIdentityDraft({
+            name: ui.name || '',
+            preferred_language: ui.preferred_language || '',
+            preferences: (ui.preferences || []).join('\n'),
+            dos: (ui.dos || []).join('\n'),
+            donts: (ui.donts || []).join('\n'),
+        });
+        setIsEditingUserIdentity(true);
+    };
+
+    // User Identity: Save changes - convert text back to arrays
+    const saveUserIdentity = async () => {
+        if (!userIdentityDraft) return;
+
+        // Parse text back to arrays (split by newline, filter empty)
+        const parseList = (text: string) => text.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+
+        const updateData = {
+            name: userIdentityDraft.name.trim() || undefined,
+            preferred_language: userIdentityDraft.preferred_language.trim() || undefined,
+            preferences: parseList(userIdentityDraft.preferences),
+            dos: parseList(userIdentityDraft.dos),
+            donts: parseList(userIdentityDraft.donts),
+        };
+
+        // Get current change_log length to calculate how many new entries were added
+        const prevChangeLogLength = personaData?.user_identity?.change_log?.length ?? 0;
+
+        try {
+            const res = await fetch('/api/user/user-identity', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updateData)
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setPersonaData(prev => prev ? { ...prev, user_identity: data.user_identity } : prev);
+
+                // Calculate new entries and trigger animation
+                const newLength = data.user_identity?.change_log?.length ?? 0;
+                const addedCount = newLength - prevChangeLogLength;
+                if (addedCount > 0) {
+                    setNewTimelineEntryCount(addedCount);
+                    // Scroll timeline to top after a brief delay to let React render
+                    setTimeout(() => {
+                        timelineRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                    }, 50);
+                    // Clear animation flag after animation completes
+                    setTimeout(() => setNewTimelineEntryCount(0), 1500);
+                }
+            }
+        } catch (e) {
+            console.error("Failed to save user identity", e);
+        }
+        setIsEditingUserIdentity(false);
+        setUserIdentityDraft(null);
+    };
+
+    // User Identity: Cancel editing
+    const cancelEditingUserIdentity = () => {
+        setIsEditingUserIdentity(false);
+        setUserIdentityDraft(null);
+    };
 
     // Local network: real host/port from browser
     useEffect(() => {
@@ -446,6 +534,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 }
                 if (showUserIdentityModal) {
                     setShowUserIdentityModal(false);
+                    setIsEditingUserIdentity(false);
+                    setUserIdentityDraft(null);
                     e.stopPropagation();
                     return;
                 }
@@ -2473,7 +2563,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* User Identity Modal */}
             {showUserIdentityModal && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowUserIdentityModal(false)}>
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => { setShowUserIdentityModal(false); setIsEditingUserIdentity(false); setUserIdentityDraft(null); }}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
                         className="relative bg-white w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
@@ -2496,64 +2586,234 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         <div className="flex-1 overflow-hidden flex min-h-0">
                             {/* Left: User identity (human) – user_identity.json */}
                             <div className="flex-1 min-w-0 border-r border-gray-200 overflow-y-auto p-5 bg-gray-50">
-                                <h3 className="text-sm font-semibold text-gray-700 mb-3">User identity (user_identity.json)</h3>
-                                <p className="text-xs text-gray-500 mb-3">Who the agent is talking to. Updated by the LLM via update_user_identity or when you say e.g. &quot;call me Mert&quot;.</p>
+                                <div className="flex items-center justify-between mb-3">
+                                    <h3 className="text-sm font-semibold text-gray-700">User identity (user_identity.json)</h3>
+                                    {personaData?.user_identity && !isEditingUserIdentity && (
+                                        <button
+                                            onClick={startEditingUserIdentity}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-700 bg-amber-100 hover:bg-amber-200 rounded-lg transition-colors"
+                                            title="Edit"
+                                        >
+                                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                            </svg>
+                                            Edit
+                                        </button>
+                                    )}
+                                    {isEditingUserIdentity && (
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={saveUserIdentity}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-500 hover:bg-green-600 rounded-lg transition-colors"
+                                            >
+                                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                </svg>
+                                                Save
+                                            </button>
+                                            <button
+                                                onClick={cancelEditingUserIdentity}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                                <p className="text-xs text-gray-500 mb-4">
+                                    {isEditingUserIdentity
+                                        ? "Edit each field below. Use one entry per line for lists."
+                                        : "Who the agent is talking to. Click Edit to modify."}
+                                </p>
+
                                 {personaData?.user_identity ? (
-                                    <div className="space-y-3 text-sm">
-                                        <div><span className="text-gray-500 font-medium">Name</span><br /><span className="text-gray-900">{personaData.user_identity.name ?? '—'}</span></div>
-                                        {personaData.user_identity.preferred_language && (
-                                            <div><span className="text-gray-500 font-medium">Language</span><br /><span className="text-gray-900">{personaData.user_identity.preferred_language}</span></div>
-                                        )}
-                                        {(personaData.user_identity.preferences?.length ?? 0) > 0 && (
+                                    isEditingUserIdentity && userIdentityDraft ? (
+                                        /* Edit Mode - Text inputs */
+                                        <div className="space-y-4 text-sm">
                                             <div>
-                                                <span className="text-gray-500 font-medium">Preferences</span>
-                                                <ul className="list-disc list-inside text-gray-900 mt-0.5">{personaData.user_identity.preferences.map((p: string, i: number) => <li key={i}>{p}</li>)}</ul>
+                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Name</label>
+                                                <input
+                                                    type="text"
+                                                    value={userIdentityDraft.name}
+                                                    onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, name: e.target.value })}
+                                                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
+                                                    placeholder="Your name"
+                                                />
                                             </div>
-                                        )}
-                                        {(personaData.user_identity.dos?.length ?? 0) > 0 && (
                                             <div>
-                                                <span className="text-gray-500 font-medium">Do</span>
-                                                <ul className="list-disc list-inside text-gray-900 mt-0.5">{personaData.user_identity.dos.map((d: string, i: number) => <li key={i}>{d}</li>)}</ul>
+                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Language</label>
+                                                <input
+                                                    type="text"
+                                                    value={userIdentityDraft.preferred_language}
+                                                    onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, preferred_language: e.target.value })}
+                                                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
+                                                    placeholder="e.g. de, en, tr"
+                                                />
                                             </div>
-                                        )}
-                                        {(personaData.user_identity.donts?.length ?? 0) > 0 && (
                                             <div>
-                                                <span className="text-gray-500 font-medium">Don&apos;t</span>
-                                                <ul className="list-disc list-inside text-gray-900 mt-0.5">{personaData.user_identity.donts.map((d: string, i: number) => <li key={i}>{d}</li>)}</ul>
+                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Preferences <span className="text-gray-400 font-normal">(one per line)</span></label>
+                                                <textarea
+                                                    value={userIdentityDraft.preferences}
+                                                    onChange={(e) => {
+                                                        setUserIdentityDraft({ ...userIdentityDraft, preferences: e.target.value });
+                                                        e.target.style.height = 'auto';
+                                                        e.target.style.height = e.target.scrollHeight + 'px';
+                                                    }}
+                                                    ref={(el) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }}
+                                                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm font-mono resize-none overflow-hidden"
+                                                    style={{ minHeight: '2.5rem' }}
+                                                    placeholder="always address me as 'du'&#10;I prefer dark mode"
+                                                />
                                             </div>
-                                        )}
-                                        {!(personaData.user_identity.name && personaData.user_identity.name !== 'admin') && (personaData.user_identity.preferences?.length ?? 0) === 0 && (personaData.user_identity.dos?.length ?? 0) === 0 && (personaData.user_identity.donts?.length ?? 0) === 0 && (
-                                            <p className="text-gray-400 text-xs">No details yet. Tell the agent your name or preferences (e.g. &quot;call me Mert&quot;, &quot;I prefer German&quot;) and it will update this.</p>
-                                        )}
-                                    </div>
+                                            <div>
+                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Do <span className="text-gray-400 font-normal">(one per line)</span></label>
+                                                <textarea
+                                                    value={userIdentityDraft.dos}
+                                                    onChange={(e) => {
+                                                        setUserIdentityDraft({ ...userIdentityDraft, dos: e.target.value });
+                                                        e.target.style.height = 'auto';
+                                                        e.target.style.height = e.target.scrollHeight + 'px';
+                                                    }}
+                                                    ref={(el) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }}
+                                                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm font-mono resize-none overflow-hidden"
+                                                    style={{ minHeight: '2.5rem' }}
+                                                    placeholder="Use German for responses&#10;Be concise"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Don&apos;t <span className="text-gray-400 font-normal">(one per line)</span></label>
+                                                <textarea
+                                                    value={userIdentityDraft.donts}
+                                                    onChange={(e) => {
+                                                        setUserIdentityDraft({ ...userIdentityDraft, donts: e.target.value });
+                                                        e.target.style.height = 'auto';
+                                                        e.target.style.height = e.target.scrollHeight + 'px';
+                                                    }}
+                                                    ref={(el) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }}
+                                                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm font-mono resize-none overflow-hidden"
+                                                    style={{ minHeight: '2.5rem' }}
+                                                    placeholder="Don't use formal address&#10;Don't add emojis"
+                                                />
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        /* View Mode - Display values */
+                                        <div className="space-y-3 text-sm">
+                                            <div className="bg-white rounded-lg p-3 border border-gray-100">
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Name</span>
+                                                <p className="text-gray-900 mt-1">{personaData.user_identity.name || '—'}</p>
+                                            </div>
+                                            <div className="bg-white rounded-lg p-3 border border-gray-100">
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Language</span>
+                                                <p className="text-gray-900 mt-1">{personaData.user_identity.preferred_language || '—'}</p>
+                                            </div>
+                                            <div className="bg-white rounded-lg p-3 border border-gray-100">
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Preferences</span>
+                                                {(personaData.user_identity.preferences?.length ?? 0) > 0 ? (
+                                                    <ul className="mt-1 space-y-1">
+                                                        {personaData.user_identity.preferences.map((p: string, i: number) => (
+                                                            <li key={i} className="text-gray-900 flex items-start gap-2">
+                                                                <span className="text-amber-500 mt-0.5">•</span>
+                                                                <span>{p}</span>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                ) : (
+                                                    <p className="text-gray-400 mt-1">—</p>
+                                                )}
+                                            </div>
+                                            <div className="bg-white rounded-lg p-3 border border-gray-100">
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Do</span>
+                                                {(personaData.user_identity.dos?.length ?? 0) > 0 ? (
+                                                    <ul className="mt-1 space-y-1">
+                                                        {personaData.user_identity.dos.map((d: string, i: number) => (
+                                                            <li key={i} className="text-gray-900 flex items-start gap-2">
+                                                                <span className="text-green-500 mt-0.5">✓</span>
+                                                                <span>{d}</span>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                ) : (
+                                                    <p className="text-gray-400 mt-1">—</p>
+                                                )}
+                                            </div>
+                                            <div className="bg-white rounded-lg p-3 border border-gray-100">
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Don&apos;t</span>
+                                                {(personaData.user_identity.donts?.length ?? 0) > 0 ? (
+                                                    <ul className="mt-1 space-y-1">
+                                                        {personaData.user_identity.donts.map((d: string, i: number) => (
+                                                            <li key={i} className="text-gray-900 flex items-start gap-2">
+                                                                <span className="text-red-500 mt-0.5">✗</span>
+                                                                <span>{d}</span>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                ) : (
+                                                    <p className="text-gray-400 mt-1">—</p>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )
                                 ) : (
                                     <p className="text-gray-500 text-sm">Load Persona &amp; Memory tab first, or no user identity data yet.</p>
                                 )}
                             </div>
                             {/* Right: Timeline (change_log) – schmal, scrollbar bei vielen Einträgen */}
-                            <div className="w-72 shrink-0 min-h-0 flex flex-col border-l border-gray-100">
-                                <h3 className="text-sm font-semibold text-gray-700 mb-3 shrink-0 p-4 pb-0">Timeline (agent updates)</h3>
+                            <div className="w-80 shrink-0 min-h-0 flex flex-col border-l border-gray-100">
+                                <h3 className="text-sm font-semibold text-gray-700 mb-3 shrink-0 p-4 pb-0">Timeline</h3>
                                 {personaData?.user_identity?.change_log?.length > 0 ? (
-                                    <div className="flex-1 min-h-0 overflow-y-auto p-4 pt-3">
-                                        {/* Wrapper nur so hoch wie die Liste – Linie verbindet nur die Punkte */}
+                                    <div ref={timelineRef} className="flex-1 min-h-0 overflow-y-auto p-4 pt-3">
                                         <div className="relative">
-                                            <div className="absolute left-3 top-2 bottom-2 w-0.5 bg-amber-200" />
+                                            <div className="absolute left-3 top-2 bottom-2 w-0.5 bg-gradient-to-b from-amber-200 via-amber-300 to-amber-200" />
                                             <ul className="space-y-0">
-                                                {[...(personaData?.user_identity?.change_log ?? []) as Array<{ at: string; action: string }>].reverse().map((entry, i) => (
-                                                    <li key={i} className="relative flex gap-3 pb-4 last:pb-0">
-                                                        <div className="relative z-10 w-6 h-6 rounded-full bg-amber-200 border-2 border-amber-500 shrink-0 mt-0.5" />
-                                                        <div className="flex-1 min-w-0">
-                                                            <p className="text-xs text-gray-500 font-mono">{typeof entry.at === 'string' ? new Date(entry.at).toLocaleString() : entry.at}</p>
-                                                            <p className="text-sm text-gray-900 font-medium mt-0.5">{entry.action || 'update'}</p>
-                                                        </div>
-                                                    </li>
-                                                ))}
+                                                {[...(personaData?.user_identity?.change_log ?? []) as Array<{ at: string; action: string; source?: string }>].reverse().map((entry, i) => {
+                                                    const isManual = entry.source === 'settings_ui';
+                                                    const isNewEntry = i < newTimelineEntryCount;
+                                                    return (
+                                                        <li
+                                                            key={i}
+                                                            className={`relative flex gap-3 pb-4 last:pb-0 transition-all duration-500 ${
+                                                                isNewEntry ? 'animate-pulse bg-blue-50/50 -mx-2 px-2 rounded-lg' : ''
+                                                            }`}
+                                                        >
+                                                            <div className={`relative z-10 w-6 h-6 rounded-full shrink-0 mt-0.5 flex items-center justify-center transition-transform duration-300 ${
+                                                                isNewEntry ? 'scale-110' : ''
+                                                            } ${
+                                                                isManual
+                                                                    ? 'bg-blue-100 border-2 border-blue-400'
+                                                                    : 'bg-amber-200 border-2 border-amber-500'
+                                                            }`}>
+                                                                {isManual ? (
+                                                                    <svg className="w-3 h-3 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                                                    </svg>
+                                                                ) : (
+                                                                    <svg className="w-3 h-3 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                                                    </svg>
+                                                                )}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="flex items-center gap-2">
+                                                                    <p className="text-xs text-gray-500 font-mono">{typeof entry.at === 'string' ? new Date(entry.at).toLocaleString() : entry.at}</p>
+                                                                    {isManual && (
+                                                                        <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full">manual</span>
+                                                                    )}
+                                                                    {isNewEntry && (
+                                                                        <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full animate-bounce">new</span>
+                                                                    )}
+                                                                </div>
+                                                                <p className="text-sm text-gray-900 font-medium mt-0.5">{entry.action || 'update'}</p>
+                                                            </div>
+                                                        </li>
+                                                    );
+                                                })}
                                             </ul>
                                         </div>
                                     </div>
                                 ) : (
                                     <div className="flex-1 min-h-0 overflow-y-auto p-4 pt-0">
-                                        <p className="text-gray-500 text-sm">No agent updates yet. When the LLM uses the update_user_identity tool, entries appear here.</p>
+                                        <p className="text-gray-500 text-sm">No updates yet. Changes from the agent or your edits will appear here.</p>
                                     </div>
                                 )}
                             </div>

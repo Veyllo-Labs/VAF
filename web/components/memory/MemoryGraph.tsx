@@ -445,7 +445,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         // Apply collision detection only if no saved positions exist
         const hasSavedPositions = Object.keys(savedPositionsRef.current).length > 0;
         if (!hasSavedPositions && nodes.length > 0) {
-            nodes = applyCollisionDetection(nodes);
+            nodes = applyCollisionDetection(nodes) as typeof nodes;
         }
 
         return nodes;

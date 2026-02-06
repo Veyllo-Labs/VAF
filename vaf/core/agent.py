@@ -33,6 +33,7 @@ from vaf.core.backend import ServerManager
 from vaf.core.platform import Platform
 from vaf.core.log_helper import append_domain_log
 from vaf.core.system_prompt import SystemPromptManager
+from vaf.core.last_interaction import get_last_interaction
 from vaf.tools.search import WebSearchTool
 from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, MoveFileTool
 
@@ -1537,6 +1538,8 @@ class Agent:
             self.filename,
             username=getattr(self, "_current_username", None),
             user_scope_id=getattr(self, "_current_user_scope_id", None),
+            current_source=getattr(self, "_current_chat_source", None),
+            last_interaction=get_last_interaction(getattr(self, "_current_user_scope_id", None)),
         )
         
         # Optional: Load Project Context (VAF.md)
@@ -3633,6 +3636,8 @@ class Agent:
                 self.filename,
                 username=getattr(self, "_current_username", None),
                 user_scope_id=getattr(self, "_current_user_scope_id", None),
+                current_source=getattr(self, "_current_chat_source", None),
+                last_interaction=get_last_interaction(getattr(self, "_current_user_scope_id", None)),
             )
         
         # ------------------------------------------------------------------

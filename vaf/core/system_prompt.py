@@ -330,11 +330,61 @@ Sub-agents run asynchronously - results arrive later
             ],
         }
     
+    def _format_relative_time(self, ts: float) -> str:
+        """Format timestamp as relative time for system prompt.
+        Steps: just now -> minutes (< 1h) -> hours (< 24h) -> yesterday (1d) -> days (< 30d) -> months (< 12mo) -> years.
+        """
+        now = datetime.now().timestamp()
+        delta_sec = max(0, now - ts)
+        if delta_sec < 60:
+            return "just now" if self.user_language != "de" else "gerade eben"
+        if delta_sec < 3600:  # < 1 hour: show minutes
+            m = int(delta_sec / 60)
+            if self.user_language == "de":
+                return f"vor {m} Min." if m != 1 else "vor 1 Min."
+            return f"{m} min ago" if m != 1 else "1 min ago"
+        if delta_sec < 86400:  # < 24 hours: show hours
+            h = int(delta_sec / 3600)
+            if self.user_language == "de":
+                return f"vor {h} Std." if h != 1 else "vor 1 Std."
+            return f"{h} hour ago" if h == 1 else f"{h} hours ago"
+        if delta_sec < 172800:  # 1 day: yesterday
+            return "yesterday" if self.user_language != "de" else "gestern"
+        SEC_PER_DAY = 86400
+        DAYS_30 = 30 * SEC_PER_DAY
+        DAYS_365 = 365 * SEC_PER_DAY
+        if delta_sec < DAYS_30:  # 2–29 days: show days
+            d = int(delta_sec / SEC_PER_DAY)
+            if self.user_language == "de":
+                return f"vor {d} Tagen" if d != 1 else "vor 1 Tag"
+            return f"{d} days ago" if d != 1 else "1 day ago"
+        if delta_sec < DAYS_365:  # 30 days – 1 year: show months (approx 30 days = 1 month)
+            months = int(delta_sec / DAYS_30)
+            if self.user_language == "de":
+                return f"vor {months} Monaten" if months != 1 else "vor 1 Monat"
+            return f"{months} months ago" if months != 1 else "1 month ago"
+        # 1 year and above: show years
+        years = int(delta_sec / DAYS_365)
+        if self.user_language == "de":
+            return f"vor {years} Jahren" if years != 1 else "vor 1 Jahr"
+        return f"{years} years ago" if years != 1 else "1 year ago"
+
+    def _format_channel(self, source: str) -> str:
+        """Display name for channel in prompt (WebUI, Telegram, CLI)."""
+        s = (source or "").strip().lower()
+        if s == "telegram":
+            return "Telegram"
+        if s == "cli":
+            return "CLI"
+        return "WebUI"
+
     def build_prompt(
         self,
         filename: str = None,
         username: Optional[str] = None,
         user_scope_id: Optional[Union[str, Any]] = None,
+        current_source: Optional[str] = None,
+        last_interaction: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Build the complete system prompt.
@@ -343,6 +393,8 @@ Sub-agents run asynchronously - results arrive later
             filename: Script filename (used to determine VQ-1 vs Generic identity)
             username: Current user's username (for identity.json and User identity block)
             user_scope_id: Current user's scope ID (for cached profile summary from RAG)
+            current_source: Current channel: "web", "telegram", or "cli" (for "Currently chatting in ...")
+            last_interaction: Optional dict with "ts", "source", "preview" from last_interaction store
 
         Returns:
             Complete system prompt string
@@ -458,6 +510,38 @@ Then use the results to answer. Do NOT guess from your training data!
             time_str = f"Today is {now.strftime('%A, %Y-%m-%d %H:%M:%S')}."
             
         parts.append(f"\n## Current Time\n{time_str}\n")
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # 2b. LAST INTERACTION & CURRENT CHANNEL (optional)
+        # ═══════════════════════════════════════════════════════════════════════
+        if current_source or last_interaction:
+            line_parts = []
+            if last_interaction:
+                ts = last_interaction.get("ts")
+                src = last_interaction.get("source", "web")
+                preview = (last_interaction.get("preview") or "").strip()
+                display_name = username
+                if username:
+                    try:
+                        from vaf.auth.user_workspace import get_user_workspace
+                        ws = get_user_workspace(username)
+                        display_name = ws.get_user_identity().get("name", username)
+                    except Exception:
+                        display_name = username
+                else:
+                    display_name = "the user"
+                rel = self._format_relative_time(ts) if ts is not None else ""
+                chan = self._format_channel(src)
+                line_parts.append(f"Last user {display_name} interaction: {rel} via {chan}.")
+                if preview:
+                    line_parts.append(f" (About: {preview})")
+            if current_source:
+                chan = self._format_channel(current_source)
+                line_parts.append(f" Currently chatting in {chan}.")
+            if line_parts:
+                block = "".join(line_parts).strip()
+                if block:
+                    parts.append(f"\n## Session context\n{block}\n")
 
         # ═══════════════════════════════════════════════════════════════════════
         # 3. WORKSPACE CONTEXT (CWD Awareness)

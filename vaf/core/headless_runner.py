@@ -489,6 +489,9 @@ def run_headless_agent():
                             except Exception:
                                 pass
 
+                    # So build_prompt knows current channel (WebUI vs Telegram)
+                    agent._current_chat_source = getattr(task, "source", "web")
+
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
@@ -507,6 +510,18 @@ def run_headless_agent():
                             from datetime import datetime as _dt
                             with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
                                 f.write(f"{_dt.now().isoformat()} CHAT_STEP_RETURNED session_id={task.session_id} response_len={len(str(response)) if response else 0}\n")
+                    except Exception:
+                        pass
+
+                    # Record this turn as "last interaction" for next turn's system prompt
+                    try:
+                        from vaf.core.last_interaction import update_last_interaction
+                        meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                        update_last_interaction(
+                            user_scope_id=meta.get("user_scope_id"),
+                            source=getattr(task, "source", "web"),
+                            preview=(task.input_text or "")[:80],
+                        )
                     except Exception:
                         pass
 

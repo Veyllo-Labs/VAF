@@ -1007,6 +1007,7 @@ export default function VAFDashboard() {
                     });
                 }
                 else if (data.type === 'tts_audio') {
+                    console.log('[TTS] Received tts_audio, audio length:', data.audio?.length);
                     // Stop any current audio
                     if (currentAudioRef.current) {
                         currentAudioRef.current.pause();
@@ -1014,10 +1015,12 @@ export default function VAFDashboard() {
 
                     // Play new audio
                     const audioSrc = `data:audio/wav;base64,${data.audio}`;
+                    console.log('[TTS] Creating Audio element with data URL length:', audioSrc.length);
                     const audio = new Audio(audioSrc);
                     currentAudioRef.current = audio;
 
                     audio.onplay = () => {
+                        console.log('[TTS] Audio started playing');
                         // Transition from loading to playing
                         if (loadingMessageIdRef.current !== null) {
                             setPlayingMessageId(loadingMessageIdRef.current);
@@ -1026,19 +1029,22 @@ export default function VAFDashboard() {
                     };
 
                     audio.onended = () => {
+                        console.log('[TTS] Audio ended');
                         setPlayingMessageId(null);
                         currentAudioRef.current = null;
                     };
 
                     audio.onerror = (e) => {
-                        console.error("Audio playback error", e);
+                        console.error("[TTS] Audio playback error", e);
                         setPlayingMessageId(null);
                         setLoadingMessageId(null);
                         currentAudioRef.current = null;
                     };
 
-                    audio.play().catch(e => {
-                        console.error("Autoplay failed", e);
+                    audio.play().then(() => {
+                        console.log('[TTS] play() promise resolved');
+                    }).catch(e => {
+                        console.error("[TTS] Autoplay failed", e);
                         setPlayingMessageId(null);
                         setLoadingMessageId(null);
                     });

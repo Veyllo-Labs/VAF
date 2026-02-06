@@ -866,6 +866,35 @@ export default function VAFDashboard() {
                     const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding)_agent(?:$|[^a-z])/.test(toolName);
                     if (subType === 'start' && isSubAgentTool) {
                         openSubAgentWindow(false);
+                        const title = String(name || 'Sub-Agent').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+                        setSubAgentState(prev => ({
+                            ...prev,
+                            status: 'Running...',
+                            presence: 'online',
+                            steps: [
+                                ...prev.steps.filter((s: { id: string }) => s.id !== toolId),
+                                { id: toolId, title, status: 'running', actions: [] as Array<{ type: string; details: string }> }
+                            ]
+                        }));
+                    }
+                    if (subType === 'end' || subType === 'error') {
+                        if (isSubAgentTool) {
+                            const isAsyncMarker = eventData != null && String(eventData).includes('[SUBAGENT_ASYNC:');
+                            if (!isAsyncMarker) {
+                                setSubAgentState(prev => ({
+                                    ...prev,
+                                    status: subType === 'error' ? 'Failed' : 'Completed',
+                                    presence: 'idle',
+                                    steps: prev.steps.map((s: { id: string; status: string }) =>
+                                        s.id === toolId ? { ...s, status: 'completed' as const } : s
+                                    )
+                                }));
+                                if (eventData) {
+                                    const blockTitle = String(name || 'Sub-Agent').replace(/_/g, ' ');
+                                    appendSubAgentBlock(`### ${blockTitle}\n${eventData}`, toolId);
+                                }
+                            }
+                        }
                     }
                     if (subAgentState.isOpen) {
                         const timeStamp = new Date().toISOString().slice(11, 19);

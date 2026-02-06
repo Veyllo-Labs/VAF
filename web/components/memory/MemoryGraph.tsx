@@ -375,7 +375,9 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
 
         // If a tag is selected, also include all memories connected to that tag
         const selectedNode = storeNodes.find(n => n.id === selectedNodeId);
-        if (selectedNode?.type === 'tagNode') {
+        const isTagNode = selectedNode?.type === 'tagNode' || selectedNode?.data?.isTagNode;
+
+        if (isTagNode) {
             // Tag connections - edges go from memory (source) to tag (target)
             storeEdges.forEach(edge => {
                 if (edge.target === selectedNodeId) {
@@ -388,7 +390,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         }
 
         // If a memory is selected, include its connected tags and other memories via those tags
-        if (selectedNode?.type === 'memoryNode') {
+        if (!isTagNode && selectedNode) {
             // Get connected tags
             const connectedTags = new Set<string>();
             storeEdges.forEach(edge => {

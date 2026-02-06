@@ -20,6 +20,83 @@ const ReactFlowFallback = () => (
         <div className="animate-pulse text-gray-400">Loading visualization...</div>
     </div>
 );
+
+// Constants for collision detection
+const NODE_WIDTH = 220;
+const NODE_HEIGHT = 100;
+const TAG_NODE_WIDTH = 150;
+const TAG_NODE_HEIGHT = 60;
+const COLLISION_PADDING = 25;
+
+// Helper: Check if two rectangles overlap
+function rectsOverlap(
+    r1: { x: number; y: number; width: number; height: number },
+    r2: { x: number; y: number; width: number; height: number }
+): boolean {
+    return !(
+        r1.x + r1.width + COLLISION_PADDING < r2.x ||
+        r2.x + r2.width + COLLISION_PADDING < r1.x ||
+        r1.y + r1.height + COLLISION_PADDING < r2.y ||
+        r2.y + r2.height + COLLISION_PADDING < r1.y
+    );
+}
+
+// Helper: Apply collision detection to prevent overlapping nodes
+function applyCollisionDetection(nodes: any[]): any[] {
+    const result = nodes.map(n => ({ ...n, position: { ...n.position } }));
+    const maxIterations = 50;
+
+    for (let iter = 0; iter < maxIterations; iter++) {
+        let hasCollision = false;
+
+        for (let i = 0; i < result.length; i++) {
+            const nodeA = result[i];
+            const widthA = nodeA.type === 'tagNode' ? TAG_NODE_WIDTH : NODE_WIDTH;
+            const heightA = nodeA.type === 'tagNode' ? TAG_NODE_HEIGHT : NODE_HEIGHT;
+
+            for (let j = i + 1; j < result.length; j++) {
+                const nodeB = result[j];
+                const widthB = nodeB.type === 'tagNode' ? TAG_NODE_WIDTH : NODE_WIDTH;
+                const heightB = nodeB.type === 'tagNode' ? TAG_NODE_HEIGHT : NODE_HEIGHT;
+
+                const rectA = { x: nodeA.position.x, y: nodeA.position.y, width: widthA, height: heightA };
+                const rectB = { x: nodeB.position.x, y: nodeB.position.y, width: widthB, height: heightB };
+
+                if (rectsOverlap(rectA, rectB)) {
+                    hasCollision = true;
+
+                    // Calculate push direction
+                    const centerAX = rectA.x + rectA.width / 2;
+                    const centerAY = rectA.y + rectA.height / 2;
+                    const centerBX = rectB.x + rectB.width / 2;
+                    const centerBY = rectB.y + rectB.height / 2;
+
+                    const dx = centerBX - centerAX;
+                    const dy = centerBY - centerAY;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                    // Push apart
+                    const pushForce = 35;
+                    const pushX = (dx / dist) * pushForce;
+                    const pushY = (dy / dist) * pushForce;
+
+                    result[i].position = {
+                        x: result[i].position.x - pushX,
+                        y: result[i].position.y - pushY
+                    };
+                    result[j].position = {
+                        x: result[j].position.x + pushX,
+                        y: result[j].position.y + pushY
+                    };
+                }
+            }
+        }
+
+        if (!hasCollision) break;
+    }
+
+    return result;
+}
 import {
     X, Globe, Cpu, Volume2, Monitor, Shield, Save, RotateCcw,
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch,
@@ -108,6 +185,61 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [memoryEdges, setMemoryEdges] = useState<any[]>([]);
     const [memoryLoading, setMemoryLoading] = useState(false);
     const [memoryGraphError, setMemoryGraphError] = useState<string | null>(null);
+    const [selectedMemoryNodeId, setSelectedMemoryNodeId] = useState<string | null>(null);
+
+    // Calculate connected nodes for highlighting
+    const connectedMemoryNodeIds = useMemo(() => {
+        if (!selectedMemoryNodeId) return new Set<string>();
+
+        const connected = new Set<string>();
+        connected.add(selectedMemoryNodeId);
+
+        // Find all edges connected to selected node
+        memoryEdges.forEach(edge => {
+            if (edge.source === selectedMemoryNodeId) {
+                connected.add(edge.target);
+            }
+            if (edge.target === selectedMemoryNodeId) {
+                connected.add(edge.source);
+            }
+        });
+
+        // If a tag is selected, include all memories connected to that tag
+        const selectedNode = memoryNodes.find(n => n.id === selectedMemoryNodeId);
+        if (selectedNode?.type === 'tagNode' || selectedNode?.data?.isTagNode) {
+            memoryEdges.forEach(edge => {
+                if (edge.target === selectedMemoryNodeId || edge.source === selectedMemoryNodeId) {
+                    connected.add(edge.source);
+                    connected.add(edge.target);
+                }
+            });
+        }
+
+        // If a memory is selected, include its connected tags and other memories via those tags
+        if (selectedNode?.type === 'memoryNode' || (!selectedNode?.data?.isTagNode && selectedNode)) {
+            const connectedTags = new Set<string>();
+            memoryEdges.forEach(edge => {
+                if (edge.source === selectedMemoryNodeId && edge.target?.startsWith('tag-')) {
+                    connectedTags.add(edge.target);
+                    connected.add(edge.target);
+                }
+                if (edge.target === selectedMemoryNodeId && edge.source?.startsWith('tag-')) {
+                    connectedTags.add(edge.source);
+                    connected.add(edge.source);
+                }
+            });
+
+            // Get all memories connected to those tags
+            connectedTags.forEach(tagId => {
+                memoryEdges.forEach(edge => {
+                    if (edge.target === tagId) connected.add(edge.source);
+                    if (edge.source === tagId) connected.add(edge.target);
+                });
+            });
+        }
+
+        return connected;
+    }, [selectedMemoryNodeId, memoryEdges, memoryNodes]);
     
     // Workflow Visualization State
     const [workflowModal, setWorkflowModal] = useState<any>(null);
@@ -272,7 +404,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 throw new Error(`Failed to fetch graph: ${detail}`);
             }
             const data = await res.json();
-            setMemoryNodes(data.nodes || []);
+            // Apply collision detection to prevent overlapping nodes
+            const nodesWithCollisionFix = applyCollisionDetection(data.nodes || []);
+            setMemoryNodes(nodesWithCollisionFix);
             setMemoryEdges(data.edges || []);
         } catch (e) {
             console.error('Failed to fetch memory graph:', e);
@@ -2113,7 +2247,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <div>
                                     <h2 className="text-xl font-bold text-gray-900">Memory Graph</h2>
                                     <p className="text-sm text-gray-500">
-                                        {memoryStats?.memories ?? 0} memories • {memoryStats?.chunks ?? 0} chunks • {memoryStats?.connections ?? 0} connections
+                                        {memoryStats?.memories ?? 0} memories • {memoryStats?.chunks ?? 0} chunks • {memoryEdges.length} connections
                                     </p>
                                 </div>
                             </div>
@@ -2198,53 +2332,86 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             ) : (
                                 <Suspense fallback={<ReactFlowFallback />}>
                                     <ReactFlow
-                                        nodes={memoryNodes.map((node, i) => ({
+                                        nodes={memoryNodes.map((node, i) => {
+                                            const isTagNode = node.type === 'tagNode' || node.data?.isTagNode;
+                                            const isFaded = selectedMemoryNodeId !== null && !connectedMemoryNodeIds.has(node.id);
+                                            const isSelected = node.id === selectedMemoryNodeId;
+                                            return {
                                             id: node.id,
                                             type: 'default',
                                             position: node.position || { x: (i % 5) * 280, y: Math.floor(i / 5) * 180 },
                                             data: {
                                                 label: (
                                                     <div className="text-left p-1">
-                                                        <div className="font-medium text-gray-800 text-sm truncate max-w-[180px]">
+                                                        <div className={cn(
+                                                            "font-medium text-sm truncate max-w-[180px]",
+                                                            isTagNode ? "text-purple-700" : "text-gray-800"
+                                                        )}>
                                                             {node.data?.label || 'Untitled'}
                                                         </div>
-                                                        {node.data?.preview && (
+                                                        {!isTagNode && node.data?.preview && (
                                                             <div className="text-xs text-gray-500 truncate max-w-[180px] mt-0.5">
                                                                 {node.data.preview}
                                                             </div>
                                                         )}
                                                         <div className="flex items-center gap-2 mt-1 text-[10px] text-gray-400">
-                                                            <span>{node.data?.chunkCount || 0} chunks</span>
-                                                            {node.data?.tags?.length > 0 && (
-                                                                <span className="px-1.5 py-0.5 bg-gray-100 rounded">
-                                                                    {node.data.tags[0]}
-                                                                </span>
+                                                            {isTagNode ? (
+                                                                <span>{node.data?.memoryCount || 0} memories</span>
+                                                            ) : (
+                                                                <>
+                                                                    <span>{node.data?.chunkCount || 0} chunks</span>
+                                                                    {node.data?.tags?.length > 0 && (
+                                                                        <span className="px-1.5 py-0.5 bg-gray-100 rounded">
+                                                                            {node.data.tags[0]}
+                                                                        </span>
+                                                                    )}
+                                                                </>
                                                             )}
                                                         </div>
                                                     </div>
                                                 )
                                             },
+                                            selected: isSelected,
                                             style: {
-                                                background: node.data?.isHighlighted ? '#fef3c7' : 'white',
-                                                border: node.data?.isHighlighted ? '2px solid #f59e0b' : '1px solid #e5e7eb',
+                                                background: isTagNode
+                                                    ? '#f3e8ff'
+                                                    : (node.data?.isHighlighted ? '#fef3c7' : 'white'),
+                                                border: isSelected
+                                                    ? '2px solid #374151'
+                                                    : (isTagNode
+                                                        ? '2px solid #a855f7'
+                                                        : (node.data?.isHighlighted ? '2px solid #f59e0b' : '1px solid #e5e7eb')),
                                                 borderRadius: '12px',
                                                 padding: '8px',
-                                                minWidth: '200px',
+                                                minWidth: isTagNode ? '140px' : '200px',
+                                                opacity: isFaded ? 0.4 : 1,
+                                                transition: 'opacity 0.3s ease',
                                             }
-                                        }))}
-                                        edges={memoryEdges.map(edge => ({
+                                        }})}
+                                        edges={memoryEdges.map(edge => {
+                                            const isTagEdge = edge.data?.connectionType === 'tag';
+                                            const isFaded = selectedMemoryNodeId !== null &&
+                                                !connectedMemoryNodeIds.has(edge.source) &&
+                                                !connectedMemoryNodeIds.has(edge.target);
+                                            return {
                                             id: edge.id,
                                             source: edge.source,
                                             target: edge.target,
                                             type: 'smoothstep',
                                             animated: edge.data?.connectionType === 'semantic',
                                             style: {
-                                                stroke: edge.data?.connectionType === 'semantic' ? '#6b7280' : '#9ca3af',
+                                                stroke: isTagEdge
+                                                    ? '#a855f7'
+                                                    : (edge.data?.connectionType === 'semantic' ? '#6b7280' : '#9ca3af'),
                                                 strokeWidth: Math.max(1, (edge.data?.strength || 0.5) * 3),
-                                                opacity: 0.6,
+                                                opacity: isFaded ? 0.15 : (isTagEdge ? 0.5 : 0.6),
+                                                strokeDasharray: isTagEdge ? '5,5' : undefined,
+                                                transition: 'opacity 0.3s ease',
                                             },
-                                            markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
-                                        }))}
+                                            markerEnd: isTagEdge ? undefined : { type: MarkerType.ArrowClosed, width: 12, height: 12 },
+                                        }})}
+                                        onNodeClick={(_, node) => setSelectedMemoryNodeId(node.id)}
+                                        onPaneClick={() => setSelectedMemoryNodeId(null)}
                                         fitView
                                         fitViewOptions={{ padding: 0.3 }}
                                         proOptions={{ hideAttribution: true }}
@@ -2266,16 +2433,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         <div className="border-t border-gray-200 flex items-center justify-between px-6 py-3 bg-gray-50">
                             <div className="flex items-center gap-6 text-xs text-gray-500">
                                 <div className="flex items-center gap-2">
-                                    <div className="w-3 h-3 rounded-full bg-gray-700" />
-                                    <span>Semantic Connection</span>
+                                    <div className="w-3 h-3 rounded bg-white border-2 border-gray-300" />
+                                    <span>Memory</span>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <div className="w-3 h-3 rounded-full bg-gray-400" />
-                                    <span>Manual Connection</span>
+                                    <div className="w-3 h-3 rounded bg-purple-100 border-2 border-purple-400" />
+                                    <span>Tag</span>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <div className="w-3 h-3 rounded bg-yellow-100 border border-yellow-500" />
-                                    <span>Highlighted (RAG Source)</span>
+                                    <div className="w-6 h-0.5 bg-purple-400" style={{ borderTop: '2px dashed #a855f7' }} />
+                                    <span>Tag Connection</span>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">

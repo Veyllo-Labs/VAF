@@ -319,9 +319,15 @@ class APIBackendManager:
         self.session_usage = {"input_tokens": 0, "output_tokens": 0}
 
     def _create_provider(self) -> BaseAIProvider:
+        # Local/Ollama provider doesn't need an API key
+        if self.provider_name == "local":
+            # Use OpenAI-compatible provider for Ollama
+            local_url = Config.get("local_api_url", "http://localhost:11434/v1")
+            return OpenAIProvider("local", "ollama", base_url=local_url)
+
         if not self.api_key:
             raise ValueError(f"API key missing for {self.provider_name}")
-            
+
         if self.provider_name == "openai":
             return OpenAIProvider("openai", self.api_key)
         elif self.provider_name == "anthropic":
@@ -349,7 +355,8 @@ class APIBackendManager:
                 "anthropic": "claude-3-5-sonnet-20241022",
                 "deepseek": "deepseek-chat",
                 "google": "gemini-1.5-flash",
-                "openrouter": "anthropic/claude-3.5-sonnet"
+                "openrouter": "anthropic/claude-3.5-sonnet",
+                "local": "llama3"
             }
             model = self.config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, "gpt-4o"))
 
@@ -360,6 +367,10 @@ class APIBackendManager:
             self.session_usage["output_tokens"] = self.provider.usage["output_tokens"]
             yield chunk
 
+    def chat_completion_stream(self, messages, temperature=0.7, max_tokens=4096, model=None, tools=None, tool_choice=None):
+        """Streaming chat completion - alias for chat_completion with stream=True."""
+        return self.chat_completion(messages, temperature, max_tokens, stream=True, model=model, tools=tools, tool_choice=tool_choice)
+
     @staticmethod
     def get_available_models(provider: str) -> List[str]:
         """Legacy static list for UI dropdowns (can be extended to use providers)."""
@@ -368,7 +379,8 @@ class APIBackendManager:
             "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
             "deepseek": ["deepseek-chat", "deepseek-coder"],
             "google": ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"],
-            "openrouter": ["anthropic/claude-3.5-sonnet", "openai/gpt-4o"]
+            "openrouter": ["anthropic/claude-3.5-sonnet", "openai/gpt-4o"],
+            "local": ["llama3", "mistral", "codellama"]
         }
         return models.get(provider, [])
 

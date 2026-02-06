@@ -31,9 +31,9 @@ memory_router = APIRouter()
 async def get_current_user_scope(request: Request) -> Optional[UUID]:
     """
     Get the user_scope_id from the request.
-    
+
     - If authenticated (via AuthMiddleware), returns user.user_scope_id.
-    - If local (no auth): returns local_admin_scope_id so DB/RAG match WebSocket scope.
+    - If local (no auth): returns None to search ALL memories (global search).
     """
     user = getattr(request.state, "user", None)
     if user and user.get("user_scope_id"):
@@ -41,12 +41,8 @@ async def get_current_user_scope(request: Request) -> Optional[UUID]:
             return UUID(user["user_scope_id"])
         except ValueError:
             pass
-    # Local: same scope as WebSocket so memories and Settings/API see same data
-    try:
-        scope_str = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
-        return UUID(scope_str)
-    except (ValueError, TypeError):
-        return None
+    # Local mode: return None to search all memories (both scoped and unscoped)
+    return None
 
 
 # Pydantic models for request/response

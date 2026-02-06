@@ -150,6 +150,9 @@ interface MemoryActions {
     queryRag: (query: string, k?: number) => Promise<void>;
     queryRagStream: (query: string, k?: number) => Promise<void>;
     clearRagResult: () => void;
+
+    // Simple search (no LLM, just find and highlight memories)
+    searchMemories: (query: string, k?: number) => Promise<RagSource[]>;
     
     // Stats
     fetchStats: () => Promise<void>;
@@ -480,7 +483,46 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
         set({ ragResult: null, ragSources: [], streamingAnswer: '' });
         get().clearHighlights();
     },
-    
+
+    // Simple search (no LLM, just find and highlight memories)
+    searchMemories: async (query, k = 10) => {
+        if (!query.trim()) {
+            get().clearHighlights();
+            set({ ragSources: [], ragResult: null });
+            return [];
+        }
+
+        set({ isQuerying: true, error: null, ragQuery: query });
+
+        try {
+            const response = await fetch(`${getMemoryApiBase()}/api/memory/search`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query, k, threshold: 0.3 })
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Search failed: ${errorText}`);
+            }
+
+            const sources: RagSource[] = await response.json();
+            const sourceIds = [...new Set(sources.map(s => s.memory_id))];
+
+            set({
+                ragSources: sourceIds,
+                ragResult: { answer: '', sources, context_tokens: 0 },
+                isQuerying: false
+            });
+            get().highlightNodes(sourceIds);
+
+            return sources;
+        } catch (error) {
+            set({ error: (error as Error).message, isQuerying: false });
+            return [];
+        }
+    },
+
     // Stats
     fetchStats: async () => {
         try {

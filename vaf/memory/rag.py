@@ -257,16 +257,11 @@ class RagPipeline:
             Memory.is_deleted == False,
             Chunk.embedding.cosine_distance(query_embedding) < max_distance
         ]
-        
+
         # Apply scope filter
         if user_scope_id:
             filters.append(Memory.user_scope_id == user_scope_id)
-        else:
-            # If no scope provided, allow global (null) or enforce?
-            # For now, if user_scope_id is None, we search EVERYTHING (Admin mode or Global)
-            # OR we search only Null scope.
-            # Decision: If user_scope_id is None, search memories where user_scope_id IS NULL.
-            filters.append(Memory.user_scope_id.is_(None))
+        # If no user_scope_id provided, search ALL memories (no filter applied)
 
         stmt = select(
             Chunk,
@@ -426,17 +421,25 @@ Always cite which source(s) you used."""
             provider = Config.get("provider", "local")
             backend = APIBackendManager(provider)
             
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: backend.chat_completion(
-                    provider=provider,
+            # chat_completion is a generator, collect all chunks
+            def get_response():
+                result = ""
+                for chunk in backend.chat_completion(
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.3,
-                    max_tokens=1024
-                )
-            )
-            
-            return response.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    max_tokens=1024,
+                    stream=False
+                ):
+                    if isinstance(chunk, dict):
+                        content = chunk.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        if content:
+                            result = content
+                    elif isinstance(chunk, str):
+                        result += chunk
+                return result
+
+            response = await asyncio.get_event_loop().run_in_executor(None, get_response)
+            return response
         except Exception as e:
             logger.error(f"Error generating answer: {e}")
             return f"Error generating answer: {str(e)}"
@@ -451,7 +454,6 @@ Always cite which source(s) you used."""
             
             # Use streaming API
             for chunk in backend.chat_completion_stream(
-                provider=provider,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=1024

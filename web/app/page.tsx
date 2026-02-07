@@ -584,7 +584,7 @@ export default function VAFDashboard() {
     const [suggestionList, setSuggestionList] = useState<any[]>([]);
     const [suggestionType, setSuggestionType] = useState<'tool' | 'workflow' | null>(null);
     const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
-    const inputRef = useRef<HTMLInputElement>(null);
+    const inputRef = useRef<HTMLTextAreaElement>(null);
     const suggestionListRef = useRef<HTMLDivElement>(null);
 
     // Scroll Sync for Suggestions
@@ -607,7 +607,7 @@ export default function VAFDashboard() {
         }
     }, [selectedSuggestionIndex, suggestionList.length]);
 
-    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const val = e.target.value;
         setInput(val);
 
@@ -674,8 +674,7 @@ export default function VAFDashboard() {
         setSuggestionList([]);
         setSuggestionType(null);
         setSelectedSuggestionIndex(0);
-        // Refocus input if needed
-        (document.querySelector('input[type="text"]') as HTMLInputElement)?.focus(); // Simple hack for focus
+        inputRef.current?.focus();
     };
 
     // Workflow Store
@@ -1717,7 +1716,16 @@ export default function VAFDashboard() {
         setAttachedFiles(prev => prev.filter((_, i) => i !== index));
     };
 
-    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        // Enter = send, Shift+Enter = new line
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if ((input.trim() || attachedFiles.length > 0) && !loading) {
+                sendMessage(undefined);
+            }
+            return;
+        }
+
         // Handle suggestion popup navigation
         if (suggestionList.length > 0) {
             if (e.key === 'ArrowDown') {
@@ -1734,14 +1742,14 @@ export default function VAFDashboard() {
                 );
                 return;
             }
-                          if (e.key === 'Enter' || e.key === 'Tab') {
-                              if (suggestionList.length > 0) {
-                                  e.preventDefault();
-                                  handleSuggestionClick(suggestionList[selectedSuggestionIndex]);
-                                  return;
-                              }
-                              // If no suggestions, let it fall through to normal form submit
-                          }            if (e.key === 'Escape') {
+            if (e.key === 'Enter' || e.key === 'Tab') {
+                if (suggestionList.length > 0) {
+                    e.preventDefault();
+                    handleSuggestionClick(suggestionList[selectedSuggestionIndex]);
+                    return;
+                }
+            }
+            if (e.key === 'Escape') {
                 e.preventDefault();
                 setSuggestionList([]);
                 setSuggestionType(null);
@@ -1757,6 +1765,19 @@ export default function VAFDashboard() {
             setSuggestion('');
         }
     };
+
+    // Auto-grow textarea: 1 line min, 10 lines max, then scrollbar
+    const resizeInput = useCallback(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        el.style.height = 'auto';
+        const lineHeight = 20;
+        const maxHeight = lineHeight * 10;
+        el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
+    }, []);
+    useEffect(() => {
+        resizeInput();
+    }, [input, resizeInput]);
 
     const getMicErrorMessage = (error: unknown) => {
         if (!(error instanceof DOMException)) {
@@ -2613,7 +2634,7 @@ export default function VAFDashboard() {
                                     <Square size={12} fill="currentColor" />
                                 </button>
                             )}
-                            <form onSubmit={sendMessage} className="flex-1 min-w-0 flex items-center bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden">
+                            <form onSubmit={sendMessage} className="flex-1 min-w-0 flex items-end bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden">
                             <input
                                 type="file"
                                 ref={fileInputRef}
@@ -2630,20 +2651,20 @@ export default function VAFDashboard() {
                             >
                                 <Paperclip size={20} />
                             </button>
-                            <div className="flex-1 relative">
+                            <div className="flex-1 relative flex items-end">
 
-                                <div className="absolute inset-0 py-4 px-1 pointer-events-none text-sm text-gray-400 whitespace-pre">
+                                <div className="absolute inset-0 py-4 px-1 pointer-events-none text-sm text-gray-400 whitespace-pre overflow-hidden">
                                     <span className="text-transparent">{input}</span>
                                     {suggestion}
                                 </div>
-                                <input
+                                <textarea
                                     ref={inputRef}
-                                    type="text"
+                                    rows={1}
                                     value={input}
                                     onChange={handleInputChange}
                                     onKeyDown={handleKeyDown}
                                     placeholder={input ? "" : "Ask anything..."}
-                                    className="w-full py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10"
+                                    className="w-full min-h-[2.5rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
                                     disabled={loading}
                                 />
                             </div>

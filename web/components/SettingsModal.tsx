@@ -102,7 +102,7 @@ import {
     X, Globe, Cpu, Volume2, Monitor, Shield, Save, RotateCcw,
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch,
     Brain, Database, Link2, MessageSquare, Network, Users, User, Lock, Server, Laptop, Smartphone,
-    Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut
+    Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard } from './connections';
@@ -171,6 +171,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showDiscordWizard, setShowDiscordWizard] = useState(false);
     const [showTelegramWizard, setShowTelegramWizard] = useState(false);
     const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
+    const [showCreateAutomationModal, setShowCreateAutomationModal] = useState(false);
+    const [automationCalendarViewDate, setAutomationCalendarViewDate] = useState(() => new Date());
 
     const [toolsSearch, setToolsSearch] = useState('');
     const [workflowsSearch, setWorkflowsSearch] = useState('');
@@ -532,6 +534,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     e.stopPropagation();
                     return;
                 }
+                if (showCreateAutomationModal) {
+                    setShowCreateAutomationModal(false);
+                    e.stopPropagation();
+                    return;
+                }
                 if (showUserIdentityModal) {
                     setShowUserIdentityModal(false);
                     setIsEditingUserIdentity(false);
@@ -565,7 +572,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             window.addEventListener('keydown', handleKeyDown);
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, codeModal, workflowModal, showMemoryModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, onClose]);
+    }, [isOpen, codeModal, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, onClose]);
 
     const handleLogoutYes = useCallback(() => {
         setShowLogoutConfirm(false);
@@ -1702,7 +1709,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 Create custom workflows and scheduled tasks to automate your daily work.
                                             </p>
                                         </div>
-                                        <button className="px-4 py-2 bg-blue-50 text-blue-600 font-medium rounded-lg text-sm hover:bg-blue-100 transition-colors">
+                                        <button
+                                            onClick={() => setShowCreateAutomationModal(true)}
+                                            className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg text-sm transition-colors"
+                                        >
                                             Create New Automation
                                         </button>
                                     </div>
@@ -1739,7 +1749,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             ))}
                                         </div>
                                         <div className="mt-4">
-                                            <button className="w-full px-4 py-2 bg-blue-50 text-blue-600 font-medium rounded-lg text-sm hover:bg-blue-100 transition-colors">
+                                            <button
+                                                onClick={() => setShowCreateAutomationModal(true)}
+                                                className="w-full px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg text-sm transition-colors"
+                                            >
                                                 Create New Automation
                                             </button>
                                         </div>
@@ -2556,6 +2569,121 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </span>
                                 )}
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Create Automation Modal – full-window planner (no inner card) */}
+            {showCreateAutomationModal && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowCreateAutomationModal(false)}>
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div
+                        className="relative w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden bg-white"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {/* Planner header: User links, Monate Mitte, Titel + Close rechts */}
+                        <div className="flex items-center shrink-0 px-4 py-3 border-b border-gray-200 gap-4">
+                            <div className="flex items-center gap-2 shrink-0">
+                                <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center text-gray-700 font-semibold text-sm">
+                                    {(currentUser?.username ?? 'User').slice(0, 1).toUpperCase()}
+                                </div>
+                                <span className="text-sm font-medium text-gray-900 truncate">{currentUser?.username ?? 'User'}</span>
+                            </div>
+                            <div className="flex flex-wrap items-center justify-center gap-1.5 flex-1 min-w-0">
+                                {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((label, i) => {
+                                    const isSelected = automationCalendarViewDate.getMonth() === i;
+                                    const isActualMonth = automationCalendarViewDate.getFullYear() === new Date().getFullYear() && new Date().getMonth() === i;
+                                    return (
+                                        <button
+                                            key={label}
+                                            type="button"
+                                            onClick={() => setAutomationCalendarViewDate(d => new Date(d.getFullYear(), i))}
+                                            className={cn(
+                                                'px-3.5 py-2 rounded-lg text-xs font-medium transition-colors',
+                                                isSelected ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200',
+                                                isActualMonth && 'ring-2 ring-red-500'
+                                            )}
+                                        >
+                                            {label}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                                <h2 className="text-lg font-bold text-gray-900 truncate">Automations {automationCalendarViewDate.getFullYear()}</h2>
+                                <button onClick={() => setShowCreateAutomationModal(false)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700" title="Close">
+                                    <X size={18} />
+                                </button>
+                            </div>
+                        </div>
+                        {/* Body: To-do (left, wider) + Calendar (center, compact cells) */}
+                        <div className="flex-1 flex gap-4 min-h-0 p-4 overflow-auto">
+                            {/* To-do: breiter, damit Text nicht gequetscht wirkt */}
+                            <div
+                                className="min-w-[220px] w-[220px] shrink-0 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-4 flex flex-col min-h-[200px]"
+                                style={{ backgroundImage: 'radial-gradient(circle, #d1d5db 1.5px, transparent 1.5px)', backgroundSize: '10px 10px' }}
+                            >
+                                <h3 className="text-sm font-medium text-gray-700 mb-1.5 shrink-0">To-do list</h3>
+                                <p className="text-xs text-gray-500 shrink-0">Quick tasks beside your calendar.</p>
+                                <div className="flex-1 min-h-[100px]" />
+                            </div>
+                            {/* Calendar: runde Umrandung wie To-do und Note */}
+                            <div className="flex-1 flex flex-col min-w-0 min-h-0 rounded-xl border-2 border-dashed border-gray-200 p-3 overflow-hidden">
+                                {(() => {
+                                    const y = automationCalendarViewDate.getFullYear();
+                                    const m = automationCalendarViewDate.getMonth();
+                                    const firstWeekday = (new Date(y, m, 1).getDay() + 6) % 7;
+                                    const daysInMonth = new Date(y, m + 1, 0).getDate();
+                                    const numRows = Math.ceil((firstWeekday + daysInMonth) / 7);
+                                    return (
+                                <div
+                                    className="grid grid-cols-7 gap-px bg-gray-400 rounded-xl flex-1 min-h-0 w-full"
+                                    style={{ gridTemplateRows: `auto repeat(${numRows}, minmax(0, 1fr))` }}
+                                >
+                                    {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => (
+                                        <div key={day} className="bg-gray-50 flex items-center justify-center text-xs font-medium text-gray-500 uppercase tracking-wide py-1.5">
+                                            {day}
+                                        </div>
+                                    ))}
+                                    {(() => {
+                                        const today = new Date();
+                                        const isCurrentMonth = today.getFullYear() === y && today.getMonth() === m;
+                                        const cells: (number | null)[] = [
+                                            ...Array(firstWeekday).fill(null),
+                                            ...Array.from({ length: daysInMonth }, (_, i) => i + 1)
+                                        ];
+                                        while (cells.length % 7 !== 0) cells.push(null);
+                                        return cells.map((day, i) => {
+                                            const isSunday = (i % 7) === 6;
+                                            return (
+                                            <div
+                                                key={i}
+                                                className={cn(
+                                                    'min-h-0 flex items-center justify-center text-sm rounded-lg transition-all duration-200',
+                                                    day === null
+                                                        ? 'bg-gray-200 text-gray-400 cursor-default'
+                                                        : 'bg-white text-gray-700 cursor-pointer hover:bg-gray-50 hover:scale-105 hover:shadow-[0_0_16px_4px_rgba(0,0,0,0.12)] hover:z-10',
+                                                    day !== null && isSunday && 'text-red-600',
+                                                    day !== null && isCurrentMonth && day === today.getDate() && 'font-semibold text-gray-900 ring-2 ring-red-500 ring-inset'
+                                                )}
+                                            >
+                                                {day ?? ''}
+                                            </div>
+                                            );
+                                        });
+                                    })()}
+                                </div>
+                                    );
+                                })()}
+                            </div>
+                        </div>
+                        {/* Note: breiter Streifen, 150px Höhe */}
+                        <div
+                            className="shrink-0 mx-4 mb-4 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 flex flex-col items-center justify-center h-[150px] py-3"
+                            style={{ backgroundImage: 'radial-gradient(circle, #d1d5db 1.5px, transparent 1.5px)', backgroundSize: '10px 10px' }}
+                        >
+                            <span className="text-sm font-medium text-gray-600">Note</span>
                         </div>
                     </div>
                 </div>

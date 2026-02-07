@@ -116,7 +116,9 @@ class SubAgentDebugLogger:
     session_id: str = ""
 
     def __post_init__(self) -> None:
-        self._base_dir = get_debug_root_dir() / self.agent_type / self.task_id
+        # Sanitize agent_type for filesystem (Windows doesn't allow : in paths)
+        safe_agent_type = self.agent_type.replace(":", "_")
+        self._base_dir = get_debug_root_dir() / safe_agent_type / self.task_id
         self._base_dir.mkdir(parents=True, exist_ok=True)
 
     @property

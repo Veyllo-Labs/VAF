@@ -18,17 +18,20 @@ export const WorkflowChatElement: React.FC<WorkflowChatElementProps> = ({ workfl
   const isMatch = workflow?.id === workflowId;
   const data = isMatch ? workflow : null;
   
-  const status = forceStatus ?? (data?.status || 'completed');
   const steps = data?.steps || [];
   const currentStepIndex = steps.findIndex(s => s.status === 'running');
   const activeStep = steps[currentStepIndex];
-  
-  // Progress calculation: when forceStatus is running, show 0% until store has updates
+
+  // Status: use store status if we have data, otherwise use forceStatus, fallback to 'completed'
+  // This ensures that when the workflow finishes, we show the actual status, not the forced one
+  const status = (isMatch && data?.status) ? data.status : (forceStatus ?? 'completed');
+
+  // Progress calculation: use actual progress from store if available
   const total = steps.length || initialSteps || 1;
   const completed = steps.filter(s => s.status === 'success' || s.status === 'skipped').length;
-  const progress = forceStatus === 'running'
-    ? 0
-    : (isMatch ? Math.round((completed / total) * 100) : 100);
+  const progress = isMatch && steps.length > 0
+    ? Math.round((completed / total) * 100)
+    : (forceStatus === 'running' ? 0 : 100);
 
   return (
     <div 

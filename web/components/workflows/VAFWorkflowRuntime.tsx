@@ -1,8 +1,8 @@
-import React, { useEffect, useCallback } from 'react';
-import ReactFlow, { 
-  Background, 
-  Controls, 
-  useNodesState, 
+import React, { useEffect, useCallback, useRef } from 'react';
+import ReactFlow, {
+  Background,
+  Controls,
+  useNodesState,
   useEdgesState,
   ConnectionLineType,
   MarkerType
@@ -19,6 +19,9 @@ const nodeTypes = {
 
 const VAFWorkflowRuntime = () => {
   const { isOpen, nodes: initialNodes, edges: initialEdges, closeWorkflow, workflow, consoleLines } = useWorkflowStore();
+
+  // Ref for auto-scroll terminal output
+  const terminalRef = useRef<HTMLDivElement>(null);
   
   // Local state for React Flow (synced with store)
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -39,6 +42,13 @@ const VAFWorkflowRuntime = () => {
       return () => clearTimeout(timer);
     }
   }, [workflow?.status, closeWorkflow]);
+
+  // Auto-scroll terminal output to bottom when new lines are added
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [consoleLines]);
 
   if (!isOpen) return null;
 
@@ -105,7 +115,7 @@ const VAFWorkflowRuntime = () => {
           <div className="flex h-10 items-center border-b border-gray-100 bg-gray-50 px-4 text-xs font-semibold uppercase tracking-wide text-gray-500">
             Terminal Output
           </div>
-          <div className="flex-1 min-h-0 overflow-auto px-4 py-4 font-mono text-xs text-gray-900 whitespace-pre-wrap">
+          <div ref={terminalRef} className="flex-1 min-h-0 overflow-auto px-4 py-4 font-mono text-xs text-gray-900 whitespace-pre-wrap">
             {consoleLines.length > 0 ? (
               <div className="space-y-1">
                 {consoleLines.map((line, index) => (

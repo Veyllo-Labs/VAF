@@ -2976,51 +2976,94 @@ class Agent:
             # ENTIRE workflow in a new terminal. This prevents context overflow
             # because large intermediate results (like HTML reports) never
             # touch the main agent's context.
+
+            # DEBUG: Log workflow execution path
+            try:
+                from pathlib import Path
+                import datetime
+                log_dir = Path(__file__).resolve().parents[2] / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                with open(log_dir / "workflow_debug.log", "a", encoding="utf-8") as f:
+                    ts = datetime.datetime.now().isoformat()
+                    sep_terminals = self.config.get("sub_agents_in_separate_terminals", False)
+                    in_wf = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "NOT SET")
+                    in_sa = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "NOT SET")
+                    f.write(f"{ts} WORKFLOW EXECUTION START\n")
+                    f.write(f"{ts} workflow_id={workflow_id}\n")
+                    f.write(f"{ts} sub_agents_in_separate_terminals={sep_terminals}\n")
+                    f.write(f"{ts} VAF_IN_WORKFLOW_TERMINAL={in_wf}\n")
+                    f.write(f"{ts} VAF_IN_SUBAGENT_TERMINAL={in_sa}\n")
+            except Exception as e:
+                pass
+
             if self.config.get("sub_agents_in_separate_terminals", False):
                 # Don't spawn if already in a workflow/subagent terminal
                 in_workflow_terminal = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
                 in_subagent_terminal = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes")
-                
+
                 if not in_workflow_terminal and not in_subagent_terminal:
-                    # Create IPC task
-                    from vaf.core.subagent_ipc import get_ipc, get_current_session_id
-                    ipc = get_ipc()
-                    task_id = ipc.create_task(
-                        agent_type=f"workflow:{workflow_id}",
-                        task_description=user_input,
-                        session_id=get_current_session_id()
-                    )
-                    
-                    # Build command to run workflow in separate terminal
-                    import json as json_module
-                    import shlex
-                    
-                    # Serialize variables to JSON
-                    variables_json = json_module.dumps(result.variables)
-                    
-                    from vaf.core.platform import Platform
-                    
-                    # Pass session ID to workflow terminal
-                    session_id = get_current_session_id()
-                    if session_id:
-                        os.environ["VAF_SESSION_ID"] = session_id
-                    os.environ["VAF_TASK_ID"] = task_id
-                    os.environ["VAF_AGENT_TYPE"] = f"workflow:{workflow_id}"
-                    
-                    # Pass Language Hint to workflow terminal
-                    if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language:
-                        os.environ["VAF_USER_LANGUAGE"] = self.prompt_manager.user_language
-                    
-                    # Build command with proper escaping for the platform
-                    if Platform.is_windows():
-                        # Windows: escape double quotes in JSON
-                        escaped_json = variables_json.replace('"', '\\"')
-                        cmd = f'vaf workflow run "{workflow_id}" --variables "{escaped_json}" --task-id {task_id}'
-                    else:
-                        # Unix: use shlex.quote for proper escaping
-                        cmd = f'vaf workflow run "{workflow_id}" --variables {shlex.quote(variables_json)} --task-id {task_id}'
-                    
-                    Platform.open_new_terminal(cmd, title=f"VAF Workflow: {workflow_id}")
+                    try:
+                        # DEBUG: Log each step
+                        def _debug_log(msg):
+                            try:
+                                from pathlib import Path
+                                import datetime
+                                log_dir = Path(__file__).resolve().parents[2] / "logs"
+                                with open(log_dir / "workflow_debug.log", "a", encoding="utf-8") as f:
+                                    f.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
+                            except:
+                                pass
+
+                        _debug_log("STEP 1: Creating IPC task...")
+                        # Create IPC task
+                        from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+                        ipc = get_ipc()
+                        task_id = ipc.create_task(
+                            agent_type=f"workflow:{workflow_id}",
+                            task_description=user_input,
+                            session_id=get_current_session_id()
+                        )
+                        _debug_log(f"STEP 2: IPC task created: {task_id}")
+
+                        # Build command to run workflow in separate terminal
+                        import json as json_module
+                        import shlex
+
+                        # Serialize variables to JSON
+                        variables_json = json_module.dumps(result.variables)
+                        _debug_log(f"STEP 3: Variables JSON: {variables_json[:200]}")
+
+                        from vaf.core.platform import Platform
+
+                        # Pass session ID to workflow terminal
+                        session_id = get_current_session_id()
+                        if session_id:
+                            os.environ["VAF_SESSION_ID"] = session_id
+                        os.environ["VAF_TASK_ID"] = task_id
+                        os.environ["VAF_AGENT_TYPE"] = f"workflow:{workflow_id}"
+                        _debug_log(f"STEP 4: Env vars set, session_id={session_id}")
+
+                        # Pass Language Hint to workflow terminal
+                        if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language:
+                            os.environ["VAF_USER_LANGUAGE"] = self.prompt_manager.user_language
+
+                        # Build command with proper escaping for the platform
+                        if Platform.is_windows():
+                            # Windows CMD: escape double quotes with backslash (for subprocess shell=True)
+                            # Also escape backslashes that precede quotes
+                            escaped_json = variables_json.replace('\\', '\\\\').replace('"', '\\"')
+                            cmd = f'vaf workflow run "{workflow_id}" --variables "{escaped_json}" --task-id {task_id}'
+                        else:
+                            # Unix: use shlex.quote for proper escaping
+                            cmd = f'vaf workflow run "{workflow_id}" --variables {shlex.quote(variables_json)} --task-id {task_id}'
+                        _debug_log(f"STEP 5: Command built: {cmd[:300]}")
+
+                        _debug_log("STEP 6: Calling Platform.open_new_terminal...")
+                        result_ok = Platform.open_new_terminal(cmd, title=f"VAF Workflow: {workflow_id}")
+                        _debug_log(f"STEP 7: open_new_terminal returned: {result_ok}")
+                    except Exception as e:
+                        _debug_log(f"ERROR: {type(e).__name__}: {e}")
+                        raise
                     
                     UI.event("Workflow", msg_running_separate.format(task_id=task_id[:8]), style="cyan")
                     UI.info(msg_runs_independently)

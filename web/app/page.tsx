@@ -11,6 +11,7 @@ import { cn, getApiBase } from '@/lib/utils';
 import SettingsModal from '@/components/SettingsModal';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import SubAgentWindow from '@/components/SubAgentWindow';
+import DocumentEditor from '@/components/DocumentEditor';
 import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
 import { useWorkflowStore } from '@/components/workflows/stores/workflowStore';
@@ -602,6 +603,17 @@ export default function VAFDashboard() {
         steps: []
     });
 
+    // Document Editor State
+    const [documentEditorState, setDocumentEditorState] = useState<{
+        isOpen: boolean;
+        filePath: string;
+        title: string;
+    }>({
+        isOpen: false,
+        filePath: '',
+        title: 'Document',
+    });
+
     // Suggestion State
     const [suggestionList, setSuggestionList] = useState<any[]>([]);
     const [suggestionType, setSuggestionType] = useState<'tool' | 'workflow' | null>(null);
@@ -700,7 +712,13 @@ export default function VAFDashboard() {
     };
 
     // Workflow Store
-    const { loadWorkflow, updateStepStatus, appendWorkflowLine } = useWorkflowStore();
+    const { workflow: activeWorkflow, isOpen: workflowPanelOpen, loadWorkflow, updateStepStatus, appendWorkflowLine } = useWorkflowStore();
+    // Check if a workflow is actively running
+    const isWorkflowRunning = activeWorkflow?.status === 'running';
+
+    // Ref for WebSocket access (to avoid stale closure)
+    const isWorkflowRunningRef = useRef(isWorkflowRunning);
+    useEffect(() => { isWorkflowRunningRef.current = isWorkflowRunning; }, [isWorkflowRunning]);
 
     // TTS State
     const [playingMessageId, setPlayingMessageId] = useState<number | null>(null);
@@ -819,6 +837,10 @@ export default function VAFDashboard() {
     };
 
     const openSubAgentWindow = (manual: boolean) => {
+        // Don't open Sub-Agent window when a workflow is running - output goes to workflow terminal
+        if (isWorkflowRunningRef.current && !manual) {
+            return;
+        }
         if (manual) {
             subAgentManualOpenRef.current = true;
             if (subAgentAutoCloseRef.current) {
@@ -1286,15 +1308,11 @@ export default function VAFDashboard() {
                         status: 'running'
                     });
 
-                    // Add visual element to chat
-                    setMessages(prev => [...prev, {
-                        role: 'workflow',
-                        content: '',
-                        timestamp: Date.now(),
-                        workflowId: data.workflowId || 'wf-' + Date.now(), // Ensure consistent ID
-                        workflowName: data.name || 'Workflow',
-                        initialSteps: (data.steps || []).length
-                    }]);
+                    // NOTE: We do NOT add a chat message here anymore!
+                    // The workflow is already shown in:
+                    // 1. The Runtime Panel on the right side
+                    // 2. The inline WorkflowChatElement parsed from [WORKFLOW_ASYNC:...] text
+                    // Adding a message here caused duplicate workflow elements in the chat.
                 }
                 else if (data.type === 'workflow_update') {
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
@@ -1304,6 +1322,15 @@ export default function VAFDashboard() {
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
                     const line = typeof data.line === 'string' ? data.line : '';
                     appendWorkflowLine(line);
+                }
+                else if (data.type === 'document_ready') {
+                    // A document was created by a workflow - open the Document Editor
+                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+                    setDocumentEditorState({
+                        isOpen: true,
+                        filePath: data.filePath || '',
+                        title: data.title || 'Document',
+                    });
                 }
                 else if (data.type === 'subagent_update') {
                     const statusText = String(data.status || '').trim();
@@ -1375,8 +1402,13 @@ export default function VAFDashboard() {
                     if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
                     if (data.output) {
                         const prefix = data.agentType ? `### ${data.agentType.replace(/_/g, ' ')}` : '### Sub-Agent Output';
-                        appendSubAgentBlock(`${prefix}\n${data.output}`, data.taskId);
-                        setSubAgentState(prev => ({ ...prev, isOpen: true }));
+                        // If workflow is running, send to workflow terminal instead of sub-agent window
+                        if (isWorkflowRunningRef.current) {
+                            appendWorkflowLine(`${prefix}\n${data.output}`);
+                        } else {
+                            appendSubAgentBlock(`${prefix}\n${data.output}`, data.taskId);
+                            setSubAgentState(prev => ({ ...prev, isOpen: true }));
+                        }
                     }
                 }
                 else if (data.type === 'subagent_output_stream') {
@@ -1384,8 +1416,14 @@ export default function VAFDashboard() {
                     const line = typeof data.line === 'string' ? data.line : '';
                     if (line) {
                         const timeStamp = new Date().toISOString().slice(11, 19);
-                        appendSubAgentLine(`[${timeStamp}] ${line}`);
-                        setSubAgentState(prev => ({ ...prev, isOpen: true }));
+                        const formattedLine = `[${timeStamp}] ${line}`;
+                        // If workflow is running, send to workflow terminal instead of sub-agent window
+                        if (isWorkflowRunningRef.current) {
+                            appendWorkflowLine(formattedLine);
+                        } else {
+                            appendSubAgentLine(formattedLine);
+                            setSubAgentState(prev => ({ ...prev, isOpen: true }));
+                        }
                     }
                 }
                 else if (data.type === 'history_update') {
@@ -2450,10 +2488,9 @@ export default function VAFDashboard() {
                                                         return (
                                                             <>
                                                                 <WorkflowChatElement
-                                                                    workflowId={wf.taskId}
+                                                                    workflowId={wf.workflowId}
                                                                     name={wf.name}
-                                                                    initialSteps={1}
-                                                                    forceStatus="running"
+                                                                    initialSteps={4}
                                                                 />
                                                                 {wf.rest ? (
                                                                     <div className="relative group flex items-end">
@@ -2732,36 +2769,48 @@ export default function VAFDashboard() {
                         </div>
                     </div>
                 </div>
+                    {/* Right Panel: Either SubAgentWindow OR DocumentEditor (dock mode) */}
                     {showSubAgentPanel && (
                         <div
                             className={cn(
                                 "hidden lg:flex h-full items-stretch overflow-hidden transition-all duration-300 ease-out",
-                                subAgentState.isOpen
+                                (subAgentState.isOpen || documentEditorState.isOpen)
                                     ? "w-[58%] min-w-[640px] max-w-[940px] opacity-100"
                                     : "w-0 min-w-0 max-w-0 opacity-0 pointer-events-none"
                             )}
-                            aria-hidden={!subAgentState.isOpen}
+                            aria-hidden={!subAgentState.isOpen && !documentEditorState.isOpen}
                         >
-                            <SubAgentWindow
-                                isOpen={subAgentState.isOpen}
-                                mode="dock"
-                                onClose={() => {
-                                    subAgentManualOpenRef.current = false;
-                                    setSubAgentState(prev => ({ ...prev, isOpen: false }));
-                                }}
-                                canClose={true}
-                                agentName={subAgentState.agentName}
-                                status={subAgentState.status}
-                                presence={subAgentState.presence}
-                                currentFile={subAgentState.currentFile}
-                                codeContent={subAgentState.codeContent}
-                                artifactFile={subAgentState.artifactFile || subAgentState.currentFile}
-                                artifactCode={subAgentState.artifactCode || subAgentState.codeContent}
-                                artifactStatus={subAgentState.artifactStatus}
-                                onArtifactChange={handleArtifactChange}
-                                consoleLines={subAgentState.consoleLines}
-                                steps={subAgentState.steps}
-                            />
+                            {/* Show DocumentEditor if open, otherwise show SubAgentWindow */}
+                            {documentEditorState.isOpen ? (
+                                <DocumentEditor
+                                    isOpen={documentEditorState.isOpen}
+                                    onClose={() => setDocumentEditorState(prev => ({ ...prev, isOpen: false }))}
+                                    filePath={documentEditorState.filePath}
+                                    title={documentEditorState.title}
+                                    mode="dock"
+                                />
+                            ) : (
+                                <SubAgentWindow
+                                    isOpen={subAgentState.isOpen}
+                                    mode="dock"
+                                    onClose={() => {
+                                        subAgentManualOpenRef.current = false;
+                                        setSubAgentState(prev => ({ ...prev, isOpen: false }));
+                                    }}
+                                    canClose={true}
+                                    agentName={subAgentState.agentName}
+                                    status={subAgentState.status}
+                                    presence={subAgentState.presence}
+                                    currentFile={subAgentState.currentFile}
+                                    codeContent={subAgentState.codeContent}
+                                    artifactFile={subAgentState.artifactFile || subAgentState.currentFile}
+                                    artifactCode={subAgentState.artifactCode || subAgentState.codeContent}
+                                    artifactStatus={subAgentState.artifactStatus}
+                                    onArtifactChange={handleArtifactChange}
+                                    consoleLines={subAgentState.consoleLines}
+                                    steps={subAgentState.steps}
+                                />
+                            )}
                         </div>
                     )}
                 </div>

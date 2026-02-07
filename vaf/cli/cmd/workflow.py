@@ -13,6 +13,18 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# Fix Windows encoding issues - must be done BEFORE any output
+if sys.platform == "win32":
+    # Set UTF-8 encoding for subprocess output
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    # Enable Windows console UTF-8 mode if available
+    try:
+        import ctypes
+        # Set console output code page to UTF-8 (65001)
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+    except Exception:
+        pass
+
 app = typer.Typer()
 
 # Default auto-close delay in seconds
@@ -24,12 +36,12 @@ def _auto_close_countdown(delay: int = AUTO_CLOSE_DELAY):
     Show a countdown and then exit (closing the terminal).
     """
     print()  # Empty line for spacing
-    
+
     for remaining in range(delay, 0, -1):
         sys.stdout.write(f"\r[*] Terminal closing in {remaining} seconds...  ")
         sys.stdout.flush()
         time.sleep(1)
-    
+
     sys.stdout.write(f"\r[OK] Terminal closing.                           \n")
     sys.stdout.flush()
     sys.exit(0)
@@ -48,6 +60,23 @@ def run_workflow(
     The entire workflow executes here with its own context.
     Only the final summary is reported back to the main agent via IPC.
     """
+    # Initialize debug logger early
+    debug_logger = None
+    try:
+        # Set env vars needed for debug logger BEFORE calling get_subagent_logger_from_env
+        if task_id:
+            os.environ["VAF_TASK_ID"] = task_id
+        os.environ["VAF_AGENT_TYPE"] = f"workflow:{workflow_id}"
+        os.environ["VAF_IN_SUBAGENT_TERMINAL"] = "1"
+
+        from vaf.core.subagent_debug import get_subagent_logger_from_env
+        debug_logger = get_subagent_logger_from_env()
+        if debug_logger:
+            debug_logger.event("workflow_cli_start", workflow_id=workflow_id, task_id=task_id,
+                              variables_raw=variables[:200] if variables else "")
+    except Exception as e:
+        print(f"[DEBUG] Logger init failed: {e}", file=sys.stderr)
+
     # IMPORTANT: Mark task as running FIRST before any other imports
     # This ensures the main agent knows we've started even if later imports fail
     ipc = None
@@ -63,9 +92,13 @@ def run_workflow(
         # Mark task as running IMMEDIATELY
         if ipc and task_id:
             ipc.mark_task_running(task_id)
+            if debug_logger:
+                debug_logger.event("workflow_ipc_marked_running", task_id=task_id)
     except Exception as e:
         # If IPC fails, log to stderr but continue
         print(f"[WARNING] IPC initialization failed: {e}", file=sys.stderr)
+        if debug_logger:
+            debug_logger.event("workflow_ipc_error", error=str(e)[:200])
 
     try:
         from vaf.cli.ui import UI
@@ -102,44 +135,56 @@ def run_workflow(
 
     success = False
     final_summary = ""
-    
+
     try:
         # Parse variables
         try:
             vars_dict = json.loads(variables)
-        except json.JSONDecodeError:
-            UI.error(f"Invalid JSON for variables: {variables}")
+            if debug_logger:
+                debug_logger.event("workflow_variables_parsed", variables=list(vars_dict.keys()))
+        except json.JSONDecodeError as e:
+            error_msg = f"Invalid JSON for variables: {variables}"
+            UI.error(error_msg)
+            if debug_logger:
+                debug_logger.event("workflow_json_error", error=str(e), variables_raw=variables[:100])
             if ipc and task_id:
-                ipc.fail_task(task_id, f"Invalid JSON for variables: {variables}")
+                ipc.fail_task(task_id, error_msg)
             if not no_auto_close:
                 _auto_close_countdown()
             sys.exit(1)
-        
+
         # Load workflow template
         from vaf.workflows.templates import get_template
         template = get_template(workflow_id)
-        
+
         if not template:
-            UI.error(f"Workflow not found: {workflow_id}")
+            error_msg = f"Workflow not found: {workflow_id}"
+            UI.error(error_msg)
+            if debug_logger:
+                debug_logger.event("workflow_not_found", workflow_id=workflow_id)
             if ipc and task_id:
-                ipc.fail_task(task_id, f"Workflow not found: {workflow_id}")
+                ipc.fail_task(task_id, error_msg)
             if not no_auto_close:
                 _auto_close_countdown()
             sys.exit(1)
-        
+
+        if debug_logger:
+            debug_logger.event("workflow_template_loaded", workflow_name=template.get('name'),
+                              num_steps=len(template.get('steps', [])))
+
         UI.success(f"[OK] Starting workflow: {template['name']}")
         UI.info(f"Variables: {vars_dict}")
-        
+
         # Build workflow steps
         from vaf.workflows.engine import create_workflow, WorkflowEngine
         steps = create_workflow(template)
-        
+
         # Load all tools needed for workflow
         from vaf.tools.filesystem import WriteFileTool, ReadFileTool, ListFilesTool, MoveFileTool
         from vaf.tools.bash import BashTool
         from vaf.tools.search import WebSearchTool
         from vaf.tools.webfetch import WebFetchTool
-        
+
         tools = {
             "write_file": WriteFileTool(),
             "read_file": ReadFileTool(),
@@ -149,7 +194,7 @@ def run_workflow(
             "web_search": WebSearchTool(),
             "webfetch": WebFetchTool(),
         }
-        
+
         # Load sub-agent tools
         try:
             from vaf.tools.coder import CodingAgentTool
@@ -160,7 +205,7 @@ def run_workflow(
             tools["research_agent"] = ResearchAgentTool()
         except ImportError as e:
             UI.warning(f"Could not load some tools: {e}")
-        
+
         # Load utility tools
         try:
             from vaf.tools.report_filename import ReportFilenameTool
@@ -169,12 +214,12 @@ def run_workflow(
             tools["repair_report"] = RepairReportTool()
         except ImportError as e:
             UI.warning(f"Could not load utility tools: {e}")
-        
+
         # Web UI Reporting Setup
         import requests
         session_id = os.environ.get("VAF_SESSION_ID")
         workflow_output_enabled = False
-        
+
         def send_web_update(data):
             if not session_id: return
             try:
@@ -256,7 +301,7 @@ def run_workflow(
                 if event == "success": status = "success"
                 elif event == "error": status = "failed"
                 elif event == "skip": status = "skipped"
-                
+
                 send_web_update({
                     "type": "workflow_update",
                     "stepId": step_id,
@@ -266,23 +311,23 @@ def run_workflow(
 
             if event == "start":
                 UI.event("Workflow", f"Step {current}/{total}: {step.tool}...", style="cyan")
-                
+
                 # Try to speak filler for this tool
                 try:
                     from vaf.core.speech import get_speech_manager
                     from vaf.core.speech_fillers import TOOL_FILLERS
                     from vaf.core.config import Config
-                    
+
                     sm = get_speech_manager()
                     if sm.is_tts_enabled():
                         lang = Config.get("language", "de")
                         # Get filler for this tool
                         filler = TOOL_FILLERS.get(step.tool, {}).get(lang)
-                        
+
                         # Fallback to English if filler not found for current language
                         if not filler and lang != "en":
                             filler = TOOL_FILLERS.get(step.tool, {}).get("en")
-                        
+
                         # If no specific filler, but it's a "thinking" moment, maybe use generic?
                         # For now, only use if we have a specific match
                         if filler:
@@ -294,28 +339,28 @@ def run_workflow(
                                 pass
                             except:
                                 pass
-                                
+
                             sm.speak(filler, lang=lang)
                 except Exception:
                     pass
-                    
+
             elif event == "success":
                 UI.event("Workflow", f"[OK] Step {current}/{total}: {step.tool}", style="green")
             elif event == "error":
                 UI.event("Workflow", f"[X] Step {current}/{total}: {step.tool} failed", style="red")
-        
+
         # Create engine and execute
         engine = WorkflowEngine(tools, callback=progress_callback)
         engine._workflow_defaults = template.get("defaults", {})
         engine._workflow_name = workflow_id
-        
+
         # Execute the workflow
         result = engine.execute(steps, variables=vars_dict)
-        
+
         if result.success:
             # Extract final output summary
             final_output = str(result.final_output) if result.final_output else ""
-            
+
             # Create SHORT summary (not full content!)
             if "written successfully" in final_output.lower() or "saved" in final_output.lower():
                 # File was written - extract path
@@ -329,30 +374,43 @@ def run_workflow(
             else:
                 # Other output - truncate
                 final_summary = f"Workflow '{template['name']}' completed successfully.\nResult: {final_output[:200]}{'...' if len(final_output) > 200 else ''}"
-            
+
             UI.success(f"\n[OK] {final_summary}")
             success = True
-            
+
             # Report SUCCESS with SHORT summary (not full content!)
             if ipc and task_id:
                 ipc.complete_task(task_id, final_summary)
                 UI.success(f"[OK] Result sent to Main Agent [Task: {task_id}]")
+
+            # Send document_ready signal if an HTML file was created
+            if session_id:
+                import re
+                doc_path_match = re.search(r'(?:to|saved|written)[:\s]+(.+\.html)', final_output, re.IGNORECASE)
+                if doc_path_match:
+                    doc_path = doc_path_match.group(1).strip()
+                    send_web_update({
+                        "type": "document_ready",
+                        "workflowId": workflow_id,
+                        "filePath": doc_path,
+                        "title": template.get('name', 'Document'),
+                    })
         else:
             error_msg = result.error or "Unknown error"
             UI.error(f"Workflow failed: {error_msg}")
-            
+
             if ipc and task_id:
                 ipc.fail_task(task_id, error_msg)
-                
+
     except Exception as e:
         error_msg = str(e)
         UI.error(f"Workflow execution failed: {error_msg}")
         import traceback
         traceback.print_exc()
-        
+
         if ipc and task_id:
             ipc.fail_task(task_id, error_msg)
-    
+
     if workflow_output_enabled:
         try:
             stdout_writer = sys.stdout
@@ -381,10 +439,10 @@ def list_workflows():
     """List all available workflows."""
     from rich.console import Console
     from vaf.workflows.templates import WORKFLOW_TEMPLATES
-    
+
     console = Console()
     console.print("\n[bold cyan]Available Workflows[/bold cyan]\n")
-    
+
     for wf_id, template in WORKFLOW_TEMPLATES.items():
         console.print(f"  [green]{wf_id}[/green]: {template.get('name', wf_id)}")
         if template.get('description'):
@@ -393,4 +451,3 @@ def list_workflows():
 
 if __name__ == "__main__":
     app()
-

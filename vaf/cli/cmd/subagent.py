@@ -12,6 +12,18 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# Fix Windows encoding issues - must be done BEFORE any output
+if sys.platform == "win32":
+    # Set UTF-8 encoding for subprocess output
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    # Enable Windows console UTF-8 mode if available
+    try:
+        import ctypes
+        # Set console output code page to UTF-8 (65001)
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+    except Exception:
+        pass
+
 app = typer.Typer()
 
 # Default auto-close delay in seconds

@@ -500,26 +500,45 @@ class Platform:
     def open_new_terminal(command: str, title: str = None) -> bool:
         """
         Open a new terminal window and execute a command. OS-independent.
-        
+
         Args:
             command: Command to execute in the new terminal
             title: Optional title for the terminal window
-            
+
         Returns:
             True if successful, False otherwise
         """
         import subprocess
+        from pathlib import Path
+        import datetime
+
+        # CRITICAL: Log IMMEDIATELY at function entry - NO try/except to ensure we see this
+        log_dir = Path(__file__).resolve().parents[2] / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        platform_log = log_dir / "platform_subprocess.log"
+        with open(platform_log, "a", encoding="utf-8") as f:
+            ts = datetime.datetime.now().isoformat()
+            webui_check = os.environ.get("VAF_WEBUI_ACTIVE", "NOT SET")
+            f.write(f"{ts} === open_new_terminal CALLED ===\n")
+            f.write(f"{ts} Command: {command[:500]}\n")
+            f.write(f"{ts} VAF_WEBUI_ACTIVE={webui_check}\n")
+            f.write(f"{ts} VAF_TASK_ID={os.environ.get('VAF_TASK_ID', 'NOT SET')}\n")
+            f.write(f"{ts} VAF_SESSION_ID={os.environ.get('VAF_SESSION_ID', 'NOT SET')}\n")
 
         try:
+
             webui_active = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
             if webui_active:
-                # Copy current environment and ensure PATH is inherited
+                # Copy current environment and ensure all VAF_ vars are passed
                 env = os.environ.copy()
 
                 # Log the command being executed for debugging
                 import logging
                 logger = logging.getLogger("vaf.platform")
+
                 logger.debug(f"Spawning sub-agent command: {command}")
+                logger.debug(f"VAF_TASK_ID={env.get('VAF_TASK_ID', 'NOT SET')}")
+                logger.debug(f"VAF_AGENT_TYPE={env.get('VAF_AGENT_TYPE', 'NOT SET')}")
 
                 proc = subprocess.Popen(
                     command,
@@ -531,13 +550,28 @@ class Platform:
                     start_new_session=True,
                     env=env  # Explicitly pass environment
                 )
-
                 try:
-                    from vaf.core.web_interface import get_web_interface
+                    import requests
                     from vaf.core.config import Config
                     session_id = os.environ.get("VAF_SESSION_ID", "").strip()
                     task_id = os.environ.get("VAF_TASK_ID", "").strip()
                     agent_type = os.environ.get("VAF_AGENT_TYPE", "").strip()
+
+                    # Helper to send updates via HTTP to the WebServer
+                    # This works across processes (unlike direct singleton calls)
+                    def _send_web_update(data: dict):
+                        if not session_id:
+                            return
+                        try:
+                            data["sessionId"] = session_id
+                            # Use the internal API endpoint for subagent updates
+                            requests.post(
+                                "http://127.0.0.1:8001/api/subagent/stream",
+                                json=data,
+                                timeout=0.5
+                            )
+                        except Exception:
+                            pass  # Don't block on WebUI errors
 
                     if session_id and (task_id or agent_type):
                         title = (agent_type or "Sub-Agent").replace("_", " ").title()
@@ -557,7 +591,7 @@ class Platform:
                             "status": "running",
                             "actions": []
                         }]
-                        get_web_interface()._push_session_update(session_id, {
+                        _send_web_update({
                             "type": "subagent_update",
                             "agentName": title,
                             "status": "Running sub-agent task...",
@@ -578,7 +612,7 @@ class Platform:
                             if not clean:
                                 continue
                             output_lines.append(clean)
-                            get_web_interface()._push_session_update(session_id or None, {
+                            _send_web_update({
                                 "type": "subagent_output_stream",
                                 "taskId": task_id or None,
                                 "agentType": agent_type or None,
@@ -611,7 +645,7 @@ class Platform:
                 # Windows: Use start cmd /c to open new window and close when done
                 # /c = execute command then terminate (terminal closes after exit)
                 # /k = execute command and remain (keeps terminal open - DON'T use!)
-                import os
+                # Note: os is imported at module level, don't re-import here!
                 cwd = os.getcwd()
                 if title:
                     # Use /D to set working directory and ensure command is properly quoted

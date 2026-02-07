@@ -524,12 +524,50 @@ async def healthcheck():
 async def receive_workflow_update(update: WorkflowUpdate):
     """Receive workflow updates from external processes (like separate terminals)."""
     data = update.dict(exclude_none=True)
-    if manager._server_loop:
-        # Broadcast to relevant session
+    # We're in an async handler, so we can directly await without checking the loop
+    # The server loop check was causing silent failures when _server_loop wasn't set
+    try:
         if update.sessionId:
             await manager.broadcast_to_session(update.sessionId, data)
         else:
             await manager.broadcast(data)
+    except Exception as e:
+        append_domain_log("webui", f"[ERROR] broadcast failed in /api/workflow/update: {e}")
+    return {"status": "ok"}
+
+
+class SubAgentStreamUpdate(BaseModel):
+    """Model for subagent output stream updates from separate processes."""
+    type: str
+    sessionId: Optional[str] = None
+    taskId: Optional[str] = None
+    agentType: Optional[str] = None
+    agentName: Optional[str] = None
+    line: Optional[str] = None
+    status: Optional[str] = None
+    presence: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    file: Optional[str] = None
+    code: Optional[str] = None
+    steps: Optional[List] = None
+
+
+@app.post("/api/subagent/stream")
+async def receive_subagent_stream(update: SubAgentStreamUpdate):
+    """
+    Receive subagent output stream updates from external processes.
+    This endpoint bridges subprocess output to WebSocket clients.
+    """
+    data = update.dict(exclude_none=True)
+    # We're in an async handler, so we can directly await without checking the loop
+    try:
+        if update.sessionId:
+            await manager.broadcast_to_session(update.sessionId, data)
+        else:
+            await manager.broadcast(data)
+    except Exception as e:
+        append_domain_log("webui", f"[ERROR] broadcast failed in /api/subagent/stream: {e}")
     return {"status": "ok"}
 
 @app.get("/api/tools/{name}/source")
@@ -604,6 +642,41 @@ async def get_file(path: str = Query(..., description="Absolute path to local fi
         media_type=mime_type or "application/octet-stream",
         filename=target.name,
     )
+
+
+class FileSaveRequest(BaseModel):
+    """Request body for saving a file."""
+    path: str
+    content: str
+
+
+@app.post("/api/file/save")
+async def save_file(request: FileSaveRequest):
+    """Save content to a local file (allowed roots: documents, downloads, data dir)."""
+    from vaf.core.platform import Platform
+    try:
+        target = Platform.normalize_path(request.path)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    # Security: only allow saving to specific directories
+    allowed_roots = [
+        Platform.documents_dir().resolve(),
+        Platform.downloads_dir().resolve(),
+        Platform.data_dir().resolve(),
+    ]
+    if not any(target.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Access denied - file must be in Documents, Downloads, or VAF data directory")
+
+    try:
+        # Ensure parent directory exists
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Write content
+        target.write_text(request.content, encoding='utf-8')
+        return {"status": "ok", "path": str(target)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+
 
 @app.get("/sounds/{filename}")
 async def get_sound(filename: str):

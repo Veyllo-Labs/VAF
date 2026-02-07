@@ -173,6 +173,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
     const [showCreateAutomationModal, setShowCreateAutomationModal] = useState(false);
     const [automationCalendarViewDate, setAutomationCalendarViewDate] = useState(() => new Date());
+    const [selectedDayForView, setSelectedDayForView] = useState<Date | null>(null);
 
     const [toolsSearch, setToolsSearch] = useState('');
     const [workflowsSearch, setWorkflowsSearch] = useState('');
@@ -535,6 +536,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     return;
                 }
                 if (showCreateAutomationModal) {
+                    if (selectedDayForView) {
+                        setSelectedDayForView(null);
+                        e.stopPropagation();
+                        return;
+                    }
                     setShowCreateAutomationModal(false);
                     e.stopPropagation();
                     return;
@@ -572,7 +578,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             window.addEventListener('keydown', handleKeyDown);
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, codeModal, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, onClose]);
+    }, [isOpen, codeModal, workflowModal, showMemoryModal, showCreateAutomationModal, selectedDayForView, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, onClose]);
+
+    useEffect(() => {
+        if (showCreateAutomationModal) setSelectedDayForView(null);
+    }, [showCreateAutomationModal]);
 
     const handleLogoutYes = useCallback(() => {
         setShowLogoutConfirm(false);
@@ -2628,9 +2638,62 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <p className="text-xs text-gray-500 shrink-0">Quick tasks beside your calendar.</p>
                                 <div className="flex-1 min-h-[100px]" />
                             </div>
-                            {/* Calendar: runde Umrandung wie To-do und Note */}
+                            {/* Calendar oder Tagesansicht */}
                             <div className="flex-1 flex flex-col min-w-0 min-h-0 rounded-xl border-2 border-dashed border-gray-200 p-3 overflow-hidden">
-                                {(() => {
+                                {selectedDayForView ? (
+                                    /* Tagesansicht: 24 Stunden-Slots, aktueller Stundenblock rot umrandet */
+                                    (() => {
+                                        const now = new Date();
+                                        const isToday = selectedDayForView.getFullYear() === now.getFullYear() &&
+                                            selectedDayForView.getMonth() === now.getMonth() &&
+                                            selectedDayForView.getDate() === now.getDate();
+                                        const currentHour = now.getHours();
+                                        const currentTimeStr = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+                                        return (
+                                    <>
+                                        <div className="flex items-center justify-between gap-2 shrink-0 mb-3">
+                                            <button
+                                                type="button"
+                                                onClick={() => setSelectedDayForView(null)}
+                                                className="flex items-center gap-1.5 px-2.5 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                                            >
+                                                <ChevronRight size={16} className="rotate-180" />
+                                                Monat
+                                            </button>
+                                            <h3 className="text-sm font-semibold text-gray-900">
+                                                {selectedDayForView.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+                                            </h3>
+                                        </div>
+                                        <div className="flex-1 overflow-auto min-h-0 border border-gray-200 rounded-lg bg-white">
+                                            {Array.from({ length: 24 }, (_, h) => {
+                                                const isCurrentHourSlot = isToday && h === currentHour;
+                                                return (
+                                                <div
+                                                    key={h}
+                                                    className={cn(
+                                                        'flex items-center gap-3 px-3 py-2.5 border-b border-gray-100 last:border-b-0 min-h-[48px] rounded-lg transition-colors',
+                                                        isCurrentHourSlot && 'ring-2 ring-red-500 ring-inset bg-red-50/30'
+                                                    )}
+                                                >
+                                                    <span className={cn('text-sm font-medium w-12 shrink-0', isCurrentHourSlot ? 'text-red-600 font-semibold' : 'text-gray-500')}>
+                                                        {String(h).padStart(2, '0')}:00
+                                                        {isCurrentHourSlot && (
+                                                            <span className="block text-xs font-normal text-red-600 mt-0.5">{currentTimeStr}</span>
+                                                        )}
+                                                    </span>
+                                                    <div className={cn(
+                                                        'flex-1 min-h-[32px] rounded border border-dashed',
+                                                        isCurrentHourSlot ? 'bg-red-50/50 border-red-200' : 'bg-gray-50/50 border-gray-200'
+                                                    )} />
+                                                </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </>
+                                        );
+                                    })()
+                                ) : (
+                                (() => {
                                     const y = automationCalendarViewDate.getFullYear();
                                     const m = automationCalendarViewDate.getMonth();
                                     const firstWeekday = (new Date(y, m, 1).getDay() + 6) % 7;
@@ -2659,6 +2722,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             return (
                                             <div
                                                 key={i}
+                                                role="button"
+                                                tabIndex={0}
+                                                onClick={day !== null ? () => setSelectedDayForView(new Date(y, m, day)) : undefined}
+                                                onKeyDown={day !== null ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedDayForView(new Date(y, m, day!)); } } : undefined}
                                                 className={cn(
                                                     'min-h-0 flex items-center justify-center text-sm rounded-lg transition-all duration-200',
                                                     day === null
@@ -2675,7 +2742,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     })()}
                                 </div>
                                     );
-                                })()}
+                                })()
+                                )}
                             </div>
                         </div>
                         {/* Note: breiter Streifen, 150px Höhe */}

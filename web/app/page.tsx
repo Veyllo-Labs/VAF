@@ -5,10 +5,11 @@ import { useRouter } from 'next/navigation';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import SettingsModal from '@/components/SettingsModal';
+import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import SubAgentWindow from '@/components/SubAgentWindow';
 import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
@@ -522,6 +523,8 @@ export default function VAFDashboard() {
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [apiModels, setApiModels] = useState<Record<string, string[]>>({});
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [settingsInitialTab, setSettingsInitialTab] = useState<string | null>(null);
+    const [isAutomationPopupOpen, setIsAutomationPopupOpen] = useState(false);
     const [showChangingModelOverlay, setShowChangingModelOverlay] = useState(false);
     const [tools, setTools] = useState<Array<{ name: string; description: string; category: string }>>([]);
     const [workflows, setWorkflows] = useState<Array<{ id: string; name: string; description: string; steps: number }>>([]);
@@ -1780,6 +1783,7 @@ export default function VAFDashboard() {
         if (!sttEnabled) {
             const confirmEnable = confirm("Voice Input is currently disabled. Would you like to open Settings to enable it?");
             if (confirmEnable) {
+                setSettingsInitialTab(null);
                 setIsSettingsOpen(true);
             }
             return;
@@ -2260,7 +2264,19 @@ export default function VAFDashboard() {
                         </div>
 
                         <div
+                            onClick={() => setIsAutomationPopupOpen(true)}
+                            className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/automation transition-all justify-start"
+                            title="Automation"
+                        >
+                            <div className="w-6 flex justify-center shrink-0">
+                                <Calendar size={20} />
+                            </div>
+                            <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap text-sm">Automation</span>
+                        </div>
+
+                        <div
                             onClick={() => {
+                                setSettingsInitialTab(null);
                                 setIsSettingsOpen(true);
                                 // Fetch tools, workflows, and automations when opening settings
                                 ws?.send(JSON.stringify({ type: 'get_tools' }));
@@ -2974,7 +2990,7 @@ export default function VAFDashboard() {
 
             <SettingsModal
                 isOpen={isSettingsOpen}
-                onClose={() => setIsSettingsOpen(false)}
+                onClose={() => { setSettingsInitialTab(null); setIsSettingsOpen(false); }}
                 config={config}
                 onSave={handleSaveConfig}
                 availableModels={availableModels}
@@ -2993,10 +3009,17 @@ export default function VAFDashboard() {
                 automations={automations}
                 currentUser={currentUser}
                 onLogout={() => {
+                    setSettingsInitialTab(null);
                     setIsSettingsOpen(false);
                     router.replace('/login');
                 }}
                 apiBase={getApiBase()}
+                initialTab={settingsInitialTab ?? undefined}
+            />
+            <AutomationCalendarModal
+                isOpen={isAutomationPopupOpen}
+                onClose={() => setIsAutomationPopupOpen(false)}
+                currentUser={currentUser}
             />
         </main>
     );

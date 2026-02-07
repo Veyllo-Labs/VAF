@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef, Fragment } from 'react';
 import { useRouter } from 'next/navigation';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
@@ -96,6 +96,28 @@ async function convertToWav(blob: Blob): Promise<Blob> {
     } finally {
         await audioContext.close();
     }
+}
+
+/** Same calendar day (local date)? */
+function isSameDay(ts1: number, ts2: number): boolean {
+    const d1 = new Date(ts1);
+    const d2 = new Date(ts2);
+    return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+}
+
+function formatDayLabel(ts: number): string {
+    return new Date(ts).toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+/** Trennlinie im Chatverlauf: Tagwechsel mit Datum oben (Ende) und unten (Fortsetzung). */
+function DaySeparator({ endDate, startDate }: { endDate: number; startDate: number }) {
+    return (
+        <div className="flex flex-col items-stretch py-4">
+            <div className="text-right text-xs text-gray-400 pr-1" title="Chat endete an diesem Tag">{formatDayLabel(endDate)}</div>
+            <div className="border-t border-gray-200 my-1" aria-hidden />
+            <div className="text-right text-xs text-gray-400 pr-1" title="Fortsetzung an diesem Tag">{formatDayLabel(startDate)}</div>
+        </div>
+    );
 }
 
 /** Strip backend "--- FILE: name ---\n...\n----------------" blocks from message content for display. Returns cleaned text and parsed file names (for chips when msg.files is missing after reload). */
@@ -2333,14 +2355,24 @@ export default function VAFDashboard() {
                                     <p className="text-gray-400 mt-2">Start a conversation or choose a workflow</p>
                                 </div>
                             )}
-                            {messages.filter(m => !m.content.includes('__CMD__')).map((msg, i) => { // Filter out internal commands
-                                // Render System Steps (Timeline Style)
-                                if (msg.role === 'system') {
-                                    const isLast = i === messages.length - 1;
-                                    const isSubAgentMessage = msg.content.toLowerCase().includes('sub-agent');
+                            {(() => {
+                                const filteredMessages = messages.filter(m => !m.content.includes('__CMD__'));
+                                return filteredMessages.map((msg, i) => {
+                                    const trueIndex = messages.indexOf(msg);
+                                    const prevMsg = i > 0 ? filteredMessages[i - 1] : null;
+                                    const showDaySeparator = prevMsg !== null && !isSameDay(prevMsg.timestamp, msg.timestamp);
                                     return (
-                                        <SystemStep
-                                            key={i}
+                                        <Fragment key={trueIndex}>
+                                            {showDaySeparator && <DaySeparator endDate={prevMsg.timestamp} startDate={msg.timestamp} />}
+                                            {/* Message content */}
+                                            {(() => {
+                                                // Render System Steps (Timeline Style)
+                                                if (msg.role === 'system') {
+                                                    const isLast = i === filteredMessages.length - 1;
+                                                    const isSubAgentMessage = msg.content.toLowerCase().includes('sub-agent');
+                                                    return (
+                                                        <SystemStep
+                                                            key={`system-${trueIndex}`}
                                             message={msg.content}
                                             isLoading={loading && isLast}
                                             useBotIcon={loading && isLast}
@@ -2355,8 +2387,8 @@ export default function VAFDashboard() {
                                     const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding)_agent(?:$|[^a-z])/.test(toolLower);
                                     return (
                                         <ToolMessage
-                                            key={i}
-                                            id={msg.toolId || `tool-${i}`}
+                                            key={`tool-${trueIndex}`}
+                                            id={msg.toolId || `tool-${trueIndex}`}
                                             name={msg.toolName || 'Unknown Tool'}
                                             status={msg.toolStatus || 'completed'}
                                             result={msg.content}
@@ -2378,7 +2410,7 @@ export default function VAFDashboard() {
                                 // Render Workflow Messages
                                 if (msg.role === 'workflow') {
                                     return (
-                                        <div key={i} className="flex justify-start gap-4 pt-4">
+                                        <div key={`workflow-${trueIndex}`} className="flex justify-start gap-4 pt-4">
                                             <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
                                             <WorkflowChatElement
                                                 workflowId={msg.workflowId || ""}
@@ -2391,7 +2423,7 @@ export default function VAFDashboard() {
 
                                 const { thought, answer, isThinkingComplete } = parseContent(msg.content);
                                 const isBot = msg.role === 'assistant';
-                                const isLastMessage = i === messages.length - 1;
+                                const isLastMessage = i === filteredMessages.length - 1;
                                 // Simple: thinking is done when the </think> tag is found (isThinkingComplete)
                                 // For non-last messages, always treat as complete
                                 const thinkingDone = !isLastMessage || isThinkingComplete;
@@ -2401,10 +2433,10 @@ export default function VAFDashboard() {
                                 const displayFiles = !isBot && (msg.files?.length ? msg.files : (attachmentStripped?.fileNames.length ? attachmentStripped.fileNames.map(name => ({ name, mimeType: '' })) : undefined));
 
                                 // Add top margin if following a system step
-                                const prevWasSystem = i > 0 && messages[i - 1].role === 'system';
+                                const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
 
                                 return (
-                                    <div key={i} className={cn("flex gap-4 pt-4", isBot ? "justify-start" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
+                                    <div key={`bubble-${trueIndex}`} className={cn("flex gap-4 pt-4", isBot ? "justify-start" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
                                         {isBot && <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>}
                                         <div className={cn("max-w-[85%] flex flex-col", isBot ? "w-full items-start" : "items-end shrink-0")}>
 
@@ -2431,14 +2463,14 @@ export default function VAFDashboard() {
                                                                         <button
                                                                             onClick={(e) => {
                                                                                 e.stopPropagation();
-                                                                                if (playingMessageId === i) handleStopSpeech();
-                                                                                else handleSpeak(i, wf.rest);
+                                                                                if (playingMessageId === trueIndex) handleStopSpeech();
+                                                                                else handleSpeak(trueIndex, wf.rest);
                                                                             }}
                                                                             className="ml-2 mb-1 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all opacity-40 hover:opacity-100 data-[active=true]:opacity-100 shrink-0"
-                                                                            data-active={playingMessageId === i || loadingMessageId === i}
-                                                                            title={playingMessageId === i ? "Stop Speaking" : "Read Aloud"}
+                                                                            data-active={playingMessageId === trueIndex || loadingMessageId === trueIndex}
+                                                                            title={playingMessageId === trueIndex ? "Stop Speaking" : "Read Aloud"}
                                                                         >
-                                                                            {loadingMessageId === i ? <Loader2 size={14} className="animate-spin" /> : playingMessageId === i ? (
+                                                                            {loadingMessageId === trueIndex ? <Loader2 size={14} className="animate-spin" /> : playingMessageId === trueIndex ? (
                                                                                 <div className="relative"><Volume2 size={14} className="text-gray-600" /><span className="absolute -inset-1 rounded-full bg-gray-400/20 animate-ping" /></div>
                                                                             ) : <Volume2 size={14} />}
                                                                         </button>
@@ -2456,16 +2488,16 @@ export default function VAFDashboard() {
                                                                 <button
                                                                     onClick={(e) => {
                                                                         e.stopPropagation();
-                                                                        if (playingMessageId === i) handleStopSpeech();
-                                                                        else handleSpeak(i, answer);
+                                                                        if (playingMessageId === trueIndex) handleStopSpeech();
+                                                                        else handleSpeak(trueIndex, answer);
                                                                     }}
                                                                     className="ml-2 mb-1 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all opacity-40 hover:opacity-100 data-[active=true]:opacity-100 shrink-0"
-                                                                    data-active={playingMessageId === i || loadingMessageId === i}
-                                                                    title={playingMessageId === i ? "Stop Speaking" : "Read Aloud"}
+                                                                    data-active={playingMessageId === trueIndex || loadingMessageId === trueIndex}
+                                                                    title={playingMessageId === trueIndex ? "Stop Speaking" : "Read Aloud"}
                                                                 >
-                                                                    {loadingMessageId === i ? (
+                                                                    {loadingMessageId === trueIndex ? (
                                                                         <Loader2 size={14} className="animate-spin" />
-                                                                    ) : playingMessageId === i ? (
+                                                                    ) : playingMessageId === trueIndex ? (
                                                                         <div className="relative">
                                                                             <Volume2 size={14} className="text-gray-600" />
                                                                             <span className="absolute -inset-1 rounded-full bg-gray-400/20 animate-ping" />
@@ -2492,14 +2524,18 @@ export default function VAFDashboard() {
                                             )}
 
                                             {/* Show status steps below the active message if streaming */}
-                                            {loading && isBot && i === messages.length - 1 && statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && (
+                                            {loading && isBot && i === filteredMessages.length - 1 && statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && (
                                                 <span className="text-[10px] text-gray-400 mt-1 ml-1 animate-in fade-in">{statusMessage}</span>
                                             )}
                                         </div>
                                         {!isBot && <div className="w-9 h-9 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-gray-500 shadow-sm shrink-0"><User size={18} /></div>}
                                     </div>
                                 );
-                            })}
+                                            })()}
+                                        </Fragment>
+                                    );
+                                });
+                            })()}
 
                             {loading && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
                                 <div className="flex gap-4 items-center animate-pulse pt-4">

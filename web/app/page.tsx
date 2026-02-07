@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import SettingsModal from '@/components/SettingsModal';
@@ -106,6 +106,18 @@ function stripAttachmentBlocks(content: string): { text: string; fileNames: stri
     while ((match = re.exec(content)) !== null) fileNames.push(match[1].trim());
     const text = content.replace(re, '').trim();
     return { text, fileNames };
+}
+
+/** Extract file paths from text (Windows and Unix paths with common extensions) */
+function extractFilePaths(text: string): { path: string; start: number; end: number }[] {
+    const results: { path: string; start: number; end: number }[] = [];
+    // Match Windows paths (C:\...) and Unix paths (/...) with common file extensions
+    const pathRegex = /(?:[A-Za-z]:\\[^\s<>"'`\n]+\.(?:html?|pdf|docx?|txt|md|json|csv|xlsx?|png|jpg|jpeg|gif|svg|mp[34]|wav))|(?:\/[^\s<>"'`\n]+\.(?:html?|pdf|docx?|txt|md|json|csv|xlsx?|png|jpg|jpeg|gif|svg|mp[34]|wav))/gi;
+    let match;
+    while ((match = pathRegex.exec(text)) !== null) {
+        results.push({ path: match[0], start: match.index, end: match.index + match[0].length });
+    }
+    return results;
 }
 
 // Helper to parse and merge thinking blocks
@@ -343,6 +355,7 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
     const isRouter = message.includes('Router');
     const isWorkflow = message.includes('Step') || message.includes('Workflow');
     const isSafety = message.includes('Safety');
+    const isSubAgentResult = message.includes('Sub-Agent') && (message.includes('Output saved') || message.includes('completed'));
 
     // Extract clean text
     const cleanText = message.replace(/^(Router|Step \d+\/\d+|System|Agent|Info)\s*[:\|]?\s*/, '');
@@ -350,6 +363,46 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
 
     // Ensure we don't show empty steps (fixes lag if empty router logs sent)
     if (!cleanText.trim()) return null;
+
+    // Extract file paths for clickable links
+    const filePaths = extractFilePaths(cleanText);
+
+    // Render text with clickable file paths
+    const renderTextWithLinks = (text: string) => {
+        if (filePaths.length === 0) return text;
+
+        const elements: (string | JSX.Element)[] = [];
+        let lastIndex = 0;
+
+        filePaths.forEach((fp, i) => {
+            // Add text before this path
+            if (fp.start > lastIndex) {
+                elements.push(text.substring(lastIndex, fp.start));
+            }
+            // Add clickable link
+            elements.push(
+                <a
+                    key={i}
+                    href={`/api/file?path=${encodeURIComponent(fp.path)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-amber-600 hover:text-amber-700 underline decoration-dotted hover:decoration-solid font-medium"
+                    title={`Open: ${fp.path}`}
+                >
+                    📄 {fp.path.split(/[/\\]/).pop()}
+                </a>
+            );
+            lastIndex = fp.end;
+        });
+
+        // Add remaining text
+        if (lastIndex < text.length) {
+            elements.push(text.substring(lastIndex));
+        }
+
+        return <>{elements}</>;
+    };
 
     // Use standard React state for animation to avoid build issues with framer-motion
     // eslint-disable-next-line react-hooks/rules-of-hooks
@@ -365,7 +418,8 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
             className={cn(
                 "flex gap-4 w-full my-1 transition-all duration-500 ease-out",
                 isVisible ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-2",
-                onClick ? "cursor-pointer" : ""
+                onClick ? "cursor-pointer" : "",
+                isSubAgentResult && filePaths.length > 0 ? "bg-amber-50/50 rounded-lg p-2 -ml-2" : ""
             )}
             onClick={onClick}
             role={onClick ? "button" : undefined}
@@ -392,20 +446,22 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
                             isLoading ? "border-gray-300 text-gray-700 shadow-sm" :
                                 isRouter ? "border-orange-200 text-orange-500" :
                                     isSafety ? "border-red-200 text-red-500" :
-                                        isWorkflow ? "border-gray-200 text-gray-500" : "border-gray-200 text-gray-400"
+                                        isSubAgentResult && filePaths.length > 0 ? "border-amber-300 text-amber-600" :
+                                            isWorkflow ? "border-gray-200 text-gray-500" : "border-gray-200 text-gray-400"
                         )}>
                             {isLoading ? <Loader2 size={10} className="animate-spin" /> :
                                 isRouter ? <GitBranch size={10} /> :
                                     isSafety ? <ShieldAlert size={10} /> :
-                                        isWorkflow ? <Workflow size={10} /> : <CheckCircle2 size={10} />}
+                                        isSubAgentResult && filePaths.length > 0 ? <FileText size={10} /> :
+                                            isWorkflow ? <Workflow size={10} /> : <CheckCircle2 size={10} />}
                         </div>
                     </div>
                 )}
             </div>
             <div className="flex-1 py-1">
-                <div className={cn("text-xs text-gray-500 flex items-center gap-2", onClick && "hover:text-gray-800")}>
+                <div className={cn("text-xs text-gray-500 flex items-center gap-2 flex-wrap", onClick && "hover:text-gray-800")}>
                     <span className={cn("font-semibold uppercase tracking-wider text-[10px]", isLoading ? "text-gray-600" : "text-gray-400")}>{source}</span>
-                    <span className={cn(isLoading ? "text-gray-900 font-medium" : "text-gray-600")}>{cleanText}</span>
+                    <span className={cn(isLoading ? "text-gray-900 font-medium" : "text-gray-600")}>{renderTextWithLinks(cleanText)}</span>
                 </div>
             </div>
         </div>
@@ -2617,11 +2673,10 @@ export default function VAFDashboard() {
                                 isOpen={subAgentState.isOpen}
                                 mode="dock"
                                 onClose={() => {
-                                    if (!subAgentCanClose) return;
                                     subAgentManualOpenRef.current = false;
                                     setSubAgentState(prev => ({ ...prev, isOpen: false }));
                                 }}
-                                canClose={subAgentCanClose}
+                                canClose={true}
                                 agentName={subAgentState.agentName}
                                 status={subAgentState.status}
                                 presence={subAgentState.presence}

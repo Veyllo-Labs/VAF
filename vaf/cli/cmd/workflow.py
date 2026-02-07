@@ -44,30 +44,62 @@ def run_workflow(
 ):
     """
     Run a complete workflow in a separate terminal.
-    
+
     The entire workflow executes here with its own context.
     Only the final summary is reported back to the main agent via IPC.
     """
-    from vaf.cli.ui import UI
-    from vaf.core.config import Config
-    
+    # IMPORTANT: Mark task as running FIRST before any other imports
+    # This ensures the main agent knows we've started even if later imports fail
+    ipc = None
+    try:
+        from vaf.core.subagent_ipc import get_ipc, set_current_session_id
+        session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+        if session_id:
+            set_current_session_id(session_id)
+
+        # Get IPC instance if we have a task_id
+        ipc = get_ipc() if task_id else None
+
+        # Mark task as running IMMEDIATELY
+        if ipc and task_id:
+            ipc.mark_task_running(task_id)
+    except Exception as e:
+        # If IPC fails, log to stderr but continue
+        print(f"[WARNING] IPC initialization failed: {e}", file=sys.stderr)
+
+    try:
+        from vaf.cli.ui import UI
+        from vaf.core.config import Config
+    except Exception as e:
+        error_msg = f"Failed to import required modules: {e}"
+        print(f"[ERROR] {error_msg}", file=sys.stderr)
+        if ipc and task_id:
+            ipc.fail_task(task_id, error_msg)
+        sys.exit(1)
+
     # Mark that we're in a workflow terminal
     os.environ["VAF_IN_WORKFLOW_TERMINAL"] = "1"
     os.environ["VAF_IN_SUBAGENT_TERMINAL"] = "1"  # Prevents sub-agents from spawning more terminals
-    
-    # Restore session ID from environment (passed from main agent)
-    from vaf.core.subagent_ipc import get_ipc, set_current_session_id
-    session_id = os.environ.get("VAF_SESSION_ID", "").strip()
-    if session_id:
-        set_current_session_id(session_id)
-    
-    # Get IPC instance if we have a task_id
-    ipc = get_ipc() if task_id else None
-    
-    # Mark task as running
+
+    # Start heartbeat thread to keep the task alive
+    heartbeat_stop_event = None
+    heartbeat_thread = None
     if ipc and task_id:
-        ipc.mark_task_running(task_id)
-    
+        import threading
+        heartbeat_stop_event = threading.Event()
+
+        def _heartbeat_loop():
+            while not heartbeat_stop_event.is_set():
+                try:
+                    ipc.update_heartbeat(task_id)
+                except Exception:
+                    pass
+                # Send heartbeat every 5 seconds
+                heartbeat_stop_event.wait(5)
+
+        heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+        heartbeat_thread.start()
+
     success = False
     final_summary = ""
     
@@ -330,10 +362,16 @@ def run_workflow(
         except Exception:
             pass
 
+    # Stop heartbeat thread
+    if heartbeat_stop_event:
+        heartbeat_stop_event.set()
+    if heartbeat_thread:
+        heartbeat_thread.join(timeout=1)
+
     # Auto-close terminal after completion
     if not no_auto_close:
         _auto_close_countdown()
-    
+
     if not success:
         sys.exit(1)
 

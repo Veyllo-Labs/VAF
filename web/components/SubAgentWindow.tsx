@@ -182,13 +182,9 @@ export default function SubAgentWindow({
                                 </span>
                             )}
                             <button
-                                onClick={canClose ? onClose : undefined}
-                                className={cn(
-                                    "rounded-full p-1 text-gray-400 transition",
-                                    canClose ? "hover:bg-gray-100 hover:text-gray-600" : "cursor-not-allowed opacity-40"
-                                )}
+                                onClick={onClose}
+                                className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
                                 aria-label="Close"
-                                aria-disabled={!canClose}
                             >
                                 <X size={14} />
                             </button>

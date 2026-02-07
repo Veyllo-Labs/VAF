@@ -423,7 +423,20 @@ class ResearchAgentTool(BaseTool):
         section_titles: Optional[Sequence[str]] = kwargs.get("sections")
         existing_section_html = str(kwargs.get("existing_section_html") or "").strip()
 
+        # Debug logging - get logger early
+        debug_logger = None
+        try:
+            from vaf.core.subagent_debug import get_subagent_logger_from_env
+            debug_logger = get_subagent_logger_from_env()
+            if debug_logger:
+                debug_logger.event("research_agent_start", topic=raw_topic[:200], format=out_format,
+                                   max_results=max_results, deep=deep, forced_lang=forced_lang)
+        except Exception:
+            pass
+
         if not raw_topic:
+            if debug_logger:
+                debug_logger.event("research_agent_error", error="No topic provided")
             return "Error: No topic provided."
             
         # Clean up topic title (remove "write a report about", "hello", etc.)
@@ -553,9 +566,16 @@ class ResearchAgentTool(BaseTool):
 
         tui = ResearchTUI(UI.console, topic, animate=animate_tui)
 
+        # Pass debug_logger to inner function via closure
+        _debug_lg = debug_logger
+
         def _run_research_loop() -> str:
+            nonlocal _debug_lg
             tui.set_stage(f"Starting (lang={lang})")
             tui.log(f"Start: {topic}")
+            if _debug_lg:
+                _debug_lg.event("research_loop_start", topic=topic, lang=lang, num_sections=len(specs),
+                               section_titles=[s.title for s in specs])
             if in_workflow and not use_live:
                 UI.event("Research", f"Starting research: {topic}", style="dim")
 
@@ -601,6 +621,9 @@ class ResearchAgentTool(BaseTool):
                 section_query = topic if not spec.query_suffix else f"{topic} {spec.query_suffix}"
                 tui.set_stage("Searching web")
                 tui.log(f"web_search: {spec.title}")
+                if _debug_lg:
+                    _debug_lg.event("section_start", section_idx=idx, section_title=spec.title,
+                                   query=section_query[:200])
                 if in_workflow and not use_live:
                     UI.event("Research", f"[{idx}/{len(specs)}] {spec.title}: searching sources...", style="dim")
 
@@ -608,8 +631,13 @@ class ResearchAgentTool(BaseTool):
                 raw_results = None
                 try:
                     raw_results = web.run(query=section_query, max_results=max_results * 3, deep=deep, open_in_browser=False, return_raw=True)
+                    if _debug_lg:
+                        _debug_lg.event("web_search_complete", section_idx=idx,
+                                       num_results=len(raw_results) if isinstance(raw_results, list) else 0)
                 except Exception as e:
                     tui.log(f"Error in web_search (return_raw): {str(e)[:100]}")
+                    if _debug_lg:
+                        _debug_lg.event("web_search_error", section_idx=idx, error=str(e)[:300])
                     raw_results = None
                 
                 if not isinstance(raw_results, list):
@@ -789,15 +817,22 @@ class ResearchAgentTool(BaseTool):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 safe_topic = re.sub(r'[^\w\s-]', '', topic).strip().replace(' ', '_')[:50]
                 filename = f"research_{safe_topic}_{timestamp}.html"
-                
+
                 # Save to user's Documents/VAF_Research (or Downloads/VAF_Research as fallback)
                 # This is OS-independent and user-friendly
                 output_dir = Platform.get_research_dir()
                 output_path = output_dir / filename
-                
+
+                if _debug_lg:
+                    _debug_lg.event("saving_report", output_path=str(output_path), html_len=len(html),
+                                   num_sections=len(rendered_sections), num_sources=len(all_sources))
+
                 with open(output_path, 'w', encoding='utf-8') as f:
                     f.write(html)
-                
+
+                if _debug_lg:
+                    _debug_lg.event("report_saved", output_path=str(output_path))
+
                 UI.success(f"Research saved: {output_path}")
                 
                 # Open in browser automatically
@@ -820,11 +855,17 @@ class ResearchAgentTool(BaseTool):
                     f"🔗 {len(all_sources)} sources analyzed\n\n"
                     f"The report has been opened in your browser."
                 )
+                if _debug_lg:
+                    _debug_lg.event("research_complete", output_path=str(output_path),
+                                   word_count=word_count, num_sections=len(rendered_sections))
                 return summary
             else:
                 # Direct call (not sub-agent): return full HTML as before
                 if in_workflow and not use_live:
                     UI.event("Research", "Research completed.", style="success")
+                if _debug_lg:
+                    _debug_lg.event("research_complete_inline", html_len=len(html),
+                                   num_sections=len(rendered_sections))
                 return html
 
         if not use_live:

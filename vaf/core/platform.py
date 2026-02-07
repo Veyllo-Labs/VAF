@@ -509,10 +509,18 @@ class Platform:
             True if successful, False otherwise
         """
         import subprocess
-        
+
         try:
             webui_active = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
             if webui_active:
+                # Copy current environment and ensure PATH is inherited
+                env = os.environ.copy()
+
+                # Log the command being executed for debugging
+                import logging
+                logger = logging.getLogger("vaf.platform")
+                logger.debug(f"Spawning sub-agent command: {command}")
+
                 proc = subprocess.Popen(
                     command,
                     shell=True,
@@ -520,15 +528,17 @@ class Platform:
                     stderr=subprocess.STDOUT,
                     text=True,
                     bufsize=1,
-                    start_new_session=True
+                    start_new_session=True,
+                    env=env  # Explicitly pass environment
                 )
+
                 try:
                     from vaf.core.web_interface import get_web_interface
                     from vaf.core.config import Config
                     session_id = os.environ.get("VAF_SESSION_ID", "").strip()
                     task_id = os.environ.get("VAF_TASK_ID", "").strip()
                     agent_type = os.environ.get("VAF_AGENT_TYPE", "").strip()
-                    
+
                     if session_id and (task_id or agent_type):
                         title = (agent_type or "Sub-Agent").replace("_", " ").title()
                         cfg = Config.load()
@@ -562,20 +572,40 @@ class Platform:
                     def _stream_output():
                         if not proc.stdout:
                             return
+                        output_lines = []
                         for line in proc.stdout:
                             clean = line.rstrip("\r\n")
                             if not clean:
                                 continue
+                            output_lines.append(clean)
                             get_web_interface()._push_session_update(session_id or None, {
                                 "type": "subagent_output_stream",
                                 "taskId": task_id or None,
                                 "agentType": agent_type or None,
                                 "line": clean
                             })
+
+                        # After stdout closes, check if process exited with error
+                        proc.wait()
+                        if proc.returncode != 0:
+                            error_msg = f"Sub-agent process exited with code {proc.returncode}"
+                            if output_lines:
+                                # Include last few lines of output in error
+                                error_msg += f". Last output: {' | '.join(output_lines[-5:])}"
+                            logger.error(error_msg)
+                            # Try to fail the task via IPC
+                            try:
+                                from vaf.core.subagent_ipc import get_ipc
+                                ipc = get_ipc()
+                                if task_id:
+                                    ipc.fail_task(task_id, error_msg)
+                            except Exception:
+                                pass
+
                     import threading
                     threading.Thread(target=_stream_output, daemon=True).start()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"Error setting up sub-agent streaming: {e}")
                 return True
             if Platform.is_windows():
                 # Windows: Use start cmd /c to open new window and close when done

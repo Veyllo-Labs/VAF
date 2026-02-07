@@ -116,20 +116,40 @@ class WorkflowEngine:
         
         # Don't show "Starting workflow" message - will show Step 1/N instead
         
+        # Get workflow-level debug logger
+        workflow_debug_lg = None
+        try:
+            from vaf.core.subagent_debug import get_subagent_logger_from_env
+            workflow_debug_lg = get_subagent_logger_from_env()
+            if workflow_debug_lg:
+                workflow_debug_lg.event("workflow_execute_start",
+                                       workflow_name=getattr(self, "_workflow_name", ""),
+                                       num_steps=len(steps),
+                                       variables=list(variables.keys()) if variables else [])
+        except Exception:
+            pass
+
         for i, step in enumerate(steps, 1):
             step_start = time.time()
             step.status = StepStatus.RUNNING
-            
+
+            # Debug log step start
+            if workflow_debug_lg:
+                workflow_debug_lg.event("workflow_step_start", step_index=i, step_tool=step.tool,
+                                       step_description=step.description[:100] if step.description else "")
+
             # Check condition if specified
             if step.condition and not self._evaluate_condition(step.condition, outputs):
                 step.status = StepStatus.SKIPPED
                 self.callback("skip", step, i, len(steps))
                 UI.event("Workflow", f"Step {i}/{len(steps)}: {step.tool} [Skipped]", style="dim")
+                if workflow_debug_lg:
+                    workflow_debug_lg.event("workflow_step_skipped", step_index=i, step_tool=step.tool)
                 continue
-            
+
             # Progress callback
             self.callback("start", step, i, len(steps))
-            
+
             # Show workflow progress (like "Step 1/2" display)
             step_desc = step.description if step.description else step.tool
             UI.event(f"Step {i}/{len(steps)}", step_desc, style="bold cyan")
@@ -504,11 +524,16 @@ class WorkflowEngine:
                 step.status = StepStatus.SUCCESS
                 step.result = result
                 step.duration = time.time() - step_start
-                
+
+                # Debug log step success
+                if workflow_debug_lg:
+                    workflow_debug_lg.event("workflow_step_complete", step_index=i, step_tool=step.tool,
+                                           duration=step.duration, result_len=len(str(result)) if result else 0)
+
                 # Store output for next steps
                 outputs[step.output_name] = result
                 final_output = result
-                
+
                 # Truncate for display
                 display_result = str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
                 # Use ASCII markers for maximum terminal compatibility (avoid UnicodeEncodeError on some Windows consoles)
@@ -529,18 +554,24 @@ class WorkflowEngine:
                     break
         
         total_duration = time.time() - start_time
-        
+
         # Determine overall success
         success = all(
-            s.status in (StepStatus.SUCCESS, StepStatus.SKIPPED) 
+            s.status in (StepStatus.SUCCESS, StepStatus.SKIPPED)
             for s in steps
         )
-        
+
+        # Debug log workflow end
+        if workflow_debug_lg:
+            workflow_debug_lg.event("workflow_execute_end", success=success,
+                                   total_duration=total_duration, error=error[:200] if error else None,
+                                   final_output_len=len(str(final_output)) if final_output else 0)
+
         if success:
             UI.event("Workflow", f"Completed in {total_duration:.1f}s", style="success")
         else:
             UI.event("Workflow", f"Failed after {total_duration:.1f}s", style="error")
-        
+
         return WorkflowResult(
             success=success,
             outputs=outputs,

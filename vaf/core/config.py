@@ -53,9 +53,9 @@ class Config:
         # Auto-start local llama-server (disable if only using APIs)
         "auto_start_local_server": True,
 
-        # UX toggles (opt-in)
+        # UX toggles (opt-in; off by default – user must enable)
         # Auto open web search source links in the user's default browser (tabs)
-        "ux_auto_open_links": True,
+        "ux_auto_open_links": False,
         # Auto open created output folders/files (file explorer / browser for html)
         "ux_auto_open_outputs": True,
         # Safety cap for tabs opened automatically

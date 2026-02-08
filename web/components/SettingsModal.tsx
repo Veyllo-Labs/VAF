@@ -1329,8 +1329,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <Section title="Automation">
                                     <Switch
                                         label="Auto-open Links"
-                                        description="Automatically open search result links in browser tabs"
-                                        checked={localConfig.ux_auto_open_links ?? true}
+                                        description="Automatically open search result links in browser tabs (off by default)"
+                                        checked={localConfig.ux_auto_open_links ?? false}
                                         onChange={(v: boolean) => handleChange('ux_auto_open_links', v)}
                                     />
                                     <div className="h-4" />

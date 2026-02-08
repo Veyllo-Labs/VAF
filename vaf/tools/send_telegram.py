@@ -49,7 +49,27 @@ class SendTelegramTool(BaseTool):
                 "Once they are in the whitelist, you can send them proactive messages."
             )
         try:
-            send_telegram_reply(chat_id, message[:4096])
-            return "Message sent to the user via Telegram."
+            text_to_send = message[:4096]
+            send_telegram_reply(chat_id, text_to_send)
         except Exception as e:
             return f"Failed to send Telegram message: {e}"
+
+        # Append the sent message to the Telegram session so when the user replies (e.g. "Danke!"),
+        # the agent has context (the proactive message and links) in that session.
+        try:
+            from vaf.core.session import SessionManager, Session
+            session_id = f"telegram_{chat_id}"
+            sm = SessionManager()
+            try:
+                session = sm.load(session_id, restore_state=False)
+            except FileNotFoundError:
+                session = Session(
+                    id=session_id,
+                    name=f"Telegram {chat_id}",
+                )
+            session.add_message(role="assistant", content=text_to_send)
+            sm.save(session, sync_state=False)
+        except Exception:
+            pass  # Do not fail the tool if session append fails
+
+        return "Message sent to the user via Telegram."

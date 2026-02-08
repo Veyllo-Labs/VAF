@@ -16,6 +16,8 @@ import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
 import { useWorkflowStore } from '@/components/workflows/stores/workflowStore';
 import { WorkflowChatElement } from '@/components/workflows/WorkflowChatElement';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 // Types
 type Message = {
@@ -286,6 +288,47 @@ const renderMarkdownLinks = (text: string): React.ReactNode[] => {
     }
 
     return nodes.length > 0 ? nodes : [text];
+};
+
+/** Renders markdown in chat bubbles (headings, lists, bold, links, code). Links use normalizeDownloadHref for sandbox/local paths. */
+const ChatMarkdown = ({ children, dark = false }: { children: string; dark?: boolean }) => {
+    const linkClass = dark
+        ? 'text-indigo-200 underline break-all hover:text-white'
+        : 'text-gray-700 underline break-all hover:text-gray-900';
+    return (
+        <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+                a: ({ href, children: linkChildren }) => (
+                    <a href={href ? normalizeDownloadHref(href) : href} target="_blank" rel="noopener noreferrer" className={linkClass}>
+                        {linkChildren}
+                    </a>
+                ),
+                p: ({ children: pChildren }) => <p className="mb-2 last:mb-0">{pChildren}</p>,
+                strong: ({ children: sChildren }) => <strong className="font-semibold">{sChildren}</strong>,
+                ul: ({ children: ulChildren }) => <ul className="list-disc list-inside mb-2 space-y-0.5">{ulChildren}</ul>,
+                ol: ({ children: olChildren }) => <ol className="list-decimal list-inside mb-2 space-y-0.5">{olChildren}</ol>,
+                li: ({ children: liChildren }) => <li className="ml-0">{liChildren}</li>,
+                h1: ({ children: c }) => <h1 className="text-lg font-bold mt-3 mb-1 first:mt-0">{c}</h1>,
+                h2: ({ children: c }) => <h2 className="text-base font-bold mt-3 mb-1 first:mt-0">{c}</h2>,
+                h3: ({ children: c }) => <h3 className="text-sm font-bold mt-2 mb-1 first:mt-0">{c}</h3>,
+                h4: ({ children: c }) => <h4 className="text-sm font-semibold mt-2 mb-0.5 first:mt-0">{c}</h4>,
+                h5: ({ children: c }) => <h5 className="text-sm font-semibold mt-1 mb-0.5 first:mt-0">{c}</h5>,
+                h6: ({ children: c }) => <h6 className="text-sm font-medium mt-1 first:mt-0">{c}</h6>,
+                code: ({ className, children: codeChildren }) => {
+                    const isBlock = className?.includes('language-');
+                    if (isBlock) {
+                        const preClass = dark ? 'bg-gray-700 text-gray-200 rounded p-2 text-xs overflow-x-auto my-2' : 'bg-gray-100 text-gray-800 rounded p-2 text-xs overflow-x-auto my-2';
+                        return <pre className={preClass}><code>{codeChildren}</code></pre>;
+                    }
+                    const codeClass = dark ? 'bg-gray-700 text-gray-200 px-1 rounded text-xs' : 'bg-gray-100 text-gray-800 px-1 rounded text-xs';
+                    return <code className={codeClass}>{codeChildren}</code>;
+                },
+            }}
+        >
+            {children}
+        </ReactMarkdown>
+    );
 };
 
 // Component: Thinking Accordion
@@ -2482,7 +2525,7 @@ export default function VAFDashboard() {
                                                                 {wf.rest ? (
                                                                     <div className="relative group flex items-end">
                                                                         <div className="px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed bg-white text-gray-800 rounded-tl-none border border-gray-200">
-                                                                            <p className="whitespace-pre-wrap">{renderMarkdownLinks(wf.rest)}</p>
+                                                                            <div className="chat-markdown"><ChatMarkdown>{wf.rest}</ChatMarkdown></div>
                                                                         </div>
                                                                         <button
                                                                             onClick={(e) => {
@@ -2506,7 +2549,7 @@ export default function VAFDashboard() {
                                                         <div className="relative group flex items-end">
                                                             <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed",
                                                                 isBot ? "bg-white text-gray-800 rounded-tl-none border border-gray-200" : "bg-gray-800 text-white rounded-tr-none")}>
-                                                                <p className="whitespace-pre-wrap">{renderMarkdownLinks(isBot ? answer : displayAnswer)}</p>
+                                                                <div className="chat-markdown"><ChatMarkdown dark={!isBot}>{isBot ? answer : displayAnswer}</ChatMarkdown></div>
                                                             </div>
                                                             {isBot && (
                                                                 <button

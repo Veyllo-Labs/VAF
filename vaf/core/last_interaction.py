@@ -43,7 +43,8 @@ def update_last_interaction(
 ) -> None:
     """
     Record the last user interaction for the given user (or default).
-    Call when a user message is about to be processed (e.g. in headless before chat_step).
+    Call after a user message has been fully processed (e.g. in headless after chat_step returns),
+    so the next turn's system prompt can show "last interaction" and optional "(About: preview)".
 
     Args:
         user_scope_id: User scope (UUID or None for single-user).

@@ -2328,34 +2328,8 @@ export default function VAFDashboard() {
                         />
                     </div>
 
-                    {/* Status Footer - Redesigned */}
+                    {/* Status Footer: Automation, Settings (Connection-Indikator ist im Main-Bereich links) */}
                     <div className="shrink-0 p-3 mt-auto mb-2 flex flex-col gap-1 w-full overflow-hidden">
-
-                        {/* Connection Indicator – click to reconnect when disconnected */}
-                        <div
-                            className={cn(
-                                "flex items-center gap-3 p-2 rounded-lg justify-start transition-all duration-300",
-                                !isConnected && "cursor-pointer hover:bg-gray-100"
-                            )}
-                            onClick={() => { if (!isConnected) { setStatus('connecting'); setReconnectAttempt((a) => a + 1); } }}
-                            title={!isConnected ? 'Click to reconnect' : undefined}
-                        >
-                            <div className="w-6 flex justify-center shrink-0">
-                                <div
-                                    className={cn(
-                                        "w-2.5 h-2.5 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.2)] transition-colors",
-                                        showIdleState
-                                            ? "bg-yellow-400 shadow-yellow-300/50"
-                                            : isConnected
-                                                ? "bg-green-500 shadow-green-400/50"
-                                                : "bg-red-500 shadow-red-400/50"
-                                    )}
-                                />
-                            </div>
-                            <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 whitespace-nowrap text-sm font-medium text-gray-500">
-                                {connectionLabel}
-                            </span>
-                        </div>
 
                         <div
                             onClick={() => setIsAutomationPopupOpen(true)}
@@ -3134,6 +3108,10 @@ export default function VAFDashboard() {
                 }}
                 apiBase={getApiBase()}
                 initialTab={settingsInitialTab ?? undefined}
+                connectionLabel={connectionLabel}
+                isConnected={isConnected}
+                showIdleState={showIdleState}
+                onReconnect={() => { if (!isConnected) { setStatus('connecting'); setReconnectAttempt((a) => a + 1); } }}
             />
             <AutomationCalendarModal
                 isOpen={isAutomationPopupOpen}

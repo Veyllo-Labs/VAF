@@ -133,6 +133,11 @@ export interface SettingsModalProps {
     apiBase?: string;
     /** When set, open the modal with this tab active (e.g. 'automations'). */
     initialTab?: string;
+    /** Connection status for indicator above Logout in sidebar */
+    connectionLabel?: string;
+    isConnected?: boolean;
+    showIdleState?: boolean;
+    onReconnect?: () => void;
 }
 
 const CATEGORIES = [
@@ -157,7 +162,7 @@ const PROVIDERS = [
 ];
 
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect }: SettingsModalProps) {
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [activeTab, setActiveTab] = useState('general');
     const [changed, setChanged] = useState(false);
@@ -910,9 +915,33 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         </button>
                     )})}
 
-                    {/* Log out – bottom left (only when logged in) */}
-                    {currentUser && (
-                        <div className="mt-auto pt-4 border-t border-gray-200">
+                    {/* Connection-Indikator – über dem Trennstrich */}
+                    <div
+                        className={cn(
+                            "flex items-center gap-3 px-3 py-2 rounded-lg w-full transition-all mt-auto",
+                            !isConnected && onReconnect && "cursor-pointer hover:bg-gray-100"
+                        )}
+                        onClick={() => { if (!isConnected && onReconnect) onReconnect(); }}
+                        title={!isConnected && onReconnect ? 'Click to reconnect' : undefined}
+                    >
+                        <div
+                            className={cn(
+                                "w-2.5 h-2.5 rounded-full shrink-0 transition-colors",
+                                showIdleState
+                                    ? "bg-yellow-400 shadow-[0_0_6px_rgba(234,179,8,0.5)]"
+                                    : isConnected
+                                        ? "bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.5)]"
+                                        : "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.5)]"
+                            )}
+                        />
+                        <span className="text-sm font-medium text-gray-600 truncate">
+                            {connectionLabel}
+                        </span>
+                    </div>
+
+                    {/* Trennstrich, darunter Log out */}
+                    <div className="pt-2 border-t border-gray-200">
+                        {currentUser && (
                             <button
                                 type="button"
                                 onClick={() => setShowLogoutConfirm(true)}
@@ -921,8 +950,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <LogOut size={18} />
                                 Log out
                             </button>
-                        </div>
-                    )}
+                        )}
+                    </div>
                 </div>
 
                 {/* Content Area */}

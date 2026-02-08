@@ -20,12 +20,18 @@ class UpdateUserIdentityTool(BaseTool):
     description = (
         "Update the current user's identity so you know who you're talking to and how they like to be treated. "
         "Use when the user says their name, language, preferences, or do's/don'ts (e.g. 'call me X', 'I prefer German', "
-        "'always be concise', 'don't use emojis'). You can set name, language, and add/remove preferences, do's, and don'ts. "
+        "'always be concise', 'don't use emojis'). Use also when the user says which channel to use for proactive messages "
+        "(e.g. 'send it to Telegram' -> main_messenger='telegram'). You can set name, language, main_messenger, and add/remove preferences, do's, and don'ts. "
         "This updates the User identity block in your system prompt so you can greet them correctly (e.g. 'Hey Mert') and follow their rules."
     )
     parameters = {
         "type": "object",
         "properties": {
+            "main_messenger": {
+                "type": "string",
+                "enum": ["telegram", "discord", "slack"],
+                "description": "Preferred channel for proactive messages. Set when user says e.g. 'send it via Telegram' or 'use Discord'."
+            },
             "name": {
                 "type": "string",
                 "description": "Display name for the user (e.g. 'Mert'). Omit to keep current."
@@ -75,6 +81,8 @@ class UpdateUserIdentityTool(BaseTool):
         remove_do = (kwargs.get("remove_do") or "").strip() or None
         add_dont = kwargs.get("add_dont")
         remove_dont = (kwargs.get("remove_dont") or "").strip() or None
+        main_messenger_raw = (kwargs.get("main_messenger") or "").strip().lower() or None
+        main_messenger = main_messenger_raw if main_messenger_raw in ("telegram", "discord", "slack") else None
 
         def _norm_list(val):
             if val is None:
@@ -87,8 +95,8 @@ class UpdateUserIdentityTool(BaseTool):
         add_do = _norm_list(add_do)
         add_dont = _norm_list(add_dont)
 
-        if not any([name, language, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont]):
-            return "No updates provided. Pass at least one of: name, language, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont."
+        if not any([name, language, main_messenger is not None, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont]):
+            return "No updates provided. Pass at least one of: name, language, main_messenger, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont."
 
         try:
             from datetime import datetime
@@ -99,6 +107,8 @@ class UpdateUserIdentityTool(BaseTool):
                 user_identity["name"] = name
             if language is not None:
                 user_identity["preferred_language"] = language
+            if main_messenger is not None:
+                user_identity["main_messenger"] = main_messenger
             for p in add_preference:
                 if p and p not in user_identity["preferences"]:
                     user_identity["preferences"].append(p)
@@ -121,6 +131,8 @@ class UpdateUserIdentityTool(BaseTool):
                 parts.append("name")
             if language is not None:
                 parts.append("language")
+            if main_messenger is not None:
+                parts.append("main_messenger")
             if add_preference or remove_preference:
                 parts.append("preference")
             if add_do or remove_do:

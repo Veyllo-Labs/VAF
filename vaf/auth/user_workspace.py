@@ -67,6 +67,7 @@ class UserWorkspace:
                 "preferences": [],
                 "dos": [],
                 "donts": [],
+                "main_messenger": None,
                 "change_log": [],
             }
             self.save_user_identity(default_user)
@@ -116,12 +117,14 @@ You’re not a chatbot. You’re becoming someone.
         """Human user profile (name, language, preferences, do's/don'ts, change_log) – used in "User identity (current user)" block."""
         if not self.user_identity_file.exists():
             self.ensure_exists()
+        VALID_MAIN_MESSENGERS = ("telegram", "discord", "slack")
         defaults = {
             "name": self.username,
             "preferred_language": None,
             "preferences": [],
             "dos": [],
             "donts": [],
+            "main_messenger": None,
             "change_log": [],
         }
         try:
@@ -133,6 +136,11 @@ You’re not a chatbot. You’re becoming someone.
                     data[key] = [x for x in data[key] if isinstance(x, str)]
             if "preferred_language" not in data:
                 data["preferred_language"] = defaults["preferred_language"]
+            if "main_messenger" not in data:
+                data["main_messenger"] = defaults["main_messenger"]
+            else:
+                val = data.get("main_messenger")
+                data["main_messenger"] = val if (val and str(val).strip().lower() in VALID_MAIN_MESSENGERS) else None
             if "change_log" not in data or not isinstance(data["change_log"], list):
                 data["change_log"] = []
             else:
@@ -154,6 +162,7 @@ You’re not a chatbot. You’re becoming someone.
         """True if this looks like a fresh default (no real user details)."""
         name = (data.get("name") or "").strip()
         lang = data.get("preferred_language")
+        main_messenger = data.get("main_messenger")
         prefs = data.get("preferences") or []
         dos = data.get("dos") or []
         donts = data.get("donts") or []
@@ -161,6 +170,7 @@ You’re not a chatbot. You’re becoming someone.
         return (
             name in ("", "admin", self.username)
             and not lang
+            and not main_messenger
             and len(prefs) == 0
             and len(dos) == 0
             and len(donts) == 0

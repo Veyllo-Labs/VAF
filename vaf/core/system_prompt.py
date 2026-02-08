@@ -473,7 +473,9 @@ Then use the results to answer. Do NOT guess from your training data!
 |------|-------------|----------|
 | `memory_search` | **Look up** any stored facts | "user name", "project X", "last meeting" |
 | `memory_save` | **Save** general facts, projects, notes | "Project VAF uses Docker", "Meeting scheduled for Friday" |
-| `update_user_identity` | **Save PERSONAL user info** (name, language, preferences, do's/don'ts) | "My name is Mert", "I prefer German", "Don't use emojis" |
+| `update_user_identity` | **Save PERSONAL user info** (name, language, preferences, do's/don'ts, main_messenger) | "My name is Mert", "I prefer German", "Send it via Telegram" |
+| `send_telegram` | **Send a message to the user via Telegram** (when they asked to receive something there; use if main_messenger is Telegram or user said "via Telegram") | Send summary, result, or notification |
+| `send_discord` | **Send a message to the user via Discord** (when they asked to receive something there; use if main_messenger is Discord or user said "via Discord") | Send summary, result, or notification |
 
 ### When to use which SAVE tool:
 - **Personal info about the USER** → `update_user_identity`
@@ -606,6 +608,8 @@ Then use the results to answer. Do NOT guess from your training data!
                         user_data["dos"] = ui.get("dos")
                     if ui.get("donts"):
                         user_data["donts"] = ui.get("donts")
+                    if ui.get("main_messenger") and str(ui.get("main_messenger")).strip().lower() in ("telegram", "discord", "slack"):
+                        user_data["main_messenger"] = (ui.get("main_messenger") or "").strip().lower()
                 except Exception:
                     user_data["name"] = username
 
@@ -642,6 +646,28 @@ You are talking to the following user.
 3. **LANGUAGE:** If `preferred_language` is set, **ALWAYS** answer in that language (unless explicitly asked otherwise).
 4. **GREETING:** If this is the start of a conversation, greet the user by their `name` naturally (don't say "Hello [Name]", say "Hey [Name]" or similar based on your Soul).
 """
+            # Messaging connections: only when at least one channel is available
+            try:
+                from vaf.core.messaging_connections import get_messaging_connections
+                conn = get_messaging_connections(username=username, user_scope_id=user_scope_id)
+                avail = conn.get("available") or []
+                main = conn.get("main_messenger")
+                if avail:
+                    channel_names = [c.capitalize() for c in avail]
+                    identity_block += "\n## Messaging connections (proactive messages)\n"
+                    identity_block += f"This user has the following messaging channels available for proactive messages: {', '.join(channel_names)}.\n"
+                    if main:
+                        identity_block += f"Preferred channel for proactive messages: {main.capitalize()}.\n"
+                    else:
+                        identity_block += "Preferred channel is not set yet.\n"
+                    identity_block += (
+                        "When the user asks you to send them something (e.g. a summary, a file, or a notification), "
+                        "if preferred channel is not set, ask once: e.g. \"Soll ich es dir per Discord, Telegram oder Slack schicken?\" / \"Should I send it via Discord, Telegram or Slack?\". "
+                        "Store their answer with `update_user_identity(main_messenger=\"telegram\")` (or discord/slack). "
+                        "Then use the matching tool: `send_telegram`, `send_discord`, or `send_slack` depending on the preferred channel or user request (e.g. use send_telegram when main_messenger is Telegram or they said \"via Telegram\").\n"
+                    )
+            except Exception:
+                pass
             parts.append(identity_block)
 
         full_prompt = "\n".join(parts)
@@ -652,11 +678,15 @@ You are talking to the following user.
         return full_prompt
     
     def _build_tool_documentation(self) -> str:
-        """Build tool documentation section."""
+        """Build tool documentation section. When agent has _active_tools set, only document those tools."""
         tool_names = []
         tool_descriptions = []
+        tools_to_doc = self.tools
+        if self.agent and getattr(self.agent, "_active_tools", None) is not None:
+            active = set(self.agent._active_tools)
+            tools_to_doc = [t for t in self.tools if getattr(t, "name", None) in active]
         
-        for tool in self.tools:
+        for tool in tools_to_doc:
             name = None
             description = None
             

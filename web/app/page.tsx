@@ -864,6 +864,19 @@ export default function VAFDashboard() {
         });
     };
 
+    // Sub-Agent Window: hide when a workflow is running to avoid overlay
+    const subAgentStateRef = useRef(subAgentState);
+    useEffect(() => { subAgentStateRef.current = subAgentState; }, [subAgentState]);
+    useEffect(() => {
+        if (!isWorkflowRunning) return;
+        if (!subAgentStateRef.current.isOpen) return;
+        if (subAgentAutoCloseRef.current) {
+            clearTimeout(subAgentAutoCloseRef.current);
+            subAgentAutoCloseRef.current = null;
+        }
+        preserveChatScroll(() => setSubAgentState(prev => ({ ...prev, isOpen: false })));
+    }, [isWorkflowRunning]);
+
     // Cache State
     const sessionCache = useRef<Record<string, Message[]>>({});
     const cacheSaveTimeout = useRef<NodeJS.Timeout | null>(null);

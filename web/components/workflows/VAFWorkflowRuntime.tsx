@@ -111,11 +111,11 @@ const VAFWorkflowRuntime = () => {
             />
           </ReactFlow>
         </div>
-        <div className="flex-1 min-h-0 bg-white">
-          <div className="flex h-10 items-center border-b border-gray-100 bg-gray-50 px-4 text-xs font-semibold uppercase tracking-wide text-gray-500">
+        <div className="flex-1 min-h-0 bg-white flex flex-col overflow-hidden">
+          <div className="flex h-10 shrink-0 items-center border-b border-gray-100 bg-gray-50 px-4 text-xs font-semibold uppercase tracking-wide text-gray-500">
             Terminal Output
           </div>
-          <div ref={terminalRef} className="flex-1 min-h-0 overflow-auto px-4 py-4 font-mono text-xs text-gray-900 whitespace-pre-wrap">
+          <div ref={terminalRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-4 font-mono text-xs text-gray-900 whitespace-pre-wrap break-words">
             {consoleLines.length > 0 ? (
               <div className="space-y-1">
                 {consoleLines.map((line, index) => (

@@ -427,6 +427,11 @@ def _run_bot():
             logger.info(f"Voice message from chat {chat_id}, will reply in {voice_lang}")
 
         _append_chat_activity(chat_id, user_scope_id, "in")
+        try:
+            from vaf.core.messaging_connections import save_telegram_chat_id
+            save_telegram_chat_id(user_scope_id, vaf_username, str(chat_id))
+        except Exception:
+            pass
         session_id = f"telegram_{telegram_user_id}"
         tq = TaskQueue()
         metadata = {

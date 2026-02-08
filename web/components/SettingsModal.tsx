@@ -309,6 +309,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [userIdentityDraft, setUserIdentityDraft] = useState<{
         name: string;
         preferred_language: string;
+        main_messenger: string;
         preferences: string;
         dos: string;
         donts: string;
@@ -354,6 +355,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setUserIdentityDraft({
             name: ui.name || '',
             preferred_language: ui.preferred_language || '',
+            main_messenger: ui.main_messenger || '',
             preferences: (ui.preferences || []).join('\n'),
             dos: (ui.dos || []).join('\n'),
             donts: (ui.donts || []).join('\n'),
@@ -368,9 +370,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         // Parse text back to arrays (split by newline, filter empty)
         const parseList = (text: string) => text.split('\n').map(s => s.trim()).filter(s => s.length > 0);
 
+        const rawMain = (userIdentityDraft.main_messenger || '').trim().toLowerCase();
+        const main_messenger = ['telegram', 'discord', 'slack'].includes(rawMain) ? rawMain : null;
         const updateData = {
             name: userIdentityDraft.name.trim() || undefined,
             preferred_language: userIdentityDraft.preferred_language.trim() || undefined,
+            main_messenger: main_messenger as string | null,
             preferences: parseList(userIdentityDraft.preferences),
             dos: parseList(userIdentityDraft.dos),
             donts: parseList(userIdentityDraft.donts),
@@ -2679,6 +2684,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 />
                                             </div>
                                             <div>
+                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Main messenger</label>
+                                                <select
+                                                    value={userIdentityDraft.main_messenger || ''}
+                                                    onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, main_messenger: e.target.value })}
+                                                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
+                                                >
+                                                    <option value="">Not set</option>
+                                                    <option value="telegram">Telegram</option>
+                                                    <option value="discord">Discord</option>
+                                                    <option value="slack">Slack</option>
+                                                </select>
+                                                <p className="text-xs text-gray-400 mt-0.5">Preferred channel for proactive messages from the agent.</p>
+                                            </div>
+                                            <div>
                                                 <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Preferences <span className="text-gray-400 font-normal">(one per line)</span></label>
                                                 <textarea
                                                     value={userIdentityDraft.preferences}
@@ -2734,6 +2753,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <div className="bg-white rounded-lg p-3 border border-gray-100">
                                                 <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Language</span>
                                                 <p className="text-gray-900 mt-1">{personaData.user_identity.preferred_language || '—'}</p>
+                                            </div>
+                                            <div className="bg-white rounded-lg p-3 border border-gray-100">
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Main messenger</span>
+                                                <p className="text-gray-900 mt-1">{personaData.user_identity.main_messenger ? String(personaData.user_identity.main_messenger).charAt(0).toUpperCase() + String(personaData.user_identity.main_messenger).slice(1) : '—'}</p>
                                             </div>
                                             <div className="bg-white rounded-lg p-3 border border-gray-100">
                                                 <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Preferences</span>

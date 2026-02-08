@@ -1061,6 +1061,9 @@ class Agent:
         try:
             from vaf.tools.context_tools import UpdateIntentTool, UpdateWorkingMemoryTool, RequestClarificationTool, MemorySaveTool, MemorySearchTool
             from vaf.tools.user_identity import UpdateUserIdentityTool
+            from vaf.tools.send_telegram import SendTelegramTool
+            from vaf.tools.send_discord import SendDiscordTool
+            from vaf.tools.send_slack import SendSlackTool
             
             # UpdateIntent and UpdateWorkingMemory are for Main Agent
             self.tools["update_intent"] = UpdateIntentTool()
@@ -1068,6 +1071,9 @@ class Agent:
             self.tools["memory_save"] = MemorySaveTool()
             self.tools["memory_search"] = MemorySearchTool()
             self.tools["update_user_identity"] = UpdateUserIdentityTool()
+            self.tools["send_telegram"] = SendTelegramTool()
+            self.tools["send_discord"] = SendDiscordTool()
+            self.tools["send_slack"] = SendSlackTool()
             
             # RequestClarification is strictly for Sub-Agents (via coder_only flag),
             # but we register it here so it's available in the system (even if filtered out later for Main Agent).
@@ -3797,6 +3803,19 @@ class Agent:
                 for name in ("update_intent", "update_working_memory", "memory_search", "memory_save", "update_user_identity"):
                     if name in self.tools and name not in selected_tools:
                         selected_tools = list(selected_tools) + [name]
+                # Messaging tools: only add those for which the user has the connection
+                try:
+                    from vaf.core.messaging_connections import get_messaging_connections
+                    conn = get_messaging_connections(
+                        username=getattr(self, "_current_username", None),
+                        user_scope_id=getattr(self, "_current_user_scope_id", None),
+                    )
+                    for ch in conn.get("available") or []:
+                        tool_name = {"telegram": "send_telegram", "discord": "send_discord", "slack": "send_slack"}.get(ch)
+                        if tool_name and tool_name in self.tools and tool_name not in selected_tools:
+                            selected_tools = list(selected_tools) + [tool_name]
+                except Exception:
+                    pass
 
             # ALWAYS show final tools as system message for debugging consistency
             final_list = ", ".join(selected_tools) if selected_tools else "None (Safety Net -> ALL)"
@@ -5666,6 +5685,9 @@ class Agent:
                     append_domain_log("rag", f"[Agent] {name} called with user_scope_id={scope_id}")
                 if name == "update_user_identity":
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                if name in ("send_telegram", "send_discord", "send_slack"):
+                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 result = self.tools[name].run(**tool_args)
             else:
                 result = f"Error: Unknown tool '{name}'"

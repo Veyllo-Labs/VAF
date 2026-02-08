@@ -47,6 +47,16 @@ If either is set, it appends a **"## Session context"** block after **"## Curren
 
 No session-context block is added if both `current_source` and `last_interaction` are missing (e.g. first message ever, or CLI without this feature).
 
+### 3b. Messaging connections block
+
+When the current user has at least one **messaging connection** (Telegram or Discord) and a username or user_scope_id is available, `build_prompt()` also adds a **"## Messaging connections (proactive messages)"** subsection inside the **"## 👤 CURRENT USER CONTEXT"** block. It states:
+
+- Which channels are available for proactive messages (e.g. Telegram, Discord).
+- The user’s preferred channel (`main_messenger` from user_identity, if set).
+- Instructions: if the user asks to receive something but has not set a preferred channel, ask once and store with `update_user_identity(main_messenger="telegram")` (or discord/slack); then use the matching tool (`send_telegram`, `send_discord`, or `send_slack`) to send the content.
+
+This block is built using `vaf/core/messaging_connections.get_messaging_connections(username, user_scope_id)` and is only shown when the list of available channels is non-empty. See [CONNECTIONS.md](CONNECTIONS.md) and [USER_IDENTITY.md](USER_IDENTITY.md) for proactive messaging and `main_messenger`.
+
 ### 4. When the block is not updated
 
 - System commands (`__CMD__:...`) do not update the store.

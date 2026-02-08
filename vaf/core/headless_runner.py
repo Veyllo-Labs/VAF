@@ -468,6 +468,18 @@ def run_headless_agent():
                         memory_context = ""
                         append_domain_log("rag", f"RAG failed: {e}")
 
+                    # RAG Ergebnis in Web-UI anzeigen (Trefferzahl = Snippets im System-Prompt)
+                    try:
+                        _rag_count = memory_context.count("[Source ") if memory_context else 0
+                        get_web_interface().log(
+                            f"RAG: {_rag_count} hit(s) (included in system prompt for this turn).",
+                            level="info",
+                            source="System",
+                            session_id=task.session_id,
+                        )
+                    except Exception:
+                        pass
+
                     # Streaming callback for WebUI - accumulates chunks, throttled emit so UI keeps up
                     response_parts = []
                     _last_emit_time = [0.0]  # list so nested function can assign

@@ -41,6 +41,7 @@ class UserIdentityUpdate(BaseModel):
     preferences: Optional[List[str]] = None
     dos: Optional[List[str]] = None
     donts: Optional[List[str]] = None
+    main_messenger: Optional[str] = None  # "telegram" | "discord" | "slack"
 
 class UserIdentityEntryUpdate(BaseModel):
     """Update or delete a specific entry in a list field."""
@@ -97,7 +98,18 @@ async def update_user_identity(data: UserIdentityUpdate, username: str = Depends
 
     # Update fields that are provided
     update_dict = data.dict(exclude_none=True)
+    full_dict = data.dict()
+    valid_main_messengers = ("telegram", "discord", "slack")
+    if "main_messenger" in full_dict:
+        value = full_dict["main_messenger"]
+        normalized = (value or "").strip().lower() or None
+        normalized = normalized if normalized in valid_main_messengers else None
+        if current.get("main_messenger") != normalized:
+            changes.append("main_messenger")
+            current["main_messenger"] = normalized
     for key, value in update_dict.items():
+        if key == "main_messenger":
+            continue
         if current.get(key) != value:
             changes.append(key)
             current[key] = value

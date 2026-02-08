@@ -192,6 +192,16 @@ Global options (top-level in config):
 - **No reply**: Ensure the bridge is running (Settings → Connections, Telegram toggle on). After a VAF restart, the bridge auto-starts if Telegram is enabled.
 - **Verification timeout**: Send the exact 6-digit code to the bot in a **private chat** (DM).
 
+## Proactive messaging
+
+When you have one or more messaging connections (e.g. Telegram, Discord), the agent can **send you proactive messages**—for example when you ask it to "send me the result via Telegram" or "tell me how full my desktop is and send that to me".
+
+- **System prompt**: The agent is informed which channels are available for the current user and whether a preferred channel (`main_messenger`) is set. This is stored in User Identity (see [USER_IDENTITY.md](USER_IDENTITY.md)).
+- **Tool availability**: Only tools for **configured** connections are exposed to the agent: `send_telegram` when Telegram is connected, `send_discord` when Discord is connected, and (when supported) `send_slack` for Slack. So the agent never sees a send tool for a channel you do not have.
+- **First time**: If you have not set a preferred channel, the agent will ask once (e.g. "Should I send it via Discord, Telegram or Slack?") and store your answer in User Identity as `main_messenger` (via the `update_user_identity` tool).
+- **Sending**: The agent uses the matching tool (`send_telegram`, `send_discord`, or `send_slack`) to deliver the content. For **Telegram**, the agent can only send to you after you have sent at least one message from Telegram (so VAF can associate your chat ID). Chat IDs are stored in `messaging_endpoints.json` under the platform data directory.
+- **Discord**: Proactive send to Discord is planned for a later phase; Telegram is supported first.
+
 ## Architecture
 
 ```

@@ -14,6 +14,7 @@ import os
 import logging
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from vaf.core.main_persistence import MainPersistenceManager
 from vaf.core.platform import Platform
 from vaf.core.config import Config
@@ -473,7 +474,7 @@ Then use the results to answer. Do NOT guess from your training data!
 |------|-------------|----------|
 | `memory_search` | **Look up** any stored facts | "user name", "project X", "last meeting" |
 | `memory_save` | **Save** general facts, projects, notes | "Project VAF uses Docker", "Meeting scheduled for Friday" |
-| `update_user_identity` | **Save PERSONAL user info** (name, language, city, country, preferences, do's/don'ts, main_messenger) | "My name is Mert", "I'm in Berlin", "Send it via Telegram" |
+| `update_user_identity` | **Save PERSONAL user info** (name, language, city, country, preferences, do's/don'ts, main_messenger, timezone, date_format, time_format) | "My name is Mert", "I'm in Berlin", "Send it via Telegram", "Use Europe/Berlin for time" |
 | `send_telegram` | **Send a message to the user via Telegram** (when they asked to receive something there; use if main_messenger is Telegram or user said "via Telegram") | Send summary, result, or notification |
 | `send_discord` | **Send a message to the user via Discord** (when they asked to receive something there; use if main_messenger is Discord or user said "via Discord") | Send summary, result, or notification |
 | `mail_inbox` | **Show inbox** (list of emails) for a connected account (account_id, folder, max_messages) | Check inbox, list messages; use message_id/provider_message_id with read_mail to read one |
@@ -500,21 +501,54 @@ Then use the results to answer. Do NOT guess from your training data!
 
 
         # ═══════════════════════════════════════════════════════════════════════
-        # 2. CURRENT TIME & DATE
+        # 2. CURRENT TIME & DATE (user timezone and format from user_identity if set)
         # ═══════════════════════════════════════════════════════════════════════
-        from datetime import datetime
         now = datetime.now()
-        
-        # Localized date formatting
-        if self.user_language == "de":
-            # German formatting: Donnerstag, 01.01.2026 12:00:00
-            days = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
-            day_name = days[now.weekday()]
-            time_str = f"Heute ist {day_name}, der {now.strftime('%d.%m.%Y %H:%M:%S')}."
+        ui_for_time = {}
+        if username:
+            try:
+                from vaf.auth.user_workspace import get_user_workspace
+                _ws = get_user_workspace(username)
+                ui_for_time = _ws.get_user_identity()
+            except Exception:
+                pass
+        tz_str = (ui_for_time.get("timezone") or "").strip() or None
+        if tz_str:
+            try:
+                now = datetime.now(ZoneInfo(tz_str))
+            except Exception:
+                pass
+        date_fmt_key = (ui_for_time.get("date_format") or "").strip() or None
+        time_fmt_key = (ui_for_time.get("time_format") or "").strip() or None
+        # Preset -> strftime for date
+        date_strftime_map = {
+            "dd.mm.yyyy": "%d.%m.%Y",
+            "yyyy-mm-dd": "%Y-%m-%d",
+            "mm/dd/yyyy": "%m/%d/%Y",
+            "dd.mm.yy": "%d.%m.%y",
+        }
+        if date_fmt_key and date_fmt_key in date_strftime_map:
+            date_fmt = date_strftime_map[date_fmt_key]
+        elif self.user_language == "de":
+            date_fmt = "%d.%m.%Y"
         else:
-            # Default/English: Thursday, 2026-01-01 12:00:00
-            time_str = f"Today is {now.strftime('%A, %Y-%m-%d %H:%M:%S')}."
-            
+            date_fmt = "%Y-%m-%d"
+        if time_fmt_key == "12h":
+            time_fmt = "%I:%M:%S %p"
+        elif time_fmt_key == "24h":
+            time_fmt = "%H:%M:%S"
+        elif self.user_language == "de":
+            time_fmt = "%H:%M:%S"
+        else:
+            time_fmt = "%H:%M:%S"
+        combined_fmt = f"{date_fmt} {time_fmt}"
+        days_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        days_de = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+        day_name = days_de[now.weekday()] if self.user_language == "de" else days_en[now.weekday()]
+        if self.user_language == "de":
+            time_str = f"Heute ist {day_name}, der {now.strftime(combined_fmt)}."
+        else:
+            time_str = f"Today is {day_name}, {now.strftime(combined_fmt)}."
         parts.append(f"\n## Current Time\n{time_str}\n")
 
         # ═══════════════════════════════════════════════════════════════════════
@@ -623,6 +657,15 @@ Then use the results to answer. Do NOT guess from your training data!
                         user_data["donts"] = ui.get("donts")
                     if ui.get("main_messenger") and str(ui.get("main_messenger")).strip().lower() in ("telegram", "discord", "slack"):
                         user_data["main_messenger"] = (ui.get("main_messenger") or "").strip().lower()
+                    tz_val = (ui.get("timezone") or "").strip()
+                    if tz_val:
+                        user_data["timezone"] = tz_val
+                    df_val = (ui.get("date_format") or "").strip()
+                    if df_val:
+                        user_data["date_format"] = df_val
+                    tf_val = (ui.get("time_format") or "").strip()
+                    if tf_val and tf_val.lower() in ("24h", "12h"):
+                        user_data["time_format"] = tf_val.lower()
                 except Exception:
                     user_data["name"] = username
 
@@ -659,6 +702,7 @@ You are talking to the following user.
 3. **LANGUAGE:** If `preferred_language` is set, **ALWAYS** answer in that language (unless explicitly asked otherwise).
 4. **GREETING:** If this is the start of a conversation, greet the user by their `name` naturally (don't say "Hello [Name]", say "Hey [Name]" or similar based on your Soul).
 5. **LOCATION:** If `city` and/or `country` are set, use them for context-aware answers (e.g. weather, local time, "how's the weather today?" → use the user's location).
+6. **DATES & TIMES:** If `timezone`, `date_format`, or `time_format` are set, use them when showing dates or times (e.g. user's local time, preferred date format like dd.mm.yyyy, 24h vs 12h).
 """
             # Messaging connections: only when at least one channel is available
             try:

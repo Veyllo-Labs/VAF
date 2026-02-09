@@ -70,6 +70,9 @@ class UserWorkspace:
                 "main_messenger": None,
                 "city": None,
                 "country": None,
+                "timezone": None,
+                "date_format": None,
+                "time_format": None,
                 "change_log": [],
             }
             self.save_user_identity(default_user)
@@ -129,6 +132,9 @@ You’re not a chatbot. You’re becoming someone.
             "main_messenger": None,
             "city": None,
             "country": None,
+            "timezone": None,
+            "date_format": None,
+            "time_format": None,
             "change_log": [],
         }
         try:
@@ -155,6 +161,12 @@ You’re not a chatbot. You’re becoming someone.
                 data["city"] = defaults["city"]
             if "country" not in data:
                 data["country"] = defaults["country"]
+            for key in ("timezone", "date_format", "time_format"):
+                if key not in data:
+                    data[key] = defaults[key]
+                else:
+                    val = data[key]
+                    data[key] = (val if isinstance(val, str) and val.strip() else None) or defaults[key]
 
             # One-time migration: local admin used to use username "Local Admin"; data may still be there
             local_admin_username = Config.get("local_admin_username", "admin")

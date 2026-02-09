@@ -15,7 +15,7 @@ That data is stored per user and injected into the system prompt each turn.
 ## Storage
 
 - **File**: `~/.vaf/users/<username>/user_identity.json`
-- **Contents**: `name`, `preferred_language`, `city`, `country` (location), `preferences` (list of strings), `dos` (list), `donts` (list), `main_messenger` (optional: `"telegram"` | `"discord"` | `"slack"`), `change_log` (list of `{ "at": "<ISO8601>", "action": "<summary>" }`).
+- **Contents**: `name`, `preferred_language`, `city`, `country` (location), `preferences` (list of strings), `dos` (list), `donts` (list), `main_messenger` (optional: `"telegram"` | `"discord"` | `"slack"`), `timezone` (optional IANA e.g. `Europe/Berlin`), `date_format` (optional e.g. `dd.mm.yyyy`), `time_format` (optional `24h` | `12h`), `change_log` (list of `{ "at": "<ISO8601>", "action": "<summary>" }`).
 - **Created**: When the workspace is first used; default `name` is the username, other fields empty.
 
 Do not confuse with `identity.json` in the same directory: that file holds the **agent's** display name, emoji, and theme (used in the Soul block). User identity is only about the human user.
@@ -27,6 +27,9 @@ In `vaf/core/system_prompt.py`, `build_prompt()` adds a block **"## User identit
 - Name, preferred language, and location (city, country) when set.
 - Preferences, Do, and Don't lists.
 - Optional `main_messenger` (preferred channel for proactive messages: telegram, discord, or slack).
+- Optional `timezone`, `date_format`, and `time_format` (used for the **"## Current Time"** block and so the model can show dates/times in the user's preferred format).
+
+The **"## Current Time"** sentence in the system prompt uses the user's `timezone` (if set) and `date_format`/`time_format` so the model sees the correct local time and format.
 
 When the user has at least one messaging connection (Telegram, Discord), a **"## Messaging connections (proactive messages)"** subsection is added: it lists available channels and the preferred channel (if set), and instructs the agent to ask once if the user wants to receive something but has not set `main_messenger`, then to use `update_user_identity(main_messenger=...)` and the matching channel tool (`send_telegram`, `send_discord`, or `send_slack`). Only tools for configured connections are exposed to the agent. See [CONNECTIONS.md](CONNECTIONS.md) for proactive messaging.
 
@@ -38,7 +41,7 @@ That block is rebuilt every turn (dynamic system prompt), so the model always se
 - **Name**: `update_user_identity`
 - **When to use**: When the user says their name, language, location, or rules (e.g. "call me Mert", "I prefer German", "I'm in Berlin" / "I'm based in Munich, Germany", "always be concise", "don't use emojis"). Also when the user says which channel to use for proactive messages (e.g. "send it via Telegram" → `main_messenger="telegram"`).
 
-Parameters (all optional): `name`, `language`, `city`, `country`, `main_messenger` (`"telegram"` | `"discord"` | `"slack"`), `add_preference` / `remove_preference`, `add_do` / `remove_do`, `add_dont` / `remove_dont`. At least one must be provided.
+Parameters (all optional): `name`, `language`, `city`, `country`, `main_messenger` (`"telegram"` | `"discord"` | `"slack"`), `timezone` (IANA e.g. `Europe/Berlin`), `date_format` (e.g. `dd.mm.yyyy`), `time_format` (`24h` | `12h`), `add_preference` / `remove_preference`, `add_do` / `remove_do`, `add_dont` / `remove_dont`. At least one must be provided.
 
 On each successful run, the tool appends one entry to `change_log` with the current time (same source as the system prompt clock) and a short action summary (e.g. "name", "language", "preference"). The log is trimmed to the last 50 entries.
 
@@ -58,6 +61,8 @@ When the user asks the agent to send them something (e.g. a summary or a result 
   Returns `identity` (agent), `user_identity` (human user profile), and `soul`. The Settings UI uses this to show the User Identity modal.
 
 ## Settings UI
+
+- **Settings → Interface** includes a **Date & Time** section where you can set timezone, date format, and time format (24h/12h). These are stored in `user_identity.json` and used in the system prompt and for displaying dates/times.
 
 Under **Settings → Persona & Memory → Long-term Memory (RAG Source)** there is a **User Identity** button (amber). It opens a modal with:
 

@@ -237,7 +237,17 @@ Telegram uses the same pipeline as the Web UI:
 
 - **Multiple accounts**: Connect **Gmail** (OAuth2 + Gmail API), **Microsoft Outlook** (OAuth2 + Microsoft Graph Mail), or any provider via **IMAP/SMTP**. **iCloud Mail** has no OAuth mail API; use IMAP with an app-specific password (see Apple / iCloud below).
 - **Secure storage**: OAuth tokens and IMAP passwords are stored in the OS keyring (Windows Credential Manager, macOS Keychain, Linux Secret Service). If the keyring is unavailable, credentials are stored in an AES-256-GCM encrypted file under the platform data directory. No passwords or tokens are stored in `config.json`.
-- **Agent tools**: When at least one email account is connected, the agent can use `mail_inbox` (list emails), `read_mail` (read full body of one message), and `send_mail` (from a connected account). Credentials are never passed to the agent; the transport layer resolves them by `account_id`. Access tokens are refreshed automatically before API calls when expired.
+- **Agent tools**: When at least one email account is connected, the agent can use `mail_inbox`, `read_mail`, and `send_mail`. Credentials are never passed to the agent; the transport layer resolves them by `account_id`. Access tokens are refreshed automatically when expired.
+
+#### Agent email tools (mail_inbox, read_mail, send_mail)
+
+| Tool | Purpose | When to use |
+|------|---------|-------------|
+| `mail_inbox` | List messages in a folder (inbox or other). Returns From, Date, Subject, and for each message `message_id` and `provider_message_id` (for Gmail/Microsoft). | User asks to check email, show inbox, or list recent messages. |
+| `read_mail` | Return the full body of one message as plain text. Parameters: `account_id`, `message_id`, `folder` (default INBOX), optional `provider_message_id`. | User asks what a specific email says or contains. Use `message_id` (and `provider_message_id` when present) from a prior `mail_inbox` call. |
+| `send_mail` | Send an email from a connected account (`account_id`, `to`, `subject`, `body`). | User asks to send or reply to an email. |
+
+Message bodies are always returned as plain text: HTML and MIME structure are stripped, and the same cleaned text is used in the Mail dashboard and for the agent. This keeps context size low and avoids raw markup.
 
 ### Setup
 

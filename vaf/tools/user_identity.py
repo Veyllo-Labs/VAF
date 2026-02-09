@@ -21,8 +21,8 @@ class UpdateUserIdentityTool(BaseTool):
         "Update the current user's identity so you know who you're talking to and how they like to be treated. "
         "Use when the user says their name, language, location (city/country), preferences, or do's/don'ts (e.g. 'call me X', 'I prefer German', "
         "'I'm in Berlin' or 'I'm based in Munich, Germany', 'always be concise', 'don't use emojis'). Use also when the user says which channel to use for proactive messages "
-        "(e.g. 'send it to Telegram' -> main_messenger='telegram'). You can set name, language, city, country, main_messenger, and add/remove preferences, do's, and don'ts. "
-        "Location (city/country) helps you answer context-aware questions (e.g. weather, local time). "
+        "(e.g. 'send it to Telegram' -> main_messenger='telegram'). You can set name, language, city, country, main_messenger, timezone, date_format, time_format, and add/remove preferences, do's, and don'ts. "
+        "Location (city/country) and timezone help you answer context-aware questions (e.g. weather, local time). date_format (e.g. dd.mm.yyyy) and time_format (24h/12h) are used when showing dates and times. "
         "This updates the User identity block in your system prompt so you can greet them correctly (e.g. 'Hey Mert') and follow their rules."
     )
     parameters = {
@@ -75,6 +75,19 @@ class UpdateUserIdentityTool(BaseTool):
             "remove_dont": {
                 "type": "string",
                 "description": "Exact text of one 'don\'t' rule to remove."
+            },
+            "timezone": {
+                "type": "string",
+                "description": "IANA timezone (e.g. 'Europe/Berlin', 'America/New_York'). Use when user says their timezone or how they want times shown."
+            },
+            "date_format": {
+                "type": "string",
+                "description": "Preferred date format (e.g. 'dd.mm.yyyy', 'yyyy-mm-dd', 'mm/dd/yyyy'). Use when user says how they want dates shown."
+            },
+            "time_format": {
+                "type": "string",
+                "enum": ["24h", "12h"],
+                "description": "Preferred time format: 24h or 12h. Use when user says they want 24-hour or 12-hour (AM/PM) time."
             }
         },
         "required": []
@@ -94,6 +107,10 @@ class UpdateUserIdentityTool(BaseTool):
         remove_dont = (kwargs.get("remove_dont") or "").strip() or None
         main_messenger_raw = (kwargs.get("main_messenger") or "").strip().lower() or None
         main_messenger = main_messenger_raw if main_messenger_raw in ("telegram", "discord", "slack") else None
+        timezone = (kwargs.get("timezone") or "").strip() or None
+        date_format = (kwargs.get("date_format") or "").strip() or None
+        time_format_raw = (kwargs.get("time_format") or "").strip().lower() or None
+        time_format = time_format_raw if time_format_raw in ("24h", "12h") else None
 
         def _norm_list(val):
             if val is None:
@@ -106,8 +123,8 @@ class UpdateUserIdentityTool(BaseTool):
         add_do = _norm_list(add_do)
         add_dont = _norm_list(add_dont)
 
-        if not any([name, language, city is not None, country is not None, main_messenger is not None, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont]):
-            return "No updates provided. Pass at least one of: name, language, city, country, main_messenger, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont."
+        if not any([name, language, city is not None, country is not None, main_messenger is not None, timezone is not None, date_format is not None, time_format is not None, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont]):
+            return "No updates provided. Pass at least one of: name, language, city, country, main_messenger, timezone, date_format, time_format, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont."
 
         try:
             from datetime import datetime
@@ -124,6 +141,12 @@ class UpdateUserIdentityTool(BaseTool):
                 user_identity["city"] = city
             if country is not None:
                 user_identity["country"] = country
+            if timezone is not None:
+                user_identity["timezone"] = timezone
+            if date_format is not None:
+                user_identity["date_format"] = date_format
+            if time_format is not None:
+                user_identity["time_format"] = time_format
             for p in add_preference:
                 if p and p not in user_identity["preferences"]:
                     user_identity["preferences"].append(p)
@@ -152,6 +175,12 @@ class UpdateUserIdentityTool(BaseTool):
                 parts.append("city")
             if country is not None:
                 parts.append("country")
+            if timezone is not None:
+                parts.append("timezone")
+            if date_format is not None:
+                parts.append("date_format")
+            if time_format is not None:
+                parts.append("time_format")
             if add_preference or remove_preference:
                 parts.append("preference")
             if add_do or remove_do:

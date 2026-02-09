@@ -161,6 +161,39 @@ const PROVIDERS = [
     { id: 'openrouter', label: 'OpenRouter', defaultModel: 'anthropic/claude-3.5-sonnet' },
 ];
 
+// Common IANA timezones for Date & Time (Interface). Used in system prompt and user context.
+const DATE_TIME_TIMEZONES: { value: string; label: string }[] = [
+    { value: '', label: 'Server default' },
+    { value: 'UTC', label: 'UTC' },
+    { value: 'Europe/Berlin', label: 'Europe/Berlin' },
+    { value: 'Europe/London', label: 'Europe/London' },
+    { value: 'Europe/Paris', label: 'Europe/Paris' },
+    { value: 'Europe/Vienna', label: 'Europe/Vienna' },
+    { value: 'Europe/Zurich', label: 'Europe/Zurich' },
+    { value: 'America/New_York', label: 'America/New_York' },
+    { value: 'America/Chicago', label: 'America/Chicago' },
+    { value: 'America/Los_Angeles', label: 'America/Los_Angeles' },
+    { value: 'America/Denver', label: 'America/Denver' },
+    { value: 'Asia/Tokyo', label: 'Asia/Tokyo' },
+    { value: 'Asia/Shanghai', label: 'Asia/Shanghai' },
+    { value: 'Asia/Singapore', label: 'Asia/Singapore' },
+    { value: 'Australia/Sydney', label: 'Australia/Sydney' },
+];
+
+const DATE_TIME_DATE_FORMATS: { value: string; label: string }[] = [
+    { value: '', label: 'Default (language-based)' },
+    { value: 'dd.mm.yyyy', label: 'DD.MM.YYYY (e.g. 10.02.2026)' },
+    { value: 'yyyy-mm-dd', label: 'YYYY-MM-DD (e.g. 2026-02-10)' },
+    { value: 'mm/dd/yyyy', label: 'MM/DD/YYYY (e.g. 02/10/2026)' },
+    { value: 'dd.mm.yy', label: 'DD.MM.YY (e.g. 10.02.26)' },
+];
+
+const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
+    { value: '', label: 'Default (24h)' },
+    { value: '24h', label: '24-hour' },
+    { value: '12h', label: '12-hour (AM/PM)' },
+];
+
 
 export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect }: SettingsModalProps) {
     const [localConfig, setLocalConfig] = useState<any>(config || {});
@@ -311,6 +344,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // Persona State
     const [personaData, setPersonaData] = useState<{identity: any, user_identity?: any, soul: string} | null>(null);
     const [personaLoading, setPersonaLoading] = useState(false);
+    // Date & Time (Interface tab) – synced from user_identity when on interface tab
+    const [dateTimeTimezone, setDateTimeTimezone] = useState<string>('');
+    const [dateTimeDateFormat, setDateTimeDateFormat] = useState<string>('');
+    const [dateTimeTimeFormat, setDateTimeTimeFormat] = useState<string>('');
+    const [dateTimeSaving, setDateTimeSaving] = useState(false);
 
     // User Identity Edit State - Text-based editing
     const [isEditingUserIdentity, setIsEditingUserIdentity] = useState(false);
@@ -328,7 +366,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const timelineRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        if (activeTab === 'persona') {
+        if (activeTab === 'persona' || activeTab === 'interface') {
             setPersonaLoading(true);
             fetch('/api/user/persona')
                 .then(res => res.json())
@@ -337,6 +375,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 .finally(() => setPersonaLoading(false));
         }
     }, [activeTab]);
+
+    // Sync Date & Time fields from user_identity when Interface tab has persona data
+    useEffect(() => {
+        if (activeTab !== 'interface' || !personaData?.user_identity) return;
+        const ui = personaData.user_identity as { timezone?: string; date_format?: string; time_format?: string };
+        setDateTimeTimezone(ui.timezone || '');
+        setDateTimeDateFormat(ui.date_format || '');
+        setDateTimeTimeFormat(ui.time_format || '');
+    }, [activeTab, personaData?.user_identity]);
 
     useEffect(() => {
         setLocalConfig(config || {});
@@ -432,6 +479,30 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const cancelEditingUserIdentity = () => {
         setIsEditingUserIdentity(false);
         setUserIdentityDraft(null);
+    };
+
+    // Date & Time (Interface tab): save timezone, date_format, time_format to user_identity
+    const saveDateTimeSettings = async () => {
+        setDateTimeSaving(true);
+        try {
+            const res = await fetch('/api/user/user-identity', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    timezone: dateTimeTimezone.trim() || undefined,
+                    date_format: dateTimeDateFormat.trim() || undefined,
+                    time_format: dateTimeTimeFormat.trim() || undefined,
+                }),
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setPersonaData(prev => prev ? { ...prev, user_identity: data.user_identity } : prev);
+            }
+        } catch (e) {
+            console.error('Failed to save date/time settings', e);
+        } finally {
+            setDateTimeSaving(false);
+        }
     };
 
     // Local network: real host/port from browser
@@ -1335,6 +1406,43 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'interface' && (
                             <div className="space-y-6">
+                                <Section title="Date & Time">
+                                    <p className="text-xs text-gray-500 mb-4">Used in the system prompt and for showing dates/times to you. Stored in your user identity.</p>
+                                    {personaLoading ? (
+                                        <p className="text-sm text-gray-500">Loading…</p>
+                                    ) : (
+                                        <>
+                                            <div className="grid grid-cols-1 gap-4">
+                                                <Select
+                                                    label="Timezone"
+                                                    value={dateTimeTimezone}
+                                                    onChange={(v: string) => setDateTimeTimezone(v)}
+                                                    options={DATE_TIME_TIMEZONES}
+                                                />
+                                                <Select
+                                                    label="Date format"
+                                                    value={dateTimeDateFormat}
+                                                    onChange={(v: string) => setDateTimeDateFormat(v)}
+                                                    options={DATE_TIME_DATE_FORMATS}
+                                                />
+                                                <Select
+                                                    label="Time format"
+                                                    value={dateTimeTimeFormat}
+                                                    onChange={(v: string) => setDateTimeTimeFormat(v)}
+                                                    options={DATE_TIME_TIME_FORMATS}
+                                                />
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={saveDateTimeSettings}
+                                                disabled={dateTimeSaving}
+                                                className="mt-3 px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 text-sm font-medium"
+                                            >
+                                                {dateTimeSaving ? 'Saving…' : 'Save'}
+                                            </button>
+                                        </>
+                                    )}
+                                </Section>
                                 <Section title="Automation">
                                     <Switch
                                         label="Auto-open Links"

@@ -98,6 +98,10 @@ Singleton pattern manager that:
 - Icons for different step types (Router, Workflow, Safety)
 - Automatic filtering of redundant messages
 
+### 6. Settings
+
+Under **Settings → Interface**, the **Date & Time** section lets you set your timezone, date format, and time format (24h/12h). These values are stored in your user identity and used in the system prompt and when the agent shows dates and times.
+
 ## Local Model Idle Behavior
 
 When the provider is `local`, the tray process only loads the model on real activity (prompt/CLI heartbeat). If there are no active WebUI WebSocket connections for 15 seconds, the model is unloaded from VRAM unless persistence is enabled.

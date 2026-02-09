@@ -44,6 +44,9 @@ class UserIdentityUpdate(BaseModel):
     dos: Optional[List[str]] = None
     donts: Optional[List[str]] = None
     main_messenger: Optional[str] = None  # "telegram" | "discord" | "slack"
+    timezone: Optional[str] = None  # IANA e.g. Europe/Berlin
+    date_format: Optional[str] = None  # e.g. dd.mm.yyyy
+    time_format: Optional[str] = None  # "24h" | "12h"
 
 class UserIdentityEntryUpdate(BaseModel):
     """Update or delete a specific entry in a list field."""
@@ -115,8 +118,16 @@ async def update_user_identity(data: UserIdentityUpdate, username: str = Depends
             if current.get(loc_key) != val:
                 changes.append(loc_key)
                 current[loc_key] = val
+    for dt_key in ("timezone", "date_format", "time_format"):
+        if dt_key in full_dict:
+            val = (full_dict[dt_key] or "").strip() or None
+            if dt_key == "time_format" and val and val.lower() not in ("24h", "12h"):
+                val = None
+            if current.get(dt_key) != val:
+                changes.append(dt_key)
+                current[dt_key] = val
     for key, value in update_dict.items():
-        if key in ("main_messenger", "city", "country"):
+        if key in ("main_messenger", "city", "country", "timezone", "date_format", "time_format"):
             continue
         if current.get(key) != value:
             changes.append(key)

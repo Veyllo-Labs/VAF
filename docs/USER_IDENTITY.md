@@ -7,6 +7,7 @@ This document describes how VAF stores and uses the **current human user's** pro
 The model needs to know who it is talking to so it can:
 - Greet the user by name (e.g. "Hey Mert").
 - Prefer the user's language.
+- Use the user's location (city/country) for context-aware answers (e.g. weather, local time).
 - Follow stated preferences and rules (e.g. "always be concise", "don't use emojis").
 
 That data is stored per user and injected into the system prompt each turn.
@@ -14,7 +15,7 @@ That data is stored per user and injected into the system prompt each turn.
 ## Storage
 
 - **File**: `~/.vaf/users/<username>/user_identity.json`
-- **Contents**: `name`, `preferred_language`, `preferences` (list of strings), `dos` (list), `donts` (list), `main_messenger` (optional: `"telegram"` | `"discord"` | `"slack"`), `change_log` (list of `{ "at": "<ISO8601>", "action": "<summary>" }`).
+- **Contents**: `name`, `preferred_language`, `city`, `country` (location), `preferences` (list of strings), `dos` (list), `donts` (list), `main_messenger` (optional: `"telegram"` | `"discord"` | `"slack"`), `change_log` (list of `{ "at": "<ISO8601>", "action": "<summary>" }`).
 - **Created**: When the workspace is first used; default `name` is the username, other fields empty.
 
 Do not confuse with `identity.json` in the same directory: that file holds the **agent's** display name, emoji, and theme (used in the Soul block). User identity is only about the human user.
@@ -23,7 +24,7 @@ Do not confuse with `identity.json` in the same directory: that file holds the *
 
 In `vaf/core/system_prompt.py`, `build_prompt()` adds a block **"## User identity (current user)"** when a username (or user_scope_id) is available. It reads `user_identity.json` via `UserWorkspace.get_user_identity()` and appends:
 
-- Name and preferred language.
+- Name, preferred language, and location (city, country) when set.
 - Preferences, Do, and Don't lists.
 - Optional `main_messenger` (preferred channel for proactive messages: telegram, discord, or slack).
 
@@ -35,9 +36,9 @@ That block is rebuilt every turn (dynamic system prompt), so the model always se
 
 - **Module**: `vaf/tools/user_identity.py`
 - **Name**: `update_user_identity`
-- **When to use**: When the user says their name, language, or rules (e.g. "call me Mert", "I prefer German", "always be concise", "don't use emojis"). Also when the user says which channel to use for proactive messages (e.g. "send it via Telegram" → `main_messenger="telegram"`).
+- **When to use**: When the user says their name, language, location, or rules (e.g. "call me Mert", "I prefer German", "I'm in Berlin" / "I'm based in Munich, Germany", "always be concise", "don't use emojis"). Also when the user says which channel to use for proactive messages (e.g. "send it via Telegram" → `main_messenger="telegram"`).
 
-Parameters (all optional): `name`, `language`, `main_messenger` (`"telegram"` | `"discord"` | `"slack"`), `add_preference` / `remove_preference`, `add_do` / `remove_do`, `add_dont` / `remove_dont`. At least one must be provided.
+Parameters (all optional): `name`, `language`, `city`, `country`, `main_messenger` (`"telegram"` | `"discord"` | `"slack"`), `add_preference` / `remove_preference`, `add_do` / `remove_do`, `add_dont` / `remove_dont`. At least one must be provided.
 
 On each successful run, the tool appends one entry to `change_log` with the current time (same source as the system prompt clock) and a short action summary (e.g. "name", "language", "preference"). The log is trimmed to the last 50 entries.
 
@@ -60,7 +61,7 @@ When the user asks the agent to send them something (e.g. a summary or a result 
 
 Under **Settings → Persona & Memory → Long-term Memory (RAG Source)** there is a **User Identity** button (amber). It opens a modal with:
 
-- **Left**: Contents of `user_identity.json` (name, language, main messenger, preferences, do's, don'ts). Read-only; updates happen via the tool or when the user tells the agent.
+- **Left**: Contents of `user_identity.json` (name, language, location: city/country, main messenger, preferences, do's, don'ts). Read-only; updates happen via the tool or when the user tells the agent.
 - **Right**: Timeline of `change_log` entries (time and action), newest first.
 
 The modal size matches the Memory Graph modal (95vw × 90vh).

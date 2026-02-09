@@ -317,6 +317,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [userIdentityDraft, setUserIdentityDraft] = useState<{
         name: string;
         preferred_language: string;
+        city: string;
+        country: string;
         main_messenger: string;
         preferences: string;
         dos: string;
@@ -363,6 +365,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setUserIdentityDraft({
             name: ui.name || '',
             preferred_language: ui.preferred_language || '',
+            city: ui.city || '',
+            country: ui.country || '',
             main_messenger: ui.main_messenger || '',
             preferences: (ui.preferences || []).join('\n'),
             dos: (ui.dos || []).join('\n'),
@@ -383,6 +387,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const updateData = {
             name: userIdentityDraft.name.trim() || undefined,
             preferred_language: userIdentityDraft.preferred_language.trim() || undefined,
+            city: userIdentityDraft.city.trim() || undefined,
+            country: userIdentityDraft.country.trim() || undefined,
             main_messenger: main_messenger as string | null,
             preferences: parseList(userIdentityDraft.preferences),
             dos: parseList(userIdentityDraft.dos),
@@ -2721,6 +2727,29 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     placeholder="e.g. de, en, tr"
                                                 />
                                             </div>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div>
+                                                    <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">City</label>
+                                                    <input
+                                                        type="text"
+                                                        value={userIdentityDraft.city}
+                                                        onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, city: e.target.value })}
+                                                        className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
+                                                        placeholder="e.g. Berlin, Munich"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Country</label>
+                                                    <input
+                                                        type="text"
+                                                        value={userIdentityDraft.country}
+                                                        onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, country: e.target.value })}
+                                                        className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
+                                                        placeholder="e.g. Germany, DE"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <p className="text-xs text-gray-400 -mt-1">Location helps the agent answer weather, time, and local questions.</p>
                                             <div>
                                                 <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Main messenger</label>
                                                 <select
@@ -2791,6 +2820,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <div className="bg-white rounded-lg p-3 border border-gray-100">
                                                 <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Language</span>
                                                 <p className="text-gray-900 mt-1">{personaData.user_identity.preferred_language || '—'}</p>
+                                            </div>
+                                            <div className="bg-white rounded-lg p-3 border border-gray-100">
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Location</span>
+                                                <p className="text-gray-900 mt-1">
+                                                    {[personaData.user_identity.city, personaData.user_identity.country].filter(Boolean).join(', ') || '—'}
+                                                </p>
                                             </div>
                                             <div className="bg-white rounded-lg p-3 border border-gray-100">
                                                 <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Main messenger</span>

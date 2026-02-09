@@ -38,6 +38,8 @@ class UserIdentityUpdate(BaseModel):
     """Update user_identity.json fields."""
     name: Optional[str] = None
     preferred_language: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
     preferences: Optional[List[str]] = None
     dos: Optional[List[str]] = None
     donts: Optional[List[str]] = None
@@ -107,8 +109,14 @@ async def update_user_identity(data: UserIdentityUpdate, username: str = Depends
         if current.get("main_messenger") != normalized:
             changes.append("main_messenger")
             current["main_messenger"] = normalized
+    for loc_key in ("city", "country"):
+        if loc_key in full_dict:
+            val = (full_dict[loc_key] or "").strip() or None
+            if current.get(loc_key) != val:
+                changes.append(loc_key)
+                current[loc_key] = val
     for key, value in update_dict.items():
-        if key == "main_messenger":
+        if key in ("main_messenger", "city", "country"):
             continue
         if current.get(key) != value:
             changes.append(key)

@@ -17,8 +17,15 @@ import requests
 
 from vaf.core.config import Config
 from vaf.core.credential_store import get_email_credentials, set_email_imap_password
-from vaf.core.email_sync_store import init_store, list_messages as store_list_messages, upsert_messages
-from vaf.core.email_transport import fetch_mail
+from vaf.core.email_sync_store import (
+    init_store,
+    list_categories as store_list_categories,
+    list_for_sender_relabel,
+    list_messages as store_list_messages,
+    update_message_category as store_update_message_category,
+    upsert_messages,
+)
+from vaf.core.email_transport import apply_sender_rules_to_category, fetch_mail, get_message_body_plain
 from vaf.core.oauth_pkce import (
     exchange_code_for_tokens,
     get_authorization_url,
@@ -448,11 +455,38 @@ async def sync_account(request: Request, account_id: str, folder: str = "INBOX",
     return {"ok": True, "count": count}
 
 
+@router.get("/messages/body")
+async def get_message_body(
+    request: Request,
+    account_id: str,
+    message_id: str,
+    folder: str = "INBOX",
+    provider_message_id: Optional[str] = None,
+    _username: str = Depends(_get_current_username),
+):
+    """
+    Fetch full message body as plain text only (no HTML). Used when opening a message in the UI.
+    provider_message_id is required for Gmail/Microsoft for efficient fetch; optional for IMAP.
+    """
+    store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
+    body = get_message_body_plain(
+        account_id=account_id,
+        message_id=message_id,
+        folder=folder,
+        username=store_username,
+        provider_message_id=provider_message_id or None,
+    )
+    if body is None:
+        raise HTTPException(status_code=404, detail="Message or body not found")
+    return {"body": body}
+
+
 @router.get("/messages")
 async def get_synced_messages(
     request: Request,
     account_id: Optional[str] = None,
     folder: str = "INBOX",
+    category: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
     _username: str = Depends(_get_current_username),
@@ -460,12 +494,79 @@ async def get_synced_messages(
     """
     List synced messages from the local store (paginated). Scoped to current user.
     account_id: optional; if omitted, returns messages from all accounts for that user.
+    category: optional primary|social|promotions (Gmail-style). Spam is never stored or returned.
     """
     limit = min(max(1, limit), 100)
     offset = max(0, offset)
     store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
-    items = store_list_messages(account_id=account_id, folder=folder, limit=limit, offset=offset, username=store_username)
-    return {"messages": items, "folder": folder}
+    items = store_list_messages(account_id=account_id, folder=folder, limit=limit, offset=offset, username=store_username, category=category)
+    return {"messages": items, "folder": folder, "category": category}
+
+
+@router.get("/categories")
+async def get_categories(_username: str = Depends(_get_current_username)):
+    """List distinct categories for the current user (primary, social, promotions + any custom)."""
+    store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
+    categories = store_list_categories(store_username)
+    return {"categories": categories}
+
+
+class PatchMessageBody(BaseModel):
+    account_id: str
+    folder: str = "INBOX"
+    message_id: str
+    category: str
+
+
+@router.patch("/messages")
+async def patch_message_category(
+    body: PatchMessageBody,
+    _username: str = Depends(_get_current_username),
+):
+    """Update a message's category (label). Use for Primary, Promotions, Social or custom labels."""
+    store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
+    ok = store_update_message_category(
+        store_username,
+        body.account_id,
+        body.folder,
+        body.message_id,
+        body.category,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return {"ok": True, "category": body.category.strip().lower().replace(" ", "_")[:64] or "primary"}
+
+
+@router.post("/messages/apply-sender-rules")
+async def apply_sender_rules(
+    _username: str = Depends(_get_current_username),
+):
+    """
+    Re-apply sender→category rules to all synced messages for the current user (backfill).
+    Use after adding or changing sender_category_rules in config so existing and new mails get the right label.
+    Returns { ok, updated } with the number of messages whose category was changed.
+    """
+    store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
+    rows = list_for_sender_relabel(store_username)
+    updated = 0
+    for row in rows:
+        new_cat = apply_sender_rules_to_category(
+            row.get("from_addr") or "",
+            row.get("category") or "primary",
+            store_username if store_username else None,
+        )
+        new_cat = (new_cat or "primary").strip().lower().replace(" ", "_")[:64] or "primary"
+        if new_cat != (row.get("category") or "primary"):
+            ok = store_update_message_category(
+                store_username,
+                row["account_id"],
+                row["folder"],
+                row["message_id"],
+                new_cat,
+            )
+            if ok:
+                updated += 1
+    return {"ok": True, "updated": updated}
 
 
 class PatchAccountBody(BaseModel):

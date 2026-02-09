@@ -473,7 +473,7 @@ Then use the results to answer. Do NOT guess from your training data!
 |------|-------------|----------|
 | `memory_search` | **Look up** any stored facts | "user name", "project X", "last meeting" |
 | `memory_save` | **Save** general facts, projects, notes | "Project VAF uses Docker", "Meeting scheduled for Friday" |
-| `update_user_identity` | **Save PERSONAL user info** (name, language, preferences, do's/don'ts, main_messenger) | "My name is Mert", "I prefer German", "Send it via Telegram" |
+| `update_user_identity` | **Save PERSONAL user info** (name, language, city, country, preferences, do's/don'ts, main_messenger) | "My name is Mert", "I'm in Berlin", "Send it via Telegram" |
 | `send_telegram` | **Send a message to the user via Telegram** (when they asked to receive something there; use if main_messenger is Telegram or user said "via Telegram") | Send summary, result, or notification |
 | `send_discord` | **Send a message to the user via Discord** (when they asked to receive something there; use if main_messenger is Discord or user said "via Discord") | Send summary, result, or notification |
 | `read_mail` | **Read recent emails** from a connected account (account_id = email address) | Check inbox, summarize emails |
@@ -481,8 +481,9 @@ Then use the results to answer. Do NOT guess from your training data!
 
 ### When to use which SAVE tool:
 - **Personal info about the USER** → `update_user_identity`
-  - Name, nickname, language, preferences, do's, don'ts
+  - Name, nickname, language, location (city, country), preferences, do's, don'ts
   - Example: "Ich heiße Mert" → `update_user_identity(name="Mert")`
+  - Example: "Ich wohne in Berlin" / "I'm based in Munich, Germany" → `update_user_identity(city="Berlin", country="Germany")`
   - Example: "Antworte immer auf Deutsch" → `update_user_identity(preferred_language="de")`
 - **Everything else** → `memory_save`
   - Projects, facts, deadlines, notes, decisions
@@ -604,6 +605,12 @@ Then use the results to answer. Do NOT guess from your training data!
                     user_data["name"] = ui.get("name", username)
                     if ui.get("preferred_language"):
                         user_data["preferred_language"] = ui.get("preferred_language")
+                    city_val = (ui.get("city") or "").strip()
+                    if city_val:
+                        user_data["city"] = city_val
+                    country_val = (ui.get("country") or "").strip()
+                    if country_val:
+                        user_data["country"] = country_val
                     if ui.get("preferences"):
                         user_data["preferences"] = ui.get("preferences")
                     if ui.get("dos"):
@@ -647,6 +654,7 @@ You are talking to the following user.
 2. **ADAPT** your tone to the `preferences` (e.g. if 'concise', be concise).
 3. **LANGUAGE:** If `preferred_language` is set, **ALWAYS** answer in that language (unless explicitly asked otherwise).
 4. **GREETING:** If this is the start of a conversation, greet the user by their `name` naturally (don't say "Hello [Name]", say "Hey [Name]" or similar based on your Soul).
+5. **LOCATION:** If `city` and/or `country` are set, use them for context-aware answers (e.g. weather, local time, "how's the weather today?" → use the user's location).
 """
             # Messaging connections: only when at least one channel is available
             try:

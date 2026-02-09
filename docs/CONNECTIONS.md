@@ -306,6 +306,25 @@ In `config.json`, `email_config` contains only:
 }
 ```
 
+You can optionally add **sender rules** so that messages from certain senders are auto-labelled (e.g. Social or Promotions). Rules apply to **new** syncs and can be **re-applied to existing** messages (backfill).
+
+- **Config key**: `sender_category_rules` inside `email_config` (single-user) or inside each user’s object in `email_config_by_user` (multi-user).
+- **Format**: Array of `{ "pattern": "substring", "category": "social" }`. The pattern is matched case-insensitively against the full **From** header (e.g. `Twitch <no-reply@twitch.tv>`). First match wins. Category is normalized (e.g. `social`, `promotions`, `primary`, or a custom label).
+- **Example** (mark Twitch and similar as Social):
+
+```json
+"email_config": {
+  "accounts": [ ... ],
+  "sender_category_rules": [
+    { "pattern": "twitch.tv", "category": "social" },
+    { "pattern": "newsletter@", "category": "promotions" }
+  ]
+}
+```
+
+- **New syncs**: When mail is fetched (Gmail, Microsoft, IMAP), each message’s category is set from the provider (Gmail labels) or from sender rules. So new mails get the right label automatically.
+- **Existing mails (backfill)**: Call **POST** `/api/email/messages/apply-sender-rules` (with auth). The backend re-applies the current rules to all synced messages for that user and updates categories where they change. Response: `{ "ok": true, "updated": 42 }`.
+
 OAuth client IDs (optional) at top level: `email_oauth_google_client_id`, `email_oauth_google_client_secret`, and similarly for Microsoft and Apple. Credentials (tokens, passwords) are never stored in config.
 
 ### Secure credential storage (OS-independent)

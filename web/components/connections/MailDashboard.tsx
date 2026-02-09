@@ -29,12 +29,26 @@ interface EmailAccount {
 interface SyncedMessage {
     account_id: string;
     folder: string;
-    message_id: string;
+    message_id?: string;
+    category?: string;
+    provider_message_id?: string;
     subject: string;
     from: string;
     date: string;
     body_snippet: string;
     synced_at: string;
+}
+
+/** Provider auto-detected categories (e.g. Gmail: Primary, Social, Promotions). Always shown in filter bar. */
+const STANDARD_CATEGORIES = ['primary', 'social', 'promotions'] as const;
+const CATEGORY_DISPLAY: Record<string, string> = {
+    all: 'All',
+    primary: 'Primary',
+    social: 'Social',
+    promotions: 'Promotions',
+};
+function categoryDisplay(cat: string): string {
+    return CATEGORY_DISPLAY[cat] ?? (cat.charAt(0).toUpperCase() + cat.slice(1).toLowerCase().replace(/_/g, ' '));
 }
 
 export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refreshTrigger = 0 }: MailDashboardProps) {
@@ -46,6 +60,17 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
     const [messagesLoading, setMessagesLoading] = useState(false);
     const [messagesOffset, setMessagesOffset] = useState(0);
     const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+    const [selectedCategory, setSelectedCategory] = useState<string>('all');
+    const [categories, setCategories] = useState<string[]>(['primary', 'social', 'promotions']);
+    const [customLabels, setCustomLabels] = useState<string[]>([]);
+    const [selectedMessage, setSelectedMessage] = useState<SyncedMessage | null>(null);
+    const [messageBody, setMessageBody] = useState<string | null>(null);
+    const [messageBodyLoading, setMessageBodyLoading] = useState(false);
+    const [messageBodyError, setMessageBodyError] = useState<string | null>(null);
+    const [newLabelInput, setNewLabelInput] = useState('');
+    const [patchLoading, setPatchLoading] = useState(false);
+    const [applyRulesLoading, setApplyRulesLoading] = useState(false);
+    const [applyRulesResult, setApplyRulesResult] = useState<number | null>(null);
     const autoSyncTimersRef = useRef<Record<string, ReturnType<typeof setInterval>>>({});
 
     const fetchAccounts = async () => {
@@ -60,11 +85,24 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
         }
     };
 
-    const fetchMessages = async (accountId: string | null, offset: number, append: boolean) => {
+    const fetchCategories = async () => {
+        try {
+            const res = await fetch(api('api/email/categories'), { credentials: 'include' });
+            if (res.ok) {
+                const data = await res.json();
+                setCategories(data.categories || ['primary', 'social', 'promotions']);
+            }
+        } catch {
+            setCategories(['primary', 'social', 'promotions']);
+        }
+    };
+
+    const fetchMessages = async (accountId: string | null, offset: number, append: boolean, category: string = 'all') => {
         setMessagesLoading(true);
         try {
             const params = new URLSearchParams({ folder: 'INBOX', limit: '50', offset: String(offset) });
             if (accountId) params.set('account_id', accountId);
+            if (category && category !== 'all') params.set('category', category);
             const res = await fetch(api(`api/email/messages?${params}`), { credentials: 'include' });
             if (res.ok) {
                 const data = await res.json();
@@ -84,22 +122,100 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
 
     useEffect(() => {
         if (isOpen && accounts.length > 0) {
-            setMessagesOffset(0);
-            fetchMessages(selectedAccountId, 0, false);
+            fetchCategories();
         }
-    }, [isOpen, selectedAccountId, accounts.length]);
+    }, [isOpen, accounts.length]);
+
+    useEffect(() => {
+        if (isOpen && accounts.length > 0) {
+            setMessagesOffset(0);
+            fetchMessages(selectedAccountId, 0, false, selectedCategory);
+        }
+    }, [isOpen, selectedAccountId, selectedCategory, accounts.length]);
+
+    useEffect(() => {
+        if (!selectedMessage) {
+            setMessageBody(null);
+            setMessageBodyLoading(false);
+            setMessageBodyError(null);
+            return;
+        }
+        const mid = selectedMessage.message_id;
+        if (!mid || !selectedMessage.account_id) {
+            setMessageBody(null);
+            setMessageBodyLoading(false);
+            setMessageBodyError(null);
+            return;
+        }
+        let cancelled = false;
+        setMessageBody(null);
+        setMessageBodyError(null);
+        setMessageBodyLoading(true);
+        const params = new URLSearchParams({
+            account_id: selectedMessage.account_id,
+            message_id: mid,
+            folder: selectedMessage.folder || 'INBOX',
+        });
+        if (selectedMessage.provider_message_id) {
+            params.set('provider_message_id', selectedMessage.provider_message_id);
+        }
+        fetch(api(`api/email/messages/body?${params}`), { credentials: 'include' })
+            .then(async (res) => {
+                if (cancelled) return;
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    setMessageBodyError(data.detail || res.statusText || 'Failed to load body');
+                    setMessageBody(null);
+                    return;
+                }
+                const data = await res.json();
+                setMessageBody(typeof data.body === 'string' ? data.body : '');
+                setMessageBodyError(null);
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setMessageBodyError('Failed to load message body');
+                    setMessageBody(null);
+                }
+            })
+            .finally(() => {
+                if (!cancelled) setMessageBodyLoading(false);
+            });
+        return () => { cancelled = true; };
+    }, [selectedMessage]);
 
     useEffect(() => {
         if (!isOpen) return;
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
                 e.preventDefault();
-                onClose();
+                if (selectedMessage) setSelectedMessage(null);
+                else onClose();
             }
         };
         window.addEventListener('keydown', handleKeyDown, true);
         return () => window.removeEventListener('keydown', handleKeyDown, true);
-    }, [isOpen, onClose]);
+    }, [isOpen, onClose, selectedMessage]);
+
+    const handleApplySenderRules = async () => {
+        setApplyRulesLoading(true);
+        setApplyRulesResult(null);
+        try {
+            const res = await fetch(api('api/email/messages/apply-sender-rules'), {
+                method: 'POST',
+                credentials: 'include',
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.ok) {
+                setApplyRulesResult(data.updated ?? 0);
+                setMessagesOffset(0);
+                fetchMessages(selectedAccountId, 0, false, selectedCategory);
+                fetchCategories();
+            }
+        } finally {
+            setApplyRulesLoading(false);
+        }
+    };
 
     const handleSyncAccount = async (accountId: string) => {
         setSyncLoading(accountId);
@@ -113,7 +229,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
             if (data.ok) {
                 await fetchAccounts();
                 setMessagesOffset(0);
-                fetchMessages(selectedAccountId, 0, false);
+                fetchMessages(selectedAccountId, 0, false, selectedCategory);
             } else {
                 setError(data.error || 'Sync failed');
             }
@@ -181,6 +297,52 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
             setError('Failed to remove account');
         }
     };
+
+    const handleSetMessageCategory = async (message: SyncedMessage, category: string) => {
+        const cat = category.trim().toLowerCase().replace(/\s+/g, '_').slice(0, 64) || 'primary';
+        setPatchLoading(true);
+        try {
+            const res = await fetch(api('api/email/messages'), {
+                method: 'PATCH',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    account_id: message.account_id,
+                    folder: message.folder || 'INBOX',
+                    message_id: message.message_id || '',
+                    category: cat,
+                }),
+            });
+            if (res.ok) {
+                const updated = { ...message, category: cat };
+                setSelectedMessage(prev => prev && prev.message_id === message.message_id ? updated : null);
+                setMessages(prev => {
+                    const next = prev.map(m =>
+                        (m.message_id === message.message_id && m.account_id === message.account_id) ? updated : m
+                    );
+                    if (selectedCategory !== 'all' && selectedCategory !== cat) {
+                        return next.filter(m => !(m.message_id === message.message_id && m.account_id === message.account_id));
+                    }
+                    return next;
+                });
+                if (!categories.includes(cat) && !STANDARD_CATEGORIES.includes(cat as any)) {
+                    setCustomLabels(prev => prev.includes(cat) ? prev : [...prev, cat]);
+                }
+                if (!categories.includes(cat)) {
+                    setCategories(prev => prev.includes(cat) ? prev : [...prev, cat].sort());
+                }
+            }
+        } finally {
+            setPatchLoading(false);
+        }
+    };
+
+    // Always show provider filter labels (Primary, Social, Promotions) then API/custom categories
+    const allCategoriesForDisplay = [
+        ...STANDARD_CATEGORIES,
+        ...categories.filter(c => !STANDARD_CATEGORIES.includes(c as any)),
+        ...customLabels.filter(c => !categories.includes(c) && !STANDARD_CATEGORIES.includes(c as any)),
+    ];
 
     const formatLastVerified = (iso?: string) => {
         if (!iso) return null;
@@ -330,6 +492,20 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                         <UserPlus className="w-4 h-4" />
                                         Add another account
                                     </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleApplySenderRules}
+                                        disabled={applyRulesLoading}
+                                        className="mt-2 w-full py-2 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 inline-flex items-center justify-center gap-2"
+                                    >
+                                        {applyRulesLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                                        Apply sender rules
+                                    </button>
+                                    {applyRulesResult !== null && (
+                                        <p className="mt-1 text-xs text-gray-500 text-center">
+                                            {applyRulesResult === 0 ? 'No labels changed' : `${applyRulesResult} message(s) updated`}
+                                        </p>
+                                    )}
                                 </>
                             )}
                         </div>
@@ -370,6 +546,51 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                         Sync now
                                     </button>
                                 </div>
+                                <div className="shrink-0 flex flex-wrap items-center gap-1.5 px-4 py-2 border-b border-gray-100 bg-white">
+                                    <button
+                                        type="button"
+                                        onClick={() => { setSelectedCategory('all'); setMessagesOffset(0); }}
+                                        className={cn(
+                                            'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                                            selectedCategory === 'all' ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'
+                                        )}
+                                    >
+                                        All
+                                    </button>
+                                    {allCategoriesForDisplay.map((cat) => (
+                                        <button
+                                            key={cat}
+                                            type="button"
+                                            onClick={() => { setSelectedCategory(cat); setMessagesOffset(0); }}
+                                            className={cn(
+                                                'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                                                selectedCategory === cat ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'
+                                            )}
+                                        >
+                                            {categoryDisplay(cat)}
+                                        </button>
+                                    ))}
+                                    <div className="flex items-center gap-1">
+                                        <input
+                                            type="text"
+                                            placeholder="+ New label"
+                                            value={newLabelInput}
+                                            onChange={(e) => setNewLabelInput(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && newLabelInput.trim()) {
+                                                    const cat = newLabelInput.trim().toLowerCase().replace(/\s+/g, '_').slice(0, 64);
+                                                    if (cat && !allCategoriesForDisplay.includes(cat)) {
+                                                        setCustomLabels(prev => [...prev, cat]);
+                                                        setSelectedCategory(cat);
+                                                        setMessagesOffset(0);
+                                                        setNewLabelInput('');
+                                                    }
+                                                }
+                                            }}
+                                            className="w-24 px-2 py-1 rounded-lg text-sm border border-gray-200 focus:outline-none focus:ring-1 focus:ring-gray-400"
+                                        />
+                                    </div>
+                                </div>
                                 <div className="flex-1 overflow-y-auto">
                                     {messagesLoading && messages.length === 0 ? (
                                         <div className="flex items-center justify-center py-12">
@@ -378,13 +599,23 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                     ) : messages.length === 0 ? (
                                         <div className="flex flex-col items-center justify-center py-12 text-center max-w-sm mx-auto px-4">
                                             <Inbox className="w-12 h-12 text-gray-300 mb-3" />
-                                            <p className="text-gray-600 font-medium">No synced emails yet</p>
-                                            <p className="text-sm text-gray-500 mt-1">Use Sync on an account in the sidebar to fetch your inbox.</p>
+                                            <p className="text-gray-600 font-medium">
+                                                {selectedCategory !== 'all' ? 'No emails in this category' : 'No synced emails yet'}
+                                            </p>
+                                            <p className="text-sm text-gray-500 mt-1">
+                                                {selectedCategory !== 'all'
+                                                    ? 'Click Sync now to refresh – Gmail will assign Promotions and Social. You can also open a message and set a label.'
+                                                    : 'Use Sync on an account in the sidebar to fetch your inbox.'}
+                                            </p>
                                         </div>
                                     ) : (
                                         <ul className="divide-y divide-gray-100">
                                             {messages.map((m) => (
-                                                <li key={m.message_id || `${m.account_id}-${m.date}-${m.subject}`} className="px-4 py-3 hover:bg-gray-50/80 transition-colors">
+                                                <li
+                                                    key={m.message_id || `${m.account_id}-${m.date}-${m.subject}`}
+                                                    onClick={() => setSelectedMessage(m)}
+                                                    className="px-4 py-3 hover:bg-gray-50/80 transition-colors cursor-pointer"
+                                                >
                                                     <div className="flex flex-col gap-0.5 min-w-0">
                                                         <div className="flex items-baseline justify-between gap-2">
                                                             <span className="font-medium text-gray-900 truncate text-sm">{m.subject || '(No subject)'}</span>
@@ -407,7 +638,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                                 onClick={() => {
                                                     const next = messagesOffset + 50;
                                                     setMessagesOffset(next);
-                                                    fetchMessages(selectedAccountId, next, true);
+                                                    fetchMessages(selectedAccountId, next, true, selectedCategory);
                                                 }}
                                                 className="text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50"
                                             >
@@ -420,6 +651,95 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                         )}
                     </main>
                 </div>
+
+                {/* Mail detail popup – mail-client style: large, sender top, labels, body, AI reply */}
+                {selectedMessage && (
+                    <div
+                        className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50"
+                        onClick={() => setSelectedMessage(null)}
+                    >
+                        <div
+                            className="bg-white w-full max-w-4xl h-[90vh] min-h-[500px] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
+                            onClick={e => e.stopPropagation()}
+                        >
+                            {/* Header: subject + close */}
+                            <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-gray-200 shrink-0">
+                                <h3 className="text-lg font-semibold text-gray-900 leading-snug pr-8">
+                                    {selectedMessage.subject || '(No subject)'}
+                                </h3>
+                                <button type="button" onClick={() => setSelectedMessage(null)} className="p-2 hover:bg-gray-100 rounded-lg shrink-0">
+                                    <X className="w-5 h-5 text-gray-500" />
+                                </button>
+                            </div>
+                            {/* Absender + Datum */}
+                            <div className="px-5 py-2 border-b border-gray-100 shrink-0">
+                                <p className="text-sm text-gray-700">
+                                    <span className="font-medium text-gray-500">From:</span>{' '}
+                                    <span className="text-gray-900">{selectedMessage.from}</span>
+                                </p>
+                                <p className="text-xs text-gray-500 mt-0.5">{selectedMessage.date}</p>
+                            </div>
+                            {/* Labels */}
+                            <div className="px-5 py-3 border-b border-gray-100 shrink-0 flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-medium text-gray-500 mr-1">Label:</span>
+                                {allCategoriesForDisplay.map((cat) => (
+                                    <button
+                                        key={cat}
+                                        type="button"
+                                        disabled={patchLoading}
+                                        onClick={() => handleSetMessageCategory(selectedMessage, cat)}
+                                        className={cn(
+                                            'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                                            (selectedMessage.category || 'primary') === cat
+                                                ? 'bg-gray-900 text-white'
+                                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                        )}
+                                    >
+                                        {categoryDisplay(cat)}
+                                    </button>
+                                ))}
+                                <input
+                                    type="text"
+                                    placeholder="New label"
+                                    className="w-28 px-2 py-1.5 rounded-lg text-sm border border-gray-200 focus:outline-none focus:ring-1 focus:ring-gray-400"
+                                    onKeyDown={(e) => {
+                                        const t = e.currentTarget;
+                                        if (e.key === 'Enter' && t.value.trim()) {
+                                            handleSetMessageCategory(selectedMessage, t.value.trim());
+                                            t.value = '';
+                                        }
+                                    }}
+                                />
+                            </div>
+                            {/* Mail body – main scrollable area */}
+                            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+                                {messageBodyLoading && (
+                                    <div className="flex items-center justify-center py-12">
+                                        <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+                                    </div>
+                                )}
+                                {!messageBodyLoading && messageBodyError && (
+                                    <p className="text-sm text-red-600">{messageBodyError}</p>
+                                )}
+                                {!messageBodyLoading && !messageBodyError && messageBody !== null && (
+                                    <pre className="text-sm text-gray-800 whitespace-pre-wrap font-sans leading-relaxed">
+                                        {messageBody || '(No content)'}
+                                    </pre>
+                                )}
+                            </div>
+                            {/* Footer: AI Antwort verfassen & senden */}
+                            <div className="shrink-0 px-5 py-4 border-t border-gray-200 bg-gray-50/80">
+                                <button
+                                    type="button"
+                                    className="w-full py-3 px-4 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors flex items-center justify-center gap-2"
+                                >
+                                    <Mail className="w-4 h-4" />
+                                    Reply with Agent
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );

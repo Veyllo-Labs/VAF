@@ -8,9 +8,13 @@ Mail transport layer: connect to mail servers using credentials from credential_
 """
 
 import base64
+import html
 import imaplib
 import logging
+import quopri
+import re
 import smtplib
+from email import message_from_bytes, message_from_string
 from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional
 
@@ -21,6 +25,193 @@ from vaf.core.credential_store import get_email_credentials
 from vaf.core.oauth_pkce import get_valid_access_token
 
 logger = logging.getLogger("vaf.core.email_transport")
+
+
+def _decode_quoted_printable(raw: bytes) -> str:
+    """Decode quoted-printable bytes to UTF-8 string. If not QP, decode as UTF-8. Uses lenient manual fallback if quopri fails."""
+    if not raw:
+        return ""
+    # Only try QP if it looks like quoted-printable (=XX hex sequences or soft line breaks)
+    if not re.search(rb"=[0-9A-Fa-f]{2}|=\r?\n", raw):
+        return raw.decode("utf-8", errors="replace")
+    try:
+        decoded = quopri.decodestring(raw, header=False)
+        return decoded.decode("utf-8", errors="replace")
+    except Exception:
+        pass
+    # Lenient manual QP decode: =XX -> byte, =\n or =\r\n -> remove
+    out: List[int] = []
+    i = 0
+    while i < len(raw):
+        if raw[i : i + 1] == b"=":
+            if i + 1 < len(raw) and raw[i + 1 : i + 2] in (b"\r", b"\n"):
+                i += 1
+                while i < len(raw) and raw[i : i + 1] in (b"\r", b"\n"):
+                    i += 1
+                continue
+            if i + 2 <= len(raw):
+                try:
+                    hex_pair = raw[i + 1 : i + 3].decode("ascii")
+                    if len(hex_pair) == 2 and all(c in "0123456789ABCDEFabcdef" for c in hex_pair):
+                        out.append(int(hex_pair, 16))
+                        i += 3
+                        continue
+                except Exception:
+                    pass
+            out.append(ord("="))
+            i += 1
+            continue
+        out.append(raw[i])
+        i += 1
+    try:
+        return bytes(out).decode("utf-8", errors="replace")
+    except Exception:
+        return raw.decode("utf-8", errors="replace")
+
+
+def _html_to_plain(html_str: str) -> str:
+    """Strip HTML to plain text only. No script/style, no tags, no trackers. Decode entities."""
+    if not html_str or not isinstance(html_str, str):
+        return ""
+    # If content still has quoted-printable sequences (e.g. =3D), decode first
+    if re.search(r"=[0-9A-Fa-f]{2}", html_str):
+        try:
+            html_str = _decode_quoted_printable(html_str.encode("latin-1", errors="replace"))
+        except Exception:
+            pass
+    s = re.sub(r"<script[^>]*>.*?</script>", "", html_str, flags=re.DOTALL | re.IGNORECASE)
+    s = re.sub(r"<style[^>]*>.*?</style>", "", s, flags=re.DOTALL | re.IGNORECASE)
+    s = re.sub(r"<noscript[^>]*>.*?</noscript>", "", s, flags=re.DOTALL | re.IGNORECASE)
+    s = re.sub(r"<img[^>]*>", " ", s, flags=re.IGNORECASE)  # trackers/pixels
+    s = re.sub(r"<[^>]+>", " ", s)
+    s = re.sub(r"\s+", " ", s)
+    return html.unescape(s).strip()
+
+
+def _extract_plain_from_raw_mime(body: str) -> Optional[str]:
+    """
+    If body is raw MIME (boundaries + Content-Type/Content-Transfer-Encoding headers), parse it
+    and return the best part as plain text (text/plain preferred, else text/html stripped).
+    Returns None if body doesn't look like raw MIME.
+    """
+    if not body or not isinstance(body, str) or len(body) < 50:
+        return None
+    body_lower = body.lower()
+    if "content-transfer-encoding:" not in body_lower or "content-type:" not in body_lower:
+        return None
+    # Find MIME boundary: first line that looks like --something or -something (not closing --boundary--)
+    boundary_line = None
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("--") and len(stripped) > 2:
+            boundary_line = stripped[2:].rstrip("-").strip()
+            break
+        if stripped.startswith("-") and len(stripped) > 1 and "content-type" not in stripped.lower():
+            boundary_line = stripped.lstrip("-").rstrip("-").strip()
+            break
+    if not boundary_line:
+        return None
+    try:
+        # Normalize: delimiter lines must be --boundary (some senders use single -)
+        body = body.strip()
+        if body.startswith("-") and not body.startswith("--"):
+            body = "-" + body
+        # Replace "-boundary" line starts with single - by "--boundary"
+        body = body.replace("\n-" + boundary_line, "\n--" + boundary_line)
+        body = body.replace("\r\n-" + boundary_line, "\r\n--" + boundary_line)
+        # Build minimal MIME message so the parser can split parts
+        safe_boundary = boundary_line.replace("\\", "\\\\").replace('"', '\\"')
+        header = (
+            "MIME-Version: 1.0\r\n"
+            "Content-Type: multipart/alternative; boundary=\"%s\"\r\n"
+            "\r\n"
+        ) % safe_boundary
+        if not body.lstrip().startswith("--"):
+            body = "--" + boundary_line + "\r\n" + body
+        msg = message_from_string(header + body)
+    except Exception:
+        return None
+    if not msg.is_multipart():
+        return None
+    plain: Optional[str] = None
+    html_part: Optional[str] = None
+    for part in msg.walk():
+        ctype = (part.get_content_type() or "").lower()
+        if part.get_content_maintype() == "multipart":
+            continue
+        try:
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                continue
+            text = payload.decode("utf-8", errors="replace")
+            if "text/plain" in ctype:
+                plain = (plain or "") + text
+            elif "text/html" in ctype:
+                html_part = (html_part or "") + text
+        except Exception:
+            continue
+    if plain and plain.strip():
+        return re.sub(r"\s+", " ", plain).strip()
+    if html_part and html_part.strip():
+        return _html_to_plain(html_part)
+    return None
+
+
+def _ensure_plain_text(body: Optional[str]) -> Optional[str]:
+    """
+    Guarantee body is plain text: decode QP if present, strip HTML, return readable text only.
+    If body is raw MIME (multipart with boundaries), parse and extract text/plain or text/html.
+    Call this on any body before returning to the UI so fancy HTML mails never show as code.
+    """
+    if not body or not isinstance(body, str):
+        return body
+    s = body
+    # 0) If body looks like raw MIME (boundaries + part headers), parse and use extracted part
+    extracted = _extract_plain_from_raw_mime(s)
+    if extracted:
+        extracted = extracted.replace("\uFFFD", " ")
+        return re.sub(r"\s+", " ", extracted).strip() or s.strip()
+    # 1) Decode quoted-printable if still in string (e.g. =3D, =C2=A0)
+    if re.search(r"=[0-9A-Fa-f]{2}", s):
+        try:
+            s = _decode_quoted_printable(s.encode("latin-1", errors="replace"))
+        except Exception:
+            pass
+    # 2) If it looks like HTML, extract text only
+    if "<" in s and ">" in s:
+        s = _html_to_plain(s)
+    # 3) Remove Unicode replacement character (U+FFFD, displays as) from decoding errors
+    s = s.replace("\uFFFD", " ")
+    # 4) Collapse whitespace and trim
+    s = re.sub(r"\s+", " ", s).strip()
+    return s if s else body.strip()
+
+
+def _get_sender_rules(username: Optional[str] = None) -> List[Dict[str, str]]:
+    """Return sender→category rules from config. Each rule: {"pattern": "twitch.tv", "category": "social"}. First match wins."""
+    ec = _get_email_config(username)
+    rules = ec.get("sender_category_rules")
+    if not isinstance(rules, list):
+        return []
+    out: List[Dict[str, str]] = []
+    for r in rules:
+        if isinstance(r, dict) and r.get("pattern") and r.get("category"):
+            out.append({"pattern": str(r["pattern"]).strip(), "category": str(r["category"]).strip().lower().replace(" ", "_")[:64] or "primary"})
+    return out
+
+
+def apply_sender_rules_to_category(from_str: str, current_category: str, username: Optional[str] = None) -> str:
+    """
+    Apply sender rules: if any rule's pattern is contained in from_str (case-insensitive), return that category.
+    Used on sync (new mails) and on backfill (existing mails). Returns current_category if no rule matches.
+    """
+    rules = _get_sender_rules(username)
+    from_lower = (from_str or "").lower()
+    for r in rules:
+        pattern = (r.get("pattern") or "").lower()
+        if pattern and pattern in from_lower:
+            return r.get("category") or current_category
+    return current_category
 
 
 def _get_email_config(username: Optional[str] = None) -> Dict[str, Any]:
@@ -198,20 +389,91 @@ def _fetch_mail_gmail(
             if r2.status_code != 200:
                 continue
             msg = r2.json()
+            label_ids = msg.get("labelIds") if isinstance(msg.get("labelIds"), list) else (msg.get("labels") or [])
+            if not isinstance(label_ids, list):
+                label_ids = []
+            if label_ids and isinstance(label_ids[0], dict):
+                label_ids = [lb.get("id") for lb in label_ids if lb.get("id")]
+            if "SPAM" in label_ids:
+                continue
+            # Gmail auto-categories: Social and Promotions (advertisements) from provider
+            if "CATEGORY_PROMOTIONS" in label_ids:
+                category = "promotions"
+            elif "CATEGORY_SOCIAL" in label_ids:
+                category = "social"
+            else:
+                category = "primary"
             payload = msg.get("payload") or {}
             headers_list = payload.get("headers") or []
             headers = {h["name"].lower(): h["value"] for h in headers_list if h.get("name")}
+            from_str = headers.get("from", "")
+            category = apply_sender_rules_to_category(from_str, category, username)
             result.append({
                 "subject": headers.get("subject", ""),
-                "from": headers.get("from", ""),
+                "from": from_str,
                 "date": headers.get("date", ""),
                 "message_id": headers.get("message-id", ""),
                 "body_snippet": (msg.get("snippet") or "")[:500],
+                "category": category,
+                "provider_message_id": mid,
             })
         return result
     except Exception as e:
         logger.warning("Gmail fetch failed: %s", e)
         return []
+
+
+def _get_body_gmail(account_id: str, provider_message_id: str, username: Optional[str] = None) -> Optional[str]:
+    """Fetch full message body from Gmail API as plain text. Prefer text/plain; if only HTML, strip to plain."""
+    token = get_valid_access_token(account_id, "gmail", username)
+    if not token:
+        return None
+    try:
+        r = requests.get(
+            f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{provider_message_id}",
+            params={"format": "full"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            return None
+        msg = r.json()
+        payload = msg.get("payload") or {}
+        plain: Optional[str] = None
+        html_body: Optional[str] = None
+
+        def collect_parts(part: Dict[str, Any]) -> None:
+            nonlocal plain, html_body
+            mime = (part.get("mimeType") or "").lower()
+            body = part.get("body") or {}
+            data = body.get("data")
+            if data:
+                try:
+                    # Gmail base64 may contain newlines; strip for decode
+                    b64 = (data if isinstance(data, str) else data.decode("utf-8", errors="replace")).replace("\n", "").replace("\r", "").strip()
+                    padding = 4 - (len(b64) % 4)
+                    if padding != 4:
+                        b64 += "=" * padding
+                    raw = base64.urlsafe_b64decode(b64)
+                    text = _decode_quoted_printable(raw)
+                    if "text/plain" in mime:
+                        plain = (plain or "") + text
+                    elif "text/html" in mime:
+                        html_body = (html_body or "") + text
+                except Exception:
+                    pass
+            for p in part.get("parts") or []:
+                collect_parts(p)
+
+        collect_parts(payload)
+        if plain:
+            return plain.strip()
+        if html_body:
+            return _html_to_plain(html_body)
+        return msg.get("snippet") or ""
+    except Exception as e:
+        logger.warning("Gmail get body failed: %s", e)
+        return None
 
 
 def _send_mail_gmail(
@@ -301,17 +563,52 @@ def _fetch_mail_microsoft(
             from_email = (from_obj.get("emailAddress") or {}).get("address") or ""
             from_name = (from_obj.get("emailAddress") or {}).get("name") or ""
             from_str = from_name + (" <" + from_email + ">") if from_email else from_name or from_email
+            category = apply_sender_rules_to_category(from_str, "primary", username)
             result.append({
                 "subject": m.get("subject") or "",
                 "from": from_str,
                 "date": m.get("receivedDateTime") or "",
                 "message_id": m.get("internetMessageId") or "",
                 "body_snippet": (m.get("bodyPreview") or "")[:500],
+                "category": category,
+                "provider_message_id": m.get("id") or "",
             })
         return result
     except Exception as e:
         logger.warning("Graph fetch failed: %s", e)
         return []
+
+
+def _get_body_microsoft(account_id: str, provider_message_id: str, username: Optional[str] = None) -> Optional[str]:
+    """Fetch full message body from Microsoft Graph as plain text. Strip HTML if needed."""
+    token = get_valid_access_token(account_id, "microsoft", username)
+    if not token:
+        return None
+    try:
+        r = requests.get(
+            f"https://graph.microsoft.com/v1.0/me/messages/{provider_message_id}",
+            params={"$select": "body"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        body_obj = data.get("body") or {}
+        content = body_obj.get("content") or ""
+        ct = (body_obj.get("contentType") or "").lower()
+        # Graph may return content in quoted-printable; decode before stripping HTML
+        if isinstance(content, str) and re.search(r"=[0-9A-Fa-f]{2}", content):
+            try:
+                content = _decode_quoted_printable(content.encode("latin-1"))
+            except Exception:
+                pass
+        if "html" in ct:
+            return _html_to_plain(content)
+        return content.strip()
+    except Exception as e:
+        logger.warning("Graph get body failed: %s", e)
+        return None
 
 
 def _send_mail_microsoft(
@@ -351,6 +648,122 @@ def _send_mail_microsoft(
     except Exception as e:
         logger.warning("Graph send failed: %s", e)
         return False
+
+
+def _get_body_imap(account_id: str, message_id: str, folder: str, username: Optional[str] = None) -> Optional[str]:
+    """Fetch full message body via IMAP. Search by Message-ID then fetch body as plain text."""
+    conn = _imap_connect(account_id, username=username)
+    if not conn or not message_id:
+        return None
+    try:
+        conn.select(folder or "INBOX", readonly=True)
+        search_id = message_id.strip()
+        if not search_id.startswith("<"):
+            search_id = "<" + search_id + ">"
+        _, uids = conn.search(None, "HEADER", "Message-ID", search_id)
+        ids = uids[0].split()
+        if not ids:
+            return None
+        uid = ids[-1]
+        _, data = conn.fetch(uid, "(BODY.PEEK[TEXT])")
+        if not data or not data[0]:
+            _, data = conn.fetch(uid, "(RFC822)")
+            if not data or not data[0]:
+                return None
+            raw = data[0]
+            if isinstance(raw, tuple) and len(raw) > 1:
+                raw = raw[1]
+            else:
+                return None
+            msg = message_from_bytes(raw)
+            plain = None
+            html_part = None
+            for part in msg.walk():
+                ctype = (part.get_content_type() or "").lower()
+                try:
+                    payload = part.get_payload(decode=True)
+                    if payload is None:
+                        continue
+                    text = payload.decode("utf-8", errors="replace")
+                    if "text/plain" in ctype:
+                        plain = (plain or "") + text
+                    elif "text/html" in ctype:
+                        html_part = (html_part or "") + text
+                except Exception:
+                    continue
+            if plain:
+                return plain.strip()
+            if html_part:
+                return _html_to_plain(html_part)
+            return None
+        part = data[0]
+        if isinstance(part, tuple) and len(part) > 1:
+            raw = part[1]
+        else:
+            return None
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", errors="replace").strip()
+        return str(raw).strip()
+    except Exception as e:
+        logger.warning("IMAP get body failed: %s", e)
+        return None
+    finally:
+        try:
+            conn.close()
+            conn.logout()
+        except Exception:
+            pass
+
+
+def get_message_body_plain(
+    account_id: str,
+    message_id: str,
+    folder: str = "INBOX",
+    username: Optional[str] = None,
+    provider_message_id: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Fetch full message body as plain text only (no HTML). Uses provider_message_id for Gmail/Graph when available.
+    All return paths go through _ensure_plain_text so fancy HTML/QP never reaches the UI.
+    """
+    acc = get_account(account_id, username)
+    if not acc:
+        return None
+    provider = (acc.get("provider") or "imap").lower()
+    result: Optional[str] = None
+    if provider == "gmail" and provider_message_id:
+        result = _get_body_gmail(account_id, provider_message_id, username)
+    elif provider == "microsoft" and provider_message_id:
+        result = _get_body_microsoft(account_id, provider_message_id, username)
+    elif provider == "imap":
+        result = _get_body_imap(account_id, message_id, folder, username)
+    elif provider == "microsoft" and message_id:
+        token = get_valid_access_token(account_id, "microsoft", username)
+        if token:
+            try:
+                r = requests.get(
+                    "https://graph.microsoft.com/v1.0/me/messages",
+                    params={"$filter": f"internetMessageId eq '{message_id.replace(chr(39), chr(39)+chr(39))}'", "$select": "id,body"},
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=15,
+                )
+                if r.status_code == 200:
+                    value = (r.json() or {}).get("value") or []
+                    if value:
+                        body_obj = (value[0] or {}).get("body") or {}
+                        content = body_obj.get("content") or ""
+                        if isinstance(content, str) and re.search(r"=[0-9A-Fa-f]{2}", content):
+                            try:
+                                content = _decode_quoted_printable(content.encode("latin-1"))
+                            except Exception:
+                                pass
+                        if "html" in (body_obj.get("contentType") or "").lower():
+                            result = _html_to_plain(content)
+                        else:
+                            result = content.strip()
+            except Exception as e:
+                logger.warning("Graph get body by Message-ID failed: %s", e)
+    return _ensure_plain_text(result) if result is not None else None
 
 
 def fetch_mail(
@@ -397,12 +810,15 @@ def fetch_mail(
                 else:
                     continue
                 msg = message_from_bytes(payload)
+                from_str = msg.get("From", "")
+                category = apply_sender_rules_to_category(from_str, "primary", username)
                 result.append({
                     "subject": msg.get("Subject", ""),
-                    "from": msg.get("From", ""),
+                    "from": from_str,
                     "date": msg.get("Date", ""),
                     "message_id": msg.get("Message-ID", ""),
                     "body_snippet": "",
+                    "category": category,
                 })
             except Exception:
                 continue

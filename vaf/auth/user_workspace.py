@@ -3,7 +3,7 @@ User Workspace Manager for VAF.
 
 Handles the creation and management of user-specific files:
 - identity.json: Agent persona (name, emoji, theme) – used in Soul block
-- user_identity.json: Current human user's profile (name, language, preferences, do's/don'ts) – used in "User identity (current user)" block and by update_user_identity tool
+- user_identity.json: Current human user's profile (name, language, location city/country, preferences, do's/don'ts) – used in "User identity (current user)" block and by update_user_identity tool
 - soul.md: Personality and behavioral rules (System Prompt)
 - logs/: Daily interaction logs
 """
@@ -68,6 +68,8 @@ class UserWorkspace:
                 "dos": [],
                 "donts": [],
                 "main_messenger": None,
+                "city": None,
+                "country": None,
                 "change_log": [],
             }
             self.save_user_identity(default_user)
@@ -114,7 +116,7 @@ You’re not a chatbot. You’re becoming someone.
         self.identity_file.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
     def get_user_identity(self) -> Dict[str, Any]:
-        """Human user profile (name, language, preferences, do's/don'ts, change_log) – used in "User identity (current user)" block."""
+        """Human user profile (name, language, city, country, preferences, do's/don'ts, change_log) – used in "User identity (current user)" block."""
         if not self.user_identity_file.exists():
             self.ensure_exists()
         VALID_MAIN_MESSENGERS = ("telegram", "discord", "slack")
@@ -125,6 +127,8 @@ You’re not a chatbot. You’re becoming someone.
             "dos": [],
             "donts": [],
             "main_messenger": None,
+            "city": None,
+            "country": None,
             "change_log": [],
         }
         try:
@@ -147,6 +151,10 @@ You’re not a chatbot. You’re becoming someone.
                 data["change_log"] = [e for e in data["change_log"] if isinstance(e, dict) and "at" in e]
             if "name" not in data:
                 data["name"] = defaults["name"]
+            if "city" not in data:
+                data["city"] = defaults["city"]
+            if "country" not in data:
+                data["country"] = defaults["country"]
 
             # One-time migration: local admin used to use username "Local Admin"; data may still be there
             local_admin_username = Config.get("local_admin_username", "admin")

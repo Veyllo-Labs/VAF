@@ -1,8 +1,8 @@
 """
 Standalone tool for updating the current user's identity (user_identity.json).
 
-Used so the LLM can set name, language, preferences, do's and don'ts
-when the user says e.g. "call me Mert" or "I prefer German".
+Used so the LLM can set name, language, location (city/country), preferences, do's and don'ts
+when the user says e.g. "call me Mert", "I prefer German", or "I'm based in Berlin, Germany".
 """
 
 from vaf.tools.base import BaseTool
@@ -19,14 +19,23 @@ class UpdateUserIdentityTool(BaseTool):
     name = "update_user_identity"
     description = (
         "Update the current user's identity so you know who you're talking to and how they like to be treated. "
-        "Use when the user says their name, language, preferences, or do's/don'ts (e.g. 'call me X', 'I prefer German', "
-        "'always be concise', 'don't use emojis'). Use also when the user says which channel to use for proactive messages "
-        "(e.g. 'send it to Telegram' -> main_messenger='telegram'). You can set name, language, main_messenger, and add/remove preferences, do's, and don'ts. "
+        "Use when the user says their name, language, location (city/country), preferences, or do's/don'ts (e.g. 'call me X', 'I prefer German', "
+        "'I'm in Berlin' or 'I'm based in Munich, Germany', 'always be concise', 'don't use emojis'). Use also when the user says which channel to use for proactive messages "
+        "(e.g. 'send it to Telegram' -> main_messenger='telegram'). You can set name, language, city, country, main_messenger, and add/remove preferences, do's, and don'ts. "
+        "Location (city/country) helps you answer context-aware questions (e.g. weather, local time). "
         "This updates the User identity block in your system prompt so you can greet them correctly (e.g. 'Hey Mert') and follow their rules."
     )
     parameters = {
         "type": "object",
         "properties": {
+            "city": {
+                "type": "string",
+                "description": "User's city (e.g. 'Berlin', 'Munich'). Use when user says where they live or are based."
+            },
+            "country": {
+                "type": "string",
+                "description": "User's country (e.g. 'Germany', 'DE'). Use when user says where they live or are based."
+            },
             "main_messenger": {
                 "type": "string",
                 "enum": ["telegram", "discord", "slack"],
@@ -75,6 +84,8 @@ class UpdateUserIdentityTool(BaseTool):
         username = kwargs.get("username") or "admin"
         name = (kwargs.get("name") or "").strip() or None
         language = (kwargs.get("language") or "").strip() or None
+        city = (kwargs.get("city") or "").strip() or None
+        country = (kwargs.get("country") or "").strip() or None
         add_preference = kwargs.get("add_preference")
         remove_preference = (kwargs.get("remove_preference") or "").strip() or None
         add_do = kwargs.get("add_do")
@@ -95,8 +106,8 @@ class UpdateUserIdentityTool(BaseTool):
         add_do = _norm_list(add_do)
         add_dont = _norm_list(add_dont)
 
-        if not any([name, language, main_messenger is not None, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont]):
-            return "No updates provided. Pass at least one of: name, language, main_messenger, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont."
+        if not any([name, language, city is not None, country is not None, main_messenger is not None, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont]):
+            return "No updates provided. Pass at least one of: name, language, city, country, main_messenger, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont."
 
         try:
             from datetime import datetime
@@ -109,6 +120,10 @@ class UpdateUserIdentityTool(BaseTool):
                 user_identity["preferred_language"] = language
             if main_messenger is not None:
                 user_identity["main_messenger"] = main_messenger
+            if city is not None:
+                user_identity["city"] = city
+            if country is not None:
+                user_identity["country"] = country
             for p in add_preference:
                 if p and p not in user_identity["preferences"]:
                     user_identity["preferences"].append(p)
@@ -133,6 +148,10 @@ class UpdateUserIdentityTool(BaseTool):
                 parts.append("language")
             if main_messenger is not None:
                 parts.append("main_messenger")
+            if city is not None:
+                parts.append("city")
+            if country is not None:
+                parts.append("country")
             if add_preference or remove_preference:
                 parts.append("preference")
             if add_do or remove_do:

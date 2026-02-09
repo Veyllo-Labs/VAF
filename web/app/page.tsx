@@ -290,8 +290,9 @@ const renderMarkdownLinks = (text: string): React.ReactNode[] => {
     return nodes.length > 0 ? nodes : [text];
 };
 
-/** Renders markdown in chat bubbles (headings, lists, bold, links, code). Links use normalizeDownloadHref for sandbox/local paths. */
+/** Renders markdown in chat bubbles (headings, lists, bold, links, code). Links use normalizeDownloadHref for sandbox/local paths. User messages (dark): single line breaks are preserved as sent. */
 const ChatMarkdown = ({ children, dark = false }: { children: string; dark?: boolean }) => {
+    const text = dark ? children.replace(/\n/g, "  \n") : children;
     const linkClass = dark
         ? 'text-indigo-200 underline break-all hover:text-white'
         : 'text-gray-700 underline break-all hover:text-gray-900';
@@ -326,7 +327,7 @@ const ChatMarkdown = ({ children, dark = false }: { children: string; dark?: boo
                 },
             }}
         >
-            {children}
+            {text}
         </ReactMarkdown>
     );
 };
@@ -2253,6 +2254,7 @@ export default function VAFDashboard() {
     }, [subAgentState.isOpen, showSubAgentPanel]);
 
     const chatWidthClass = subAgentState.isOpen ? 'max-w-3xl' : 'max-w-4xl';
+    const messagesAreaWidthClass = subAgentState.isOpen ? 'max-w-5xl' : 'max-w-6xl';
 
     if (authChecking) {
         return (
@@ -2414,7 +2416,7 @@ export default function VAFDashboard() {
                 >
                     <div className="flex-1 flex flex-col relative bg-white overflow-hidden">
                         <div className="flex-1 overflow-y-auto p-6" ref={containerRef}>
-                        <div className={cn(chatWidthClass, "mx-auto space-y-2 pb-32")}>
+                        <div className={cn(messagesAreaWidthClass, "mx-auto space-y-2 pb-32")}>
                             {/* Sub-Agent banner removed; reopen via tool cards or system log */}
                             {messages.length === 0 && (
                                 <div className="h-full flex flex-col items-center justify-center pt-40 pb-20 text-center">
@@ -2504,9 +2506,9 @@ export default function VAFDashboard() {
                                 const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
 
                                 return (
-                                    <div key={`bubble-${trueIndex}`} className={cn("flex gap-4 pt-4", isBot ? "justify-start" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
+                                    <div key={`bubble-${trueIndex}`} className={cn("flex gap-4 pt-4", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
                                         {isBot && <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>}
-                                        <div className={cn("max-w-[85%] flex flex-col", isBot ? "w-full items-start" : "items-end shrink-0")}>
+                                        <div className={cn("flex flex-col", isBot ? "max-w-[85%] w-full items-start" : "max-w-[72%] items-end shrink-0")}>
 
                                             {isBot && thought && <ThinkingDetails thought={thought} isComplete={thinkingDone} />}
 
@@ -2524,7 +2526,7 @@ export default function VAFDashboard() {
                                                                 />
                                                                 {wf.rest ? (
                                                                     <div className="relative group flex items-end">
-                                                                        <div className="px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed bg-white text-gray-800 rounded-tl-none border border-gray-200">
+                                                                        <div className="px-5 py-3 rounded-2xl shadow-sm text-[15px] leading-relaxed bg-white text-gray-800 rounded-tl-none border border-transparent">
                                                                             <div className="chat-markdown"><ChatMarkdown>{wf.rest}</ChatMarkdown></div>
                                                                         </div>
                                                                         <button
@@ -2547,8 +2549,8 @@ export default function VAFDashboard() {
                                                         );
                                                     })() : (
                                                         <div className="relative group flex items-end">
-                                                            <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed",
-                                                                isBot ? "bg-white text-gray-800 rounded-tl-none border border-gray-200" : "bg-gray-800 text-white rounded-tr-none")}>
+                                                            <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-[15px] leading-relaxed",
+                                                                isBot ? "bg-white text-gray-800 rounded-tl-none border border-transparent" : "bg-gray-800 text-white rounded-tr-none")}>
                                                                 <div className="chat-markdown"><ChatMarkdown dark={!isBot}>{isBot ? answer : displayAnswer}</ChatMarkdown></div>
                                                             </div>
                                                             {isBot && (
@@ -2605,7 +2607,7 @@ export default function VAFDashboard() {
                             })()}
 
                             {loading && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
-                                <div className="flex gap-4 items-center animate-pulse pt-4">
+                                <div className="flex gap-4 items-center justify-center animate-pulse pt-4">
                                     <div className="w-9 h-9 rounded-xl bg-gray-200 flex items-center justify-center text-gray-400"><Bot size={18} /></div>
                                     <div className="flex flex-col gap-1">
                                         <div className="bg-gray-100 px-4 py-2 rounded-2xl rounded-tl-none w-fit flex gap-1">

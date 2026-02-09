@@ -541,6 +541,7 @@ def run_headless_agent():
                             user_scope_id=meta.get("user_scope_id"),
                             source=getattr(task, "source", "web"),
                             preview=(task.input_text or "")[:80],
+                            voice=bool(meta.get("voice_lang")),
                         )
                     except Exception:
                         pass

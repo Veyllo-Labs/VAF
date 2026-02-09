@@ -40,16 +40,20 @@ def update_last_interaction(
     user_scope_id: Optional[Any] = None,
     source: str = "web",
     preview: str = "",
+    voice: bool = False,
 ) -> None:
     """
     Record the last user interaction for the given user (or default).
     Call after a user message has been fully processed (e.g. in headless after chat_step returns),
     so the next turn's system prompt can show "last interaction" and optional "(About: preview)".
+    When source is Telegram and the message was a voice message, set voice=True so the prompt
+    can show "via Telegram (Sprachnachricht)" and the agent can prefer text for names/emails.
 
     Args:
         user_scope_id: User scope (UUID or None for single-user).
         source: Channel: "web", "telegram", or "cli".
         preview: Short preview of the user message (will be sanitized and truncated to PREVIEW_MAX_CHARS).
+        voice: True if the message was a voice message (e.g. Telegram Sprachnachricht).
     """
     try:
         path = _store_path()
@@ -64,6 +68,7 @@ def update_last_interaction(
             "ts": time.time(),
             "source": str(source).strip().lower() or "web",
             "preview": _sanitize_preview(preview),
+            "voice": bool(voice),
         }
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     except Exception:
@@ -77,7 +82,7 @@ def get_last_interaction(
     Return the last recorded interaction for the given user, or None.
 
     Returns:
-        Dict with "ts" (float), "source" (str), "preview" (str), or None if missing.
+        Dict with "ts" (float), "source" (str), "preview" (str), "voice" (bool), or None if missing.
     """
     try:
         path = _store_path()
@@ -98,6 +103,7 @@ def get_last_interaction(
             "ts": float(ts),
             "source": str(entry.get("source", "web")),
             "preview": str(entry.get("preview", "")),
+            "voice": bool(entry.get("voice", False)),
         }
     except Exception:
         return None

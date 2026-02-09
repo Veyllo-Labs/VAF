@@ -1064,6 +1064,7 @@ class Agent:
             from vaf.tools.send_telegram import SendTelegramTool
             from vaf.tools.send_discord import SendDiscordTool
             from vaf.tools.send_slack import SendSlackTool
+            from vaf.tools.mail_inbox import MailInboxTool
             from vaf.tools.read_mail import ReadMailTool
             from vaf.tools.send_mail import SendMailTool
 
@@ -1076,6 +1077,7 @@ class Agent:
             self.tools["send_telegram"] = SendTelegramTool()
             self.tools["send_discord"] = SendDiscordTool()
             self.tools["send_slack"] = SendSlackTool()
+            self.tools["mail_inbox"] = MailInboxTool()
             self.tools["read_mail"] = ReadMailTool()
             self.tools["send_mail"] = SendMailTool()
             

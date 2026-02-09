@@ -237,7 +237,7 @@ Telegram uses the same pipeline as the Web UI:
 
 - **Multiple accounts**: Connect **Gmail** (OAuth2 + Gmail API), **Microsoft Outlook** (OAuth2 + Microsoft Graph Mail), or any provider via **IMAP/SMTP**. **iCloud Mail** has no OAuth mail API; use IMAP with an app-specific password (see Apple / iCloud below).
 - **Secure storage**: OAuth tokens and IMAP passwords are stored in the OS keyring (Windows Credential Manager, macOS Keychain, Linux Secret Service). If the keyring is unavailable, credentials are stored in an AES-256-GCM encrypted file under the platform data directory. No passwords or tokens are stored in `config.json`.
-- **Agent tools**: When at least one email account is connected, the agent can use `read_mail` (inbox, folder) and `send_mail` (from a connected account). Credentials are never passed to the agent; the transport layer resolves them by `account_id`. Access tokens are refreshed automatically before API calls when expired.
+- **Agent tools**: When at least one email account is connected, the agent can use `mail_inbox` (list emails), `read_mail` (read full body of one message), and `send_mail` (from a connected account). Credentials are never passed to the agent; the transport layer resolves them by `account_id`. Access tokens are refreshed automatically before API calls when expired.
 
 ### Setup
 

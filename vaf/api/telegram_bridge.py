@@ -444,9 +444,11 @@ def _run_bot():
             metadata["relay_to_username"] = vaf_username
         if voice_lang:
             metadata["voice_lang"] = voice_lang  # Pass language to agent context
+        # So the LLM sees that this user message was a voice message (transcribed)
+        user_message = f"[Voice message, transcribed]: {text}" if voice_lang else text
         tq.add(
             session_id=session_id,
-            input_text=text,
+            input_text=user_message,
             source="telegram",
             metadata=metadata,
         )

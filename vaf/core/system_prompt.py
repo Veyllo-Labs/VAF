@@ -394,7 +394,7 @@ Sub-agents run asynchronously - results arrive later
             username: Current user's username (for identity.json and User identity block)
             user_scope_id: Current user's scope ID (for cached profile summary from RAG)
             current_source: Current channel: "web", "telegram", or "cli" (for "Currently chatting in ...")
-            last_interaction: Optional dict with "ts", "source", "preview" from last_interaction store
+            last_interaction: Optional dict with "ts", "source", "preview", "voice" from last_interaction store
 
         Returns:
             Complete system prompt string
@@ -476,7 +476,8 @@ Then use the results to answer. Do NOT guess from your training data!
 | `update_user_identity` | **Save PERSONAL user info** (name, language, city, country, preferences, do's/don'ts, main_messenger) | "My name is Mert", "I'm in Berlin", "Send it via Telegram" |
 | `send_telegram` | **Send a message to the user via Telegram** (when they asked to receive something there; use if main_messenger is Telegram or user said "via Telegram") | Send summary, result, or notification |
 | `send_discord` | **Send a message to the user via Discord** (when they asked to receive something there; use if main_messenger is Discord or user said "via Discord") | Send summary, result, or notification |
-| `read_mail` | **Read recent emails** from a connected account (account_id = email address) | Check inbox, summarize emails |
+| `mail_inbox` | **Show inbox** (list of emails) for a connected account (account_id, folder, max_messages) | Check inbox, list messages; use message_id/provider_message_id with read_mail to read one |
+| `read_mail` | **Read full body of one email** as plain text (account_id, message_id, folder, optional provider_message_id) | When user asks what an email says; same cleaned text as Mail UI, token-efficient |
 | `send_mail` | **Send an email** from a connected account (account_id, to, subject, body) | Send email on behalf of user |
 
 ### When to use which SAVE tool:
@@ -537,7 +538,10 @@ Then use the results to answer. Do NOT guess from your training data!
                     display_name = "the user"
                 rel = self._format_relative_time(ts) if ts is not None else ""
                 chan = self._format_channel(src)
-                line_parts.append(f"Last user {display_name} interaction: {rel} via {chan}.")
+                voice_note = ""
+                if last_interaction.get("voice") and src == "telegram":
+                    voice_note = " (Sprachnachricht)" if self.user_language == "de" else " (voice message)"
+                line_parts.append(f"Last user {display_name} interaction: {rel} via {chan}{voice_note}.")
                 if preview:
                     line_parts.append(f" (About: {preview})")
             if current_source:
@@ -675,6 +679,11 @@ You are talking to the following user.
                         "if preferred channel is not set, ask once: e.g. \"Soll ich es dir per Discord, Telegram oder Slack schicken?\" / \"Should I send it via Discord, Telegram or Slack?\". "
                         "Store their answer with `update_user_identity(main_messenger=\"telegram\")` (or discord/slack). "
                         "Then use the matching tool: `send_telegram`, `send_discord`, or `send_slack` depending on the preferred channel or user request (e.g. use send_telegram when main_messenger is Telegram or they said \"via Telegram\").\n"
+                    )
+                    identity_block += (
+                        "**Telegram / Sprachnachricht:** When the user asks you to write something (e.g. email, contact names, list of people) or when their last message was a voice message (Sprachnachricht): "
+                        "send or present that content as **text** (not only by voice), so that names and important details are not misunderstood. "
+                        "Include the exact names, email text, or contacts in your written reply so they can be read; avoid relying only on spoken output for names and exact wording.\n"
                     )
             except Exception:
                 pass

@@ -14,6 +14,7 @@ interface ConnectionsPanelProps {
     onOpenDiscordWizard: () => void;
     onOpenTelegramWizard: () => void;
     onOpenTelegramDashboard?: () => void;
+    onOpenEmailDashboard?: () => void;
     onOpenEmailWizard?: () => void;
 }
 
@@ -200,7 +201,7 @@ export const CATEGORIES = [
 /** Use relative /api/ so Next.js rewrites to backend. */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard, onOpenTelegramWizard, onOpenTelegramDashboard, onOpenEmailWizard }: ConnectionsPanelProps) {
+export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard, onOpenTelegramWizard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard }: ConnectionsPanelProps) {
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'disconnected' | 'checking'>>({});
 
     useEffect(() => {
@@ -266,6 +267,9 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
     };
 
     const handleDisconnect = async (appId: string) => {
+        const app = CONNECTION_APPS.find(a => a.id === appId);
+        const appName = app?.name ?? appId;
+        if (!confirm(`Are you sure you want to disconnect ${appName}? This will remove the connection and associated data.`)) return;
         if (appId === 'discord') {
             onConfigChange('discord_config', null);
             setConnectionStatus(prev => ({ ...prev, discord: 'disconnected' }));
@@ -420,7 +424,10 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                                 if (onOpenTelegramDashboard && configured) onOpenTelegramDashboard();
                                                                 else onOpenTelegramWizard();
                                                             }
-                                                            if (app.id === 'email' && onOpenEmailWizard) onOpenEmailWizard();
+                                                            if (app.id === 'email') {
+                                                                if (onOpenEmailDashboard) onOpenEmailDashboard();
+                                                                else if (onOpenEmailWizard) onOpenEmailWizard();
+                                                            }
                                                         }}
                                                         className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                                                         title="Settings"
@@ -442,7 +449,10 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                     onClick={() => {
                                                         if (app.id === 'discord') onOpenDiscordWizard();
                                                         if (app.id === 'telegram') onOpenTelegramWizard();
-                                                        if (app.id === 'email' && onOpenEmailWizard) onOpenEmailWizard();
+                                                        if (app.id === 'email') {
+                                                                if (onOpenEmailDashboard) onOpenEmailDashboard();
+                                                                else if (onOpenEmailWizard) onOpenEmailWizard();
+                                                            }
                                                     }}
                                                     disabled={app.comingSoon || !app.available}
                                                     className={cn(

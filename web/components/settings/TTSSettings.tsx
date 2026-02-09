@@ -376,7 +376,10 @@ export default function TTSSettings({
                                                         <Volume2 className="w-4 h-4" />
                                                     </button>
                                                     <button
-                                                        onClick={() => uninstallLanguage(lang.code)}
+                                                        onClick={() => {
+                                                            if (!confirm('Are you sure you want to remove this language? You can install it again later from available languages.')) return;
+                                                            uninstallLanguage(lang.code);
+                                                        }}
                                                         className="p-1.5 hover:bg-red-100 rounded-lg transition-colors"
                                                         title="Remove"
                                                     >

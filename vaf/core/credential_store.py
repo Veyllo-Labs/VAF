@@ -49,9 +49,12 @@ def _keyring_available() -> bool:
         return _KEYRING_AVAILABLE
 
 
-def _credential_key(account_id: str, provider: str = "email") -> str:
-    """Build keyring/fallback key for an account. Normalize for safe storage."""
+def _credential_key(account_id: str, provider: str = "email", username: Optional[str] = None) -> str:
+    """Build keyring/fallback key for an account. Normalize for safe storage. When username is set, scope by user."""
     safe_id = (account_id or "").strip().lower().replace(" ", "_")
+    if username and (username or "").strip():
+        safe_user = (username or "").strip().lower().replace(" ", "_")
+        return f"email:{provider}:{safe_user}:{safe_id}"
     return f"email:{provider}:{safe_id}"
 
 
@@ -107,13 +110,14 @@ def _save_fallback_data(data: Dict[str, str]) -> None:
     path.write_bytes(nonce + ciphertext)
 
 
-def get_email_credentials(account_id: str, provider: str = "email") -> Optional[Dict[str, Any]]:
+def get_email_credentials(account_id: str, provider: str = "email", username: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Retrieve stored credentials for an email account.
     Returns dict with either OAuth fields (access_token, refresh_token, expires_at)
     or IMAP field (password). Returns None if not found or on error.
+    When username is set (multi-user mode), credentials are scoped to that user.
     """
-    key = _credential_key(account_id, provider)
+    key = _credential_key(account_id, provider, username)
     if _keyring_available():
         try:
             import keyring
@@ -140,9 +144,10 @@ def set_email_oauth_tokens(
     access_token: str,
     refresh_token: str,
     expires_at: Optional[float] = None,
+    username: Optional[str] = None,
 ) -> None:
-    """Store OAuth tokens for an account. Prefer keyring; fallback to encrypted file."""
-    key = _credential_key(account_id, provider)
+    """Store OAuth tokens for an account. Prefer keyring; fallback to encrypted file. Optional username for multi-user scope."""
+    key = _credential_key(account_id, provider, username)
     value = json.dumps({
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -161,9 +166,9 @@ def set_email_oauth_tokens(
     _save_fallback_data(data)
 
 
-def set_email_imap_password(account_id: str, password: str) -> None:
-    """Store IMAP/SMTP password for an account. Prefer keyring; fallback to encrypted file."""
-    key = _credential_key(account_id, "imap")
+def set_email_imap_password(account_id: str, password: str, username: Optional[str] = None) -> None:
+    """Store IMAP/SMTP password for an account. Prefer keyring; fallback to encrypted file. Optional username for multi-user scope."""
+    key = _credential_key(account_id, "imap", username)
     value = json.dumps({"password": password, "type": "imap"})
     if _keyring_available():
         try:
@@ -177,19 +182,20 @@ def set_email_imap_password(account_id: str, password: str) -> None:
     _save_fallback_data(data)
 
 
-def delete_email_credentials(account_id: str, provider: Optional[str] = None) -> None:
+def delete_email_credentials(account_id: str, provider: Optional[str] = None, username: Optional[str] = None) -> None:
     """
     Remove stored credentials for an account.
     If provider is None, deletes both email:* and email:imap:* keys for this account_id.
+    Optional username for multi-user scope.
     """
     keys_to_delete = []
     if provider:
-        keys_to_delete.append(_credential_key(account_id, provider))
+        keys_to_delete.append(_credential_key(account_id, provider, username))
     else:
-        keys_to_delete.append(_credential_key(account_id, "email"))
-        keys_to_delete.append(_credential_key(account_id, "imap"))
-        for p in ("gmail", "outlook", "icloud"):
-            keys_to_delete.append(_credential_key(account_id, p))
+        keys_to_delete.append(_credential_key(account_id, "email", username))
+        keys_to_delete.append(_credential_key(account_id, "imap", username))
+        for p in ("gmail", "microsoft", "outlook", "apple", "icloud"):
+            keys_to_delete.append(_credential_key(account_id, p, username))
 
     if _keyring_available():
         try:

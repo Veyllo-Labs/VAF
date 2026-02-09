@@ -105,7 +105,7 @@ import {
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, EmailSetupWizard } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, EmailSetupWizard, MailDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 
@@ -179,7 +179,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showDiscordWizard, setShowDiscordWizard] = useState(false);
     const [showTelegramWizard, setShowTelegramWizard] = useState(false);
     const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
+    const [showMailDashboard, setShowMailDashboard] = useState(false);
     const [showEmailWizard, setShowEmailWizard] = useState(false);
+    const [mailDashboardRefresh, setMailDashboardRefresh] = useState(0);
     const [showCreateAutomationModal, setShowCreateAutomationModal] = useState(false);
 
     const [toolsSearch, setToolsSearch] = useState('');
@@ -1369,6 +1371,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 onOpenDiscordWizard={() => setShowDiscordWizard(true)}
                                 onOpenTelegramWizard={() => setShowTelegramWizard(true)}
                                 onOpenTelegramDashboard={() => setShowTelegramDashboard(true)}
+                                onOpenEmailDashboard={() => setShowMailDashboard(true)}
                                 onOpenEmailWizard={() => setShowEmailWizard(true)}
                             />
                         )}
@@ -2247,6 +2250,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             onClick={(e) => {
                                                                 e.preventDefault();
                                                                 e.stopPropagation();
+                                                                if (!confirm('Are you sure you want to delete this category? This action cannot be undone.')) return;
                                                                 onDeleteTrustedCategory(cat.id);
                                                             }}
                                                             className="p-2 cursor-pointer relative z-10 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -2268,7 +2272,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600" title="Trust score (1–10)">Trust {src.trust_score}</span>
                                                             {onRemoveTrustedSource && (
                                                                 <button
-                                                                    onClick={() => onRemoveTrustedSource((src.domains && src.domains[0]) || '', src.is_custom)}
+                                                                    onClick={() => {
+                                                                        if (!confirm('Are you sure you want to remove this trusted source?')) return;
+                                                                        onRemoveTrustedSource((src.domains && src.domains[0]) || '', src.is_custom);
+                                                                    }}
                                                                     className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                                                                     title="Remove"
                                                                 >
@@ -3478,12 +3485,27 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onConfigChange={handleChange}
             />
 
-            {/* Email Setup Wizard */}
+            {/* Mail Dashboard (same size as Telegram Dashboard) */}
+            <MailDashboard
+                isOpen={showMailDashboard}
+                onClose={() => setShowMailDashboard(false)}
+                onOpenAddWizard={() => setShowEmailWizard(true)}
+                refreshTrigger={mailDashboardRefresh}
+            />
+
+            {/* Email Setup Wizard (opened from Mail Dashboard "Add account") */}
             <EmailSetupWizard
                 isOpen={showEmailWizard}
-                onClose={() => setShowEmailWizard(false)}
-                onComplete={() => { setShowEmailWizard(false); }}
+                onClose={() => {
+                    setShowEmailWizard(false);
+                    setMailDashboardRefresh(r => r + 1);
+                }}
+                onComplete={() => {
+                    setShowEmailWizard(false);
+                    setMailDashboardRefresh(r => r + 1);
+                }}
                 existingAccounts={localConfig?.email_config?.accounts || []}
+                currentUser={currentUser}
             />
 
             {/* Soul Wizard Modal */}

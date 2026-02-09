@@ -235,31 +235,47 @@ Telegram uses the same pipeline as the Web UI:
 
 ### Features
 
-- **Multiple accounts**: Connect Gmail (OAuth2), Microsoft Outlook (OAuth2), Apple iCloud (OAuth2), or any provider via IMAP/SMTP.
+- **Multiple accounts**: Connect **Gmail** (OAuth2 + Gmail API), **Microsoft Outlook** (OAuth2 + Microsoft Graph Mail), or any provider via **IMAP/SMTP**. **iCloud Mail** has no OAuth mail API; use IMAP with an app-specific password (see Apple / iCloud below).
 - **Secure storage**: OAuth tokens and IMAP passwords are stored in the OS keyring (Windows Credential Manager, macOS Keychain, Linux Secret Service). If the keyring is unavailable, credentials are stored in an AES-256-GCM encrypted file under the platform data directory. No passwords or tokens are stored in `config.json`.
-- **Agent tools**: When at least one email account is connected, the agent can use `read_mail` (inbox, folder) and `send_mail` (from a connected account). Credentials are never passed to the agent; the transport layer resolves them by `account_id`.
+- **Agent tools**: When at least one email account is connected, the agent can use `read_mail` (inbox, folder) and `send_mail` (from a connected account). Credentials are never passed to the agent; the transport layer resolves them by `account_id`. Access tokens are refreshed automatically before API calls when expired.
 
 ### Setup
 
 1. Go to **Settings → Connections** and click **Connect** on Email.
 2. Choose a provider:
-   - **Google (Gmail)** or **Microsoft (Outlook)** or **Apple (iCloud)**: OAuth2 with PKCE. You must register an OAuth app (Google Cloud Console, Azure App Registration, or Apple Developer) and set the redirect URI to `http://127.0.0.1:PORT/api/email/oauth/callback` (PORT = your VAF web server port). Add the client ID (and optional secret) in config (`email_oauth_google_client_id`, etc.). Then click the provider; a browser window opens for sign-in. After authorizing, you are redirected back and the account is added.
-   - **Other mail provider (IMAP/SMTP)**: Enter your email and password (or app password if 2FA). Optionally set IMAP/SMTP host/port; defaults are used for known domains (Gmail, Outlook, Yahoo, iCloud).
-3. Manage accounts in the same wizard: list, add another, or remove (credentials are deleted from the keyring and the account is removed from config).
+   - **Google (Gmail)** / **Microsoft (Outlook)**: If an admin has set the OAuth client (see below), **Sign in with Google** or **Sign in with Microsoft** works with one click for all users. Otherwise use **Other (IMAP/SMTP)** (e.g. Gmail with app password). Mail is read/sent via Gmail API / Microsoft Graph when OAuth is used, or via IMAP/SMTP otherwise.
+   - **Admin setup (once per instance)**: In the mail wizard, expand **For admins: OAuth client**. Enter Google and/or Microsoft Client ID and Client secret (from a Web application OAuth app), then Save. After that, everyone on this VAF instance gets one-click sign-in. Redirect URI: `http://127.0.0.1:8001/api/email/oauth/callback`. Do not commit the secret to source code. See “Gmail: Desktop vs Web OAuth client” below for creating the OAuth app.
+   - **Apple (iCloud Mail)**: No OAuth mail API. The wizard shows a notice: use **Other (IMAP/SMTP)** and enter your iCloud email and an app-specific password (Apple ID → Sign-In and Security → App-Specific Passwords).
+   - **Other (IMAP/SMTP)**: Enter your email and password (or app password if 2FA). Optionally set IMAP/SMTP host/port; defaults are used for known domains (Gmail, Outlook, Yahoo, iCloud).
+3. Manage accounts in the wizard: list, verify connection, add another, or remove (credentials are deleted and the account is removed from config).
 
-### OAuth2 (Google, Microsoft, Apple)
+### OAuth2 (Google, Microsoft)
 
-- **Flow**: Authorization Code with PKCE; redirect to localhost. No external backend required.
-- **Scopes**: Minimal mail-only scopes (e.g. Gmail: `https://mail.google.com/`; Microsoft: IMAP/SMTP or Graph mail scopes).
-- **Token storage**: Access and refresh tokens are stored only in the keyring (or encrypted fallback file). Config holds only account metadata (`email_config.accounts`: `account_id`, `provider`, `email`, `enabled`, optional server fields for IMAP).
-- **Revocation**: When you remove an account in the UI, tokens are deleted locally. Optionally revoke the grant in the provider’s security settings (Google Account, Microsoft Account, Apple ID).
+- **Good UX (like other local apps)**: The app can ship a **default** OAuth client ID so users never open Google Cloud Console. Distributors/packagers set env vars: `VAF_EMAIL_OAUTH_GOOGLE_CLIENT_ID`, `VAF_EMAIL_OAUTH_MICROSOFT_CLIENT_ID` (and optionally `VAF_EMAIL_OAUTH_GOOGLE_CLIENT_SECRET`, `VAF_EMAIL_OAUTH_MICROSOFT_CLIENT_SECRET`). User override in Settings (config) takes precedence over env.
+- **Flow**: Authorization Code with PKCE; redirect to the **local** VAF backend (e.g. `http://127.0.0.1:8001/api/email/oauth/callback`). VAF is a **desktop/local** app—no public web app; the browser redirects to your machine’s backend, which exchanges the code for tokens.
+
+#### Gmail: Desktop vs Web OAuth client (Google)
+
+- **Desktop client** (type “Desktop” in Google Cloud): No client secret; PKCE only. Per [Google’s docs](https://developers.google.com/identity/protocols/oauth2/native-app), `client_secret` is optional for installed apps. In practice, when the **token exchange** is done by a **server** (your VAF backend), Google’s token endpoint may still return **“client_secret is missing”**. If you see that error, use a **Web application** client (below).
+- **Web application client** (recommended if you get “client_secret is missing”): In [Google Cloud Console → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials), create an OAuth 2.0 Client ID of type **Web application**. Add authorized redirect URI: `http://127.0.0.1:8001/api/email/oauth/callback` (and optionally `http://localhost:8001/api/email/oauth/callback` if your backend is reachable as localhost). Enable Gmail API for the project. Set **Client ID** and **Client secret** in VAF: env vars `VAF_EMAIL_OAUTH_GOOGLE_CLIENT_ID` and `VAF_EMAIL_OAUTH_GOOGLE_CLIENT_SECRET`, or Settings → Connections → Email OAuth. This is how many local/desktop apps that use a local callback server work (e.g. VS Code, Slack): they use a Web client and keep the secret only on the deployer’s machine.
+- **Redirect URI**: Must match exactly (including port). Default is `http://127.0.0.1:<local_network_port>/api/email/oauth/callback` (see config `email_oauth_callback_base_url` or backend port).
+- **Scopes**: **Gmail**: `gmail.readonly`, `gmail.send`, `userinfo.email`. **Microsoft**: `User.Read`, `Mail.Read`, `Mail.Send`, `offline_access`, `openid`.
+- **Token storage**: Access and refresh tokens are stored only in the keyring (or encrypted fallback file). Config holds only account metadata (`email_config.accounts`: `account_id`, `provider`, `email`, `enabled`, `last_verified_at`, optional server fields for IMAP).
+- **Transport**: Gmail uses the Gmail REST API (messages list/get/send). Microsoft uses Microsoft Graph (`/me/messages`, `/me/sendMail`). Tokens are refreshed automatically when expired.
+- **Verify**: Use **Verify** in the wizard to re-test the connection (Gmail: profile; Microsoft: GET /me; IMAP: NOOP). Success updates `last_verified_at`.
+- **Revocation**: When you remove an account in the UI, tokens are deleted locally. Optionally revoke the grant in the provider’s security settings (Google Account, Microsoft Account).
+
+### Apple / iCloud Mail
+
+- **Sign in with Apple** provides identity only; it does **not** grant mail read/send access. iCloud Mail does not expose a public OAuth Mail API. To connect iCloud Mail, use **Other (IMAP/SMTP)** and enter your iCloud email and an **app-specific password** (Apple ID → Sign-In and Security → App-Specific Passwords). Defaults: `imap.mail.me.com` / `smtp.mail.me.com`.
 
 ### IMAP/SMTP fallback
 
 - For providers that do not support OAuth (or if you choose “Other mail provider”), use email + password or app password.
-- **UI notice**: “OAuth2 is not available for this provider. Use your email and an app password (recommended if you use 2FA).”
+- **Gmail with 2FA**: Prefer **Google (Gmail)** OAuth in the wizard. If you use IMAP with Gmail and 2FA, you need an [App Password](https://myaccount.google.com/apppasswords) (create one there).
+- **Microsoft/Outlook.com**: Outlook.com no longer supports IMAP with password (Microsoft retired Basic auth in 2024). Use **Sign in with Microsoft** (OAuth) in the wizard; an admin must configure the OAuth client first.
 - **TLS**: IMAP and SMTP use TLS; certificate verification is enabled.
-- **Defaults**: Known domains (gmail.com, outlook.com, yahoo.com, icloud.com, etc.) get default IMAP/SMTP host/port; you can override in the advanced options.
+- **Defaults**: Known domains (gmail.com, outlook.com, yahoo.com, icloud.com, me.com, etc.) get default IMAP/SMTP host/port; you can override in the advanced options.
 
 ### Configuration (metadata only)
 
@@ -291,6 +307,23 @@ In `config.json`, `email_config` contains only:
 ```
 
 OAuth client IDs (optional) at top level: `email_oauth_google_client_id`, `email_oauth_google_client_secret`, and similarly for Microsoft and Apple. Credentials (tokens, passwords) are never stored in config.
+
+### Secure credential storage (OS-independent)
+
+- **Per-account credentials** (OAuth access/refresh tokens, IMAP/SMTP passwords) are **never** stored in `config.json`. They are stored in:
+  - **Keyring** when available: Windows Credential Manager, macOS Keychain, or Linux Secret Service (via the same API), so behaviour is OS-independent.
+  - **Fallback**: If keyring is unavailable, an AES-256-GCM encrypted file under the platform data directory (see `Platform.data_dir()`) is used; the encryption key is stored in config. Paths and behaviour are cross-platform.
+- **OAuth client ID and client secret** (app-level, set by admin) are stored in config when provided. Do **not** commit config that contains client secrets to source control. Where the OS allows, use restrictive file permissions on the config file (e.g. `chmod 600` on Unix; on Windows, ensure only the running user can read the file).
+
+### Multi-user (network) mode
+
+When **local network** is enabled and users log in (e.g. Max and Susan), email data is **scoped per user**:
+
+- **Account list**: Each user only sees and manages their own email accounts. Max’s accounts are stored under his user; Susan’s under hers. The backend uses `email_config` for the local admin (single-user) and `email_config_by_user[username]` for named users.
+- **Credentials**: Stored with a user-scoped key (e.g. keyring entry includes the username). So Max’s and Susan’s credentials are isolated.
+- **Synced messages**: The email sync store (SQLite) has a `username` column. List/sync only reads and writes rows for the current user. **Susan cannot see Max’s synced emails, and Max cannot see Susan’s.**
+
+Single-user (no login or local admin) continues to use the legacy `email_config` and unscoped credentials/sync store.
 
 ## Future Integrations
 

@@ -383,7 +383,10 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                                                 <span className="text-gray-700">@{e.telegram_username || e.telegram_user_id}</span>
                                                 <button
                                                     type="button"
-                                                    onClick={() => handleRelayRemove(e.telegram_user_id)}
+                                                    onClick={() => {
+                                                        if (!confirm('Are you sure you want to remove this relay contact?')) return;
+                                                        handleRelayRemove(e.telegram_user_id);
+                                                    }}
                                                     className="p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-600"
                                                     title="Remove"
                                                 >

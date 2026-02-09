@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import {
     X, ChevronRight, ChevronLeft, Mail, Loader2, AlertCircle,
-    ExternalLink, CheckCircle2, Shield
+    ExternalLink, CheckCircle2, Shield, ChevronDown, ChevronUp, Settings2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -14,6 +14,8 @@ interface EmailSetupWizardProps {
     onClose: () => void;
     onComplete?: () => void;
     existingAccounts?: Array<{ account_id: string; email: string; provider: string; enabled?: boolean; last_verified_at?: string }>;
+    /** When set, the "For admins: OAuth client" section is only shown for role === 'admin'. */
+    currentUser?: { role?: string };
 }
 
 const STEPS = [
@@ -23,14 +25,14 @@ const STEPS = [
     { id: 'complete', title: 'Complete', subtitle: 'Manage your accounts' },
 ];
 
-const PROVIDERS = [
+const PROVIDER_OPTIONS: Array<{ id: string; name: string; icon: string; desc: string; oauth: boolean }> = [
     { id: 'gmail', name: 'Google (Gmail)', icon: 'G', desc: 'Sign in with your Google account', oauth: true },
     { id: 'microsoft', name: 'Microsoft (Outlook)', icon: 'M', desc: 'Sign in with your Microsoft account', oauth: true },
-    { id: 'apple', name: 'Apple (iCloud Mail)', icon: 'A', desc: 'Sign in with Apple', oauth: true },
+    { id: 'apple', name: 'Apple (iCloud Mail)', icon: 'A', desc: 'Use IMAP with app-specific password', oauth: false },
     { id: 'imap', name: 'Other (IMAP/SMTP)', icon: 'O', desc: 'Email and app password', oauth: false },
 ];
 
-export default function EmailSetupWizard({ isOpen, onClose, onComplete, existingAccounts = [] }: EmailSetupWizardProps) {
+export default function EmailSetupWizard({ isOpen, onClose, onComplete, existingAccounts = [], currentUser }: EmailSetupWizardProps) {
     const [currentStep, setCurrentStep] = useState(0);
     const [provider, setProvider] = useState<string>('');
     const [authUrl, setAuthUrl] = useState('');
@@ -47,6 +49,16 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
     const [testError, setTestError] = useState('');
     const [testHint, setTestHint] = useState('');
     const [verifyLoading, setVerifyLoading] = useState<string | null>(null);
+    // Admin OAuth (expandable): set once so all users get one-click Sign in with Google/Outlook
+    const [adminOAuthOpen, setAdminOAuthOpen] = useState(false);
+    const [oauthGoogleId, setOauthGoogleId] = useState('');
+    const [oauthGoogleSecret, setOauthGoogleSecret] = useState('');
+    const [oauthMicrosoftId, setOauthMicrosoftId] = useState('');
+    const [oauthMicrosoftSecret, setOauthMicrosoftSecret] = useState('');
+    const [adminSaveStatus, setAdminSaveStatus] = useState<'idle' | 'saving' | 'ok' | 'fail'>('idle');
+    const [adminSaveError, setAdminSaveError] = useState('');
+    // OAuth status: only show Gmail/Microsoft when admin has configured them
+    const [oauthStatus, setOauthStatus] = useState<{ oauth_google_configured: boolean; oauth_microsoft_configured: boolean }>({ oauth_google_configured: false, oauth_microsoft_configured: false });
 
     const fetchAccounts = async () => {
         try {
@@ -60,18 +72,85 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
         }
     };
 
+    const loadOAuthConfig = async () => {
+        try {
+            const res = await fetch(api('api/config'), { credentials: 'include' });
+            if (res.ok) {
+                const c = await res.json();
+                setOauthGoogleId((c.email_oauth_google_client_id ?? '').trim());
+                setOauthGoogleSecret((c.email_oauth_google_client_secret ?? '').trim());
+                setOauthMicrosoftId((c.email_oauth_microsoft_client_id ?? '').trim());
+                setOauthMicrosoftSecret((c.email_oauth_microsoft_client_secret ?? '').trim());
+            }
+        } catch {
+            // ignore
+        }
+    };
+
+    const fetchOAuthStatus = async () => {
+        try {
+            const res = await fetch(api('api/email/oauth-status'), { credentials: 'include' });
+            if (res.ok) {
+                const data = await res.json();
+                setOauthStatus({
+                    oauth_google_configured: !!data.oauth_google_configured,
+                    oauth_microsoft_configured: !!data.oauth_microsoft_configured,
+                });
+            }
+        } catch {
+            setOauthStatus({ oauth_google_configured: false, oauth_microsoft_configured: false });
+        }
+    };
+
     useEffect(() => {
         if (isOpen) {
+            if (currentUser?.role === 'admin') loadOAuthConfig();
+            fetchOAuthStatus();
             fetchAccounts().then(() => {
                 const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
                 if (params.get('email_oauth') === 'success') setCurrentStep(3);
             });
         }
-    }, [isOpen]);
+    }, [isOpen, currentUser?.role]);
+
+    const visibleProviders = React.useMemo(() => {
+        return PROVIDER_OPTIONS.filter((p) => {
+            if (p.id === 'gmail') return oauthStatus.oauth_google_configured;
+            if (p.id === 'microsoft') return oauthStatus.oauth_microsoft_configured;
+            return true;
+        });
+    }, [oauthStatus.oauth_google_configured, oauthStatus.oauth_microsoft_configured]);
 
     useEffect(() => {
         if (isOpen && accounts.length > 0 && currentStep === 0) setCurrentStep(3);
     }, [isOpen, accounts.length, currentStep]);
+
+    const handleSaveAdminOAuth = async () => {
+        setAdminSaveStatus('saving');
+        setAdminSaveError('');
+        try {
+            const res = await fetch(api('api/config'), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({
+                    email_oauth_google_client_id: oauthGoogleId.trim(),
+                    email_oauth_google_client_secret: oauthGoogleSecret.trim(),
+                    email_oauth_microsoft_client_id: oauthMicrosoftId.trim(),
+                    email_oauth_microsoft_client_secret: oauthMicrosoftSecret.trim(),
+                }),
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail ?? 'Failed to save');
+            }
+            setAdminSaveStatus('ok');
+            fetchOAuthStatus();
+        } catch (e) {
+            setAdminSaveStatus('fail');
+            setAdminSaveError(e instanceof Error ? e.message : 'Failed to save');
+        }
+    };
 
     const handleChooseProvider = (id: string) => {
         setProvider(id);
@@ -80,14 +159,26 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
             setCurrentStep(2);
             return;
         }
+        if (id === 'apple') {
+            setCurrentStep(2);
+            return;
+        }
         setLoading(true);
         fetch(api(`api/email/oauth/start?provider=${id}`), { credentials: 'include' })
-            .then(r => r.json())
+            .then(r => {
+                if (!r.ok) throw new Error(r.status === 400 ? 'Sign-in could not be started. Restart VAF and try again.' : `Request failed: ${r.status}`);
+                return r.json();
+            })
             .then(data => {
-                setAuthUrl(data.authorization_url || '');
+                const url = data.authorization_url || '';
+                setAuthUrl(url);
                 setCurrentStep(2);
-                if (data.authorization_url && typeof window !== 'undefined') {
-                    window.open(data.authorization_url, '_blank', 'noopener,noreferrer');
+                if (url && (url.startsWith('https://accounts.google.com') || url.startsWith('https://login.microsoftonline.com') || url.startsWith('https://appleid.apple.com')) && typeof window !== 'undefined') {
+                    window.open(url, '_blank', 'noopener,noreferrer');
+                } else if (url && typeof window !== 'undefined') {
+                    window.open(url, '_blank', 'noopener,noreferrer');
+                } else if (!url) {
+                    setError('No sign-in URL returned. Check OAuth client ID in Settings.');
                 }
             })
             .catch(e => {
@@ -124,6 +215,10 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
                 setTestResult('fail');
                 setTestError(data.error || 'Connection failed');
                 setTestHint(data.hint || '');
+                if (data.hint) {
+                    const urlMatch = data.hint.match(/https:\/\/[^\s)]+/);
+                    if (urlMatch) window.open(urlMatch[0], '_blank', 'noopener,noreferrer');
+                }
             }
         } catch (e) {
             setTestResult('fail');
@@ -254,7 +349,7 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
 
     if (!isOpen) return null;
 
-    const isNextDisabled = (currentStep === 1 && !provider) || (currentStep === 2 && provider === 'imap' && (testResult !== 'ok' || loading));
+    const isNextDisabled = (currentStep === 1 && !provider) || (currentStep === 2 && provider === 'apple') || (currentStep === 2 && provider === 'imap' && (testResult !== 'ok' || loading));
 
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm">
@@ -340,7 +435,7 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
                         <div className="space-y-6">
                             <p className="text-sm text-gray-600">Only access to read and send email is requested.</p>
                             <div className="space-y-2">
-                                {PROVIDERS.map((p) => (
+                                {visibleProviders.map((p) => (
                                     <button
                                         key={p.id}
                                         onClick={() => handleChooseProvider(p.id)}
@@ -363,13 +458,107 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
                                     </button>
                                 ))}
                             </div>
+
+                            {/* For admins only: OAuth client (one-click for all users) — expandable */}
+                            {currentUser?.role === 'admin' && (
+                                <div className="border border-gray-200 rounded-xl overflow-hidden">
+                                    <button
+                                        type="button"
+                                        onClick={() => setAdminOAuthOpen(!adminOAuthOpen)}
+                                        className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 transition-colors"
+                                    >
+                                        <span className="flex items-center gap-2">
+                                            <Settings2 className="w-4 h-4 text-gray-500" />
+                                            For admins: OAuth client (one-click Gmail/Outlook for all users)
+                                        </span>
+                                        {adminOAuthOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                    </button>
+                                    {adminOAuthOpen && (
+                                        <div className="p-4 bg-white border-t border-gray-200 space-y-4">
+                                            <p className="text-xs text-gray-600">
+                                                Set these once so everyone on this VAF instance can use &quot;Sign in with Google&quot; or &quot;Sign in with Microsoft&quot; without further setup. Otherwise users can still connect Gmail/Outlook via <strong>Other (IMAP/SMTP)</strong> with an app password. Do not commit the client secret to source code.
+                                            </p>
+                                            <div className="grid grid-cols-1 gap-3">
+                                                <div>
+                                                    <label className="block text-xs font-medium text-gray-500 mb-1">Google Client ID</label>
+                                                    <input
+                                                        type="text"
+                                                        value={oauthGoogleId}
+                                                        onChange={e => { setOauthGoogleId(e.target.value); setAdminSaveStatus('idle'); }}
+                                                        placeholder="xxx.apps.googleusercontent.com"
+                                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-medium text-gray-500 mb-1">Google Client secret</label>
+                                                    <input
+                                                        type="password"
+                                                        value={oauthGoogleSecret}
+                                                        onChange={e => { setOauthGoogleSecret(e.target.value); setAdminSaveStatus('idle'); }}
+                                                        placeholder="Optional if using Web application client"
+                                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-medium text-gray-500 mb-1">Microsoft Client ID (optional)</label>
+                                                    <input
+                                                        type="text"
+                                                        value={oauthMicrosoftId}
+                                                        onChange={e => { setOauthMicrosoftId(e.target.value); setAdminSaveStatus('idle'); }}
+                                                        placeholder="Application (client) ID from Entra"
+                                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-medium text-gray-500 mb-1">Microsoft Client secret (optional)</label>
+                                                    <input
+                                                        type="password"
+                                                        value={oauthMicrosoftSecret}
+                                                        onChange={e => { setOauthMicrosoftSecret(e.target.value); setAdminSaveStatus('idle'); }}
+                                                        placeholder="Client secret from Entra"
+                                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={handleSaveAdminOAuth}
+                                                    disabled={adminSaveStatus === 'saving'}
+                                                    className="px-3 py-2 rounded-lg text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
+                                                >
+                                                    {adminSaveStatus === 'saving' ? <Loader2 className="w-4 h-4 animate-spin inline" /> : 'Save'}
+                                                </button>
+                                                {adminSaveStatus === 'ok' && <span className="text-sm text-green-600">Saved.</span>}
+                                                {adminSaveStatus === 'fail' && adminSaveError && (
+                                                    <span className="text-sm text-red-600">{adminSaveError}</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     )}
 
                     {/* Step 2: Connect (OAuth or IMAP) */}
-                    {currentStep === 2 && provider && provider !== 'imap' && (
+                    {currentStep === 2 && provider === 'apple' && (
                         <div className="space-y-6">
-                            <h3 className="text-lg font-semibold text-gray-900">Sign in with {PROVIDERS.find(p => p.id === provider)?.name}</h3>
+                            <h3 className="text-lg font-semibold text-gray-900">iCloud Mail</h3>
+                            <p className="text-sm text-gray-600 bg-amber-50 p-4 rounded-xl border border-amber-200">
+                                iCloud Mail does not offer OAuth access for third-party apps. To connect your iCloud mailbox, use <strong>Other (IMAP/SMTP)</strong> below: go Back, choose &quot;Other (IMAP/SMTP)&quot;, then enter your iCloud email and an <strong>app-specific password</strong> (Apple ID → Sign-In and Security → App-Specific Passwords).
+                            </p>
+                            <button
+                                onClick={() => { setProvider('imap'); setError(''); }}
+                                className="w-full py-3 rounded-xl border-2 border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+                            >
+                                Set up with IMAP instead
+                            </button>
+                        </div>
+                    )}
+                    {currentStep === 2 && provider && provider !== 'imap' && provider !== 'apple' && (
+                        <div className="space-y-6">
+                            <h3 className="text-lg font-semibold text-gray-900">Sign in with {PROVIDER_OPTIONS.find(p => p.id === provider)?.name}</h3>
                             <p className="text-sm text-gray-600">
                                 A browser window was opened. Sign in there and authorize VAF. When done, click &quot;I&apos;ve completed sign-in&quot; below to refresh, then Next.
                             </p>
@@ -395,8 +584,13 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
                         <div className="space-y-6">
                             <h3 className="text-lg font-semibold text-gray-900">Enter credentials</h3>
                             <p className="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg border border-gray-200">
-                                For providers that don’t support “Sign in with Google” (or if you prefer not to use it), use your email and password here. For Gmail, Google recommends using <strong>“Google (Gmail)”</strong> in the previous step instead of IMAP. If you use IMAP with 2FA enabled, you’ll need an app password (Google Account → Security → 2-Step Verification → App passwords).
+                                For providers that don’t support “Sign in with Google” (or if you prefer not to use it), use your email and password here. For Gmail, Google recommends using <strong>“Google (Gmail)”</strong> in the previous step instead of IMAP. If you use IMAP with 2FA enabled, you’ll need an app password. Create one at <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">myaccount.google.com/apppasswords</a>.
                             </p>
+                            {/^(outlook|hotmail|live|msn|outlook\.de|office365)\.(com|de)$/i.test((imapEmail.split('@')[1] || '').toLowerCase()) && (
+                                <p className="text-sm text-amber-800 bg-amber-50 p-3 rounded-lg border border-amber-200">
+                                    <strong>Microsoft/Outlook:</strong> Outlook.com no longer supports IMAP with password (Microsoft retired this in 2024). Use <strong>Sign in with Microsoft</strong> in the previous step instead; an admin must configure the OAuth client first (expand &quot;For admins&quot; in the email wizard).
+                                </p>
+                            )}
                             <div className="space-y-3">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
@@ -470,7 +664,7 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
                                                         <span className="ml-2 text-xs text-gray-500">{a.provider}</span>
                                                     </div>
                                                     <div className="flex items-center gap-2">
-                                                        {a.provider === 'imap' && (
+                                                        {(a.provider === 'imap' || a.provider === 'gmail' || a.provider === 'microsoft') && (
                                                             <button
                                                                 onClick={() => handleVerifyAccount(id)}
                                                                 disabled={verifyLoading === id}

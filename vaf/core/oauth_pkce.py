@@ -3,11 +3,17 @@ OAuth2 Authorization Code Flow with PKCE for email providers (Google, Microsoft,
 
 State and code_verifier are stored temporarily (file under data_dir); tokens
 are stored only in credential_store, never in config.
+
+UX: Like other local apps (VS Code, Slack, etc.), the app can ship a default OAuth
+client ID so users never open Google Cloud Console. Set env vars:
+  VAF_EMAIL_OAUTH_GOOGLE_CLIENT_ID, VAF_EMAIL_OAUTH_MICROSOFT_CLIENT_ID
+User override in Settings (config) takes precedence over env.
 """
 
 import hashlib
 import json
 import logging
+import os
 import secrets
 import time
 from pathlib import Path
@@ -17,8 +23,27 @@ from urllib.parse import urlencode
 import requests
 
 from vaf.core.config import Config
-from vaf.core.credential_store import set_email_oauth_tokens
+from vaf.core.credential_store import get_email_credentials, set_email_oauth_tokens
 from vaf.core.platform import Platform
+
+# Env vars for shipped default OAuth client IDs (so users don't need Google Cloud Console)
+_ENV_OAUTH_KEYS: Dict[str, Dict[str, str]] = {
+    "gmail": {
+        "client_id": "VAF_EMAIL_OAUTH_GOOGLE_CLIENT_ID",
+        "client_secret": "VAF_EMAIL_OAUTH_GOOGLE_CLIENT_SECRET",
+    },
+    "microsoft": {
+        "client_id": "VAF_EMAIL_OAUTH_MICROSOFT_CLIENT_ID",
+        "client_secret": "VAF_EMAIL_OAUTH_MICROSOFT_CLIENT_SECRET",
+    },
+}
+
+# Shipped default: one OAuth app for the VAF project. Users get "Sign in with Google" with one click.
+# Override via Settings → Email OAuth or env VAF_EMAIL_OAUTH_GOOGLE_CLIENT_ID if you use your own app.
+_SHIPPED_GOOGLE_CLIENT_ID = "827949283932-dud9ms3m1krbv7pbanuc5j8c2dfc4jnb.apps.googleusercontent.com"
+
+# Buffer in seconds before expiry to consider token expired (refresh early)
+TOKEN_EXPIRY_BUFFER = 60
 
 logger = logging.getLogger("vaf.core.oauth_pkce")
 
@@ -102,7 +127,11 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
     "gmail": {
         "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
         "token_url": "https://oauth2.googleapis.com/token",
-        "scopes": ["https://mail.google.com/"],  # IMAP/SMTP access
+        "scopes": [
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/userinfo.email",
+        ],
         "client_id_key": "email_oauth_google_client_id",
         "client_secret_key": "email_oauth_google_client_secret",
     },
@@ -110,9 +139,11 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         "auth_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
         "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
         "scopes": [
-            "https://outlook.office365.com/IMAP.AccessAsUser.All",
-            "https://outlook.office365.com/SMTP.Send",
-            "offline_access", "openid",
+            "https://graph.microsoft.com/User.Read",
+            "https://graph.microsoft.com/Mail.Read",
+            "https://graph.microsoft.com/Mail.Send",
+            "offline_access",
+            "openid",
         ],
         "client_id_key": "email_oauth_microsoft_client_id",
         "client_secret_key": "email_oauth_microsoft_client_secret",
@@ -125,6 +156,41 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         "client_secret_key": "email_oauth_apple_client_secret",
     },
 }
+
+
+def _get_oauth_client_credential(provider: str, key_kind: str) -> str:
+    """Return client_id or client_secret: config first, then env, then shipped default for Gmail."""
+    if provider not in PROVIDERS:
+        return ""
+    conf = PROVIDERS[provider]
+    config_key = conf["client_id_key"] if key_kind == "client_id" else conf["client_secret_key"]
+    value = (Config.get(config_key) or "").strip()
+    if value:
+        return value
+    env_map = _ENV_OAUTH_KEYS.get(provider, {})
+    env_key = env_map.get(key_kind)
+    if env_key:
+        value = (os.environ.get(env_key) or "").strip()
+        return value
+    if provider == "gmail" and key_kind == "client_id":
+        return _SHIPPED_GOOGLE_CLIENT_ID
+    return ""
+
+
+def is_oauth_provider_configured(provider: str) -> bool:
+    """
+    Return True if the provider has client_id and client_secret set so one-click sign-in works.
+    Used by GET /api/email/oauth-status to decide whether to show Gmail/Microsoft in the UI.
+    """
+    if provider not in ("gmail", "microsoft"):
+        return False
+    client_id = _get_oauth_client_credential(provider, "client_id")
+    if not client_id and provider == "gmail":
+        client_id = _SHIPPED_GOOGLE_CLIENT_ID
+    if not client_id:
+        return False
+    client_secret = _get_oauth_client_credential(provider, "client_secret")
+    return bool(client_secret)
 
 
 def get_state_provider(state: str) -> Optional[str]:
@@ -146,7 +212,9 @@ def get_authorization_url(provider: str, redirect_uri: str) -> Tuple[str, str]:
     if provider not in PROVIDERS:
         raise ValueError(f"Unknown provider: {provider}")
     conf = PROVIDERS[provider]
-    client_id = (Config.get(conf["client_id_key"]) or "").strip()
+    client_id = _get_oauth_client_credential(provider, "client_id")
+    if not client_id and provider == "gmail":
+        client_id = _SHIPPED_GOOGLE_CLIENT_ID
     if not client_id:
         raise ValueError(f"OAuth client ID not configured for {provider}. Add it in Settings.")
     verifier, challenge = _pkce_verifier_and_challenge()
@@ -195,26 +263,39 @@ def exchange_code_for_tokens(
     code_verifier = entry.get("code_verifier")
     if not code_verifier:
         raise ValueError("Missing code_verifier for state.")
+    # Use the exact redirect_uri from the auth request (Google requires character-for-character match)
+    exchange_redirect_uri = entry.get("redirect_uri") or redirect_uri
     if provider not in PROVIDERS:
         raise ValueError(f"Unknown provider: {provider}")
     conf = PROVIDERS[provider]
-    client_id = (Config.get(conf["client_id_key"]) or "").strip()
-    client_secret = (Config.get(conf["client_secret_key"]) or "").strip()
+    client_id = _get_oauth_client_credential(provider, "client_id")
+    if not client_id and provider == "gmail":
+        client_id = _SHIPPED_GOOGLE_CLIENT_ID
+    client_secret = _get_oauth_client_credential(provider, "client_secret")
     token_url = conf["token_url"]
     payload = {
         "client_id": client_id,
         "code": code,
-        "redirect_uri": redirect_uri,
+        "redirect_uri": exchange_redirect_uri,
         "grant_type": "authorization_code",
         "code_verifier": code_verifier,
     }
     if client_secret:
         payload["client_secret"] = client_secret
+    elif provider == "gmail":
+        # Google's token endpoint sometimes requires client_secret to be present
+        # (even for Desktop clients). Sending empty can avoid "client_secret is missing".
+        payload["client_secret"] = ""
     headers = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
     resp = requests.post(token_url, data=payload, headers=headers, timeout=30)
     if resp.status_code != 200:
-        logger.warning("Token exchange failed: %s %s", resp.status_code, resp.text[:200])
-        raise ValueError(f"Token exchange failed: {resp.status_code}")
+        try:
+            err_body = resp.json()
+            err_msg = err_body.get("error_description") or err_body.get("error") or resp.text[:200]
+        except Exception:
+            err_msg = resp.text[:200]
+        logger.warning("Token exchange failed: %s %s", resp.status_code, err_msg)
+        raise ValueError(f"Token exchange failed: {err_msg}")
     data = resp.json()
     access = data.get("access_token")
     refresh = data.get("refresh_token")
@@ -231,3 +312,53 @@ def get_oauth_callback_redirect_uri(request_base_url: str) -> str:
     """Build redirect_uri for OAuth callback from request base URL."""
     base = request_base_url.rstrip("/")
     return f"{base}/api/email/oauth/callback"
+
+
+def get_valid_access_token(account_id: str, provider: str, username: Optional[str] = None) -> Optional[str]:
+    """
+    Return a valid access token for the account, refreshing if expired.
+    Only gmail and microsoft support refresh; apple returns current token or None.
+    Returns None if credentials missing, invalid, or refresh fails.
+    Optional username for multi-user credential scope.
+    """
+    creds = get_email_credentials(account_id, provider, username)
+    if not creds or creds.get("type") != "oauth":
+        return None
+    access = creds.get("access_token")
+    refresh = creds.get("refresh_token")
+    expires_at = creds.get("expires_at")
+    now = time.time()
+    if access and (expires_at is None or now + TOKEN_EXPIRY_BUFFER < expires_at):
+        return access
+    if not refresh or provider not in PROVIDERS:
+        return access  # Return possibly expired token; caller may get 401
+    conf = PROVIDERS[provider]
+    client_id = _get_oauth_client_credential(provider, "client_id")
+    client_secret = _get_oauth_client_credential(provider, "client_secret")
+    token_url = conf["token_url"]
+    payload = {
+        "client_id": client_id,
+        "refresh_token": refresh,
+        "grant_type": "refresh_token",
+    }
+    if client_secret:
+        payload["client_secret"] = client_secret
+    elif provider == "gmail":
+        payload["client_secret"] = ""
+    headers = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
+    try:
+        resp = requests.post(token_url, data=payload, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            logger.warning("Token refresh failed for %s: %s %s", provider, resp.status_code, resp.text[:200])
+            return access
+        data = resp.json()
+        new_access = data.get("access_token")
+        if not new_access:
+            return access
+        expires_in = data.get("expires_in")
+        new_expires_at = time.time() + int(expires_in) if expires_in else None
+        set_email_oauth_tokens(account_id, provider, new_access, refresh, new_expires_at, username)
+        return new_access
+    except Exception as e:
+        logger.warning("Token refresh error for %s: %s", provider, e)
+        return access

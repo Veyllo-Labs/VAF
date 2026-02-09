@@ -230,6 +230,10 @@ class WebInterfaceManager:
             "content": content
         })
 
+    def emit_clear_last_assistant(self, session_id: str = None):
+        """Ask the Web UI to remove the last assistant message (e.g. before empty-response retry)."""
+        self._push_session_update(session_id, {"type": "clear_last_assistant"})
+
     def emit_message_complete(self, content: str, session_id: str = None):
         """Emit when a message is fully complete (for Auto-TTS trigger)."""
         self._push_session_update(session_id, {

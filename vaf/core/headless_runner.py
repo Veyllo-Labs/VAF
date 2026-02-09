@@ -480,26 +480,34 @@ def run_headless_agent():
                     except Exception:
                         pass
 
-                    # Streaming callback for WebUI - accumulates chunks, throttled emit so UI keeps up
+                    # Streaming callback for WebUI - accumulates chunks, throttled emit so UI keeps up.
+                    # Supports .clear() so agent can reset buffer on empty-response retry (only retry content is shown).
                     response_parts = []
                     _last_emit_time = [0.0]  # list so nested function can assign
 
-                    def webui_stream_callback(text):
-                        response_parts.append(text)
-                        full_text = "".join(response_parts)
-                        if not full_text.strip():
+                    def _emit(text):
+                        if not (text and text.strip()):
                             return
                         now = time.time()
                         if now - _last_emit_time[0] >= STREAM_EMIT_THROTTLE_SEC:
                             try:
                                 get_web_interface().emit_agent_message(
                                     role="assistant",
-                                    content=full_text,
+                                    content=text,
                                     session_id=task.session_id
                                 )
                                 _last_emit_time[0] = now
                             except Exception:
                                 pass
+
+                    def webui_stream_callback(text):
+                        response_parts.append(text)
+                        _emit("".join(response_parts))
+
+                    def clear_stream_buffer():
+                        response_parts.clear()
+
+                    webui_stream_callback.clear = clear_stream_buffer
 
                     # So build_prompt knows current channel (WebUI vs Telegram)
                     agent._current_chat_source = getattr(task, "source", "web")

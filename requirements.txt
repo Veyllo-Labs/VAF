@@ -60,8 +60,9 @@ python-docx>=1.1.0  # Word document reading
 openpyxl>=3.1.0  # Excel file reading
 python-pptx>=0.6.21  # PowerPoint reading
 
-# Auth (Local Network: JWT, 2FA, Argon2)
+# Auth (Local Network: JWT, 2FA, Argon2) + Email credential storage
 argon2-cffi>=23.1.0         # Password hashing
+keyring>=24.0.0             # OS keyring for email OAuth/IMAP credentials (Windows/macOS/Linux)
 PyJWT>=2.8.0               # JWT tokens
 pyotp>=2.9.0               # TOTP 2FA
 qrcode[pil]>=7.4.0         # QR code for 2FA setup

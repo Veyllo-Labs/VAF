@@ -188,6 +188,14 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount TTS routes: {e}")
 
+# Mount Email connection routes (OAuth2 PKCE + accounts CRUD)
+try:
+    from vaf.api.email_routes import router as email_router
+    app.include_router(email_router)
+    log("WebServer", "Email integration routes mounted at /api/email")
+except Exception as e:
+    log("WebServer", f"Failed to mount Email routes: {e}")
+
 # Add authentication middleware if local network is enabled
 if Config.get("local_network_enabled", False):
     try:

@@ -10,9 +10,9 @@ Connect external apps and services to interact with your VAF agent.
 |----------|--------|-------------|
 | **Discord** | ✅ Available | Chat with your agent via Discord DMs or channels |
 | **Telegram** | ✅ Available | Use VAF from Telegram; VAF can reach you there (whitelist, per-user) |
+| **Email** | ✅ Available | OAuth2 (Google, Microsoft, Apple) or IMAP/SMTP; read and send email via agent |
 | Slack | 🔜 Coming Soon | Integrate VAF into your Slack workspace |
 | WhatsApp | 🔜 Coming Soon | Chat with your agent on WhatsApp |
-| Email | 🔜 Coming Soon | Receive and respond to emails automatically |
 
 ### Calendar
 
@@ -231,10 +231,70 @@ Telegram uses the same pipeline as the Web UI:
 4. Headless runner processes the task; RAG, tools, and user identity are scoped to that user
 5. The agent reply (without internal reasoning blocks) is sent back to the Telegram chat via the bridge
 
+## Email Integration
+
+### Features
+
+- **Multiple accounts**: Connect Gmail (OAuth2), Microsoft Outlook (OAuth2), Apple iCloud (OAuth2), or any provider via IMAP/SMTP.
+- **Secure storage**: OAuth tokens and IMAP passwords are stored in the OS keyring (Windows Credential Manager, macOS Keychain, Linux Secret Service). If the keyring is unavailable, credentials are stored in an AES-256-GCM encrypted file under the platform data directory. No passwords or tokens are stored in `config.json`.
+- **Agent tools**: When at least one email account is connected, the agent can use `read_mail` (inbox, folder) and `send_mail` (from a connected account). Credentials are never passed to the agent; the transport layer resolves them by `account_id`.
+
+### Setup
+
+1. Go to **Settings → Connections** and click **Connect** on Email.
+2. Choose a provider:
+   - **Google (Gmail)** or **Microsoft (Outlook)** or **Apple (iCloud)**: OAuth2 with PKCE. You must register an OAuth app (Google Cloud Console, Azure App Registration, or Apple Developer) and set the redirect URI to `http://127.0.0.1:PORT/api/email/oauth/callback` (PORT = your VAF web server port). Add the client ID (and optional secret) in config (`email_oauth_google_client_id`, etc.). Then click the provider; a browser window opens for sign-in. After authorizing, you are redirected back and the account is added.
+   - **Other mail provider (IMAP/SMTP)**: Enter your email and password (or app password if 2FA). Optionally set IMAP/SMTP host/port; defaults are used for known domains (Gmail, Outlook, Yahoo, iCloud).
+3. Manage accounts in the same wizard: list, add another, or remove (credentials are deleted from the keyring and the account is removed from config).
+
+### OAuth2 (Google, Microsoft, Apple)
+
+- **Flow**: Authorization Code with PKCE; redirect to localhost. No external backend required.
+- **Scopes**: Minimal mail-only scopes (e.g. Gmail: `https://mail.google.com/`; Microsoft: IMAP/SMTP or Graph mail scopes).
+- **Token storage**: Access and refresh tokens are stored only in the keyring (or encrypted fallback file). Config holds only account metadata (`email_config.accounts`: `account_id`, `provider`, `email`, `enabled`, optional server fields for IMAP).
+- **Revocation**: When you remove an account in the UI, tokens are deleted locally. Optionally revoke the grant in the provider’s security settings (Google Account, Microsoft Account, Apple ID).
+
+### IMAP/SMTP fallback
+
+- For providers that do not support OAuth (or if you choose “Other mail provider”), use email + password or app password.
+- **UI notice**: “OAuth2 is not available for this provider. Use your email and an app password (recommended if you use 2FA).”
+- **TLS**: IMAP and SMTP use TLS; certificate verification is enabled.
+- **Defaults**: Known domains (gmail.com, outlook.com, yahoo.com, icloud.com, etc.) get default IMAP/SMTP host/port; you can override in the advanced options.
+
+### Configuration (metadata only)
+
+In `config.json`, `email_config` contains only:
+
+```json
+{
+  "email_config": {
+    "accounts": [
+      {
+        "account_id": "user@gmail.com",
+        "provider": "gmail",
+        "email": "user@gmail.com",
+        "enabled": true
+      },
+      {
+        "account_id": "other@example.com",
+        "provider": "imap",
+        "email": "other@example.com",
+        "enabled": true,
+        "imap_host": "imap.example.com",
+        "imap_port": 993,
+        "smtp_host": "smtp.example.com",
+        "smtp_port": 587
+      }
+    ]
+  }
+}
+```
+
+OAuth client IDs (optional) at top level: `email_oauth_google_client_id`, `email_oauth_google_client_secret`, and similarly for Microsoft and Apple. Credentials (tokens, passwords) are never stored in config.
+
 ## Future Integrations
 
 We're working on additional integrations:
 
 - **Slack**: OAuth-based workspace integration
 - **WhatsApp**: Via WhatsApp Business API
-- **Email**: IMAP/SMTP configuration for email automation

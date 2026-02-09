@@ -5,3 +5,4 @@ export type { DiscordConfig } from './DiscordSetupWizard';
 export { default as TelegramSetupWizard } from './TelegramSetupWizard';
 export type { TelegramConfig } from './TelegramSetupWizard';
 export { default as TelegramDashboard } from './TelegramDashboard';
+export { default as EmailSetupWizard } from './EmailSetupWizard';

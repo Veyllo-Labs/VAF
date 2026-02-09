@@ -105,7 +105,7 @@ import {
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, EmailSetupWizard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 
@@ -179,6 +179,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showDiscordWizard, setShowDiscordWizard] = useState(false);
     const [showTelegramWizard, setShowTelegramWizard] = useState(false);
     const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
+    const [showEmailWizard, setShowEmailWizard] = useState(false);
     const [showCreateAutomationModal, setShowCreateAutomationModal] = useState(false);
 
     const [toolsSearch, setToolsSearch] = useState('');
@@ -1368,6 +1369,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 onOpenDiscordWizard={() => setShowDiscordWizard(true)}
                                 onOpenTelegramWizard={() => setShowTelegramWizard(true)}
                                 onOpenTelegramDashboard={() => setShowTelegramDashboard(true)}
+                                onOpenEmailWizard={() => setShowEmailWizard(true)}
                             />
                         )}
 
@@ -3474,6 +3476,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onClose={() => setShowTelegramDashboard(false)}
                 config={localConfig}
                 onConfigChange={handleChange}
+            />
+
+            {/* Email Setup Wizard */}
+            <EmailSetupWizard
+                isOpen={showEmailWizard}
+                onClose={() => setShowEmailWizard(false)}
+                onComplete={() => { setShowEmailWizard(false); }}
+                existingAccounts={localConfig?.email_config?.accounts || []}
             />
 
             {/* Soul Wizard Modal */}

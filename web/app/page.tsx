@@ -484,7 +484,7 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
     return (
         <div
             className={cn(
-                "flex gap-4 w-full my-1 transition-all duration-500 ease-out",
+                "flex gap-4 w-full max-w-[85%] my-1 transition-all duration-500 ease-out",
                 isVisible ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-2",
                 onClick ? "cursor-pointer" : "",
                 isSubAgentResult && filePaths.length > 0 ? "bg-amber-50/50 rounded-lg p-2 -ml-2" : ""
@@ -1220,6 +1220,16 @@ export default function VAFDashboard() {
                         } else {
                             return [...prev, { role: 'assistant', content: data.content, timestamp: Date.now() }];
                         }
+                    });
+                }
+                else if (data.type === 'clear_last_assistant') {
+                    // Remove faulty assistant message so only the retry response is shown (empty-response retry)
+                    const activeSessionId = currentSessionIdRef.current;
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    setMessages(prev => {
+                        const last = prev[prev.length - 1];
+                        if (last && last.role === 'assistant') return prev.slice(0, -1);
+                        return prev;
                     });
                 }
                 else if (data.type === 'tts_audio') {
@@ -2440,16 +2450,18 @@ export default function VAFDashboard() {
                                                 if (msg.role === 'system') {
                                                     const isLast = i === filteredMessages.length - 1;
                                                     const isSubAgentMessage = msg.content.toLowerCase().includes('sub-agent');
+                                                    const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
                                                     return (
-                                                        <SystemStep
-                                                            key={`system-${trueIndex}`}
-                                            message={msg.content}
-                                            isLoading={loading && isLast}
-                                            useBotIcon={loading && isLast}
-                                            onClick={isSubAgentMessage ? () => openSubAgentWindow(true) : undefined}
-                                        />
-                                    );
-                                }
+                                                        <div key={`system-${trueIndex}`} className={cn("flex justify-center", prevWasSystem ? "pt-0" : "pt-4")}>
+                                                            <SystemStep
+                                                                message={msg.content}
+                                                                isLoading={loading && isLast}
+                                                                useBotIcon={loading && isLast}
+                                                                onClick={isSubAgentMessage ? () => openSubAgentWindow(true) : undefined}
+                                                            />
+                                                        </div>
+                                                    );
+                                                }
 
                                 // Render Tool Messages
                                 if (msg.role === 'tool') {
@@ -2480,13 +2492,15 @@ export default function VAFDashboard() {
                                 // Render Workflow Messages
                                 if (msg.role === 'workflow') {
                                     return (
-                                        <div key={`workflow-${trueIndex}`} className="flex justify-start gap-4 pt-4">
-                                            <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
-                                            <WorkflowChatElement
-                                                workflowId={msg.workflowId || ""}
-                                                name={msg.workflowName || "Workflow"}
-                                                initialSteps={msg.initialSteps}
-                                            />
+                                        <div key={`workflow-${trueIndex}`} className="flex justify-center gap-4 pt-4">
+                                            <div className="flex gap-4 max-w-[85%] w-full items-start">
+                                                <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
+                                                <WorkflowChatElement
+                                                    workflowId={msg.workflowId || ""}
+                                                    name={msg.workflowName || "Workflow"}
+                                                    initialSteps={msg.initialSteps}
+                                                />
+                                            </div>
                                         </div>
                                     );
                                 }
@@ -2505,11 +2519,8 @@ export default function VAFDashboard() {
                                 // Add top margin if following a system step
                                 const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
 
-                                return (
-                                    <div key={`bubble-${trueIndex}`} className={cn("flex gap-4 pt-4", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
-                                        {isBot && <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>}
-                                        <div className={cn("flex flex-col", isBot ? "max-w-[85%] w-full items-start" : "max-w-[72%] items-end shrink-0")}>
-
+                                const bubbleContent = (
+                                                <>
                                             {isBot && thought && <ThinkingDetails thought={thought} isComplete={thinkingDone} />}
 
                                             {/* Show answer bubble: always for user, for bot if there's an answer OR if there's no thought (fallback) */}
@@ -2596,8 +2607,26 @@ export default function VAFDashboard() {
                                             {loading && isBot && i === filteredMessages.length - 1 && statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && (
                                                 <span className="text-[10px] text-gray-400 mt-1 ml-1 animate-in fade-in">{statusMessage}</span>
                                             )}
-                                        </div>
-                                        {!isBot && <div className="w-9 h-9 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-gray-500 shadow-sm shrink-0"><User size={18} /></div>}
+                                                </>
+                                            );
+
+                                return (
+                                    <div key={`bubble-${trueIndex}`} className={cn("flex gap-4 pt-4", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
+                                        {isBot ? (
+                                            <div className="w-full max-w-[85%] flex gap-4">
+                                                <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
+                                                <div className="flex flex-col flex-1 min-w-0 items-start">
+                                                    {bubbleContent}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <div className={cn("flex flex-col", "max-w-[72%] items-end shrink-0")}>
+                                                    {bubbleContent}
+                                                </div>
+                                                <div className="w-9 h-9 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-gray-500 shadow-sm shrink-0"><User size={18} /></div>
+                                            </>
+                                        )}
                                     </div>
                                 );
                                             })()}

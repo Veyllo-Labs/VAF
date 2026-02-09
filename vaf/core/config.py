@@ -32,7 +32,7 @@ class Config:
         "provider": "local",
         
         # API Keys (Base64 encoded for basic obfuscation - NOT encryption!)
-        # For production, consider using system keyring
+        # For production, consider using system keyring for API keys and tokens.
         "api_key_openai": "",
         "api_key_anthropic": "",
         "api_key_deepseek": "",
@@ -144,6 +144,18 @@ class Config:
 
         # Connections: Telegram (bot token, whitelist per user_scope_id)
         "telegram_config": None,                                   # { bot_token, enabled, verified?, whitelist: [...] }
+
+        # Email connections: accounts only (no passwords/tokens in config).
+        # Credentials stored in OS keyring or encrypted file (see vaf.core.credential_store).
+        "email_config": None,  # { "accounts": [ { "account_id", "provider", "email", "enabled", "imap_host?", "imap_port?", "smtp_host?", "smtp_port?" } ] }
+        "email_credentials_key": "",  # AES key (Base64) for fallback encrypted file; auto-generated if empty
+        # OAuth2 client IDs (register app in Google Cloud Console / Azure / Apple; redirect_uri = http://127.0.0.1:PORT/api/email/oauth/callback)
+        "email_oauth_google_client_id": "",
+        "email_oauth_google_client_secret": "",
+        "email_oauth_microsoft_client_id": "",
+        "email_oauth_microsoft_client_secret": "",
+        "email_oauth_apple_client_id": "",
+        "email_oauth_apple_client_secret": "",
     }
 
     @classmethod
@@ -166,6 +178,7 @@ class Config:
     # These are auto-generated secrets that would break auth if lost
     PROTECTED_KEYS = [
         "local_network_jwt_secret",
+        "email_credentials_key",
     ]
 
     @classmethod

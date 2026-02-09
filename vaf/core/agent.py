@@ -1064,7 +1064,9 @@ class Agent:
             from vaf.tools.send_telegram import SendTelegramTool
             from vaf.tools.send_discord import SendDiscordTool
             from vaf.tools.send_slack import SendSlackTool
-            
+            from vaf.tools.read_mail import ReadMailTool
+            from vaf.tools.send_mail import SendMailTool
+
             # UpdateIntent and UpdateWorkingMemory are for Main Agent
             self.tools["update_intent"] = UpdateIntentTool()
             self.tools["update_working_memory"] = UpdateWorkingMemoryTool()
@@ -1074,6 +1076,8 @@ class Agent:
             self.tools["send_telegram"] = SendTelegramTool()
             self.tools["send_discord"] = SendDiscordTool()
             self.tools["send_slack"] = SendSlackTool()
+            self.tools["read_mail"] = ReadMailTool()
+            self.tools["send_mail"] = SendMailTool()
             
             # RequestClarification is strictly for Sub-Agents (via coder_only flag),
             # but we register it here so it's available in the system (even if filtered out later for Main Agent).
@@ -3887,7 +3891,7 @@ class Agent:
         
         # Retry counter for empty responses
         empty_retry_count = 0
-        MAX_EMPTY_RETRIES = 3 # Prevent infinite loops
+        MAX_EMPTY_RETRIES = 10  # Allow up to 10 attempts before hard stop
         current_temp = target_temp
         
         # Main chat loop with retries for empty responses
@@ -5191,18 +5195,26 @@ class Agent:
                     append_domain_log("backend", f"empty_response_retry full_content_preview={full_content[:100] if full_content else 'NONE'}")
                 except Exception:
                     pass
-                # Ensure Web UI shows retry message (UI.event may be no-op in headless/Docker)
+                # Ensure Web UI shows retry message and remove the faulty assistant bubble
                 try:
                     from vaf.core.web_interface import get_web_interface
                     from vaf.core.subagent_ipc import get_current_session_id
+                    session_id = get_current_session_id()
                     get_web_interface().log(
                         "Empty response detected. Applying snapshot and retry...",
                         level="warning",
                         source="System",
-                        session_id=get_current_session_id(),
+                        session_id=session_id,
                     )
+                    get_web_interface().emit_clear_last_assistant(session_id)
                 except Exception:
                     pass
+                # Clear stream buffer so the retry sends only new content (no old + new)
+                if stream_callback and hasattr(stream_callback, "clear"):
+                    try:
+                        stream_callback.clear()
+                    except Exception:
+                        pass
 
                 # Check for tool results that occurred during this turn (after original snapshot)
                 # If we executed tools but got no final answer, we must PRESERVE the tools!
@@ -5259,9 +5271,9 @@ class Agent:
                     UI.event("Debug", f"Reset to user prompt snapshot (preserving query)", style="dim")
 
                 # ═══════════════════════════════════════════════════════════════
-                # PROACTIVE CONTEXT CLEARING (User Request: "1 verschen" -> 15 attempts)
+                # PROACTIVE CONTEXT CLEARING (aggressive clear a few attempts before hard limit)
                 # ═══════════════════════════════════════════════════════════════
-                if empty_retry_count == 15:
+                if empty_retry_count == 8:
                     # Calculate tokens before
                     tokens_before, _ = self.get_token_usage()
                     
@@ -5282,8 +5294,8 @@ class Agent:
                 # ═══════════════════════════════════════════════════════════════
                 # CONTEXT OVERFLOW DETECTION (Fix for Issue #VAF-CTX-001)
                 # ═══════════════════════════════════════════════════════════════
-                MAX_RETRIES_BEFORE_EMERGENCY = 3
-                HARD_LIMIT = 5
+                MAX_RETRIES_BEFORE_EMERGENCY = 7   # Emergency context clear before hard stop
+                HARD_LIMIT = 10                     # Stop after 10 empty-response retries
 
                 # Wait 1 second before retry to avoid hammering the model (use global time module)
                 time.sleep(1)

@@ -476,6 +476,8 @@ Then use the results to answer. Do NOT guess from your training data!
 | `update_user_identity` | **Save PERSONAL user info** (name, language, preferences, do's/don'ts, main_messenger) | "My name is Mert", "I prefer German", "Send it via Telegram" |
 | `send_telegram` | **Send a message to the user via Telegram** (when they asked to receive something there; use if main_messenger is Telegram or user said "via Telegram") | Send summary, result, or notification |
 | `send_discord` | **Send a message to the user via Discord** (when they asked to receive something there; use if main_messenger is Discord or user said "via Discord") | Send summary, result, or notification |
+| `read_mail` | **Read recent emails** from a connected account (account_id = email address) | Check inbox, summarize emails |
+| `send_mail` | **Send an email** from a connected account (account_id, to, subject, body) | Send email on behalf of user |
 
 ### When to use which SAVE tool:
 - **Personal info about the USER** → `update_user_identity`

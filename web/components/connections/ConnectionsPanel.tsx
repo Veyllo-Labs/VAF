@@ -14,6 +14,7 @@ interface ConnectionsPanelProps {
     onOpenDiscordWizard: () => void;
     onOpenTelegramWizard: () => void;
     onOpenTelegramDashboard?: () => void;
+    onOpenEmailWizard?: () => void;
 }
 
 export interface ConnectionApp {
@@ -79,8 +80,8 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         category: 'communication',
         description: 'Receive and respond to emails automatically',
         configKey: 'email_config',
-        available: false,
-        comingSoon: true,
+        available: true,
+        comingSoon: false,
         iconColor: 'bg-red-500',
     },
 
@@ -199,7 +200,7 @@ export const CATEGORIES = [
 /** Use relative /api/ so Next.js rewrites to backend. */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard, onOpenTelegramWizard, onOpenTelegramDashboard }: ConnectionsPanelProps) {
+export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard, onOpenTelegramWizard, onOpenTelegramDashboard, onOpenEmailWizard }: ConnectionsPanelProps) {
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'disconnected' | 'checking'>>({});
 
     useEffect(() => {
@@ -264,7 +265,7 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
         }
     };
 
-    const handleDisconnect = (appId: string) => {
+    const handleDisconnect = async (appId: string) => {
         if (appId === 'discord') {
             onConfigChange('discord_config', null);
             setConnectionStatus(prev => ({ ...prev, discord: 'disconnected' }));
@@ -273,6 +274,20 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
             onConfigChange('telegram_config', null);
             setConnectionStatus(prev => ({ ...prev, telegram: 'disconnected' }));
         }
+        if (appId === 'email') {
+            try {
+                const accounts = config?.email_config?.accounts || [];
+                for (const a of accounts) {
+                    const id = a.account_id || a.email;
+                    if (id) {
+                        await fetch(api(`api/email/accounts/${encodeURIComponent(id)}`), { method: 'DELETE', credentials: 'include' });
+                    }
+                }
+                onConfigChange('email_config', { accounts: [] });
+            } catch (e) {
+                console.error('Failed to disconnect email accounts', e);
+            }
+        }
     };
 
     const getAppsByCategory = (category: string) => {
@@ -280,11 +295,19 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
     };
 
     const isConfigured = (app: ConnectionApp) => {
+        if (app.id === 'email') {
+            const accounts = config?.email_config?.accounts;
+            return Array.isArray(accounts) && accounts.length > 0;
+        }
         const appConfig = config[app.configKey];
         return appConfig?.verified === true;
     };
 
     const isEnabled = (app: ConnectionApp) => {
+        if (app.id === 'email') {
+            const accounts = config?.email_config?.accounts;
+            return Array.isArray(accounts) && (accounts as any[]).some((a: any) => a.enabled !== false);
+        }
         const appConfig = config[app.configKey];
         return appConfig?.enabled === true;
     };
@@ -364,6 +387,11 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                             : 'Add your Telegram in Settings to message and be reached.'}
                                                     </p>
                                                 )}
+                                                {configured && app.id === 'email' && (
+                                                    <p className="text-xs text-gray-600 mt-1">
+                                                        {(config?.email_config?.accounts?.length ?? 0)} account(s) connected. Open Settings to add or remove.
+                                                    </p>
+                                                )}
                                             </div>
                                         </div>
 
@@ -392,6 +420,7 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                                 if (onOpenTelegramDashboard && configured) onOpenTelegramDashboard();
                                                                 else onOpenTelegramWizard();
                                                             }
+                                                            if (app.id === 'email' && onOpenEmailWizard) onOpenEmailWizard();
                                                         }}
                                                         className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                                                         title="Settings"
@@ -413,6 +442,7 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                     onClick={() => {
                                                         if (app.id === 'discord') onOpenDiscordWizard();
                                                         if (app.id === 'telegram') onOpenTelegramWizard();
+                                                        if (app.id === 'email' && onOpenEmailWizard) onOpenEmailWizard();
                                                     }}
                                                     disabled={app.comingSoon || !app.available}
                                                     className={cn(

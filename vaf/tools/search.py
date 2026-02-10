@@ -116,6 +116,82 @@ def _search_google(query: str, max_results: int) -> tuple[list, str | None]:
     except Exception:
         return ([], "error")
 
+
+def _search_brave_api(query: str, max_results: int) -> list:
+    """Brave Search API. Returns list of {title, href, body} or [] on failure."""
+    key = (Config.get("api_key_brave_search") or "").strip()
+    if not key:
+        return []
+    try:
+        url = "https://api.search.brave.com/res/v1/web/search?q=" + quote_plus(query)
+        headers = {"X-Subscription-Token": key, "Accept": "application/json"}
+        r = requests.get(url, timeout=10, headers=headers)
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        results = (data.get("web") or {}).get("results") or []
+        out = []
+        for item in results[:max_results]:
+            title = (item.get("title") or "").strip() or "No title"
+            href = (item.get("url") or "").strip()
+            body = (item.get("description") or "").strip()[:500]
+            if href:
+                out.append({"title": title, "href": href, "body": body})
+        return out
+    except Exception:
+        return []
+
+
+def _search_google_cse(query: str, max_results: int) -> list:
+    """Google Custom Search JSON API. Returns list of {title, href, body} or [] on failure."""
+    key = (Config.get("api_key_google_search") or "").strip()
+    cx = (Config.get("google_search_engine_id") or "").strip()
+    if not key or not cx:
+        return []
+    try:
+        num = min(max(1, max_results), 10)
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {"key": key, "cx": cx, "q": query, "num": num}
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        items = data.get("items") or []
+        out = []
+        for item in items:
+            title = (item.get("title") or "").strip() or "No title"
+            href = (item.get("link") or "").strip()
+            body = (item.get("snippet") or "").strip()[:500]
+            if href:
+                out.append({"title": title, "href": href, "body": body})
+        return out
+    except Exception:
+        return []
+
+
+def get_web_search_results(query: str, max_results: int) -> tuple[list, str, str | None]:
+    """Try Brave API -> Google CSE API -> scrape Google -> DuckDuckGo. Returns (results, source_name, fallback_hint)."""
+    fallback_hint = None
+    # 1) Brave API
+    results = _search_brave_api(query, max_results)
+    if results:
+        return (results, "Brave", None)
+    # 2) Google Custom Search API
+    results = _search_google_cse(query, max_results)
+    if results:
+        return (results, "Google", None)
+    # 3) Scrape Google
+    results, google_reason = _search_google(query, max_results)
+    if results:
+        return (results, "Google", None)
+    # 4) DuckDuckGo fallback
+    UI.event("Web Search", "Google: no results or blocked – using DuckDuckGo", style="dim")
+    raw = DDGS().text(query, max_results=max_results, safesearch="strict")
+    results = list(raw) if raw else []
+    fallback_hint = {"blocked": "Google blockiert.", "no_results": "Google: keine Treffer.", "error": "Google: Fehler."}.get(google_reason, "Google: keine Treffer.")
+    return (results, "DuckDuckGo", fallback_hint)
+
+
 class WebSearchTool(BaseTool):
     name = "web_search"
     description = """Search the web for information. Automatically fetches full page content for accurate data extraction.
@@ -209,22 +285,12 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
                 except Exception:
                     pass
 
-            # 1) Search: try Google first, fallback to DuckDuckGo
-            results, google_reason = _search_google(query_with_filter, max_results)
-            search_source = "Google"
-            fallback_hint = None  # Short line (max 4 words) when DDG was used
-            if not results:
-                UI.event("Web Search", "Google: no results or blocked – using DuckDuckGo", style="dim")
-                raw = DDGS().text(query_with_filter, max_results=max_results, safesearch="strict")
-                results = list(raw) if raw else []
-                search_source = "DuckDuckGo"
-                fallback_hint = {"blocked": "Google blockiert.", "no_results": "Google: keine Treffer.", "error": "Google: Fehler."}.get(google_reason, "Google: keine Treffer.")
-            
-            # If no results with filter, retry without filter (DDG only; Google already tried with same query)
+            # 1) Search: Brave API -> Google CSE API -> scrape Google -> DuckDuckGo
+            results, search_source, fallback_hint = get_web_search_results(query_with_filter, max_results)
+            # If no results with filter, retry without filter
             if not results and query_with_filter != query:
                 UI.event("Smart Search", "No results with source filter - retrying without filter", style="dim")
-                raw = DDGS().text(query, max_results=max_results, safesearch="strict")
-                results = list(raw) if raw else []
+                results, search_source, fallback_hint = get_web_search_results(query, max_results)
             
             if not results:
                 return [] if return_raw else "No results found."

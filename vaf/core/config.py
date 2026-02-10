@@ -38,6 +38,10 @@ class Config:
         "api_key_deepseek": "",
         "api_key_google": "",
         "api_key_openrouter": "",
+        # Web Search API Keys (optional; when set, used before scrape/DDG)
+        "api_key_brave_search": "",
+        "api_key_google_search": "",
+        "google_search_engine_id": "",
         
         # API Model Selection per Provider
         "api_model_openai": "gpt-4o",

@@ -34,7 +34,7 @@ from vaf.core.platform import Platform
 from vaf.core.log_helper import append_domain_log
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
-from vaf.tools.search import WebSearchTool, _search_google
+from vaf.tools.search import WebSearchTool, get_web_search_results
 from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, MoveFileTool
 
 import atexit
@@ -5213,6 +5213,26 @@ class Agent:
                     except Exception:
                         pass
 
+                # First empty only: keep one assistant block (with thinking) and nudge; no temp sweep.
+                if empty_retry_count == 0:
+                    content = full_response if full_response else ((full_reasoning or "") + "\n\n" + (full_content or "")).strip()
+                    if not content:
+                        content = "[Empty]"
+                    self.history = self.history[:history_snapshot_len + 1] + [
+                        {"role": "assistant", "content": content}
+                    ]
+                    self.history.append({
+                        "role": "system",
+                        "content": (
+                            "You only provided thinking but no final answer for the user. "
+                            "Provide a clear, direct answer now (or call the necessary tools)."
+                        )
+                    })
+                    empty_retry_count += 1
+                    time.sleep(1)
+                    continue
+
+                # Second and later empties: existing logic (drop thinking, temp sweep, emergency clear)
                 # Check for tool results that occurred during this turn (after original snapshot)
                 # If we executed tools but got no final answer, we must PRESERVE the tools!
                 # Otherwise we loop forever: Call Tool -> Empty Ans -> Reset -> Call Tool -> ...
@@ -5772,14 +5792,11 @@ class Agent:
 
     def perform_web_search(self, query):
         try:
-            # 1. Search: try Google first, fallback to DuckDuckGo (same as WebSearchTool)
-            results, _ = _search_google(query, 5)
-            if not results:
-                raw = DDGS().text(query, max_results=5, safesearch='strict')
-                results = list(raw) if raw else []
+            # Same priority as WebSearchTool: Brave API -> Google CSE -> scrape Google -> DuckDuckGo
+            results, search_source, _ = get_web_search_results(query, 5)
             if not results:
                 return "No results found."
-            summary = "### Web Search Results (Deep Research)\n"
+            summary = f"### Web Search Results (Deep Research – {search_source})\n"
             
             # 2. Deep Dive: Fetch content of top 2 results
             # We use a simple fetcher to get the actual page text

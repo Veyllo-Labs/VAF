@@ -1083,6 +1083,30 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         type="password"
                                     />
                                 </Section>
+                                <Section title="Web Search (API)">
+                                    <p className="text-xs text-gray-500 mb-3">Optional. When set, these APIs are used for web search before fallback (scrape/DDG).</p>
+                                    <Input
+                                        label="Brave Search API Key"
+                                        value={localConfig.api_key_brave_search || ''}
+                                        onChange={(v: string) => handleChange('api_key_brave_search', v)}
+                                        type="password"
+                                        placeholder="From api-dashboard.search.brave.com"
+                                    />
+                                    <Input
+                                        label="Google Search API Key"
+                                        value={localConfig.api_key_google_search || ''}
+                                        onChange={(v: string) => handleChange('api_key_google_search', v)}
+                                        type="password"
+                                        placeholder="Cloud Console – Custom Search API"
+                                    />
+                                    <Input
+                                        label="Google Search Engine ID (cx)"
+                                        value={localConfig.google_search_engine_id || ''}
+                                        onChange={(v: string) => handleChange('google_search_engine_id', v)}
+                                        type="text"
+                                        placeholder="From Programmable Search Engine control panel"
+                                    />
+                                </Section>
                             </div>
                         )}
 

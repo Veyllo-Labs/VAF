@@ -112,6 +112,22 @@ When using API providers, you may want to disable automatic llama-server startup
 
 This saves resources when not using local models.
 
+## Web Search API Keys
+
+The `web_search` tool can use optional search APIs when keys are set. This avoids reliance on scraping and improves reliability.
+
+**Order of use:** Brave Search API (if key set) → Google Custom Search API (if key and search engine ID set) → scrape Google → DuckDuckGo.
+
+**Where to set:** Web UI → Settings → General → "Web Search (API)", or in `~/.vaf/config.json`:
+
+| Key | Description |
+| :--- | :--- |
+| `api_key_brave_search` | Brave Search API key. Create at [api-dashboard.search.brave.com](https://api-dashboard.search.brave.com/app/keys). |
+| `api_key_google_search` | Google Custom Search API key (Cloud Console, Custom Search API enabled). |
+| `google_search_engine_id` | Programmable Search Engine ID (cx). Create a search engine at [programmablesearchengine.google.com](https://programmablesearchengine.google.com/controlpanel/create) and set it to search the entire web. |
+
+If no API keys are set, the tool uses the built-in path (scrape Google, then DuckDuckGo on failure). The same order applies to the agent’s internal `perform_web_search` (e.g. deep research).
+
 ## Local Server: Prompt Cache (Memory)
 
 When using the local provider, the llama-server reserves RAM for a prompt cache so it can reuse conversation context across turns instead of re-evaluating the full history each time. You can tune this in `~/.vaf/config.json` or in the Web UI under **AI & Model** → **Local Model Settings**:

@@ -253,6 +253,15 @@ Use `tray_autostart` to control whether the tray app starts when the OS logs in:
 sub-agents still run headless and stream output to the docked panel even when this
 setting is enabled.
 
+### Web Search API Keys
+
+Under Settings → General, the section **Web Search (API)** lets you set optional keys for web search:
+
+- **Brave Search API Key** – Used first when set (from [Brave API dashboard](https://api-dashboard.search.brave.com/app/keys)).
+- **Google Search API Key** and **Google Search Engine ID (cx)** – Used if both are set (Custom Search API and a Programmable Search Engine that searches the entire web).
+
+If none are set, the tool uses the default path (scrape Google, then DuckDuckGo). Stored in `config.json` as `api_key_brave_search`, `api_key_google_search`, and `google_search_engine_id`.
+
 ### Port Configuration
 
 **Backend Port**: Hardcoded to 8001 in `web_server.py`

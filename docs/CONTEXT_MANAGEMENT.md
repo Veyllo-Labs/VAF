@@ -6,9 +6,10 @@ This document provides a deep dive into VAF's internal architecture, focusing on
 
 1. [Dynamic System Prompt](#dynamic-system-prompt)
 2. [Context Management](#context-management)
-3. [Sub-Agents](#sub-agents)
-4. [Web Search & Deep Research](#web-search--deep-research)
-5. [Context Compression](#context-compression)
+3. [Empty Response Handling and Retries](#empty-response-handling-and-retries)
+4. [Sub-Agents](#sub-agents)
+5. [Web Search & Deep Research](#web-search--deep-research)
+6. [Context Compression](#context-compression)
 
 ---
 
@@ -227,6 +228,15 @@ To prevent "Context Drift" (where the agent gets distracted by sub-agent status 
    - Is this a "Meta-Response" (e.g., "I have processed the files")?
    - Does it answer the original question?
    - **Action**: If it's just meta-talk, the system blocks the output and forces the agent to provide the actual answer.
+
+### Empty Response Handling and Retries
+
+When the model returns no user-facing answer (e.g. only `<think>` content or empty text), the main agent treats this as an **empty response** and retries instead of accepting it. Implementation is in `vaf/core/agent.py` (chat loop).
+
+- **First empty (retry count 0):** History is set to the current snapshot (system + user) **plus one assistant message** containing the model’s last output (including thinking). A system nudge is appended instructing the model to provide a clear final answer or call tools. No temperature change; one short delay then retry. This lets the model see its own reasoning and the explicit “answer now” instruction.
+- **Second and later empties:** History is reset to the snapshot only (system + user; tool calls and tool results from the turn are preserved). Thinking-only assistant messages are dropped. The same nudge is added, temperature is varied (sweep) to break loops, and at high retry counts proactive context clearing and emergency context management run before a hard stop (after a fixed number of retries).
+
+This two-phase approach reduces endless “think-only” loops while still using the first failed attempt as context for one retry.
 
 ### Configuration
 

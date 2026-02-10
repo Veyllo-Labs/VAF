@@ -60,6 +60,8 @@ To prevent the small Router LLM from missing obvious intents (e.g., overlooking 
 - **Research:** "research", "recherche", "analyse", "deep" → `research_agent`, `web_search`
 - **Web Search:** "search", "find", "news", "weather", "wetter" → `web_search`
 
+When `web_search` is used, results are fetched in this order if configured: Brave Search API, then Google Custom Search API, then scrape Google, then DuckDuckGo. See [API_INTEGRATION.md](API_INTEGRATION.md#web-search-api-keys) for config keys.
+
 ### 3.2. The LLM Routing Logic (`_route_tools`)
 
 After heuristics, we still query the Router LLM to catch nuanced intents that keywords might miss.

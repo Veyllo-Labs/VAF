@@ -10,6 +10,7 @@ When a workflow runs in VAF, the WebUI provides several visual components:
 2. **VAFWorkflowRuntime** - Right panel with workflow steps and terminal output
 3. **SubAgentWindow** - Panel for sub-agent output (hidden during workflow execution)
 4. **DocumentEditor** - Panel for viewing/editing workflow-generated documents
+5. **DocumentViewer** - Panel for viewing attachments (Anhänge) in the right sidebar; same UI and size as DocumentEditor
 
 ## Component Architecture
 
@@ -81,6 +82,24 @@ A panel for viewing and editing HTML documents created by workflows. Styled iden
 - Takes priority over SubAgentWindow when open
 - Uses `getApiBase()` for API calls
 
+### DocumentViewer
+
+Located at `web/components/DocumentViewer.tsx`
+
+A panel for viewing attachments (documents, images, tables) in the right sidebar. Same layout, size, and styling as DocumentEditor (dock/overlay).
+
+**Features:**
+- Displays in the same panel area as DocumentEditor and SubAgentWindow (dock mode)
+- Left column: document list with "Dokument hinzufügen" and remove per document
+- Right column: read-only extracted text (or image) for the selected document
+- No Save/Export; documents are for reference only
+
+**Integration:**
+- Opened by user via the Document Viewer (BookOpen) button next to the attach button
+- Frontend sends `set_sidebar_documents` (Client → Server) with full list of documents (name, base64 data, mimeType); backend stores extracted text in `session.runtime_state["sidebar_documents"]` and replies with `sidebar_documents_set` (Server → Client) with `contents: [{ name, content }]` for display
+- When the viewer is open and has documents, the LLM receives their content automatically on each user message (injected in headless_runner before `chat_step`)
+- Closing the viewer sends `set_sidebar_documents` with `documents: []` so the LLM no longer sees them
+
 ## Data Flow
 
 ### Workflow Execution
@@ -108,6 +127,8 @@ A panel for viewing and editing HTML documents created by workflows. Styled iden
 | `workflow_output_stream` | Add line to terminal output |
 | `subagent_output_stream` | Sub-agent output (routed to workflow terminal when running) |
 | `document_ready` | Open DocumentEditor with generated file |
+| `set_sidebar_documents` | Client → Server: set/clear sidebar documents for Document Viewer |
+| `sidebar_documents_set` | Server → Client: extracted contents for Document Viewer display |
 
 ## Store Structure
 

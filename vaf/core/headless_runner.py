@@ -512,6 +512,20 @@ def run_headless_agent():
                     # So build_prompt knows current channel (WebUI vs Telegram)
                     agent._current_chat_source = getattr(task, "source", "web")
 
+                    # Sidebar documents: inject into this turn only (session history stays clean)
+                    effective_input = input_text or ""
+                    try:
+                        session_for_sidebar = session_mgr.load(task.session_id)
+                        sidebar_docs = (getattr(session_for_sidebar, "runtime_state", None) or {}).get("sidebar_documents") or []
+                        if sidebar_docs:
+                            sidebar_block = "\n\n".join(
+                                f"--- FILE: {d.get('name', '')} ---\n{d.get('content', '')}\n----------------"
+                                for d in sidebar_docs
+                            )
+                            effective_input = sidebar_block + "\n\n" + (input_text or "")
+                    except FileNotFoundError:
+                        pass  # no session yet, use raw input_text
+
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
@@ -520,7 +534,7 @@ def run_headless_agent():
                     except Exception:
                         pass
                     response = agent.chat_step(
-                        user_input=input_text,
+                        user_input=effective_input,
                         stream_callback=webui_stream_callback,  # Stream to WebUI!
                         skip_input=False,
                         memory_context=memory_context or None,

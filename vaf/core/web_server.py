@@ -14,7 +14,7 @@ import os
 log("WebServer", "Basic imports done")
 
 from vaf.core.web_interface import get_web_interface
-from vaf.core.session import SessionManager
+from vaf.core.session import SessionManager, Session
 from vaf.cli.autosuggest import SmartAutoSuggest
 import json
 from vaf.core.config import Config
@@ -1560,7 +1560,57 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             )
                         except Exception:
                             pass
-                
+
+                elif type == "set_sidebar_documents":
+                    session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                    if not session_id:
+                        session_id = "web-default"
+                    documents = cmd.get("documents") or []
+                    try:
+                        if not documents:
+                            loaded = session_mgr.load(session_id)
+                            if not getattr(loaded, "runtime_state", None):
+                                loaded.runtime_state = {}
+                            loaded.runtime_state["sidebar_documents"] = []
+                            session_mgr.save(loaded, sync_state=False)
+                            await websocket.send_json({
+                                "type": "sidebar_documents_set",
+                                "contents": [],
+                                "sessionId": session_id
+                            })
+                        else:
+                            contents = await process_files_to_sidebar_list(documents)
+                            loaded = session_mgr.load(session_id)
+                            if not getattr(loaded, "runtime_state", None):
+                                loaded.runtime_state = {}
+                            loaded.runtime_state["sidebar_documents"] = contents
+                            session_mgr.save(loaded, sync_state=False)
+                            await websocket.send_json({
+                                "type": "sidebar_documents_set",
+                                "contents": contents,
+                                "sessionId": session_id
+                            })
+                    except FileNotFoundError:
+                        new_sess = Session(
+                            id=session_id,
+                            name=f"Session {session_id}",
+                            runtime_state={"sidebar_documents": contents}
+                        )
+                        session_mgr.save(new_sess, sync_state=False)
+                        await websocket.send_json({
+                            "type": "sidebar_documents_set",
+                            "contents": contents,
+                            "sessionId": session_id
+                        })
+                    except Exception as e:
+                        log("WebServer", f"set_sidebar_documents failed: {e}")
+                        await websocket.send_json({
+                            "type": "sidebar_documents_set",
+                            "contents": [],
+                            "sessionId": session_id,
+                            "error": str(e)
+                        })
+
                 elif type == "get_tools":
                     # Return list of available tools from agent
                     try:
@@ -2042,6 +2092,52 @@ async def process_uploaded_files(files: list) -> str:
     
     return "".join(results)
 
+
+async def process_files_to_sidebar_list(files: list) -> list:
+    """
+    Process uploaded files and return a list of {name, content} for sidebar_documents.
+    Uses same Librarian extraction as process_uploaded_files.
+    """
+    import base64
+    import tempfile
+    import os
+    from pathlib import Path
+
+    if not files:
+        return []
+
+    results = []
+    for file_obj in files:
+        try:
+            filename = file_obj.get("name", "unknown")
+            file_data = file_obj.get("data", "")
+            mime_type = file_obj.get("mimeType", "")
+
+            if file_data.startswith("data:"):
+                file_data = file_data.split(",", 1)[1] if "," in file_data else file_data
+
+            decoded_data = base64.b64decode(file_data)
+            file_ext = Path(filename).suffix or ".txt"
+            with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as temp_file:
+                temp_file.write(decoded_data)
+                temp_path = temp_file.name
+
+            try:
+                from vaf.tools.librarian import LibrarianTool
+                librarian = LibrarianTool()
+                content = librarian._read_file(Path(temp_path), enable_chunking=True)
+                results.append({"name": filename, "content": content})
+            finally:
+                try:
+                    os.unlink(temp_path)
+                except Exception:
+                    pass
+        except Exception as e:
+            results.append({
+                "name": file_obj.get("name", "unknown"),
+                "content": f"[ERROR] Failed to process file: {str(e)}"
+            })
+    return results
 
 
 def run_server(host="127.0.0.1", port=8001):

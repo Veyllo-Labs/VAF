@@ -5,13 +5,14 @@ import { useRouter } from 'next/navigation';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, BookOpen
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import SettingsModal from '@/components/SettingsModal';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import SubAgentWindow from '@/components/SubAgentWindow';
 import DocumentEditor from '@/components/DocumentEditor';
+import DocumentViewer from '@/components/DocumentViewer';
 import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
 import { useWorkflowStore } from '@/components/workflows/stores/workflowStore';
@@ -656,6 +657,15 @@ export default function VAFDashboard() {
         isOpen: false,
         filePath: '',
         title: 'Document',
+    });
+
+    // Document Viewer (sidebar attachments) state
+    const [documentViewerState, setDocumentViewerState] = useState<{
+        isOpen: boolean;
+        documents: Array<{ id: string; name: string; mimeType?: string; data?: string; content?: string }>;
+    }>({
+        isOpen: false,
+        documents: [],
     });
 
     // Suggestion State
@@ -1401,6 +1411,21 @@ export default function VAFDashboard() {
                         title: data.title || 'Document',
                     });
                 }
+                else if (data.type === 'sidebar_documents_set') {
+                    const contents = (data.contents || []) as Array<{ name: string; content: string }>;
+                    setDocumentViewerState(prev => {
+                        if (contents.length === 0) return { ...prev, documents: [] };
+                        return {
+                            ...prev,
+                            documents: contents.map((c, i) => ({
+                                ...(prev.documents[i] || {}),
+                                id: prev.documents[i]?.id ?? `doc-${i}-${c.name}`,
+                                name: c.name,
+                                content: c.content,
+                            })),
+                        };
+                    });
+                }
                 else if (data.type === 'subagent_update') {
                     const statusText = String(data.status || '').trim();
                     const modelLabel = data.model ? `• ${String(data.model)}` : '';
@@ -1567,7 +1592,20 @@ export default function VAFDashboard() {
                     });
 
                     // Combine and Sort
-                    const finalMsgs = [...hydratedServerMsgs, ...orphans].sort((a, b) => a.timestamp - b.timestamp);
+                    let finalMsgs = [...hydratedServerMsgs, ...orphans].sort((a, b) => a.timestamp - b.timestamp);
+
+                    // Deduplicate: when switching back to a session, cache + server can both contribute
+                    // the same messages (server content cleaned, timestamps differ), causing duplicates
+                    const norm = (s: string) => (s ?? '')
+                        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .slice(0, 400);
+                    finalMsgs = finalMsgs.filter((msg, i) => {
+                        const n = norm(String(msg.content ?? ''));
+                        const firstIdx = finalMsgs.findIndex(m => m.role === msg.role && norm(String(m.content ?? '')) === n);
+                        return firstIdx === i;
+                    });
 
                     setMessages(finalMsgs);
 
@@ -1843,6 +1881,48 @@ export default function VAFDashboard() {
 
     const removeFile = (index: number) => {
         setAttachedFiles(prev => prev.filter((_, i) => i !== index));
+    };
+
+    const handleDocumentViewerAddFiles = async (files: File[]) => {
+        if (!ws || !currentSessionId) return;
+        const base64List = await Promise.all(files.map(f => fileToBase64(f)));
+        const newDocs = files.map((f, i) => ({
+            id: crypto.randomUUID(),
+            name: f.name,
+            mimeType: f.type,
+            data: base64List[i],
+        }));
+        setDocumentViewerState(prev => {
+            const newList = [...prev.documents, ...newDocs];
+            ws.send(JSON.stringify({
+                type: 'set_sidebar_documents',
+                sessionId: currentSessionId,
+                documents: newList.map(d => ({ name: d.name, data: d.data, mimeType: d.mimeType })),
+            }));
+            return { ...prev, documents: newList };
+        });
+    };
+
+    const handleDocumentViewerRemove = (id: string) => {
+        setDocumentViewerState(prev => {
+            const newList = prev.documents.filter(d => d.id !== id);
+            const withData = newList.filter(d => d.data);
+            if (ws && currentSessionId) {
+                ws.send(JSON.stringify({
+                    type: 'set_sidebar_documents',
+                    sessionId: currentSessionId,
+                    documents: withData.map(d => ({ name: d.name, data: d.data, mimeType: d.mimeType })),
+                }));
+            }
+            return { ...prev, documents: newList };
+        });
+    };
+
+    const handleDocumentViewerClose = () => {
+        if (ws && currentSessionId) {
+            ws.send(JSON.stringify({ type: 'set_sidebar_documents', sessionId: currentSessionId, documents: [] }));
+        }
+        setDocumentViewerState({ isOpen: false, documents: [] });
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -2796,6 +2876,20 @@ export default function VAFDashboard() {
                             >
                                 <Paperclip size={20} />
                             </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setDocumentViewerState(prev => ({ ...prev, isOpen: true }));
+                                    setShowSubAgentPanel(true);
+                                }}
+                                className={cn(
+                                    "p-4 transition-colors",
+                                    documentViewerState.isOpen ? "text-blue-600" : "text-gray-400 hover:text-gray-900"
+                                )}
+                                title="Document Viewer (Anhänge)"
+                            >
+                                <BookOpen size={20} />
+                            </button>
                             <div className="flex-1 relative flex items-end">
 
                                 <div className="absolute inset-0 py-4 px-1 pointer-events-none text-sm text-gray-400 whitespace-pre overflow-hidden">
@@ -2842,19 +2936,28 @@ export default function VAFDashboard() {
                             </div>
                     </div>
                 </div>
-                    {/* Right Panel: Either SubAgentWindow OR DocumentEditor (dock mode) */}
+                    {/* Right Panel: DocumentViewer, DocumentEditor, or SubAgentWindow (dock mode) */}
                     {showSubAgentPanel && (
                         <div
                             className={cn(
                                 "hidden lg:flex h-full items-stretch overflow-hidden transition-all duration-300 ease-out",
-                                (subAgentState.isOpen || documentEditorState.isOpen)
+                                (subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen)
                                     ? "w-[58%] min-w-[640px] max-w-[940px] opacity-100"
                                     : "w-0 min-w-0 max-w-0 opacity-0 pointer-events-none"
                             )}
-                            aria-hidden={!subAgentState.isOpen && !documentEditorState.isOpen}
+                            aria-hidden={!subAgentState.isOpen && !documentEditorState.isOpen && !documentViewerState.isOpen}
                         >
-                            {/* Show DocumentEditor if open, otherwise show SubAgentWindow */}
-                            {documentEditorState.isOpen ? (
+                            {documentViewerState.isOpen ? (
+                                <DocumentViewer
+                                    isOpen={documentViewerState.isOpen}
+                                    onClose={handleDocumentViewerClose}
+                                    title="Document Viewer"
+                                    mode="dock"
+                                    documents={documentViewerState.documents}
+                                    onAddFiles={handleDocumentViewerAddFiles}
+                                    onRemoveDocument={handleDocumentViewerRemove}
+                                />
+                            ) : documentEditorState.isOpen ? (
                                 <DocumentEditor
                                     isOpen={documentEditorState.isOpen}
                                     onClose={() => setDocumentEditorState(prev => ({ ...prev, isOpen: false }))}

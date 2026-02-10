@@ -54,11 +54,13 @@ Key rules:
 ### Client → Server
 
 - `chat`: user input (must include `sessionId`)
+- `set_sidebar_documents`: set documents shown in the Document Viewer (Anhänge) for the current session. Payload: `{ sessionId?, documents: Array<{ name, data (base64/data-URL), mimeType? }> }`. Backend stores extracted text in `session.runtime_state["sidebar_documents"]` and injects it into the next user turn for the LLM. Send `documents: []` to clear.
 - `get_sessions`, `new_session`, `load_session`, `delete_session`
 - `get_config`, `get_models`, `get_tools`, `get_workflows`
 
 ### Server → Client
 
+- `sidebar_documents_set`: sent after processing `set_sidebar_documents`. Payload: `{ contents: Array<{ name, content }>, sessionId?, error? }`. The frontend uses `contents` to display extracted text in the Document Viewer.
 - `session_list`: available sessions
 - `history_update`: session history (also sets active session)
 - `agent_message_update`: streaming assistant text

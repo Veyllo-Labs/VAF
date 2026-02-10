@@ -2,6 +2,7 @@ import re
 import requests
 import warnings
 import os
+from urllib.parse import quote_plus
 
 # Best Practice: Try new package first, fallback to legacy with suppression
 try:
@@ -12,10 +13,108 @@ except ImportError:
         warnings.simplefilter("ignore")
         from duckduckgo_search import DDGS
 
+from bs4 import BeautifulSoup
+
 from vaf.cli.ui import UI
 from vaf.core.config import Config
 from vaf.core.platform import Platform
 from vaf.tools.base import BaseTool
+
+
+def _search_google(query: str, max_results: int) -> tuple[list, str | None]:
+    """Try to get search results from Google (https://www.google.com/search?q=...).
+    Returns (list of dicts with keys title, href, body; reason).
+    reason is None if results returned, else 'blocked'|'no_results'|'error' for fallback hint."""
+    out = []
+    try:
+        # Google expects spaces as + in query string: "wie wird das wetter" -> wie+wird+das+wetter
+        url = "https://www.google.com/search?q=" + quote_plus(query)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+        }
+        r = requests.get(url, timeout=8, headers=headers)
+        if r.status_code != 200:
+            return ([], "error")
+        raw = r.text.lower()
+        if "unusual traffic" in raw or "captcha" in raw or "denied" in raw:
+            return ([], "blocked")
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        seen_hrefs: set[str] = set()
+
+        def add_result(title: str, href: str, snippet: str) -> bool:
+            if not href or href.startswith("/") or "google.com" in href or href in seen_hrefs:
+                return False
+            seen_hrefs.add(href)
+            title = (title or "").strip() or "No title"
+            out.append({"title": title, "href": href, "body": (snippet or "")[:500]})
+            return True
+
+        # Strategy 1: classic div.g blocks
+        for div in soup.select("div.g"):
+            if len(out) >= max_results:
+                break
+            link_el = div.find("a", href=True)
+            if not link_el:
+                continue
+            href = (link_el.get("href") or "").strip()
+            title_el = div.find("h3")
+            title = (title_el.get_text(strip=True) if title_el else link_el.get_text(strip=True)) or ""
+            snippet_el = (
+                div.find("div", class_=lambda c: c and "VwiC3b" in str(c))
+                or div.find("div", class_=lambda c: c and "IsZvec" in str(c))
+                or div.find("div", class_=lambda c: c and "aCOpRe" in str(c))
+                or div.find("span", class_=lambda c: c and "st" in str(c).lower())
+            )
+            snippet = (snippet_el.get_text(strip=True) if snippet_el else "") or ""
+            add_result(title, href, snippet)
+
+        # Strategy 2: div.yuRUbf (link container) when div.g finds nothing
+        if len(out) < max_results and soup.select("div.yuRUbf"):
+            for yu in soup.select("div.yuRUbf"):
+                if len(out) >= max_results:
+                    break
+                link_el = yu.find("a", href=True)
+                if not link_el:
+                    continue
+                href = (link_el.get("href") or "").strip()
+                h3 = yu.find("h3")
+                title = (h3.get_text(strip=True) if h3 else link_el.get_text(strip=True)) or ""
+                parent = yu.parent
+                snippet = ""
+                if parent:
+                    for cls in ("VwiC3b", "IsZvec", "aCOpRe", "s"):
+                        sel = parent.find("div", class_=lambda c: c and cls in str(c))
+                        if sel:
+                            snippet = sel.get_text(strip=True)[:500]
+                            break
+                add_result(title, href, snippet)
+
+        # Strategy 3: any h3 with parent/sibling <a href="http..."> (catch alternate markup)
+        if len(out) < max_results:
+            for h3 in soup.find_all("h3"):
+                if len(out) >= max_results:
+                    break
+                a = h3.find_parent("a") or h3.find_next("a")
+                if not a or not a.get("href"):
+                    continue
+                href = (a.get("href") or "").strip()
+                title = h3.get_text(strip=True) or ""
+                nxt = h3.find_parent("div")
+                snippet = ""
+                if nxt:
+                    nxt = nxt.find_next_sibling()
+                    if nxt:
+                        snippet = nxt.get_text(strip=True)[:500]
+                add_result(title, href, snippet)
+
+        if not out:
+            return ([], "no_results")
+        return (out, None)
+    except Exception:
+        return ([], "error")
 
 class WebSearchTool(BaseTool):
     name = "web_search"
@@ -110,11 +209,18 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
                 except Exception:
                     pass
 
-            # 1) Search (with or without site filter)
-            raw = DDGS().text(query_with_filter, max_results=max_results, safesearch="strict")
-            results = list(raw) if raw else []
+            # 1) Search: try Google first, fallback to DuckDuckGo
+            results, google_reason = _search_google(query_with_filter, max_results)
+            search_source = "Google"
+            fallback_hint = None  # Short line (max 4 words) when DDG was used
+            if not results:
+                UI.event("Web Search", "Google: no results or blocked – using DuckDuckGo", style="dim")
+                raw = DDGS().text(query_with_filter, max_results=max_results, safesearch="strict")
+                results = list(raw) if raw else []
+                search_source = "DuckDuckGo"
+                fallback_hint = {"blocked": "Google blockiert.", "no_results": "Google: keine Treffer.", "error": "Google: Fehler."}.get(google_reason, "Google: keine Treffer.")
             
-            # If no results with filter, retry without filter
+            # If no results with filter, retry without filter (DDG only; Google already tried with same query)
             if not results and query_with_filter != query:
                 UI.event("Smart Search", "No results with source filter - retrying without filter", style="dim")
                 raw = DDGS().text(query, max_results=max_results, safesearch="strict")
@@ -127,7 +233,9 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
             if return_raw:
                 return results
 
-            title = "### Web Search Results\n"
+            title = f"### Web Search Results ({search_source})\n"
+            if fallback_hint:
+                title += f"*{fallback_hint}*\n\n"
             title += f"Query: {query}\n\n"
             
             # Helper to fetch text

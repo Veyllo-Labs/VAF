@@ -34,7 +34,7 @@ from vaf.core.platform import Platform
 from vaf.core.log_helper import append_domain_log
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
-from vaf.tools.search import WebSearchTool
+from vaf.tools.search import WebSearchTool, _search_google
 from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, MoveFileTool
 
 import atexit
@@ -4884,16 +4884,7 @@ class Agent:
                         get_web_interface().emit_tool_update('start', function_name, tc['id'], data=json.dumps(arguments), session_id=get_current_session_id())
                     except Exception: pass
                     
-                    # TTS Filler: "Ich suche im Internet..." (context-aware feedback)
-                    # Extract query/context for filler
-                    filler_query = None
-                    if function_name == "web_search":
-                        filler_query = arguments.get('query', '')
-                    elif function_name in ("coding_agent", "research_agent"):
-                        filler_query = arguments.get('task', '')
-                    
-                    self._speak_filler("tool", tool_name=function_name, query=filler_query)
-                    
+                    # Tool fillers are not spoken on host TTS (avoid announcing every tool use).
                     # Extract user question for web_search to enable per-page analysis
                     if function_name == "web_search":
                         # Find the last user message to get the original question
@@ -5498,16 +5489,16 @@ class Agent:
              # Case 1: Loop ended with Tool Output -> Model Silent
              if last_msg.get('role') == 'tool':
                  res = f"✅ Tool '{last_msg.get('name')}' finished: {last_msg.get('content')[:100]}..."
-                 self._speak(res)
+                 # Do not speak tool-status via TTS (user requested no "tool X / model provided no commentary")
                  return res
                  
              # Case 2: Loop ended with Assistant Thought -> Model Silent (Previous was tool)
              if last_msg.get('role') == 'assistant' and prev_msg.get('role') == 'tool':
                   res = f"✅ Tool '{prev_msg.get('name')}' finished. (Model provided no commentary)"
-                  self._speak(res)
+                  # Do not speak tool-status via TTS (user requested no "tool X / model provided no commentary")
                   return res
 
-             self._speak("...")
+             # No TTS for generic fallback either (avoid "...")
              return "..."
         
         # Final empty check - same logic as above
@@ -5781,10 +5772,13 @@ class Agent:
 
     def perform_web_search(self, query):
         try:
-            # 1. Search (Deep Research: Get detailed snippets)
-            results = DDGS().text(query, max_results=5, safesearch='strict') # 5 high quality
-            if not results: return "No results found."
-            
+            # 1. Search: try Google first, fallback to DuckDuckGo (same as WebSearchTool)
+            results, _ = _search_google(query, 5)
+            if not results:
+                raw = DDGS().text(query, max_results=5, safesearch='strict')
+                results = list(raw) if raw else []
+            if not results:
+                return "No results found."
             summary = "### Web Search Results (Deep Research)\n"
             
             # 2. Deep Dive: Fetch content of top 2 results

@@ -237,14 +237,16 @@ Telegram uses the same pipeline as the Web UI:
 
 - **Multiple accounts**: Connect **Gmail** (OAuth2 + Gmail API), **Microsoft Outlook** (OAuth2 + Microsoft Graph Mail), or any provider via **IMAP/SMTP**. **iCloud Mail** has no OAuth mail API; use IMAP with an app-specific password (see Apple / iCloud below).
 - **Secure storage**: OAuth tokens and IMAP passwords are stored in the OS keyring (Windows Credential Manager, macOS Keychain, Linux Secret Service). If the keyring is unavailable, credentials are stored in an AES-256-GCM encrypted file under the platform data directory. No passwords or tokens are stored in `config.json`.
-- **Agent tools**: When at least one email account is connected, the agent can use `mail_inbox`, `read_mail`, and `send_mail`. Credentials are never passed to the agent; the transport layer resolves them by `account_id`. Access tokens are refreshed automatically when expired.
+- **Agent tools**: When at least one email account is connected, the agent can use `mail_inbox`, `find_mail`, `read_mail`, `mark_mail_answered`, and `send_mail`. Credentials are never passed to the agent; the transport layer resolves them by `account_id`. Access tokens are refreshed automatically when expired.
 
-#### Agent email tools (mail_inbox, read_mail, send_mail)
+#### Agent email tools (mail_inbox, find_mail, read_mail, mark_mail_answered, send_mail)
 
 | Tool | Purpose | When to use |
 |------|---------|-------------|
-| `mail_inbox` | List messages in a folder (inbox or other). Returns From, Date, Subject, and for each message `message_id` and `provider_message_id` (for Gmail/Microsoft). | User asks to check email, show inbox, or list recent messages. |
-| `read_mail` | Return the full body of one message as plain text. Parameters: `account_id`, `message_id`, `folder` (default INBOX), optional `provider_message_id`. | User asks what a specific email says or contains. Use `message_id` (and `provider_message_id` when present) from a prior `mail_inbox` call. |
+| `mail_inbox` | List messages in a folder (inbox or other). **Omit `account_id`** to list from **all connected accounts** (e.g. "do we have mails about CVEs?"); returns From, Date, Subject, and per message `account_id`, `message_id`, `provider_message_id`. | User asks to check email, show inbox, or search across all mails (no need to ask for an account). |
+| `find_mail` | Search the synced mailbox by subject or sender (`query`, optional `folder`, `limit`). Returns matches with `account_id`, `message_id`, `provider_message_id`; if exactly one match, returns the full body. | User asks "what does the X mail say?" or "details about the Postman/Twitch/… email" → use find_mail(query="X"); if result includes full body use it, else call read_mail with first match's IDs. |
+| `read_mail` | Return the full body of one message as plain text. Parameters: `account_id`, `message_id`, `folder` (default INBOX), optional `provider_message_id`. Use IDs from find_mail or mail_inbox. | When you have account_id and message_id (e.g. from find_mail); do not ask the user for these. |
+| `mark_mail_answered` | Mark a message as answered by the agent (`account_id`, `message_id`, `folder`). Sets a timestamp so the Mail UI shows "Benatwortet am …" and the message is not handled twice. | After the agent has processed or replied to an email. |
 | `send_mail` | Send an email from a connected account (`account_id`, `to`, `subject`, `body`). | User asks to send or reply to an email. |
 
 Message bodies are always returned as plain text: HTML and MIME structure are stripped, and the same cleaned text is used in the Mail dashboard and for the agent. This keeps context size low and avoids raw markup.
@@ -333,7 +335,15 @@ You can optionally add **sender rules** so that messages from certain senders ar
 ```
 
 - **New syncs**: When mail is fetched (Gmail, Microsoft, IMAP), each message’s category is set from the provider (Gmail labels) or from sender rules. So new mails get the right label automatically.
-- **Existing mails (backfill)**: Call **POST** `/api/email/messages/apply-sender-rules` (with auth). The backend re-applies the current rules to all synced messages for that user and updates categories where they change. Response: `{ "ok": true, "updated": 42 }`.
+- **Label in UI**: When the user changes a message's label in the Mail dashboard (Primary, Social, Promotions, or custom), the backend automatically adds a sender rule for that message's From address and applies it to all synced messages from that sender (existing and future). No extra action is required.
+- **Manual backfill**: If you edit `sender_category_rules` in config by hand, call **POST** `/api/email/messages/apply-sender-rules` (with auth) to re-apply rules to all synced messages. Response: `{ "ok": true, "updated": 42 }`.
+
+### Mail sync store (SQLite)
+
+- **Path**: By default the DB file is `email_sync.db` in the platform data dir (e.g. `%LOCALAPPDATA%\\vaf` on Windows). To use a Docker volume or custom path, set the environment variable **`VAF_EMAIL_SYNC_DB`** to the full path of the SQLite file (e.g. `/data/vaf/email_sync.db`). The parent directory is created if missing. **Best practice (Docker):** If you run VAF in Docker, mount a volume (e.g. at `/data/vaf`) and set `VAF_EMAIL_SYNC_DB=/data/vaf/email_sync.db` so the Mail DB lives in the volume and is persistent.
+- **Per-user DB (network mode)**: When multiple users are enabled (network / login), **each user gets their own SQLite file**: `data_dir/users/{username}/email_sync.db`. So User A and User B never share mail data; each user's Mail dashboard and agent tools only see that user's synced mails.
+- **Retention**: Messages older than **90 days** (by message date, or by sync date if the message date cannot be parsed) are **deleted automatically** on each sync. This keeps the store size bounded.
+- **Answered flag**: When the agent has processed or replied to a message, it can call the **`mark_mail_answered`** tool so the message is marked with a timestamp. The Mail UI then shows "Benatwortet am DD.MM.YYYY um HH:MM" and a "Beantwortet" badge in the list, so the same mail is not handled twice.
 
 OAuth client IDs (optional) at top level: `email_oauth_google_client_id`, `email_oauth_google_client_secret`, and similarly for Microsoft and Apple. Credentials (tokens, passwords) are never stored in config.
 

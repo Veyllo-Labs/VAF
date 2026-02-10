@@ -1066,6 +1066,8 @@ class Agent:
             from vaf.tools.send_slack import SendSlackTool
             from vaf.tools.mail_inbox import MailInboxTool
             from vaf.tools.read_mail import ReadMailTool
+            from vaf.tools.find_mail import FindMailTool
+            from vaf.tools.mark_mail_answered import MarkMailAnsweredTool
             from vaf.tools.send_mail import SendMailTool
 
             # UpdateIntent and UpdateWorkingMemory are for Main Agent
@@ -1079,6 +1081,8 @@ class Agent:
             self.tools["send_slack"] = SendSlackTool()
             self.tools["mail_inbox"] = MailInboxTool()
             self.tools["read_mail"] = ReadMailTool()
+            self.tools["find_mail"] = FindMailTool()
+            self.tools["mark_mail_answered"] = MarkMailAnsweredTool()
             self.tools["send_mail"] = SendMailTool()
             
             # RequestClarification is strictly for Sub-Agents (via coder_only flag),
@@ -5702,6 +5706,8 @@ class Agent:
                 if name in ("send_telegram", "send_discord", "send_slack"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered"):
+                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 result = self.tools[name].run(**tool_args)
             else:
                 result = f"Error: Unknown tool '{name}'"

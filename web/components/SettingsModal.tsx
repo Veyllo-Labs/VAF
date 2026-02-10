@@ -2271,7 +2271,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <X size={24} />
                             </button>
                         </div>
-                        <div className="flex-1 overflow-y-auto p-6 bg-gray-50/30 space-y-4">
+                        <div className="flex-1 overflow-y-auto px-4 pt-2 pb-4 bg-gray-50/30 space-y-3 min-h-0">
                             {trustedSourcesError && (
                                 <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
                                     {trustedSourcesError}
@@ -2285,9 +2285,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <p className="text-sm text-gray-600">No categories loaded. Check backend connection.</p>
                                 </div>
                             ) : (
-                            <div className="flex flex-wrap gap-6 justify-center">
+                            <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,320px))] gap-x-3 gap-y-2 justify-center justify-items-stretch items-start content-start">
                                 {onCreateTrustedCategory && (
-                                    <div className="w-[320px] min-w-[280px] flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col min-h-[180px]">
+                                    <div className="w-full min-w-0 bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col min-h-[180px]">
                                         {!showCreateCategoryForm ? (
                                             <button
                                                 type="button"
@@ -2342,7 +2342,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         return 0;
                                     })
                                     .map((cat) => (
-                                        <div key={cat.id} className="w-[320px] min-w-[280px] flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col">
+                                        <div key={cat.id} className="w-full min-w-0 bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col">
                                             <div className="flex items-start justify-between gap-2">
                                                 <div>
                                                     <h3 className="text-lg font-semibold text-gray-900">{cat.name}</h3>

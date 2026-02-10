@@ -477,9 +477,17 @@ Then use the results to answer. Do NOT guess from your training data!
 | `update_user_identity` | **Save PERSONAL user info** (name, language, city, country, preferences, do's/don'ts, main_messenger, timezone, date_format, time_format) | "My name is Mert", "I'm in Berlin", "Send it via Telegram", "Use Europe/Berlin for time" |
 | `send_telegram` | **Send a message to the user via Telegram** (when they asked to receive something there; use if main_messenger is Telegram or user said "via Telegram") | Send summary, result, or notification |
 | `send_discord` | **Send a message to the user via Discord** (when they asked to receive something there; use if main_messenger is Discord or user said "via Discord") | Send summary, result, or notification |
-| `mail_inbox` | **Show inbox** (list of emails) for a connected account (account_id, folder, max_messages) | Check inbox, list messages; use message_id/provider_message_id with read_mail to read one |
-| `read_mail` | **Read full body of one email** as plain text (account_id, message_id, folder, optional provider_message_id) | When user asks what an email says; same cleaned text as Mail UI, token-efficient |
+| `mail_inbox` | **Show inbox** (list of emails). Use **max_messages** to control how many (e.g. max_messages=20 for 20 mails, 50 for 50). Omit account_id for ALL accounts; optional account_id, folder. Output: From, Date, Subject, account_id, message_id, provider_message_id per line | When user asks "list 20 mails", "die anderen 20", "alle Mails" → call with max_messages=20 (or 50); show the full list, do not summarize to 3 |
+| `find_mail` | **Search mailbox** by subject or sender (query, optional folder, limit). Returns matches with account_id, message_id, provider_message_id; if exactly one match, returns full body. Use when user asks "what does the X mail say?" or "details about the X email" | Prefer find_mail(query="X") for "Postman mail", "Twitch email", etc.; if result includes full body use it, else call read_mail with first match's IDs |
+| `read_mail` | **Read full body of one email** (account_id, message_id, folder, optional provider_message_id). Use IDs from find_mail or mail_inbox output | When you have account_id and message_id (e.g. from find_mail), call read_mail to get body. Do NOT ask the user for email ID |
+| `mark_mail_answered` | **Mark email as answered** (account_id, message_id, folder) | Call after processing/replying so it shows "Benatwortet am ..." and is not handled again |
 | `send_mail` | **Send an email** from a connected account (account_id, to, subject, body) | Send email on behalf of user |
+
+### Email (mail_inbox, find_mail, read_mail):
+- When the user asks **how many or which mails** (e.g. "list 20 mails", "die anderen 20", "zeig mir alle Mails", "lies die anderen Mails") → call **mail_inbox** with **max_messages** set to the requested number (e.g. 20 or 50). Present the **full list** in your reply; do NOT summarize to only 3 mails. If the user said "read the other mails", list them with mail_inbox(max_messages=50) and then either read a few with read_mail or offer to read specific ones.
+- When the user asks **what an email says** (e.g. "what does the Postman mail say?", "was sagt die X-Mail?") → prefer **find_mail(query="X")**. If the result includes the full body, use it; else call **read_mail** with the first match's IDs. Do NOT ask the user for message ID or account.
+- **find_mail** searches the synced mailbox by subject and sender (like Ctrl+F).
+- If you already have a mail_inbox list and the user asks about a specific subject, use the matching row's IDs with read_mail, or find_mail(query="...").
 
 ### When to use which SAVE tool:
 - **Personal info about the USER** → `update_user_identity`

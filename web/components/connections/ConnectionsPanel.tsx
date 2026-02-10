@@ -333,7 +333,9 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                         {getAppsByCategory(category.id).map(app => {
                             const configured = isConfigured(app);
                             const enabled = isEnabled(app);
-                            const status = connectionStatus[app.id];
+                            const status = app.id === 'email'
+                                ? ((config?.email_config?.accounts?.length ?? 0) > 0 ? 'connected' : 'disconnected')
+                                : connectionStatus[app.id];
                             const Icon = app.icon;
 
                             return (

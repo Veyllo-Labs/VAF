@@ -37,6 +37,7 @@ interface SyncedMessage {
     date: string;
     body_snippet: string;
     synced_at: string;
+    answered_at?: string;
 }
 
 /** Provider auto-detected categories (e.g. Gmail: Primary, Social, Promotions). Always shown in filter bar. */
@@ -49,6 +50,23 @@ const CATEGORY_DISPLAY: Record<string, string> = {
 };
 function categoryDisplay(cat: string): string {
     return CATEGORY_DISPLAY[cat] ?? (cat.charAt(0).toUpperCase() + cat.slice(1).toLowerCase().replace(/_/g, ' '));
+}
+
+/** Format answered_at ISO to "DD.MM.YYYY um HH:MM" for display. */
+function formatAnsweredAt(iso: string | undefined): string {
+    if (!iso?.trim()) return '';
+    try {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return '';
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        const hh = String(d.getHours()).padStart(2, '0');
+        const min = String(d.getMinutes()).padStart(2, '0');
+        return `${dd}.${mm}.${yyyy} um ${hh}:${min}`;
+    } catch {
+        return '';
+    }
 }
 
 export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refreshTrigger = 0 }: MailDashboardProps) {
@@ -69,8 +87,6 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
     const [messageBodyError, setMessageBodyError] = useState<string | null>(null);
     const [newLabelInput, setNewLabelInput] = useState('');
     const [patchLoading, setPatchLoading] = useState(false);
-    const [applyRulesLoading, setApplyRulesLoading] = useState(false);
-    const [applyRulesResult, setApplyRulesResult] = useState<number | null>(null);
     const autoSyncTimersRef = useRef<Record<string, ReturnType<typeof setInterval>>>({});
 
     const fetchAccounts = async () => {
@@ -197,26 +213,6 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
         return () => window.removeEventListener('keydown', handleKeyDown, true);
     }, [isOpen, onClose, selectedMessage]);
 
-    const handleApplySenderRules = async () => {
-        setApplyRulesLoading(true);
-        setApplyRulesResult(null);
-        try {
-            const res = await fetch(api('api/email/messages/apply-sender-rules'), {
-                method: 'POST',
-                credentials: 'include',
-            });
-            const data = await res.json().catch(() => ({}));
-            if (res.ok && data.ok) {
-                setApplyRulesResult(data.updated ?? 0);
-                setMessagesOffset(0);
-                fetchMessages(selectedAccountId, 0, false, selectedCategory);
-                fetchCategories();
-            }
-        } finally {
-            setApplyRulesLoading(false);
-        }
-    };
-
     const handleSyncAccount = async (accountId: string) => {
         setSyncLoading(accountId);
         setError('');
@@ -256,6 +252,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
         if (enabled) {
             const timer = setInterval(() => handleSyncAccount(accountId), AUTO_SYNC_INTERVAL_MS);
             autoSyncTimersRef.current[accountId] = timer;
+            handleSyncAccount(accountId); // run first sync immediately
         } else {
             const t = autoSyncTimersRef.current[accountId];
             if (t) {
@@ -282,6 +279,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
             const id = a.account_id || a.email;
             if (a.auto_sync_enabled && !autoSyncTimersRef.current[id]) {
                 autoSyncTimersRef.current[id] = setInterval(() => handleSyncAccount(id), AUTO_SYNC_INTERVAL_MS);
+                handleSyncAccount(id); // run first sync immediately when dashboard opens with auto-sync on
             }
         });
     }, [isOpen, accounts]);
@@ -314,8 +312,14 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                 }),
             });
             if (res.ok) {
+                const data = await res.json().catch(() => ({}));
+                const updatedCount = typeof data.updated === 'number' ? data.updated : 1;
                 const updated = { ...message, category: cat };
                 setSelectedMessage(prev => prev && prev.message_id === message.message_id ? updated : null);
+                if (updatedCount > 0) {
+                    setMessagesOffset(0);
+                    fetchMessages(selectedAccountId, 0, false, selectedCategory);
+                }
                 setMessages(prev => {
                     const next = prev.map(m =>
                         (m.message_id === message.message_id && m.account_id === message.account_id) ? updated : m
@@ -492,20 +496,6 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                         <UserPlus className="w-4 h-4" />
                                         Add another account
                                     </button>
-                                    <button
-                                        type="button"
-                                        onClick={handleApplySenderRules}
-                                        disabled={applyRulesLoading}
-                                        className="mt-2 w-full py-2 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                                    >
-                                        {applyRulesLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                                        Apply sender rules
-                                    </button>
-                                    {applyRulesResult !== null && (
-                                        <p className="mt-1 text-xs text-gray-500 text-center">
-                                            {applyRulesResult === 0 ? 'No labels changed' : `${applyRulesResult} message(s) updated`}
-                                        </p>
-                                    )}
                                 </>
                             )}
                         </div>
@@ -534,11 +524,14 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                     </div>
                                     <button
                                         type="button"
-                                        onClick={() => selectedAccountId && handleSyncAccount(selectedAccountId)}
-                                        disabled={!selectedAccountId || syncLoading === selectedAccountId}
+                                        onClick={() => {
+                                            const toSync = selectedAccountId || accounts[0]?.account_id || accounts[0]?.email;
+                                            if (toSync) handleSyncAccount(toSync);
+                                        }}
+                                        disabled={accounts.length === 0 || syncLoading !== null}
                                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-100 disabled:opacity-50 disabled:pointer-events-none"
                                     >
-                                        {selectedAccountId && syncLoading === selectedAccountId ? (
+                                        {syncLoading !== null ? (
                                             <Loader2 className="w-4 h-4 animate-spin" />
                                         ) : (
                                             <RefreshCw className="w-4 h-4" />
@@ -619,7 +612,12 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                                     <div className="flex flex-col gap-0.5 min-w-0">
                                                         <div className="flex items-baseline justify-between gap-2">
                                                             <span className="font-medium text-gray-900 truncate text-sm">{m.subject || '(No subject)'}</span>
-                                                            <span className="text-xs text-gray-500 shrink-0">{m.date}</span>
+                                                            <span className="text-xs text-gray-500 shrink-0 flex items-center gap-1.5">
+                                                                {m.answered_at && (
+                                                                    <span className="text-green-600 font-medium" title={formatAnsweredAt(m.answered_at)}>Beantwortet</span>
+                                                                )}
+                                                                {m.date}
+                                                            </span>
                                                         </div>
                                                         <p className="text-xs text-gray-500 truncate">{m.from}</p>
                                                         {m.body_snippet && (
@@ -671,16 +669,22 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                     <X className="w-5 h-5 text-gray-500" />
                                 </button>
                             </div>
-                            {/* Absender + Datum */}
+                            {/* Absender + Datum + Benatwortet */}
                             <div className="px-5 py-2 border-b border-gray-100 shrink-0">
                                 <p className="text-sm text-gray-700">
                                     <span className="font-medium text-gray-500">From:</span>{' '}
                                     <span className="text-gray-900">{selectedMessage.from}</span>
                                 </p>
                                 <p className="text-xs text-gray-500 mt-0.5">{selectedMessage.date}</p>
+                                {selectedMessage.answered_at && formatAnsweredAt(selectedMessage.answered_at) && (
+                                    <p className="text-xs text-green-700 mt-1 font-medium">
+                                        Benatwortet am {formatAnsweredAt(selectedMessage.answered_at)}
+                                    </p>
+                                )}
                             </div>
-                            {/* Labels */}
-                            <div className="px-5 py-3 border-b border-gray-100 shrink-0 flex flex-wrap items-center gap-2">
+                            {/* Labels — changing a label automatically applies to all mails from this sender */}
+                            <div className="px-5 py-3 border-b border-gray-100 shrink-0 space-y-2">
+                                <div className="flex flex-wrap items-center gap-2">
                                 <span className="text-xs font-medium text-gray-500 mr-1">Label:</span>
                                 {allCategoriesForDisplay.map((cat) => (
                                     <button
@@ -710,6 +714,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                         }
                                     }}
                                 />
+                                </div>
                             </div>
                             {/* Mail body – main scrollable area */}
                             <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">

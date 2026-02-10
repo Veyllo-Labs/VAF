@@ -1223,13 +1223,15 @@ export default function VAFDashboard() {
                     });
                 }
                 else if (data.type === 'clear_last_assistant') {
-                    // Remove faulty assistant message so only the retry response is shown (empty-response retry)
+                    // Remove faulty assistant message so only the retry response is shown (empty-response retry).
+                    // We must remove the last *assistant* message, not the last message: the "Empty response..."
+                    // system log is often appended before this event, so the last message can be system.
                     const activeSessionId = currentSessionIdRef.current;
                     if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
                     setMessages(prev => {
-                        const last = prev[prev.length - 1];
-                        if (last && last.role === 'assistant') return prev.slice(0, -1);
-                        return prev;
+                        const lastAssistantIdx = prev.map((m, i) => ({ m, i })).filter(({ m }) => m.role === 'assistant').pop()?.i;
+                        if (lastAssistantIdx === undefined) return prev;
+                        return prev.slice(0, lastAssistantIdx).concat(prev.slice(lastAssistantIdx + 1));
                     });
                 }
                 else if (data.type === 'tts_audio') {

@@ -5,6 +5,7 @@ Credentials are stored in credential_store (keyring or encrypted file);
 config holds only account metadata.
 """
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -18,10 +19,13 @@ import requests
 from vaf.core.config import Config
 from vaf.core.credential_store import get_email_credentials, set_email_imap_password
 from vaf.core.email_sync_store import (
+    delete_messages_older_than,
+    get_message_from_addr,
     init_store,
     list_categories as store_list_categories,
     list_for_sender_relabel,
     list_messages as store_list_messages,
+    update_message_answered as store_update_message_answered,
     update_message_category as store_update_message_category,
     upsert_messages,
 )
@@ -447,12 +451,12 @@ async def sync_account(request: Request, account_id: str, folder: str = "INBOX",
     except Exception as e:
         logger.warning("Sync fetch failed for %s: %s", account_id[:8] + "***", e)
         return {"ok": False, "count": 0, "error": str(e)}
-    init_store()
     store_username = "" if cred_username is None else cred_username
     count = upsert_messages(account_id, folder, messages, username=store_username)
+    deleted = delete_messages_older_than(username=store_username, days=90)
     acc["last_verified_at"] = datetime.now(timezone.utc).isoformat()
     _save_email_config(ec, _username)
-    return {"ok": True, "count": count}
+    return {"ok": True, "count": count, "deleted": deleted}
 
 
 @router.get("/messages/body")
@@ -516,6 +520,20 @@ class PatchMessageBody(BaseModel):
     folder: str = "INBOX"
     message_id: str
     category: str
+    answered_at: Optional[str] = None  # ISO timestamp when agent answered; set to mark "Benatwortet am ..."
+
+
+def _pattern_from_from_addr(from_addr: str) -> str:
+    """Derive a sender rule pattern from From header (e.g. 'Twitch <no-reply@twitch.tv>' -> 'no-reply@twitch.tv')."""
+    s = (from_addr or "").strip()
+    if not s:
+        return s
+    m = re.search(r"<([^>]+@[^>]+)>", s)
+    if m:
+        return m.group(1).strip().lower()
+    if "@" in s:
+        return s.lower()
+    return s
 
 
 @router.patch("/messages")
@@ -523,18 +541,57 @@ async def patch_message_category(
     body: PatchMessageBody,
     _username: str = Depends(_get_current_username),
 ):
-    """Update a message's category (label). Use for Primary, Promotions, Social or custom labels."""
+    """
+    Update a message's category (label). Always adds a sender rule for this message's From
+    address and applies it to all synced messages from that sender (existing and future).
+    """
     store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
+    cat = body.category.strip().lower().replace(" ", "_")[:64] or "primary"
     ok = store_update_message_category(
         store_username,
         body.account_id,
         body.folder,
         body.message_id,
-        body.category,
+        cat,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Message not found")
-    return {"ok": True, "category": body.category.strip().lower().replace(" ", "_")[:64] or "primary"}
+    if body.answered_at is not None:
+        store_update_message_answered(
+            store_username, body.account_id, body.folder, body.message_id,
+            answered_at=(body.answered_at.strip() or None),
+        )
+    updated = 1
+    from_addr = get_message_from_addr(
+        store_username, body.account_id, body.folder, body.message_id
+    )
+    if from_addr:
+        pattern = _pattern_from_from_addr(from_addr)
+        if pattern:
+            ec = _get_email_config(_username)
+            rules = list(ec.get("sender_category_rules") or [])
+            rules = [r for r in rules if isinstance(r, dict) and (r.get("pattern") or "").strip().lower() != pattern]
+            rules.append({"pattern": pattern, "category": cat})
+            ec["sender_category_rules"] = rules
+            _save_email_config(ec, _username)
+        rows = list_for_sender_relabel(store_username)
+        for row in rows:
+            new_cat = apply_sender_rules_to_category(
+                row.get("from_addr") or "",
+                row.get("category") or "primary",
+                store_username if store_username else None,
+            )
+            new_cat = (new_cat or "primary").strip().lower().replace(" ", "_")[:64] or "primary"
+            if new_cat != (row.get("category") or "primary"):
+                if store_update_message_category(
+                    store_username,
+                    row["account_id"],
+                    row["folder"],
+                    row["message_id"],
+                    new_cat,
+                ):
+                    updated += 1
+    return {"ok": True, "category": cat, "updated": updated}
 
 
 @router.post("/messages/apply-sender-rules")

@@ -383,6 +383,25 @@ async def startup_event():
         except Exception as e:
             log("WebServer", f"Firewall setup error: {e}")
     
+    # Email auto-sync: run every 30 min for accounts with "Auto sync every 30 min" enabled
+    async def _email_auto_sync_loop():
+        from vaf.api.email_routes import run_auto_sync_all_accounts, EMAIL_AUTO_SYNC_INTERVAL_SEC
+        await asyncio.sleep(60)  # Delay first run so server is fully up
+        while True:
+            try:
+                result = await run_auto_sync_all_accounts(max_messages=100)
+                if result["synced"] or result["failed"]:
+                    log("WebServer", f"Email auto-sync: {result['synced']} ok, {result['failed']} failed")
+                if result["errors"]:
+                    for err in result["errors"][:3]:
+                        log("WebServer", f"Email auto-sync error: {err}")
+            except Exception as e:
+                log("WebServer", f"Email auto-sync loop error: {e}")
+            await asyncio.sleep(EMAIL_AUTO_SYNC_INTERVAL_SEC)
+
+    asyncio.create_task(_email_auto_sync_loop())
+    log("WebServer", "Email auto-sync background task started (every 30 min)")
+
     # In Docker mode, start the headless agent runner
     # This handles task processing (chat, tools, etc.) within the container
     if Config.is_docker_mode():

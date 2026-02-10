@@ -334,9 +334,10 @@ The Web UI runs alongside the CLI interface:
 
 ### Input Box
 
-- **Features**: Attachment button (placeholder), text input, send button
-- **States**: Disabled during loading, focus ring on interaction
-- **Submit**: Enter key or click send button
+- **Features**: Attachment button, text input, voice input, send button; file chips and token stats above the form when relevant.
+- **Layout**: On a **new chat** (no messages), the input bar is shown **centered** in the viewport with a short welcome line (“How can I help you?”). After the first message is sent, the bar **animates** (≈500 ms) to its **fixed position at the bottom** and stays there for the rest of the conversation.
+- **States**: Disabled during loading, focus ring on interaction.
+- **Submit**: Enter key or click send button.
 
 ## Best Practices
 

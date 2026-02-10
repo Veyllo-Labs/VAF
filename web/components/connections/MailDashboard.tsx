@@ -35,6 +35,8 @@ interface SyncedMessage {
     subject: string;
     from: string;
     date: string;
+    /** ISO date (UTC) when available; use for reliable relative time. */
+    message_date_iso?: string | null;
     body_snippet: string;
     synced_at: string;
     answered_at?: string;
@@ -67,6 +69,29 @@ function formatAnsweredAt(iso: string | undefined): string {
     } catch {
         return '';
     }
+}
+
+/** Format message date for list: use message_date_iso for correct relative time, else raw date string. */
+function formatMessageDate(m: SyncedMessage): string {
+    const iso = m.message_date_iso?.trim();
+    if (iso) {
+        try {
+            const d = new Date(iso);
+            if (!Number.isNaN(d.getTime())) {
+                const diffMs = Date.now() - d.getTime();
+                if (diffMs < 60_000) return 'Gerade eben';
+                if (diffMs < 3600_000) return `vor ${Math.floor(diffMs / 60_000)} Min.`;
+                if (diffMs < 86400_000) return `vor ${Math.floor(diffMs / 3600_000)} Std.`;
+                const dd = String(d.getDate()).padStart(2, '0');
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                const yyyy = d.getFullYear();
+                return `${dd}.${mm}.${yyyy}`;
+            }
+        } catch {
+            /* fall through to raw date */
+        }
+    }
+    return m.date || '';
 }
 
 export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refreshTrigger = 0 }: MailDashboardProps) {
@@ -616,7 +641,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                                                 {m.answered_at && (
                                                                     <span className="text-green-600 font-medium" title={formatAnsweredAt(m.answered_at)}>Beantwortet</span>
                                                                 )}
-                                                                {m.date}
+                                                                {formatMessageDate(m)}
                                                             </span>
                                                         </div>
                                                         <p className="text-xs text-gray-500 truncate">{m.from}</p>
@@ -675,7 +700,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                     <span className="font-medium text-gray-500">From:</span>{' '}
                                     <span className="text-gray-900">{selectedMessage.from}</span>
                                 </p>
-                                <p className="text-xs text-gray-500 mt-0.5">{selectedMessage.date}</p>
+                                <p className="text-xs text-gray-500 mt-0.5">{formatMessageDate(selectedMessage)}</p>
                                 {selectedMessage.answered_at && formatAnsweredAt(selectedMessage.answered_at) && (
                                     <p className="text-xs text-green-700 mt-1 font-medium">
                                         Benatwortet am {formatAnsweredAt(selectedMessage.answered_at)}

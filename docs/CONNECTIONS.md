@@ -150,7 +150,7 @@ The Discord configuration is stored locally in your VAF config:
 ### Session storage and memory compaction (15-message rule)
 
 - **Verlauf:** Telegram chat history is stored in the same place as Web UI sessions: `~/.vaf/sessions/`. Each Telegram user has one session file: `telegram_<user_id>.json`. The dashboard “Session-Verlauf” popup reads from this.
-- **Nach-15-Nachrichten-Regel:** The same **session compaction** as in the Web UI applies: every N **main-user** turns (default 15, configurable via `memory_compaction_interval`), the model is prompted to write durable memories into the memory DB (RAG). The count is **cumulative** (e.g. 4 today + 5 tomorrow = 9; at 15 total, compaction runs). Only role **user** (main user of that session) is counted; other participants (relay contacts, other bot users) have separate sessions. Memories are stored under the whitelist user’s `user_scope_id`, so they appear in the same Memory graph and are used in later Web and Telegram chats. See [MEMORY_SYSTEM.md](MEMORY_SYSTEM.md#session-compaction-background).
+- **Nach-15-Nachrichten-Regel:** The same **session compaction** as in the Web UI applies: every N **main-user** turns (default 15, configurable via `memory_compaction_interval`), the model is prompted to write durable memories into RAG. The prompt includes only **user and assistant messages** (no system or tool content). The count is **cumulative** (e.g. 4 today + 5 tomorrow = 9; at 15 total, compaction runs). Only role **user** (main user of that session) is counted; other participants (relay contacts, other bot users) have separate sessions. Memories are stored under the whitelist user’s `user_scope_id`, so they appear in the same Memory graph and are used in later Web and Telegram chats. Reply length: `memory_compaction_max_tokens` (default 4000). See [MEMORY_SYSTEM.md](MEMORY_SYSTEM.md#session-compaction-background).
 
 ### Configuration
 
@@ -335,6 +335,7 @@ You can optionally add **sender rules** so that messages from certain senders ar
 ```
 
 - **New syncs**: When mail is fetched (Gmail, Microsoft, IMAP), each message’s category is set from the provider (Gmail labels) or from sender rules. So new mails get the right label automatically.
+- **Auto-sync every 30 min**: If the user enables "Auto sync every 30 min" for an account in Settings → Connections → Email, the backend runs a periodic task that syncs all such accounts every 30 minutes. The first run is 60 seconds after server startup; mail is updated even when the Mail dashboard or browser is closed, as long as the VAF server (web or headless) is running.
 - **Label in UI**: When the user changes a message's label in the Mail dashboard (Primary, Social, Promotions, or custom), the backend automatically adds a sender rule for that message's From address and applies it to all synced messages from that sender (existing and future). No extra action is required.
 - **Manual backfill**: If you edit `sender_category_rules` in config by hand, call **POST** `/api/email/messages/apply-sender-rules` (with auth) to re-apply rules to all synced messages. Response: `{ "ok": true, "updated": 42 }`.
 

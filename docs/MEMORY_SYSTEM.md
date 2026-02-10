@@ -11,7 +11,7 @@ The Memory System provides persistent, encrypted memory storage with RAG (Retrie
 - **Graph Visualization**: Interactive ReactFlow-based memory graph
 - **Auto-Connections**: Automatically links semantically related memories
 - **Streaming**: Token streaming for RAG query responses
-- **Session Compaction**: Background process that every N user turns prompts the LLM to write durable memories (MEMORY:/NO_REPLY) into RAG; see [Session Compaction (background)](#session-compaction-background).
+- **Session Compaction**: Background process that every N user turns prompts the LLM to write durable memories (MEMORY:/NO_REPLY) into RAG. The model sees only a user/assistant dialogue excerpt (no system or tool messages). See [Session Compaction (background)](#session-compaction-background).
 
 ## Overview
 
@@ -107,23 +107,27 @@ Additional settings in `~/.vaf/config.json`:
     "memory_chunk_overlap": 50,
     "memory_db_echo": false,
     "memory_compaction_enabled": true,
-    "memory_compaction_interval": 15
+    "memory_compaction_interval": 15,
+    "memory_compaction_max_tokens": 4000
 }
 ```
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `memory_rag_refine_query` | `true` | Expand short user-profile-style queries (e.g. "who am I", "preferences") before search to improve recall. Set to `false` to use the raw user message only. |
+| `memory_compaction_interval` | `15` | Run session compaction every N user turns (cumulative per session). |
+| `memory_compaction_max_tokens` | `4000` | Max tokens for the compaction LLM reply (API, local LLM, and server mode). Allows more `MEMORY:` lines per run. |
 
 ### Session Compaction (background)
 
 **Session Compaction** is an automatic background process that periodically asks the LLM to write durable memories from the current session into RAG. It does not append anything to the chat UI.
 
 - **When:** After every chat task, the headless runner checks whether the session has reached the compaction interval (number of **main-user** turns since last compaction). Default: every **15 user turns** (`memory_compaction_interval`). The count is **cumulative** (e.g. 4 today + 5 tomorrow = 9; at 15 total, compaction runs). Only messages with role `user` are counted; each session is single-user (other participants, e.g. relay contacts, have separate sessions).
-- **What:** A single non-streaming LLM call with a prompt like “Store durable memories now. Write any lasting notes to memory/{date}.md. Output MEMORY: \"...\" lines or NO_REPLY.” The reply is parsed for `MEMORY:` lines; those are ingested into RAG (metadata: `type=memory_flush`, `source=memory/{date}`). Then the user-profile summary cache is refreshed.
+- **What:** A single non-streaming LLM call with a prompt like “Store durable memories now. Write any lasting notes to memory/{date}.md. Output MEMORY: \"...\" lines or NO_REPLY.” The prompt includes a **conversation excerpt (user and assistant messages only; no system prompts or tool calls)**. Reply format: `MEMORY: "..."` lines or NO_REPLY. Parsed `MEMORY:` lines are ingested into RAG (metadata: `type=memory_flush`, `source=memory/{date}`). Then the user-profile summary cache is refreshed. Max reply length: `memory_compaction_max_tokens` (default 4000).
+- **Context:** The conversation excerpt passed to the LLM contains **only user and assistant messages** (no system prompt, no tool calls or tool results). Built from the last N messages in session history, truncated by character limit (~12k chars).
 - **Where:** Logic in `vaf/memory/rag.py` (`run_session_compaction_sync`); triggered from `vaf/core/headless_runner.py` (after each chat, or enqueued as a separate task when using a local LLM so only one LLM call runs at a time). State per session: `~/.vaf/compaction_state.json` (last compaction turn per `session_id`).
 - **Telegram:** The same compaction runs for Telegram sessions. Session history is stored in the same place (`~/.vaf/sessions/telegram_<user_id>.json`). The task carries `user_scope_id` from the admin whitelist, so memories are stored under that user (same as in the Web UI). Every 15 user turns (configurable), the model is prompted to write durable memories into RAG for that Telegram chat as well.
-- **Config:** `memory_compaction_enabled` (default `true`), `memory_compaction_interval` (default `15`). Both require `memory_enabled` to be `true`.
+- **Config:** `memory_compaction_enabled` (default `true`), `memory_compaction_interval` (default `15`), `memory_compaction_max_tokens` (default `4000`, used for API, local LLM, and server mode). All require `memory_enabled` to be `true`.
 - **Logs:** Compaction events are written to **memory.log** (same directory as other app logs: `VAF_LOG_DIR`, repo `logs/`, or platform data dir). Each line is prefixed with `[COMPACTION]` and includes: `COMPACTION_SKIP` (interval not reached), `COMPACTION_START`, `COMPACTION_NO_REPLY`, `COMPACTION_DONE` (with `memories=N`), `COMPACTION_LLM_FAIL`, `COMPACTION_INGEST_FAIL`. All lines have an ISO timestamp at the start. The headless runner also writes `QUEUE_DONE session_id=... (compaction)` to `queue.log` when the compaction task finishes.
 
 **Log structure:** One file per domain under the same log directory. **rag.log**: RAG timing, search, embed calls, snippet count, user scope. **memory.log**: compaction, RSS usage, embedding load, profiler, Whisper load. Each line starts with an ISO timestamp. In memory.log, the prefix on each line (`[COMPACTION]`, `[USAGE]`, `[EMBED]`, `[PROFILER]`, `[WHISPER]`) indicates the source.

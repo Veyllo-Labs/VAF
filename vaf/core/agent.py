@@ -2277,7 +2277,10 @@ class Agent:
         Single non-streaming LLM call for session compaction. Does not modify history.
         Returns raw reply text (e.g. MEMORY: "..." or NO_REPLY).
         While this runs, empty-response filters in chat_step must not treat short/NO_REPLY as empty.
+        max_tokens is configurable (memory_compaction_max_tokens, default 4000) for API/server/local.
         """
+        from vaf.core.config import Config
+        compaction_max_tokens = int(Config.get("memory_compaction_max_tokens", 4000))
         temp_history = [{"role": "user", "content": user_prompt}]
         content = ""
         self._compaction_in_progress = True
@@ -2286,21 +2289,21 @@ class Agent:
                 import requests
                 payload = {
                     "messages": temp_history,
-                    "max_tokens": 500,
+                    "max_tokens": compaction_max_tokens,
                     "temperature": 0.2,
                     "stream": False,
                 }
                 res = requests.post(
                     "http://127.0.0.1:8080/v1/chat/completions",
                     json=payload,
-                    timeout=60,
+                    timeout=90,
                 ).json()
                 content = (res.get("choices") or [{}])[0].get("message", {}).get("content", "")
             elif self.api_backend:
                 chunks = list(
                     self.api_backend.chat_completion(
                         messages=temp_history,
-                        max_tokens=500,
+                        max_tokens=compaction_max_tokens,
                         temperature=0.2,
                         stream=False,
                     )
@@ -2309,7 +2312,7 @@ class Agent:
             elif self.llm:
                 output = self.llm.create_chat_completion(
                     messages=temp_history,
-                    max_tokens=500,
+                    max_tokens=compaction_max_tokens,
                     temperature=0.2,
                 )
                 content = (output.get("choices") or [{}])[0].get("message", {}).get("content", "")

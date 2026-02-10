@@ -780,6 +780,36 @@ def _compaction_log(message: str, session_id: str = "", **kwargs: Any) -> None:
     append_domain_log("memory", f"[COMPACTION] {message} session_id={session_id} {extra}".strip())
 
 
+def _build_compaction_conversation_excerpt(agent: Any, max_chars: int = 12000) -> str:
+    """
+    Build a readable transcript for compaction from the agent's session history.
+    Only user prompts and assistant replies are included; no system messages,
+    no tool calls, and no tool results. The model sees only the dialogue.
+    """
+    history = getattr(agent, "history", None) or []
+    if not history:
+        return ""
+    # Only user and assistant messages; ignore system and tool
+    dialogue = [
+        (msg.get("role"), (msg.get("content") or "").strip())
+        for msg in history
+        if (msg.get("role") or "").strip().lower() in ("user", "assistant")
+    ]
+    lines = []
+    total = 0
+    for role, content in reversed(dialogue):
+        if not content and role != "user":
+            continue
+        prefix = "User: " if (role or "").strip().lower() == "user" else "Assistant: "
+        line = prefix + content.replace("\n", " ").strip()
+        if total + len(line) + 2 > max_chars:
+            break
+        lines.append(line)
+        total += len(line) + 2
+    lines.reverse()
+    return "\n\n".join(lines) if lines else ""
+
+
 def run_session_compaction_sync(
     agent: Any,
     user_scope_id: Optional[UUID],
@@ -813,12 +843,24 @@ def run_session_compaction_sync(
         pass
 
     date_str = datetime.utcnow().strftime("%Y-%m-%d")
-    prompt = (
-        "Session nearing compaction. Store durable memories now. "
-        f"Write any lasting notes to memory/{date_str}.md. "
-        "Output all MEMORY lines in English. "
-        "Reply with NO_REPLY if nothing to store."
-    )
+    conversation = _build_compaction_conversation_excerpt(agent)
+    if conversation:
+        prompt = (
+            "You are storing durable memories from this chat. Read the conversation below and output concrete facts worth remembering: "
+            "user preferences, name, decisions, events, technical choices, or anything the user would want recalled later. "
+            "Output each fact as a single line: MEMORY: \"fact in English\". Do not output meta-commentary (e.g. no \"final check\", \"compliance\", or \"retention policy\"). "
+            f"Reply with exactly NO_REPLY if there is nothing concrete to store.\n\n"
+            "--- Conversation ---\n"
+            f"{conversation}\n"
+            "---\n\n"
+            "Output MEMORY: lines or NO_REPLY."
+        )
+    else:
+        prompt = (
+            "Session nearing compaction. Store durable memories now. "
+            f"Write any lasting notes to memory/{date_str}.md. "
+            "Output each fact as MEMORY: \"...\" in English. Reply with NO_REPLY if nothing to store."
+        )
     try:
         reply = agent._generate_for_compaction(prompt)
     except Exception as e:

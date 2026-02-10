@@ -2430,13 +2430,7 @@ export default function VAFDashboard() {
                         <div className="flex-1 overflow-y-auto p-6" ref={containerRef}>
                         <div className={cn(messagesAreaWidthClass, "mx-auto space-y-2 pb-32")}>
                             {/* Sub-Agent banner removed; reopen via tool cards or system log */}
-                            {messages.length === 0 && (
-                                <div className="h-full flex flex-col items-center justify-center pt-40 pb-20 text-center">
-                                    <Bot size={48} className="text-gray-300 mb-4" />
-                                    <h2 className="text-2xl font-bold text-gray-800">How can I help you?</h2>
-                                    <p className="text-gray-400 mt-2">Start a conversation or choose a workflow</p>
-                                </div>
-                            )}
+                            {/* Empty state welcome is shown in the centered input block below */}
                             {(() => {
                                 const filteredMessages = messages.filter(m => !m.content.includes('__CMD__'));
                                 return filteredMessages.map((msg, i) => {
@@ -2657,7 +2651,22 @@ export default function VAFDashboard() {
                         </div>
                     </div>
 
-                        <div className="absolute bottom-0 w-full bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6 z-40">
+                        <div
+                            className={cn(
+                                "absolute left-0 right-0 w-full z-40 transition-all duration-500 ease-out",
+                                messages.length === 0
+                                    ? "top-1/2 -translate-y-1/2 bottom-auto"
+                                    : "top-auto bottom-0 translate-y-0"
+                            )}
+                        >
+                            <div className="bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6">
+                                {messages.length === 0 && (
+                                    <div className={cn(chatWidthClass, "mx-auto mb-4 text-center")}>
+                                        <Bot size={40} className="text-gray-300 mx-auto mb-3" />
+                                        <h2 className="text-xl font-bold text-gray-800">How can I help you?</h2>
+                                        <p className="text-gray-400 mt-1 text-sm">Start a conversation or choose a workflow</p>
+                                    </div>
+                                )}
                             {/* File chips display */}
                             {attachedFiles.length > 0 && (
                                 <div className={cn(chatWidthClass, "mx-auto mb-2 flex gap-2 flex-wrap")}>
@@ -2830,6 +2839,7 @@ export default function VAFDashboard() {
                             </button>
                         </form>
                         </div>
+                            </div>
                     </div>
                 </div>
                     {/* Right Panel: Either SubAgentWindow OR DocumentEditor (dock mode) */}

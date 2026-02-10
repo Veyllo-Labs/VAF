@@ -230,14 +230,16 @@ def list_messages(
     cat = (category or "").strip().lower().replace(" ", "_")[:64] if category else None
     conn = _get_conn(username)
     try:
-        sel = "account_id, folder, message_id, category, provider_message_id, subject, from_addr, date_str, body_snippet, synced_at, answered_at"
+        # Order by actual message date (newest first) so sync shows real newest mails; NULL date last, then synced_at
+        order_by = "ORDER BY message_date_iso DESC NULLS LAST, synced_at DESC"
+        sel = "account_id, folder, message_id, category, provider_message_id, subject, from_addr, date_str, body_snippet, synced_at, answered_at, message_date_iso"
         if account_id and cat:
             cur = conn.execute(
                 f"""
                 SELECT {sel}
                 FROM email_messages
                 WHERE username = ? AND account_id = ? AND folder = ? AND category = ?
-                ORDER BY synced_at DESC
+                {order_by}
                 LIMIT ? OFFSET ?
                 """,
                 (user, account_id, folder or "INBOX", cat, limit, offset),
@@ -248,7 +250,7 @@ def list_messages(
                 SELECT {sel}
                 FROM email_messages
                 WHERE username = ? AND account_id = ? AND folder = ?
-                ORDER BY synced_at DESC
+                {order_by}
                 LIMIT ? OFFSET ?
                 """,
                 (user, account_id, folder or "INBOX", limit, offset),
@@ -259,7 +261,7 @@ def list_messages(
                 SELECT {sel}
                 FROM email_messages
                 WHERE username = ? AND folder = ? AND category = ?
-                ORDER BY synced_at DESC
+                {order_by}
                 LIMIT ? OFFSET ?
                 """,
                 (user, folder or "INBOX", cat, limit, offset),
@@ -270,7 +272,7 @@ def list_messages(
                 SELECT {sel}
                 FROM email_messages
                 WHERE username = ? AND folder = ?
-                ORDER BY synced_at DESC
+                {order_by}
                 LIMIT ? OFFSET ?
                 """,
                 (user, folder or "INBOX", limit, offset),
@@ -286,6 +288,7 @@ def list_messages(
                 "subject": r["subject"],
                 "from": r["from_addr"],
                 "date": r["date_str"],
+                "message_date_iso": (r["message_date_iso"] or "").strip() if "message_date_iso" in r.keys() else None,
                 "body_snippet": r["body_snippet"],
                 "synced_at": r["synced_at"],
                 "answered_at": (r["answered_at"] or "").strip() if "answered_at" in r.keys() else "",

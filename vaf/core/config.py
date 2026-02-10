@@ -110,6 +110,7 @@ class Config:
         "memory_auto_capture": False,                               # DISABLED: Auto-capture causes memory spikes (investigating)
         "memory_compaction_enabled": True,                          # Session compaction: prompt to store durable memories every N turns
         "memory_compaction_interval": 15,                           # Run compaction every N user/assistant turns
+        "memory_compaction_max_tokens": 4000,                       # Max tokens for compaction LLM reply (more MEMORY: lines; API/local/server)
         "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",  # PostgreSQL connection URL
         "memory_encryption_key": "",                               # AES-256 key (Base64, auto-generated if empty)
         "memory_embedding_model": "all-MiniLM-L6-v2",             # Sentence-transformers model

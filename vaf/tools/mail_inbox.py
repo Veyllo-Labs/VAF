@@ -25,10 +25,12 @@ def _format_inbox(messages: list, folder: str) -> str:
         if pid:
             extra.append(f"provider_message_id: {pid}")
         suffix = " | " + " | ".join(extra)
+        # Prefer message_date_iso for unambiguous date; fall back to raw date header
+        date_display = m.get("message_date_iso") or m.get("date", "")
         lines.append(
-            f"{i}. From: {m.get('from', '')} | Date: {m.get('date', '')} | Subject: {m.get('subject', '')} | {suffix}"
+            f"{i}. From: {m.get('from', '')} | Date: {date_display} | Subject: {m.get('subject', '')} | {suffix}"
         )
-    out = "Recent emails (same as Mail dashboard):\n" + "\n".join(lines)
+    out = "Recent emails (same as Mail dashboard, newest first by message date):\n" + "\n".join(lines)
     out += "\n\nTo read the full body of a message, use read_mail with account_id, message_id, folder, and provider_message_id when available."
     return out
 
@@ -49,10 +51,11 @@ def _format_inbox_all_accounts(messages: list, folder: str) -> str:
         if pid:
             extra.append(f"provider_message_id: {pid}")
         suffix = " | " + " | ".join(extra)
+        date_display = m.get("message_date_iso") or m.get("date", "")
         lines.append(
-            f"{i}. From: {m.get('from', '')} | Date: {m.get('date', '')} | Subject: {m.get('subject', '')} | {suffix}"
+            f"{i}. From: {m.get('from', '')} | Date: {date_display} | Subject: {m.get('subject', '')} | {suffix}"
         )
-    out = "Recent emails (all connected accounts, same as Mail dashboard):\n" + "\n".join(lines)
+    out = "Recent emails (all connected accounts, same as Mail dashboard, newest first by message date):\n" + "\n".join(lines)
     out += "\n\nTo read the full body of a message, use read_mail with account_id, message_id, folder, and provider_message_id from the list."
     return out
 

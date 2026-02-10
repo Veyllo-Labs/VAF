@@ -4,6 +4,7 @@ Email connection API: OAuth2 PKCE start/callback and account CRUD.
 Credentials are stored in credential_store (keyring or encrypted file);
 config holds only account metadata.
 """
+import asyncio
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -655,3 +656,73 @@ async def remove_account(request: Request, account_id: str, _username: str = Dep
     _save_email_config(ec, _username)
     delete_email_credentials(account_id, provider=None, username=cred_username)
     return {"ok": True}
+
+
+# Interval for background auto-sync (must match frontend AUTO_SYNC_INTERVAL_MS / 1000)
+EMAIL_AUTO_SYNC_INTERVAL_SEC = 30 * 60  # 30 minutes
+
+
+def _collect_auto_sync_accounts() -> List[tuple[str, Dict[str, Any], Dict[str, Any]]]:
+    """Return list of (config_username, account_dict, full_ec) for every account with auto_sync_enabled."""
+    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    result: List[tuple[str, Dict[str, Any], Dict[str, Any]]] = []
+    # Legacy / local admin
+    ec = _get_email_config(None)
+    if isinstance(ec, dict):
+        for a in ec.get("accounts") or []:
+            if a.get("auto_sync_enabled"):
+                result.append((local_admin, a, ec))
+    # Per-user config
+    by_user = Config.get("email_config_by_user") or {}
+    if isinstance(by_user, dict):
+        for uname, user_ec in by_user.items():
+            if not isinstance(user_ec, dict):
+                continue
+            for a in user_ec.get("accounts") or []:
+                if a.get("auto_sync_enabled"):
+                    result.append((uname.strip(), a, user_ec))
+    return result
+
+
+async def run_auto_sync_all_accounts(max_messages: int = 100) -> Dict[str, Any]:
+    """
+    Sync all email accounts that have auto_sync_enabled=True.
+    Intended to be called periodically (e.g. every 30 min) from the web server.
+    Runs fetch_mail in a thread so the event loop is not blocked.
+    Returns summary: { "synced": N, "failed": N, "errors": [str, ...] }.
+    """
+    init_store()
+    items = _collect_auto_sync_accounts()
+    if not items:
+        return {"synced": 0, "failed": 0, "errors": []}
+    synced = 0
+    failed = 0
+    errors: List[str] = []
+    for config_username, acc, ec in items:
+        account_id = acc.get("account_id") or acc.get("email") or ""
+        if not account_id:
+            continue
+        cred_username = None if config_username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else config_username
+        store_username = "" if cred_username is None else cred_username
+        limit = min(max(1, max_messages), 200)
+        try:
+            messages = await asyncio.to_thread(
+                fetch_mail,
+                account_id,
+                folder="INBOX",
+                max_messages=limit,
+                username=cred_username,
+            )
+        except Exception as e:
+            logger.warning("Auto-sync fetch failed for %s: %s", account_id[:8] + "***", e)
+            failed += 1
+            errors.append(f"{account_id[:12]}...: {e}")
+            continue
+        count = upsert_messages(account_id, "INBOX", messages, username=store_username)
+        delete_messages_older_than(username=store_username, days=90)
+        acc["last_verified_at"] = datetime.now(timezone.utc).isoformat()
+        _save_email_config(ec, config_username if store_username else None)
+        synced += 1
+        if count > 0:
+            logger.info("Auto-sync completed for %s: %d messages", account_id[:8] + "***", count)
+    return {"synced": synced, "failed": failed, "errors": errors}

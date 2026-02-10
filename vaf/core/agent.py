@@ -4387,7 +4387,20 @@ class Agent:
                                     # Retry the request with compressed context (payload will be rebuilt in next iteration)
                                     continue
                             except (json.JSONDecodeError, KeyError):
-                                pass  # Not a context size error, fall through to normal error handling
+                                pass  # Not a context size error, try generic 400 recovery below
+                            # Any 400 (e.g. server doesn't report "exceed"): try one round of compression and truncate last user message (sidebar docs)
+                            if _attempt < 3:
+                                UI.event("Context", "Request rejected (400). Compressing context...", style="warning")
+                                self.manage_context()
+                                for msg in reversed(self.history):
+                                    if msg.get("role") == "user":
+                                        content = str(msg.get("content", ""))
+                                        if len(content) > 8000:
+                                            msg["content"] = content[:8000] + "\n\n... [Document content truncated to fit context]"
+                                            UI.event("Context", "Truncated document block in last message.", style="info")
+                                        break
+                                UI.event("Context", "Retrying request...", style="success")
+                                continue
                             
                         if response.status_code != 200:
                             UI.error(f"Server returned {response.status_code}: {response.text}")
@@ -4418,8 +4431,11 @@ class Agent:
                         append_domain_log("backend", f"server(8080) unavailable_after_retries status={getattr(response, 'status_code', None)}")
                     except Exception:
                         pass
+                    status = getattr(response, 'status_code', None) if response else None
                     UI.error("Server unavailable after retries.")
-                    return
+                    if status == 400:
+                        return "[Error] Server rejected the request (HTTP 400). The context may be too large. Try closing the Document Viewer or starting a new chat."
+                    return "[Error] Server unavailable after retries. Try again or reduce context (e.g. close Document Viewer, new chat)."
 
                 # DIAGNOSTIC: Check what the server actually gave us
                 # UI.event("Debug", f"Status: {response.status_code} | History: {len(self.history)}")

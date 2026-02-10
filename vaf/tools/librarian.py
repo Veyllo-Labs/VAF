@@ -19,6 +19,7 @@ from vaf.tools.base import BaseTool
 from vaf.cli.ui import UI, AnimatedHeader
 from vaf.tools.filesystem import ReadFileTool, ListFilesTool, TreeTool, FinderTool, WriteFileTool, FolderSizeTool
 from vaf.tools.python_sandbox import PythonSandboxTool
+from vaf.tools.document_viewer import DocumentViewerTool
 from vaf.core.fs_map import CachedFilesystemMap
 
 # Try to import psutil for better disk info (optional)
@@ -69,6 +70,7 @@ class LibrarianTool(BaseTool):
             "find_files": FinderTool(),
             "python_sandbox": PythonSandboxTool(),
             "folder_size": FolderSizeTool(),
+            "document_viewer": DocumentViewerTool(),
         }
         
         # Cross-platform home directory
@@ -927,6 +929,32 @@ Remove duplicates and ensure smooth flow.
             return result
         except Exception as e:
             return f"Error writing file: {str(e)}"
+
+    def _pdf_ocr_fallback(self, file_path: Path, max_pages: int) -> str:
+        """Extract text from scanned (image-only) PDFs via OCR. Requires pdf2image + pytesseract and system deps (poppler, Tesseract)."""
+        try:
+            from pdf2image import convert_from_path
+            import pytesseract
+        except ImportError:
+            return ""
+        try:
+            images = convert_from_path(str(file_path), first_page=1, last_page=max_pages, dpi=200)
+            # Prefer German+English if Tesseract language packs installed; else English only
+            for lang in ("deu+eng", "eng", None):
+                try:
+                    lang_arg = {"lang": lang} if lang else {}
+                    parts = []
+                    for i, img in enumerate(images):
+                        text = pytesseract.image_to_string(img, **lang_arg)
+                        if text.strip():
+                            parts.append(f"--- Page {i + 1} ---\n{text.strip()}")
+                    if parts:
+                        return "\n\n".join(parts)
+                except pytesseract.TesseractError:
+                    continue
+            return ""
+        except Exception:
+            return ""
     
     def _read_file(self, file_path: Path, enable_chunking: bool = True) -> str:
         """Read file contents - supports text, PDF, Word, Excel, PowerPoint.
@@ -1016,7 +1044,7 @@ Remove duplicates and ensure smooth flow.
                         
                         for page_num in range(max_pages):
                             page = pdf_reader.pages[page_num]
-                            page_text = page.extract_text()
+                            page_text = page.extract_text() or ""
                             if page_text.strip():
                                 content.append(f"--- Page {page_num + 1} ---\n{page_text}")
                         
@@ -1025,9 +1053,23 @@ Remove duplicates and ensure smooth flow.
                     
                     full_text = "\n\n".join(content)
                     
+                    # Scanned PDFs (image-only): no embedded text. Try OCR if enabled and deps available.
+                    use_ocr = config.get("librarian_ocr_fallback_for_pdf", True)
+                    if use_ocr and len(full_text.strip()) < 50 and num_pages > 0:
+                        ocr_text = self._pdf_ocr_fallback(file_path, max_pages)
+                        if ocr_text:
+                            full_text = ocr_text
+                    
                     # Truncate if still too long
                     if len(full_text) > 15000:
                         full_text = full_text[:15000] + "\n\n... (truncated)"
+                    
+                    if not full_text.strip():
+                        full_text = (
+                            "[Scanned PDF: no embedded text detected. For OCR install: "
+                            "pip install pdf2image pytesseract, and system tools: poppler (pdf2image), Tesseract (pytesseract). "
+                            "Then re-open this file."
+                        )
                     
                     return f"### PDF: {file_path.name}\n**Pages:** {num_pages}\n\n{full_text}"
                     
@@ -1899,7 +1941,7 @@ Common paths:
                         # Get available tool names dynamically
                         available_tool_names = list(self.tools.keys()) if hasattr(self, 'tools') and self.tools else []
                         # Also check for common tool names used by librarian
-                        common_tool_names = ["read_file", "write_file", "list_files", "find_files", "tree", "folder_size", "python_sandbox"]
+                        common_tool_names = ["read_file", "write_file", "list_files", "find_files", "tree", "folder_size", "python_sandbox", "document_viewer"]
                         all_tool_names = list(set(available_tool_names + common_tool_names))
                         
                         # Check if any tool name appears in the last assistant message (case-insensitive)
@@ -2018,6 +2060,7 @@ Common paths:
                         "find_files": "Searching",
                         "tree": "Mapping",
                         "folder_size": "Sizing",
+                        "document_viewer": "Opening in viewer",
                     }
                     icon = tool_icons.get(fn_name, "Calling")
                     UI.event("Librarian", f"{icon}: {fn_name}", style="bold green")

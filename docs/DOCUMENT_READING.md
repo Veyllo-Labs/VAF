@@ -77,11 +77,14 @@ pip install python-pptx>=0.6.21    # For PowerPoint files
 
 #### Reading a PDF File
 
+You can pass a normal path or a **file URL** (e.g. from a browser or file manager):
+
 ```
 User: "Read the file C:\Users\mert\Documents\mitgliedschaftsbescheinigung.pdf"
+User: "Open file:///C:/Users/mert1/Downloads/20251110_075336_Bewilligungsbescheid.pdf"
 ```
 
-The librarian will:
+The document_viewer tool and Librarian accept `file:///` URLs and convert them to the correct path on your OS. The librarian will:
 1. Detect it's a PDF file
 2. Extract text from all pages (up to 50 pages)
 3. Return formatted content with page numbers
@@ -349,7 +352,7 @@ with open(file_path, 'rb') as f:
 ```
 
 **Limitations:**
-- Scanned PDFs (images) won't extract text without OCR
+- **Scanned PDFs (image-only):** If PyPDF2 extracts little or no text, the Librarian tries OCR when `librarian_ocr_fallback_for_pdf` is enabled (default: true). Requires optional deps: `pip install pdf2image pytesseract` and system tools: **poppler** (for pdf2image), **Tesseract** (for pytesseract). Install e.g. German with Tesseract for best results on German documents.
 - Complex layouts may have formatting issues
 - Password-protected PDFs are not supported
 
@@ -614,7 +617,7 @@ See [Librarian Configuration](LIBRARIAN_CONFIGURATION.md) for details.
 
 Planned improvements:
 
-- [ ] OCR support for scanned PDFs
+- [x] OCR fallback for scanned PDFs (optional: pdf2image + pytesseract + poppler + Tesseract)
 - [ ] Image extraction from documents
 - [ ] Support for older formats (.doc, .ppt, .xls)
 - [ ] Password-protected file support

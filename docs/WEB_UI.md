@@ -334,7 +334,7 @@ The Web UI runs alongside the CLI interface:
 
 ### Input Box
 
-- **Features**: Attachment button, text input, voice input, send button; file chips and token stats above the form when relevant.
+- **Features**: Attachment button, text input, voice input, send button; file chips and token stats above the form when relevant. When the Document Viewer is open, **quote chips** appear above the input: any text selected in the viewer is automatically added as a quoted snippet (colored by order: dark, orange, pink, blue, green). Chips show a red hover state; clicking a chip removes that quote only. Sent messages combine the typed input and all quote snippets (joined by blank lines).
 - **Layout**: On a **new chat** (no messages), the input bar is shown **centered** in the viewport with a short welcome line (“How can I help you?”). After the first message is sent, the bar **animates** (≈500 ms) to its **fixed position at the bottom** and stays there for the rest of the conversation.
 - **States**: Disabled during loading, focus ring on interaction.
 - **Submit**: Enter key or click send button.

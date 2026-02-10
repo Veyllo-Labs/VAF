@@ -21,7 +21,8 @@ On Windows: `C:\Users\<YourName>\.vaf\config.json`
   "librarian_max_excel_size_mb": 30,
   "librarian_max_text_size_kb": 500,
   "librarian_auto_chunk_large_files": true,
-  "librarian_pdf_max_pages_preview": 50
+  "librarian_pdf_max_pages_preview": 50,
+  "librarian_ocr_fallback_for_pdf": true
 }
 ```
 
@@ -35,6 +36,7 @@ On Windows: `C:\Users\<YourName>\.vaf\config.json`
 | `librarian_max_text_size_kb` | Integer | `500` | Maximum text file size in kilobytes |
 | `librarian_auto_chunk_large_files` | Boolean | `true` | Auto-chunk large files into readable sections |
 | `librarian_pdf_max_pages_preview` | Integer | `50` | Maximum PDF pages to show in preview |
+| `librarian_ocr_fallback_for_pdf` | Boolean | `true` | When a PDF has no embedded text (scanned PDF), try OCR if pdf2image and pytesseract are installed (requires system: poppler, Tesseract) |
 
 ## Usage Examples
 

@@ -56,6 +56,8 @@ ruff>=0.1.0  # Fast Python linter and formatter
 # Document Processing (PDF, Word, etc.)
 PyPDF2>=3.0.0  # PDF reading
 pycryptodome>=3.15.0  # Required by PyPDF2 for AES-encrypted PDFs (e.g. bank statements)
+pdf2image>=1.16.0  # PDF → images for OCR (scanned PDFs); system: poppler required
+pytesseract>=0.3.10  # OCR for scanned PDFs; system: Tesseract required (optional lang pack "deu" for German)
 python-docx>=1.1.0  # Word document reading
 openpyxl>=3.1.0  # Excel file reading
 python-pptx>=0.6.21  # PowerPoint reading
@@ -85,6 +87,8 @@ redis>=5.0.0  # Redis client for caching embeddings, RAG queries, sessions
 # - Windows: https://git-scm.com/download/win or `winget install Git.Git`
 # - macOS: `brew install git` or `xcode-select --install`
 # Linux: `sudo apt-get install git` (Debian/Ubuntu) or equivalent for your distribution
+# Poppler: Required for pdf2image (scanned PDF → images). Windows: e.g. https://github.com/osber/poppler-windows/releases or chocolatey/winget; macOS: brew install poppler; Linux: apt install poppler-utils
+# Tesseract: Required for pytesseract (OCR). Windows: https://github.com/UB-Mannheim/tesseract/wiki; macOS: brew install tesseract tesseract-lang; Linux: apt install tesseract-ocr tesseract-ocr-deu
 
 
 # Testing

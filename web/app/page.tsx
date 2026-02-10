@@ -1,18 +1,18 @@
 'use client';
 
-import React, { useCallback, useEffect, useState, useRef, Fragment } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useRef, Fragment } from 'react';
 import { useRouter } from 'next/navigation';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, BookOpen
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import SettingsModal from '@/components/SettingsModal';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import SubAgentWindow from '@/components/SubAgentWindow';
 import DocumentEditor from '@/components/DocumentEditor';
-import DocumentViewer from '@/components/DocumentViewer';
+import DocumentViewer, { CHIP_BG_CLASSES, type InsertedSelectionRange } from '@/components/DocumentViewer';
 import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
 import { useWorkflowStore } from '@/components/workflows/stores/workflowStore';
@@ -27,6 +27,8 @@ type Message = {
     timestamp: number;
     /** Attachments shown on user messages (name + mimeType only; data not stored) */
     files?: { name: string; mimeType: string }[];
+    /** Document Viewer was open when this message was sent; list of document names (for indicator under bubble) */
+    sidebarDocs?: string[];
     // Extra fields for tools
     toolId?: string;
     toolName?: string;
@@ -559,6 +561,7 @@ export default function VAFDashboard() {
     }, [router]);
 
     const [input, setInput] = useState('');
+    const [insertedSelections, setInsertedSelections] = useState<InsertedSelectionRange[]>([]);
     const [suggestion, setSuggestion] = useState('');
     const [messages, setMessages] = useState<Message[]>([]);
     const messagesRef = useRef<Message[]>([]); // Ref to access messages in WebSocket callback
@@ -571,12 +574,11 @@ export default function VAFDashboard() {
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     const currentSessionIdRef = useRef<string | null>(null);
     useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
-    const pendingSendRef = useRef<{
-        text: string;
-        files: Array<{ name: string; data: string; mimeType: string }>;
-    } | null>(null);
+    const pendingSendRef = useRef<{ text: string } | null>(null);
     const pendingSessionRequestRef = useRef(false);
     const sidebarListRef = useRef<HTMLDivElement>(null);
+    const sidebarDocsSyncedForSessionRef = useRef<string | null>(null);
+    type DocumentViewerDoc = { id: string; name: string; mimeType?: string; data?: string; content?: string };
 
     const [ws, setWs] = useState<WebSocket | null>(null);
     const [loading, setLoading] = useState(false);
@@ -601,8 +603,6 @@ export default function VAFDashboard() {
     const [automations, setAutomations] = useState<Array<{ id: string; name: string; description: string; frequency: string; time: string; enabled: boolean }>>([]);
     // const [activeTools, setActiveTools] = useState<ToolState[]>([]); // REPLACED BY INLINE MESSAGES
 
-    // File attachment state
-    const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Stats state
@@ -659,14 +659,29 @@ export default function VAFDashboard() {
         title: 'Document',
     });
 
-    // Document Viewer (sidebar attachments) state
-    const [documentViewerState, setDocumentViewerState] = useState<{
-        isOpen: boolean;
-        documents: Array<{ id: string; name: string; mimeType?: string; data?: string; content?: string }>;
-    }>({
-        isOpen: false,
-        documents: [],
-    });
+    // Document Viewer: one state entry per session so switching chats never overwrites or loses data.
+    const [sessionViewerState, setSessionViewerState] = useState<Record<string, { isOpen: boolean; documents: DocumentViewerDoc[] }>>({});
+    const defaultViewerState = useMemo(() => ({ isOpen: false as const, documents: [] as DocumentViewerDoc[] }), []);
+    const documentViewerState = currentSessionId
+        ? (sessionViewerState[currentSessionId] ?? defaultViewerState)
+        : defaultViewerState;
+    const setDocumentViewerState = useCallback((
+        valueOrUpdater: { isOpen: boolean; documents: DocumentViewerDoc[] } | ((prev: { isOpen: boolean; documents: DocumentViewerDoc[] }) => { isOpen: boolean; documents: DocumentViewerDoc[] })
+    ) => {
+        if (!currentSessionId) return;
+        setSessionViewerState(prev => {
+            const current = prev[currentSessionId] ?? defaultViewerState;
+            const next = typeof valueOrUpdater === 'function' ? valueOrUpdater(current) : valueOrUpdater;
+            return { ...prev, [currentSessionId]: next };
+        });
+    }, [currentSessionId, defaultViewerState]);
+    const setDocumentViewerStateForSession = useCallback((sessionId: string, valueOrUpdater: { isOpen: boolean; documents: DocumentViewerDoc[] } | ((prev: { isOpen: boolean; documents: DocumentViewerDoc[] }) => { isOpen: boolean; documents: DocumentViewerDoc[] })) => {
+        setSessionViewerState(prev => {
+            const current = prev[sessionId] ?? defaultViewerState;
+            const next = typeof valueOrUpdater === 'function' ? valueOrUpdater(current) : valueOrUpdater;
+            return { ...prev, [sessionId]: next };
+        });
+    }, [defaultViewerState]);
 
     // Suggestion State
     const [suggestionList, setSuggestionList] = useState<any[]>([]);
@@ -968,10 +983,9 @@ export default function VAFDashboard() {
     const handleSessionSwitch = (id: string) => {
         if (currentSessionId === id) return;
 
-        // 1. Save current session state explicitly before switching (including animation state)
+        // 1. Save current session state before switching (messages + animation). Document Viewer is already keyed by session in state.
         if (currentSessionId) {
             sessionCache.current[currentSessionId] = messages;
-            // Save animation/loading state for current session
             sessionLoadingStates.current[currentSessionId] = {
                 loading,
                 statusMessage,
@@ -979,7 +993,7 @@ export default function VAFDashboard() {
             };
         }
 
-        // 2. Optimistic Switch
+        // 2. Optimistic Switch (viewer state is derived from sessionViewerState[id] automatically)
         setCurrentSessionId(id);
         const cached = sessionCache.current[id] || [];
         setMessages(cached);
@@ -997,7 +1011,7 @@ export default function VAFDashboard() {
             setLoadingMessageId(null);
         }
 
-        // 4. Request Sync
+        // 4. Request sync
         ws?.send(JSON.stringify({ type: 'load_session', id }));
     };
 
@@ -1413,10 +1427,12 @@ export default function VAFDashboard() {
                 }
                 else if (data.type === 'sidebar_documents_set') {
                     const contents = (data.contents || []) as Array<{ name: string; content: string }>;
-                    setDocumentViewerState(prev => {
+                    const sid = data.sessionId || activeSessionId;
+                    const updater = (prev: { isOpen: boolean; documents: DocumentViewerDoc[] }) => {
                         if (contents.length === 0) return { ...prev, documents: [] };
                         return {
                             ...prev,
+                            isOpen: true,
                             documents: contents.map((c, i) => ({
                                 ...(prev.documents[i] || {}),
                                 id: prev.documents[i]?.id ?? `doc-${i}-${c.name}`,
@@ -1424,7 +1440,10 @@ export default function VAFDashboard() {
                                 content: c.content,
                             })),
                         };
-                    });
+                    };
+                    if (sid) setDocumentViewerStateForSession(sid, updater);
+                    else setDocumentViewerState(updater);
+                    if (contents.length > 0) setShowSubAgentPanel(true);
                 }
                 else if (data.type === 'subagent_update') {
                     const statusText = String(data.status || '').trim();
@@ -1522,6 +1541,8 @@ export default function VAFDashboard() {
                 }
                 else if (data.type === 'history_update') {
                     setCurrentSessionId(data.sessionId);
+                    // Do not clear Document Viewer documents here – they are kept per session in sessionViewerState and would be lost on second switch-back
+                    sidebarDocsSyncedForSessionRef.current = null;
 
                     // Restore active state
                     const isActive = !!data.isActive;
@@ -1617,7 +1638,6 @@ export default function VAFDashboard() {
                         ws?.send(JSON.stringify({
                             type: 'chat',
                             content: pending.text,
-                            files: pending.files,
                             sessionId: data.sessionId
                         }));
                     }
@@ -1807,60 +1827,52 @@ export default function VAFDashboard() {
 
     const sendMessage = async (e?: React.FormEvent, overrideText?: string) => {
         e?.preventDefault();
-        const textToSend = overrideText || input;
-        if ((!textToSend.trim() && attachedFiles.length === 0) || !ws) return;
+        const combined = [input, ...insertedSelections.map((s) => s.text)].filter(Boolean).join('\n\n');
+        const textToSend = overrideText ?? combined;
+        if (!textToSend.trim() || !ws) return;
 
-        // Process attached files
-        let filesData = [];
-        if (attachedFiles.length > 0) {
-            for (const file of attachedFiles) {
-                try {
-                    const base64 = await fileToBase64(file);
-                    filesData.push({
-                        name: file.name,
-                        data: base64,
-                        mimeType: file.type
-                    });
-                } catch (error) {
-                    console.error('Error processing file:', file.name, error);
-                }
-            }
-        }
-
-        const fileMeta = filesData.map(f => ({ name: f.name, mimeType: f.mimeType }));
-        setMessages(prev => [...prev, { role: 'user', content: textToSend, timestamp: Date.now(), files: fileMeta.length ? fileMeta : undefined }]);
+        setMessages(prev => [...prev, {
+            role: 'user',
+            content: textToSend,
+            timestamp: Date.now(),
+            sidebarDocs: documentViewerState.documents.length > 0
+                ? documentViewerState.documents.map(d => d.name)
+                : undefined,
+        }]);
         setLoading(true);
 
-        // Update per-session loading state
         if (currentSessionId) {
             sessionLoadingStates.current[currentSessionId] = {
                 loading: true,
                 statusMessage: '',
-                loadingMessageId: null // Will be set when we get the message index
+                loadingMessageId: null
             };
         }
 
         if (!currentSessionId) {
-            pendingSendRef.current = { text: textToSend, files: filesData };
+            pendingSendRef.current = { text: textToSend };
             if (!pendingSessionRequestRef.current) {
                 pendingSessionRequestRef.current = true;
                 ws.send(JSON.stringify({ type: 'new_session' }));
             }
             setInput('');
+            setInsertedSelections([]);
             setSuggestion('');
-            setAttachedFiles([]); // Clear attached files after sending
             return;
         }
 
+        const sidebarPayload = documentViewerState.documents.filter(d => d.data).length > 0
+            ? documentViewerState.documents.filter(d => d.data).map(d => ({ name: d.name, data: d.data, mimeType: d.mimeType || '' }))
+            : undefined;
         ws.send(JSON.stringify({
             type: 'chat',
             content: textToSend,
-            files: filesData,
-            sessionId: currentSessionId // CRITICAL: Include session ID for proper routing
+            sessionId: currentSessionId,
+            ...(sidebarPayload && sidebarPayload.length > 0 ? { sidebarDocuments: sidebarPayload } : {}),
         }));
         setInput('');
+        setInsertedSelections([]);
         setSuggestion('');
-        setAttachedFiles([]); // Clear attached files after sending
     };
 
     const fileToBase64 = (file: File): Promise<string> => {
@@ -1872,15 +1884,30 @@ export default function VAFDashboard() {
         });
     };
 
-    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files) {
-            const newFiles = Array.from(e.target.files);
-            setAttachedFiles(prev => [...prev, ...newFiles]);
-        }
-    };
-
-    const removeFile = (index: number) => {
-        setAttachedFiles(prev => prev.filter((_, i) => i !== index));
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newFiles = e.target.files ? Array.from(e.target.files) : [];
+        e.target.value = '';
+        if (newFiles.length === 0) return;
+        const base64List = await Promise.all(newFiles.map(f => fileToBase64(f)));
+        const newDocs = newFiles.map((f, i) => ({
+            id: crypto.randomUUID(),
+            name: f.name,
+            mimeType: f.type,
+            data: base64List[i],
+        }));
+        setDocumentViewerState(prev => {
+            const newList = [...prev.documents, ...newDocs];
+            if (ws && currentSessionId) {
+                ws.send(JSON.stringify({
+                    type: 'set_sidebar_documents',
+                    sessionId: currentSessionId,
+                    documents: newList.map(d => ({ name: d.name, data: d.data, mimeType: d.mimeType })),
+                }));
+                sidebarDocsSyncedForSessionRef.current = currentSessionId;
+            }
+            return { ...prev, documents: newList, isOpen: true };
+        });
+        setShowSubAgentPanel(true);
     };
 
     const handleDocumentViewerAddFiles = async (files: File[]) => {
@@ -1899,6 +1926,7 @@ export default function VAFDashboard() {
                 sessionId: currentSessionId,
                 documents: newList.map(d => ({ name: d.name, data: d.data, mimeType: d.mimeType })),
             }));
+            sidebarDocsSyncedForSessionRef.current = currentSessionId;
             return { ...prev, documents: newList };
         });
     };
@@ -1922,14 +1950,29 @@ export default function VAFDashboard() {
         if (ws && currentSessionId) {
             ws.send(JSON.stringify({ type: 'set_sidebar_documents', sessionId: currentSessionId, documents: [] }));
         }
+        sidebarDocsSyncedForSessionRef.current = null;
         setDocumentViewerState({ isOpen: false, documents: [] });
     };
+
+    // When we get a session after user already added docs (no session before), sync sidebar to backend
+    useEffect(() => {
+        if (!currentSessionId || !ws || sidebarDocsSyncedForSessionRef.current === currentSessionId) return;
+        const withData = documentViewerState.documents.filter(d => d.data);
+        if (withData.length === 0) return;
+        ws.send(JSON.stringify({
+            type: 'set_sidebar_documents',
+            sessionId: currentSessionId,
+            documents: withData.map(d => ({ name: d.name, data: d.data, mimeType: d.mimeType })),
+        }));
+        sidebarDocsSyncedForSessionRef.current = currentSessionId;
+    }, [currentSessionId, ws, documentViewerState.documents]);
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         // Enter = send, Shift+Enter = new line
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            if ((input.trim() || attachedFiles.length > 0) && !loading) {
+            const hasContent = input.trim() || insertedSelections.length > 0;
+            if (hasContent && !loading) {
                 sendMessage(undefined);
             }
             return;
@@ -2676,6 +2719,24 @@ export default function VAFDashboard() {
                                                             ))}
                                                         </div>
                                                     )}
+                                                    {/* User message: indicator that Document Viewer had attachments when this was sent (only when viewer is closed) */}
+                                                    {!isBot && !documentViewerState.isOpen && msg.sidebarDocs && msg.sidebarDocs.length > 0 && (
+                                                        <div className="flex gap-1.5 flex-wrap mt-1 justify-end items-center">
+                                                            <span className="text-[10px] text-gray-400">Anhänge:</span>
+                                                            {msg.sidebarDocs.slice(0, 3).map((name, idx) => (
+                                                                <span
+                                                                    key={idx}
+                                                                    className="inline-flex items-center gap-1 bg-gray-100/80 rounded px-2 py-0.5 text-[10px] text-gray-500 truncate max-w-[120px]"
+                                                                    title={name}
+                                                                >
+                                                                    {name.length > 10 ? `${name.slice(0, 10)}…` : name}
+                                                                </span>
+                                                            ))}
+                                                            {msg.sidebarDocs.length > 3 && (
+                                                                <span className="text-[10px] text-gray-400">+{msg.sidebarDocs.length - 3}</span>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
 
@@ -2747,24 +2808,6 @@ export default function VAFDashboard() {
                                         <p className="text-gray-400 mt-1 text-sm">Start a conversation or choose a workflow</p>
                                     </div>
                                 )}
-                            {/* File chips display */}
-                            {attachedFiles.length > 0 && (
-                                <div className={cn(chatWidthClass, "mx-auto mb-2 flex gap-2 flex-wrap")}>
-                                    {attachedFiles.map((file, index) => (
-                                        <div key={index} className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-1.5 text-sm">
-                                            <span className="text-gray-700">{file.name}</span>
-                                            <button
-                                                type="button"
-                                                onClick={() => removeFile(index)}
-                                                className="text-gray-500 hover:text-red-600 transition-colors"
-                                            >
-                                                ×
-                                            </button>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-
                         {/* Suggestions Popup - Fixed centered, with arrow key navigation */}
                         {suggestionList.length > 0 && (
                             <div
@@ -2871,27 +2914,35 @@ export default function VAFDashboard() {
                             <button
                                 type="button"
                                 onClick={() => fileInputRef.current?.click()}
-                                className="p-4 text-gray-400 hover:text-gray-900 transition-colors"
-                                title="Attach files"
-                            >
-                                <Paperclip size={20} />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setDocumentViewerState(prev => ({ ...prev, isOpen: true }));
-                                    setShowSubAgentPanel(true);
-                                }}
                                 className={cn(
                                     "p-4 transition-colors",
                                     documentViewerState.isOpen ? "text-blue-600" : "text-gray-400 hover:text-gray-900"
                                 )}
-                                title="Document Viewer (Anhänge)"
+                                title="Anhänge (Document Viewer) – bleiben im Kontext, solange die Leiste offen ist"
                             >
-                                <BookOpen size={20} />
+                                <Paperclip size={20} />
                             </button>
-                            <div className="flex-1 relative flex items-end">
-
+                            <div className="flex-1 relative flex flex-col min-w-0">
+                                {insertedSelections.length > 0 && (
+                                    <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2 pb-1 border-b border-gray-100">
+                                        {insertedSelections.map((s, i) => (
+                                            <button
+                                                key={i}
+                                                type="button"
+                                                onClick={() => setInsertedSelections(prev => prev.filter((_, idx) => idx !== i))}
+                                                className={cn(
+                                                    'max-w-[200px] truncate text-xs rounded px-2 py-0.5 transition-colors',
+                                                    CHIP_BG_CLASSES[i % CHIP_BG_CLASSES.length],
+                                                    'hover:bg-red-500 hover:text-white'
+                                                )}
+                                                title={`${s.text}\nKlicken zum Entfernen`}
+                                            >
+                                                &quot;{s.text.slice(0, 30)}{s.text.length > 30 ? '…' : ''}&quot;
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                                <div className="relative flex items-end flex-1 min-h-0">
                                 <div className="absolute inset-0 py-4 px-1 pointer-events-none text-sm text-gray-400 whitespace-pre overflow-hidden">
                                     <span className="text-transparent">{input}</span>
                                     {suggestion}
@@ -2906,6 +2957,7 @@ export default function VAFDashboard() {
                                     className="w-full min-h-[2.5rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
                                     disabled={loading}
                                 />
+                                </div>
                             </div>
                             <button
                                 type="button"
@@ -2956,6 +3008,9 @@ export default function VAFDashboard() {
                                     documents={documentViewerState.documents}
                                     onAddFiles={handleDocumentViewerAddFiles}
                                     onRemoveDocument={handleDocumentViewerRemove}
+                                    onInsertSelection={(text, range) => setInsertedSelections(prev => [...prev, { text, ...range }])}
+                                    insertedSelectionsCount={insertedSelections.length}
+                                    insertedSelections={insertedSelections}
                                 />
                             ) : documentEditorState.isOpen ? (
                                 <DocumentEditor

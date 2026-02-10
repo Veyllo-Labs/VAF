@@ -575,7 +575,7 @@ def run_headless_agent():
                         # Final response broadcast (in case streaming missed the final state)
                         final_text = "".join(response_parts) if response_parts else response_text
                         if not final_text or not str(final_text).strip():
-                            final_text = "[Error] No response was produced by the API backend."
+                            final_text = "[Error] No response was produced. The server may have rejected the request (e.g. context too large). Try closing the Document Viewer or starting a new chat."
                         get_web_interface().emit_agent_message(
                             role="assistant",
                             content=str(final_text),

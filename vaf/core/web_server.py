@@ -1502,7 +1502,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "chat":
                     content = cmd.get("content")
                     files = cmd.get("files", [])  # List of file objects with {name, data, mimeType}
-                    
+                    sidebar_docs_payload = cmd.get("sidebarDocuments") or []  # Document Viewer docs to inject into this turn
+
                     if content or files:
                         tray_context.register_activity()
                         # Learn from user input
@@ -1517,15 +1518,37 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 # Append file contents to message (like CLI @filename behavior)
                                 content = content + "\n\n" + file_contents if content else file_contents
                         
-                        # Use TaskQueue for serialized execution
-                        from vaf.core.task_queue import TaskQueue
-                        tq = TaskQueue()
-                        
                         # Get session ID: prefer from message, then connection, then fallback
                         session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
                         if not session_id:
-                            # Fallback if not subscribed yet (should be rare)
                             session_id = "web-default"
+
+                        # Ensure sidebar documents are in session before queueing (so headless has context)
+                        if sidebar_docs_payload:
+                            try:
+                                contents = await process_files_to_sidebar_list(sidebar_docs_payload)
+                                if contents:
+                                    try:
+                                        loaded = session_mgr.load(session_id)
+                                    except FileNotFoundError:
+                                        loaded = Session(
+                                            id=session_id,
+                                            name=f"Session {session_id}",
+                                            runtime_state={"sidebar_documents": contents},
+                                        )
+                                        session_mgr.save(loaded, sync_state=False)
+                                    else:
+                                        if not getattr(loaded, "runtime_state", None):
+                                            loaded.runtime_state = {}
+                                        loaded.runtime_state["sidebar_documents"] = contents
+                                        session_mgr.save(loaded, sync_state=False)
+                                    log("WebServer", f"Injected {len(contents)} sidebar doc(s) for session {session_id} before chat")
+                            except Exception as e:
+                                log("WebServer", f"sidebar_documents on chat failed: {e}")
+
+                        # Use TaskQueue for serialized execution
+                        from vaf.core.task_queue import TaskQueue
+                        tq = TaskQueue()
                         # user_scope_id is required for correct RAG scope (Auto-Recall and memory_save)
                         user_scope_id = manager.get_connection_user(websocket)
                         username = manager.get_connection_username(websocket)
@@ -1534,9 +1557,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             metadata["user_scope_id"] = user_scope_id
                         if username:
                             metadata["username"] = username
-                        # Debug: Log user scope for RAG troubleshooting
                         log("WebServer", f"Chat message from user_scope_id={user_scope_id}, username={username}")
-                        # Add to queue
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)
                         try:
                             if is_debug_logging_enabled():

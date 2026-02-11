@@ -84,7 +84,7 @@ User: "Read the file C:\Users\mert\Documents\mitgliedschaftsbescheinigung.pdf"
 User: "Open file:///C:/Users/mert1/Downloads/20251110_075336_Bewilligungsbescheid.pdf"
 ```
 
-The document_viewer tool and Librarian accept `file:///` URLs and convert them to the correct path on your OS. The librarian will:
+The document_editor tool and Librarian accept `file:///` URLs and convert them to the correct path on your OS. The librarian will:
 1. Detect it's a PDF file
 2. Extract text from all pages (up to 50 pages)
 3. Return formatted content with page numbers

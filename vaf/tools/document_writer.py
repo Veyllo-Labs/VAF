@@ -5,8 +5,12 @@ For quick, simple documents (short contracts, letters, messages, templates).
 For complex/large documents, use document_agent instead.
 """
 
-from vaf.tools.base import BaseTool
+import os
+import shutil
+import tempfile
 from pathlib import Path
+
+from vaf.tools.base import BaseTool
 
 class DocumentWriterTool(BaseTool):
     """
@@ -77,11 +81,28 @@ For large/complex documents, use document_agent instead."""
         
         try:
             if format_type == 'word':
-                return self._create_word_document(file_path, content, document_type)
+                result = self._create_word_document(file_path, content, document_type)
             elif format_type == 'markdown':
-                return self._create_markdown_document(file_path, content, document_type)
+                result = self._create_markdown_document(file_path, content, document_type)
             else:
-                return self._create_text_document(file_path, content, document_type)
+                result = self._create_text_document(file_path, content, document_type)
+            # Open the saved document in the Web UI Document Editor
+            if not result.startswith("[ERROR]"):
+                try:
+                    session_id = os.environ.get("VAF_SESSION_ID")
+                    if not session_id:
+                        from vaf.core.subagent_ipc import get_current_session_id
+                        session_id = get_current_session_id()
+                    if session_id:
+                        from vaf.core.web_interface import notify_document_created
+                        notify_document_created(
+                            session_id,
+                            str(file_path.resolve()),
+                            title=file_path.name,
+                        )
+                except Exception:
+                    pass
+            return result
         except Exception as e:
             return f"[ERROR] Failed to create document: {e}"
     
@@ -114,7 +135,7 @@ For large/complex documents, use document_agent instead."""
 ✅ Markdown document saved successfully."""
     
     def _create_word_document(self, file_path: Path, content: str, doc_type: str) -> str:
-        """Create Word document (.docx)."""
+        """Create Word document (.docx). Writes to temp file then replaces target so the ZIP is never half-written."""
         try:
             from docx import Document
             
@@ -132,7 +153,21 @@ For large/complex documents, use document_agent instead."""
                     else:
                         doc.add_paragraph(paragraph.strip())
             
-            doc.save(str(file_path))
+            parent = file_path.parent
+            parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(suffix=".docx", dir=str(parent))
+            try:
+                os.close(fd)
+                doc.save(tmp_path)
+                if file_path.exists():
+                    file_path.unlink()
+                shutil.move(tmp_path, str(file_path))
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
             
             return f"""### {doc_type.capitalize()} created!
 

@@ -50,6 +50,48 @@ def _get_debug_log_dir():
             continue
     return Path.cwd()
 
+
+def _user_asked_for_text(user_input: str) -> bool:
+    """True if the user prompt looks like a request to write/compose text (for opening in Document Editor)."""
+    if not (user_input and user_input.strip()):
+        return False
+    lower = user_input.strip().lower()
+    triggers = (
+        "schreib mir", "verfasse", "schreibe einen text", "verfasse einen text",
+        "text schreiben", "schreib einen text", "schreibe mir", "write me a text",
+        "write me ", "draft", "entwurf", "formuliere", "formulier mir",
+        "schreib einen", "schreibe einen", "text über", "text zu ",
+    )
+    return any(t in lower for t in triggers)
+
+
+def _maybe_open_draft_in_editor(session_id: str, user_input: str, response_text: str, source: str) -> None:
+    """
+    If the user asked for a text (e.g. "Schreib mir einen Text") and the response is substantial,
+    save it to a draft file and open the Document Editor so the user can edit or save.
+    Only runs for Web UI (source == 'web').
+    """
+    if not session_id or (str(source or "").strip().lower() != "web"):
+        return
+    if not _user_asked_for_text(user_input or ""):
+        return
+    # Strip <think>...</think> for draft content
+    clean = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL)
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    if len(clean) < 200:
+        return
+    try:
+        # Use data_dir so /api/file and /api/file/save can read/write the draft (allowed_roots include data_dir)
+        draft_dir = Platform.data_dir() / "drafts" / session_id
+        draft_dir.mkdir(parents=True, exist_ok=True)
+        draft_path = draft_dir / "entwurf.md"
+        draft_path.write_text(clean, encoding="utf-8")
+        from vaf.core.web_interface import notify_document_created
+        notify_document_created(session_id, str(draft_path.resolve()), title="Entwurf")
+    except Exception:
+        pass
+
+
 def run_headless_agent():
     """
     Run a headless agent loop that processes tasks from the TaskQueue.
@@ -575,7 +617,7 @@ def run_headless_agent():
                         # Final response broadcast (in case streaming missed the final state)
                         final_text = "".join(response_parts) if response_parts else response_text
                         if not final_text or not str(final_text).strip():
-                            final_text = "[Error] No response was produced. The server may have rejected the request (e.g. context too large). Try closing the Document Viewer or starting a new chat."
+                            final_text = "[Error] No response was produced. The server may have rejected the request (e.g. context too large). Try closing the Document Editor or starting a new chat."
                         get_web_interface().emit_agent_message(
                             role="assistant",
                             content=str(final_text),
@@ -590,6 +632,18 @@ def run_headless_agent():
                         )
                     except Exception:
                         pass
+
+                    # When user asked for a text (e.g. "Schreib mir einen Text"), open it in Document Editor
+                    if not response_text.startswith("[ASYNC_ACK]"):
+                        try:
+                            _maybe_open_draft_in_editor(
+                                task.session_id or "",
+                                task.input_text or "",
+                                str(final_text),
+                                getattr(task, "source", "web"),
+                            )
+                        except Exception:
+                            pass
 
                     # If this task came from Telegram bridge, send reply back to Telegram
                     try:

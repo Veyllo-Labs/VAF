@@ -4434,8 +4434,8 @@ class Agent:
                     status = getattr(response, 'status_code', None) if response else None
                     UI.error("Server unavailable after retries.")
                     if status == 400:
-                        return "[Error] Server rejected the request (HTTP 400). The context may be too large. Try closing the Document Viewer or starting a new chat."
-                    return "[Error] Server unavailable after retries. Try again or reduce context (e.g. close Document Viewer, new chat)."
+                        return "[Error] Server rejected the request (HTTP 400). The context may be too large. Try closing the Document Editor or starting a new chat."
+                    return "[Error] Server unavailable after retries. Try again or reduce context (e.g. close Document Editor, new chat)."
 
                 # DIAGNOSTIC: Check what the server actually gave us
                 # UI.event("Debug", f"Status: {response.status_code} | History: {len(self.history)}")
@@ -5120,13 +5120,7 @@ class Agent:
                         
                         UI.event("System", "Async task started - returning status immediately", style="dim")
                         
-                        # TTS for the acknowledgment (BEFORE return!)
-                        # CRITICAL: Start TTS thread BEFORE returning, otherwise thread never starts
-                        self._speak(response_text)
-                        
-                        # Give TTS thread time to start (threading.Thread.start() needs a moment)
-                        # Without this, the return statement kills the function before thread starts
-                        time.sleep(0.05)  # 50ms is enough for thread initialization
+                        # Do not speak subagent/tool status via TTS (user requested no "librarian_agent" etc. read aloud)
                         
                         # Add a special marker that the CLI can use to force-print this message
                         return f"[ASYNC_ACK]{response_text}"
@@ -5603,7 +5597,16 @@ class Agent:
         from vaf.cli.ui import UI
         from pathlib import Path
         from vaf.core.trust import should_gate_tool, get_tool_policy, set_tool_policy, mark_trusted_dir, is_trusted_dir, explain_gate
-        
+
+        # So tools (e.g. document_writer) can notify Web UI; needed when run directly or via workflow in same process
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id
+            sid = get_current_session_id() or getattr(self, "current_session_id", None)
+            if sid:
+                os.environ["VAF_SESSION_ID"] = str(sid)
+        except Exception:
+            pass
+
         def emit(evt: dict):
             if callable(self._event_sink):
                 try:

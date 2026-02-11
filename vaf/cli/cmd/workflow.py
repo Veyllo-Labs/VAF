@@ -383,18 +383,30 @@ def run_workflow(
                 ipc.complete_task(task_id, final_summary)
                 UI.success(f"[OK] Result sent to Main Agent [Task: {task_id}]")
 
-            # Send document_ready signal if an HTML file was created
+            # Notify Web UI so Document Editor opens with the created document (any doc type)
             if session_id:
                 import re
-                doc_path_match = re.search(r'(?:to|saved|written)[:\s]+(.+\.html)', final_output, re.IGNORECASE)
+                doc_path_match = re.search(
+                    r'(?:to|saved|written)[:\s]+(.+\.(?:html|md|txt|docx))',
+                    final_output,
+                    re.IGNORECASE
+                )
                 if doc_path_match:
                     doc_path = doc_path_match.group(1).strip()
-                    send_web_update({
-                        "type": "document_ready",
-                        "workflowId": workflow_id,
-                        "filePath": doc_path,
-                        "title": template.get('name', 'Document'),
-                    })
+                    try:
+                        from vaf.core.web_interface import notify_document_created
+                        notify_document_created(
+                            session_id,
+                            doc_path,
+                            title=template.get('name', 'Document'),
+                        )
+                    except Exception:
+                        send_web_update({
+                            "type": "document_ready",
+                            "workflowId": workflow_id,
+                            "filePath": doc_path,
+                            "title": template.get('name', 'Document'),
+                        })
         else:
             error_msg = result.error or "Unknown error"
             UI.error(f"Workflow failed: {error_msg}")

@@ -102,6 +102,10 @@ Singleton pattern manager that:
 
 Under **Settings → Interface**, the **Date & Time** section lets you set your timezone, date format, and time format (24h/12h). These values are stored in your user identity and used in the system prompt and when the agent shows dates and times.
 
+### 7. Document Editor: Text prompts and drafts
+
+When you ask in the Web UI for the agent to write or compose text (e.g. *"Schreib mir einen Text …"*, *"Verfasse …"*, *"Write me a text …"*), the agent’s reply is also opened in the **Document Editor** as a draft. The draft is saved under the session’s data folder (`data_dir/drafts/<session_id>/entwurf.md`). You can edit the text there, improve it, and use **Save** to overwrite the draft or **Download HTML** to export it. This only applies to Web UI prompts (not e.g. Telegram), and only when the reply is substantial (after stripping `<think>` blocks).
+
 ## Local Model Idle Behavior
 
 When the provider is `local`, the tray process only loads the model on real activity (prompt/CLI heartbeat). If there are no active WebUI WebSocket connections for 15 seconds, the model is unloaded from VRAM unless persistence is enabled.
@@ -334,7 +338,7 @@ The Web UI runs alongside the CLI interface:
 
 ### Input Box
 
-- **Features**: Attachment button, text input, voice input, send button; file chips and token stats above the form when relevant. When the Document Viewer is open, **quote chips** appear above the input: any text selected in the viewer is automatically added as a quoted snippet (colored by order: dark, orange, pink, blue, green). Chips show a red hover state; clicking a chip removes that quote only. Sent messages combine the typed input and all quote snippets (joined by blank lines).
+- **Features**: Attachment button, text input, voice input, send button; file chips and token stats above the form when relevant. When the document panel is open with attachments (Anhänge), **quote chips** appear above the input: any text selected in the panel is automatically added as a quoted snippet (colored by order: dark, orange, pink, blue, green). Chips show a red hover state; clicking a chip removes that quote only. Sent messages combine the typed input and all quote snippets (joined by blank lines).
 - **Layout**: On a **new chat** (no messages), the input bar is shown **centered** in the viewport with a short welcome line (“How can I help you?”). After the first message is sent, the bar **animates** (≈500 ms) to its **fixed position at the bottom** and stays there for the rest of the conversation.
 - **States**: Disabled during loading, focus ring on interaction.
 - **Submit**: Enter key or click send button.

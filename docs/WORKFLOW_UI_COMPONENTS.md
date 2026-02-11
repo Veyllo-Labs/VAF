@@ -9,8 +9,7 @@ When a workflow runs in VAF, the WebUI provides several visual components:
 1. **WorkflowChatElement** - Inline chat card showing workflow progress
 2. **VAFWorkflowRuntime** - Right panel with workflow steps and terminal output
 3. **SubAgentWindow** - Panel for sub-agent output (hidden during workflow execution)
-4. **DocumentEditor** - Panel for viewing/editing workflow-generated documents
-5. **DocumentViewer** - Panel for viewing attachments (Anhänge) in the right sidebar; same UI and size as DocumentEditor
+4. **DocumentEditor** - Single right-side document panel: workflow-generated documents (edit, save, PDF, download) and attachments (Anhänge) with quote-from-selection and compact document switcher
 
 ## Component Architecture
 
@@ -68,40 +67,33 @@ A docked panel for displaying sub-agent activity. Supports two modes:
 
 Located at `web/components/DocumentEditor.tsx`
 
-A panel for viewing and editing HTML documents created by workflows. Styled identically to SubAgentWindow.
+A single right-side panel used for (1) workflow-generated documents and (2) attachments (Anhänge). Styled identically to SubAgentWindow.
 
-**Features:**
+**Kernel editor mode** (when `filePath` is set):
 - Displays in the same panel area as SubAgentWindow (dock mode)
 - Loads HTML content via `/api/file?path=...`
 - Editable iframe with contentEditable
 - Save, Export PDF, and Download HTML buttons
+- Optional workflow steps on the left
 - Status indicator (Ready/Active/Error)
-
-**Integration:**
 - Opened via `document_ready` WebSocket event from workflow
-- Takes priority over SubAgentWindow when open
 - Uses `getApiBase()` for API calls
+- Optional: text selection in the iframe can be sent as a quote chip (via `onInsertSelection`)
 
-### DocumentViewer
+**Attachments mode** (when `documents` are passed, no `filePath`):
+- Same panel area; no right-side document list (compact dropdown in header instead)
+- Header: title "Anhänge", dropdown to select current document, "Dokument hinzufügen" and per-document remove
+- Read-only extracted text (or image) for the selected document with persistent highlights
+- **Quote from document**: Selecting text inserts it as a quote chip above the chat input; each selection gets a distinct highlight color (dark, orange, pink, blue, green) and a matching chip; click chip to remove
+- Frontend sends `set_sidebar_documents` with document list; backend replies with `sidebar_documents_set` (`contents: [{ name, content }]`); `chat` messages include `sidebarDocuments` so the LLM receives attachment content
+- State is stored per session (`sessionViewerState`); not cleared on `history_update`
+- User messages show an "Anhänge" indicator (document names) under the bubble when the panel is closed
 
-Located at `web/components/DocumentViewer.tsx`
+**Integration:** The right panel renders either DocumentEditor (editor or attachments) or SubAgentWindow. Workflow document opens editor mode; Paperclip (attach) opens DocumentEditor in attachments mode.
 
-A panel for viewing attachments (documents, images, tables) in the right sidebar. Same layout, size, and styling as DocumentEditor (dock/overlay).
+**Shared types/constants:** `web/components/DocumentViewer.tsx` no longer renders a panel; it exports only types (`InsertedSelectionRange`, `DocumentViewerDocument`) and constants (`CHIP_BG_CLASSES`, `INSERTION_COLOR_CLASSES`) for use by DocumentEditor and the chat input chips.
 
-**Features:**
-- Displays in the same panel area as DocumentEditor and SubAgentWindow (dock mode)
-- Left column: document list with "Dokument hinzufügen" and remove per document
-- Right column: read-only extracted text (or image) for the selected document
-- No Save/Export; documents are for reference only
-- **Quote from document**: Selecting text in the viewer automatically inserts it into the message as a quote (no button). Each selection gets a distinct highlight color (dark, orange, pink, blue, green) in the document and a matching chip above the input. Highlights stay visible until the user removes the corresponding chip (click chip to remove). Ranges are stored per document so switching documents shows only that document’s highlights.
-
-**Integration:**
-- Opened by user via the Document Viewer (BookOpen) button next to the attach button
-- Frontend sends `set_sidebar_documents` (Client → Server) with full list of documents (name, base64 data, mimeType); backend stores extracted text in `session.runtime_state["sidebar_documents"]` and replies with `sidebar_documents_set` (Server → Client) with `contents: [{ name, content }]` for display
-- When the viewer has documents, the frontend also sends them with each `chat` message as `sidebarDocuments` so the backend can inject them into the session before queueing; the LLM then receives their content on that turn (headless_runner injects from `session.runtime_state["sidebar_documents"]` before `chat_step`)
-- Closing the viewer sends `set_sidebar_documents` with `documents: []` so the LLM no longer sees them for future turns
-- Document Viewer state (open/closed and document list) is stored per session in React state (`sessionViewerState`) and derived from the current session id; it is not cleared on `history_update`, so documents persist across repeated session switches
-- User messages sent while the viewer had documents show an "Anhänge" indicator (document names, truncated) under the bubble when the Document Viewer is closed
+_(Document Viewer as a separate panel has been removed; its functionality lives in DocumentEditor attachments mode above.)_
 
 ## Data Flow
 
@@ -130,8 +122,8 @@ A panel for viewing attachments (documents, images, tables) in the right sidebar
 | `workflow_output_stream` | Add line to terminal output |
 | `subagent_output_stream` | Sub-agent output (routed to workflow terminal when running) |
 | `document_ready` | Open DocumentEditor with generated file |
-| `set_sidebar_documents` | Client → Server: set/clear sidebar documents for Document Viewer |
-| `sidebar_documents_set` | Server → Client: extracted contents for Document Viewer display |
+| `set_sidebar_documents` | Client → Server: set/clear sidebar documents for DocumentEditor (attachments mode) |
+| `sidebar_documents_set` | Server → Client: extracted contents for DocumentEditor attachments display |
 
 ## Store Structure
 

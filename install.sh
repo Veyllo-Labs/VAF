@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 #
 # VAF - Veyllo Agentic Framework - Cross-Platform Installer
 # Supports: macOS (Intel/Apple Silicon) and Linux (Debian/Ubuntu/Fedora/Arch)
@@ -537,15 +537,9 @@ if [[ "$NODE_INSTALLED" == "true" ]]; then
     
     if [[ -d "web" ]]; then
         cd web
-        
-        if [[ ! -d "node_modules" ]]; then
-            print_info "Installing npm packages..."
-            npm install --silent 2>/dev/null || npm install
-            print_success "Web UI dependencies installed"
-        else
-            print_success "Web UI dependencies already installed"
-        fi
-        
+        print_info "Installing/updating npm packages (Web UI dependencies from web/package.json)..."
+        npm install --silent 2>/dev/null || npm install
+        print_success "Web UI dependencies installed"
         cd "$PROJECT_ROOT"
     fi
 fi

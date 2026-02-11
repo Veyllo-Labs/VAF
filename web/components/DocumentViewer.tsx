@@ -98,7 +98,7 @@ export default function DocumentViewer({
 }: DocumentViewerProps) {
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [listExpanded, setListExpanded] = useState(true);
-    const [listContentVisible, setListContentVisible] = useState(true); // delayed fade-in when expanding
+    const [listContentVisible, setListContentVisible] = useState(true);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const contentAreaRef = useRef<HTMLDivElement>(null);
     const autoCollapseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -122,7 +122,6 @@ export default function DocumentViewer({
         onInsertSelection(text, { start, end, documentId: selectedDoc.id });
     };
 
-    // When viewer opens, show list expanded then auto-collapse after 3s to hint that it's collapsible
     useEffect(() => {
         if (!isOpen) return;
         setListExpanded(true);
@@ -136,7 +135,6 @@ export default function DocumentViewer({
         };
     }, [isOpen]);
 
-    // When expanding: hide list content briefly so width animates first, then fade content in
     useEffect(() => {
         if (listExpanded) {
             setListContentVisible(false);
@@ -193,7 +191,6 @@ export default function DocumentViewer({
 
     if (!isOpen && mode === 'overlay') return null;
 
-    // Dock mode - same layout/size as DocumentEditor dock
     if (mode === 'dock') {
         return (
             <div
@@ -204,7 +201,6 @@ export default function DocumentViewer({
                 aria-hidden={!isOpen}
             >
                 <div className="flex h-full w-full min-w-0">
-                    {/* Left: content (main area) – grows when list collapses so text reflows */}
                     <div className="flex flex-1 flex-col min-w-0 w-0 bg-[#F9FAFB] rounded-r-2xl overflow-hidden">
                         <div className="flex h-12 items-center justify-between border-b border-gray-200 bg-white px-4">
                             <div className="flex items-center gap-3">
@@ -272,7 +268,6 @@ export default function DocumentViewer({
                         </div>
                     </div>
 
-                    {/* Right: collapsible document list – smooth width + content fade when expanding */}
                     <div
                         className={cn(
                             'flex flex-col border-l border-gray-200 bg-white overflow-hidden shrink-0',
@@ -380,7 +375,6 @@ export default function DocumentViewer({
         );
     }
 
-    // Overlay mode: content left, list right (collapsible)
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 sm:p-8">
             <div className="relative flex h-[90vh] w-full max-w-[1400px] overflow-hidden rounded-2xl bg-[#F3F4F6] shadow-2xl min-w-0">
@@ -436,7 +430,6 @@ export default function DocumentViewer({
                         </div>
                     </div>
                 </div>
-                {/* Right: collapsible document list (overlay) – same smooth expand as dock */}
                 <div
                     className={cn(
                         'flex flex-col border-l border-gray-200 bg-white overflow-hidden shrink-0',

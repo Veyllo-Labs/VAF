@@ -545,28 +545,24 @@ if ($nodeInstalled) {
     
     $webPath = Join-Path $PROJECT_ROOT "web"
     if (Test-Path $webPath) {
-        if (-not (Test-Path "$webPath\node_modules")) {
-            Write-Info "Installing npm packages (this may take 1-2 minutes)..."
-            Write-Host -NoNewline "  [" -ForegroundColor Gray
-            $npmStart = Get-Date
-            $job = Start-Job -ScriptBlock {
-                Set-Location $using:webPath
-                & npm install --silent 2>&1
-            }
-            $spinChars = @('|', '/', '-', '\')
-            $spinIndex = 0
-            while ($job.State -eq 'Running') {
-                Write-Host -NoNewline "`b$($spinChars[$spinIndex])" -ForegroundColor Yellow
-                $spinIndex = ($spinIndex + 1) % 4
-                Start-Sleep -Milliseconds 200
-            }
-            $npmResult = Receive-Job -Job $job
-            Remove-Job -Job $job -Force
-            $npmTime = [math]::Round(((Get-Date) - $npmStart).TotalSeconds, 1)
-            Write-Host "`b] Web UI dependencies installed (${npmTime}s)" -ForegroundColor Green
-        } else {
-            Write-Success "Web UI dependencies already installed"
+        Write-Info "Installing/updating npm packages (Web UI dependencies from web/package.json)..."
+        Write-Host -NoNewline "  [" -ForegroundColor Gray
+        $npmStart = Get-Date
+        $job = Start-Job -ScriptBlock {
+            Set-Location $using:webPath
+            & npm install --silent 2>&1
         }
+        $spinChars = @('|', '/', '-', '\')
+        $spinIndex = 0
+        while ($job.State -eq 'Running') {
+            Write-Host -NoNewline "`b$($spinChars[$spinIndex])" -ForegroundColor Yellow
+            $spinIndex = ($spinIndex + 1) % 4
+            Start-Sleep -Milliseconds 200
+        }
+        $npmResult = Receive-Job -Job $job
+        Remove-Job -Job $job -Force
+        $npmTime = [math]::Round(((Get-Date) - $npmStart).TotalSeconds, 1)
+        Write-Host "`b] Web UI dependencies installed (${npmTime}s)" -ForegroundColor Green
     }
 }
 

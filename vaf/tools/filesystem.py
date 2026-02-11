@@ -602,21 +602,36 @@ class WriteFileTool(BaseTool):
                     # Verify file was written correctly
                     # Check if we used Documents fallback (original path had Desktop but res now has Documents)
                     used_fallback = "desktop" in path.lower() and "documents" in res.lower()
-                    
+                    success = False
                     if os.path.exists(res) and os.path.getsize(res) == len(data):
+                        success = True
+                    else:
+                        try:
+                            if os.path.exists(res) and os.path.getsize(res) > 0:
+                                success = True
+                        except Exception:
+                            pass
+                    if success:
+                        # When a document file is saved, open it in the Document Editor (same as document_agent/workflow).
+                        _doc_extensions = (".html", ".htm", ".md", ".txt", ".docx")
+                        if res.lower().endswith(_doc_extensions):
+                            try:
+                                session_id = os.environ.get("VAF_SESSION_ID")
+                                if not session_id:
+                                    from vaf.core.subagent_ipc import get_current_session_id
+                                    session_id = get_current_session_id()
+                                if session_id:
+                                    from vaf.core.web_interface import notify_document_created
+                                    notify_document_created(
+                                        session_id, res,
+                                        title=os.path.basename(res)
+                                    )
+                            except Exception:
+                                pass
                         if used_fallback:
                             return f"File written successfully to {res} (Desktop not writable, saved to Documents instead)"
                         return f"File written successfully to {res}"
-                    else:
-                        # If the file exists and is non-empty, treat as success (best-effort verification).
-                        try:
-                            if os.path.exists(res) and os.path.getsize(res) > 0:
-                                if used_fallback:
-                                    return f"File written successfully to {res} (Desktop not writable, saved to Documents instead)"
-                                return f"File written successfully to {res}"
-                        except Exception:
-                            pass
-                        return f"⚠️ File written but size verification failed: {res}"
+                    return f"⚠️ File written but size verification failed: {res}"
                         
                 except Exception as e:
                     # Clean up temp file on error

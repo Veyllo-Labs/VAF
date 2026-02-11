@@ -671,10 +671,311 @@ async def get_file(path: str = Query(..., description="Absolute path to local fi
     )
 
 
+def _allowed_file_path(path_str: str):
+    """Resolve path and check it is under allowed roots. Returns Path or raises HTTPException."""
+    from vaf.core.platform import Platform
+    try:
+        target = Platform.normalize_path(path_str)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    allowed_roots = [
+        Platform.documents_dir().resolve(),
+        Platform.downloads_dir().resolve(),
+        Platform.data_dir().resolve(),
+    ]
+    if not any(target.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Access denied")
+    return target
+
+
+def _escape_html(s: str) -> str:
+    import html
+    return html.escape(s, quote=True)
+
+
+def _docx_to_html(target) -> str:
+    from docx import Document
+    doc = Document(str(target))
+    parts = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+        style_name = (para.style.name or "").lower()
+        if "heading 1" in style_name or para.style.name == "Title":
+            parts.append(f"<h1>{_escape_html(text)}</h1>")
+        elif "heading 2" in style_name:
+            parts.append(f"<h2>{_escape_html(text)}</h2>")
+        elif "heading 3" in style_name:
+            parts.append(f"<h3>{_escape_html(text)}</h3>")
+        else:
+            parts.append(f"<p>{_escape_html(text)}</p>")
+    for table in doc.tables:
+        parts.append("<table border=\"1\" cellpadding=\"4\" cellspacing=\"0\">")
+        for row in table.rows:
+            parts.append("<tr>")
+            for cell in row.cells:
+                parts.append(f"<td>{_escape_html(cell.text.strip())}</td>")
+            parts.append("</tr>")
+        parts.append("</table>")
+    return "".join(parts) if parts else "<p></p>"
+
+
+def _xlsx_to_html(target) -> str:
+    import openpyxl
+    wb = openpyxl.load_workbook(target, read_only=True, data_only=True)
+    parts = []
+    for sheet_name in wb.sheetnames[:10]:
+        sheet = wb[sheet_name]
+        parts.append(f"<h2>Sheet: {_escape_html(sheet_name)}</h2>")
+        parts.append("<table border=\"1\" cellpadding=\"4\" cellspacing=\"0\">")
+        max_row = min(sheet.max_row, 500)
+        max_col = min(sheet.max_column, 30)
+        for row in sheet.iter_rows(min_row=1, max_row=max_row, max_col=max_col, values_only=True):
+            parts.append("<tr>")
+            for cell in row:
+                val = "" if cell is None else str(cell)
+                parts.append(f"<td>{_escape_html(val)}</td>")
+            parts.append("</tr>")
+        parts.append("</table>")
+    wb.close()
+    return "".join(parts) if parts else "<p></p>"
+
+
+def _pptx_to_html(target) -> str:
+    from pptx import Presentation
+    prs = Presentation(str(target))
+    parts = []
+    for i, slide in enumerate(prs.slides[:50], 1):
+        parts.append(f"<h2>Slide {i}</h2>")
+        for shape in slide.shapes:
+            if hasattr(shape, "text") and shape.text.strip():
+                parts.append(f"<p>{_escape_html(shape.text.strip())}</p>")
+    return "".join(parts) if parts else "<p></p>"
+
+
+@app.get("/api/file/as-html")
+async def get_file_as_html(path: str = Query(..., description="Path to .docx, .xlsx or .pptx to convert to HTML for editing")):
+    """Convert Word (.docx), Excel (.xlsx) or PowerPoint (.pptx) to HTML so the Document Editor can display and edit it."""
+    target = _allowed_file_path(path)
+    suf = target.suffix.lower()
+    if suf not in (".docx", ".xlsx", ".pptx"):
+        raise HTTPException(status_code=400, detail="Only .docx, .xlsx and .pptx can be converted to HTML here")
+    try:
+        if suf == ".docx":
+            body = _docx_to_html(target)
+        elif suf == ".xlsx":
+            body = _xlsx_to_html(target)
+        else:
+            body = _pptx_to_html(target)
+        html = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/></head><body>" + body + "</body></html>"
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(html)
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=f"Support not installed: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to convert to HTML: {e}")
+
+
 class FileSaveRequest(BaseModel):
     """Request body for saving a file."""
     path: str
     content: str
+
+
+class FileSaveDocxRequest(BaseModel):
+    """Request body for saving HTML content back as .docx."""
+    path: str
+    content: str  # HTML from the editor
+
+
+def _strip_html_to_text(html_fragment: str) -> str:
+    import re
+    import html
+    t = re.sub(r"<[^>]+>", " ", html_fragment)
+    t = html.unescape(t)
+    return " ".join(t.split()).strip()
+
+
+@app.post("/api/file/save-docx")
+async def save_file_as_docx(request: FileSaveDocxRequest):
+    """Save editor content (HTML) back to a Word (.docx) file. Creates/overwrites the file."""
+    from vaf.core.platform import Platform
+    import re
+    try:
+        target = Platform.normalize_path(request.path)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    allowed_roots = [
+        Platform.documents_dir().resolve(),
+        Platform.downloads_dir().resolve(),
+        Platform.data_dir().resolve(),
+    ]
+    if not any(target.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if target.suffix.lower() != ".docx":
+        raise HTTPException(status_code=400, detail="Path must be a .docx file")
+    try:
+        from docx import Document
+        doc = Document()
+        html = request.content or ""
+        body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
+        if body_match:
+            html = body_match.group(1)
+        # Find all block elements in order: h1, h2, h3, p, table
+        pattern = r"<(h[1-3]|p|table)[^>]*>(.*?)</\1>"
+        for m in re.finditer(pattern, html, re.DOTALL | re.IGNORECASE):
+            tag, inner = m.group(1).lower(), m.group(2)
+            text = _strip_html_to_text(inner)
+            if tag.startswith("h") and len(tag) == 2:
+                level = int(tag[1])
+                if text:
+                    doc.add_heading(text, level=level)
+            elif tag == "p" and text:
+                doc.add_paragraph(text)
+            elif tag == "table":
+                rows_html = re.findall(r"<tr[^>]*>(.*?)</tr>", inner, re.DOTALL | re.IGNORECASE)
+                if rows_html:
+                    all_cells = [re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.DOTALL | re.IGNORECASE) for r in rows_html]
+                    nrows = len(all_cells)
+                    ncols = max(len(c) for c in all_cells) if all_cells else 0
+                    if ncols > 0:
+                        table = doc.add_table(rows=nrows, cols=ncols)
+                        for ri, cells in enumerate(all_cells):
+                            for ci, cell_html in enumerate(cells):
+                                if ci < ncols:
+                                    table.rows[ri].cells[ci].text = _strip_html_to_text(cell_html)
+        # If no structured blocks found, add whole body as one paragraph
+        if len(doc.paragraphs) == 0 and not doc.tables:
+            text = _strip_html_to_text(html)
+            if text:
+                doc.add_paragraph(text)
+        doc.save(str(target))
+        return {"status": "ok", "path": str(target)}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Word support not installed. Run: pip install python-docx")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save docx: {e}")
+
+
+class FileSaveOfficeRequest(BaseModel):
+    """Request body for saving HTML content back as .xlsx or .pptx."""
+    path: str
+    content: str  # HTML from the editor
+
+
+def _allowed_save_path(path_str: str, required_suffix: str):
+    from vaf.core.platform import Platform
+    try:
+        target = Platform.normalize_path(path_str)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    allowed_roots = [
+        Platform.documents_dir().resolve(),
+        Platform.downloads_dir().resolve(),
+        Platform.data_dir().resolve(),
+    ]
+    if not any(target.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if target.suffix.lower() != required_suffix:
+        raise HTTPException(status_code=400, detail=f"Path must be a {required_suffix} file")
+    return target
+
+
+@app.post("/api/file/save-xlsx")
+async def save_file_as_xlsx(request: FileSaveOfficeRequest):
+    """Save editor content (HTML tables) back to an Excel (.xlsx) file. First table = first sheet."""
+    import re
+    target = _allowed_save_path(request.path, ".xlsx")
+    html = request.content or ""
+    body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
+    if body_match:
+        html = body_match.group(1)
+    try:
+        import openpyxl
+        from openpyxl import Workbook
+        wb = Workbook()
+        wb.remove(wb.active)
+        tables = re.findall(r"<table[^>]*>(.*?)</table>", html, re.DOTALL | re.IGNORECASE)
+        for ti, table_html in enumerate(tables[:20]):
+            rows_html = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, re.DOTALL | re.IGNORECASE)
+            if not rows_html:
+                continue
+            all_cells = [re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.DOTALL | re.IGNORECASE) for r in rows_html]
+            ncols = max(len(c) for c in all_cells) if all_cells else 0
+            if ncols == 0:
+                continue
+            sheet_name = f"Sheet{ti + 1}" if ti > 0 else "Sheet1"
+            ws = wb.create_sheet(sheet_name, ti)
+            for ri, cells in enumerate(all_cells):
+                for ci, cell_html in enumerate(cells):
+                    if ci < ncols:
+                        val = _strip_html_to_text(cell_html)
+                        ws.cell(row=ri + 1, column=ci + 1, value=val)
+        if not wb.sheetnames:
+            ws = wb.create_sheet("Sheet1")
+            ws.cell(row=1, column=1, value="")
+        wb.save(str(target))
+        return {"status": "ok", "path": str(target)}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Excel support not installed. Run: pip install openpyxl")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save xlsx: {e}")
+
+
+@app.post("/api/file/save-pptx")
+async def save_file_as_pptx(request: FileSaveOfficeRequest):
+    """Save editor content (HTML: h2 = slide title, p = body) back to a PowerPoint (.pptx) file."""
+    import re
+    target = _allowed_save_path(request.path, ".pptx")
+    html = request.content or ""
+    body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
+    if body_match:
+        html = body_match.group(1)
+    try:
+        from pptx import Presentation
+        from pptx.util import Inches, Pt
+        prs = Presentation()
+        prs.slide_width = Inches(10)
+        prs.slide_height = Inches(7.5)
+        slide_sections = re.split(r"<h2[^>]*>", html, flags=re.IGNORECASE)
+        for i, section in enumerate(slide_sections):
+            if i == 0 and not re.search(r"</h2>", section, re.IGNORECASE):
+                continue
+            parts = re.split(r"</h2>", section, maxsplit=1, flags=re.IGNORECASE)
+            title_html = parts[0] if len(parts) > 1 else ""
+            body_html = parts[1] if len(parts) > 1 else section
+            title = _strip_html_to_text(title_html) or f"Slide {i}"
+            body_text = _strip_html_to_text(body_html)
+            if not title and not body_text:
+                continue
+            blank = prs.slide_layouts[6]
+            slide = prs.slides.add_slide(blank)
+            left = Inches(0.5)
+            top = Inches(0.5)
+            width = Inches(9)
+            height = Inches(0.8)
+            tb = slide.shapes.add_textbox(left, top, width, height)
+            tf = tb.text_frame
+            p = tf.paragraphs[0]
+            p.text = title
+            p.font.size = Pt(24)
+            if body_text:
+                tb2 = slide.shapes.add_textbox(left, Inches(1.5), width, Inches(5.5))
+                tf2 = tb2.text_frame
+                tf2.text = body_text
+        if len(prs.slides) == 0:
+            blank = prs.slide_layouts[6]
+            slide = prs.slides.add_slide(blank)
+            slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(1)).text_frame.text = "Untitled"
+        prs.save(str(target))
+        return {"status": "ok", "path": str(target)}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="PowerPoint support not installed. Run: pip install python-pptx")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save pptx: {e}")
 
 
 @app.post("/api/file/save")

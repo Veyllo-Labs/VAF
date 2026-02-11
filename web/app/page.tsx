@@ -1417,13 +1417,16 @@ export default function VAFDashboard() {
                     appendWorkflowLine(line);
                 }
                 else if (data.type === 'document_ready') {
-                    // A document was created by a workflow - open the Document Editor
+                    // A document was created (workflow, document_agent, etc.) – always open it in the Document Editor
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
                     setDocumentEditorState({
                         isOpen: true,
                         filePath: data.filePath || '',
                         title: data.title || 'Document',
                     });
+                    setShowSubAgentPanel(true);
+                    if (currentSessionId) setDocumentViewerStateForSession(currentSessionId, (prev) => ({ ...prev, isOpen: false }));
+                    else setDocumentViewerState((prev) => ({ ...prev, isOpen: false }));
                 }
                 else if (data.type === 'sidebar_documents_set') {
                     const contents = (data.contents || []) as Array<{ name: string; content: string }>;

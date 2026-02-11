@@ -304,3 +304,32 @@ class WebInterfaceManager:
 # Global Accessor
 def get_web_interface():
     return WebInterfaceManager()
+
+
+def notify_document_created(session_id: Optional[str], file_path, title: Optional[str] = None) -> None:
+    """
+    Notify the Web UI that a document was created so the Document Editor opens with it.
+    Call this from any code path that creates a document (workflow, document_agent, etc.).
+    Works from main process (WebSocket) and from subprocess (HTTP POST to /api/workflow/update).
+
+    Safe when there is no Web session (e.g. Telegram or automation): if session_id is missing,
+    we return immediately; the document is already saved and the flow is not disturbed.
+    """
+    if not session_id or not file_path:
+        return
+    resolved = Path(file_path).resolve().as_posix()
+    payload = {
+        "type": "document_ready",
+        "sessionId": session_id,
+        "filePath": resolved,
+        "title": title or Path(file_path).name,
+    }
+    wi = get_web_interface()
+    if getattr(wi, "_server_loop", None):
+        wi._push_session_update(session_id, payload)
+    else:
+        try:
+            import requests
+            requests.post("http://127.0.0.1:8001/api/workflow/update", json=payload, timeout=1)
+        except Exception:
+            pass

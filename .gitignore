@@ -74,3 +74,5 @@ node_modules/
 .next/
 out/
 
+memory_report_20231015.txt
+.gitignore

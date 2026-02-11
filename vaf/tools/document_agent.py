@@ -13,6 +13,8 @@ Similar architecture to research_agent but for document creation.
 import os
 import re
 import json
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -184,6 +186,21 @@ Handles documents of any size using section-by-section generation (no context ov
         
         file_path = self._save_document(final_content, filename, output_format, plan['document_type'])
 
+        # Notify Web UI so the Document Editor opens with the created document (same process or subprocess)
+        try:
+            from vaf.core.web_interface import notify_document_created
+            session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+            if not session_id:
+                try:
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    session_id = get_current_session_id() or ""
+                except Exception:
+                    pass
+            if session_id:
+                notify_document_created(session_id, file_path, title=plan.get("title"))
+        except Exception as e:
+            UI.warning(f"Could not notify document created: {e}")
+
         # Auto-open the folder containing the document
         try:
             from vaf.core.platform import Platform
@@ -330,7 +347,7 @@ Language: Match the document type (German for German contracts, etc.)."""
         return file_path
     
     def _save_as_word(self, content: str, file_path: Path, doc_type: str) -> Path:
-        """Save as Word document (.docx)."""
+        """Save as Word document (.docx). Writes to temp file then replaces target so the ZIP is never half-written."""
         try:
             from docx import Document
             
@@ -349,7 +366,21 @@ Language: Match the document type (German for German contracts, etc.)."""
                     else:
                         doc.add_paragraph(paragraph.strip())
             
-            doc.save(str(file_path))
+            parent = file_path.parent
+            parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(suffix=".docx", dir=str(parent) if str(parent) != "." else None)
+            try:
+                os.close(fd)
+                doc.save(tmp_path)
+                if file_path.exists():
+                    file_path.unlink()
+                shutil.move(tmp_path, str(file_path))
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
             return file_path
             
         except ImportError:

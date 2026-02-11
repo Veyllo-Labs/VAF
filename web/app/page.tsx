@@ -648,16 +648,29 @@ export default function VAFDashboard() {
         steps: []
     });
 
-    // Document Editor State
-    const [documentEditorState, setDocumentEditorState] = useState<{
-        isOpen: boolean;
-        filePath: string;
-        title: string;
-    }>({
-        isOpen: false,
-        filePath: '',
-        title: 'Document',
-    });
+    // Document Editor: one state entry per session (like Viewer); includes content so unsaved edits survive chat switch.
+    const [sessionEditorState, setSessionEditorState] = useState<Record<string, { isOpen: boolean; filePath: string; title: string; content?: string }>>({});
+    const defaultEditorState = useMemo(() => ({ isOpen: false as const, filePath: '', title: 'Document' }), []);
+    const documentEditorState = currentSessionId
+        ? (sessionEditorState[currentSessionId] ?? defaultEditorState)
+        : defaultEditorState;
+    const setDocumentEditorState = useCallback((
+        valueOrUpdater: { isOpen: boolean; filePath: string; title: string; content?: string } | ((prev: { isOpen: boolean; filePath: string; title: string; content?: string }) => { isOpen: boolean; filePath: string; title: string; content?: string })
+    ) => {
+        if (!currentSessionId) return;
+        setSessionEditorState(prev => {
+            const current = prev[currentSessionId] ?? defaultEditorState;
+            const next = typeof valueOrUpdater === 'function' ? valueOrUpdater(current) : valueOrUpdater;
+            return { ...prev, [currentSessionId]: next };
+        });
+    }, [currentSessionId, defaultEditorState]);
+    const setDocumentEditorStateForSession = useCallback((sessionId: string, valueOrUpdater: { isOpen: boolean; filePath: string; title: string; content?: string } | ((prev: { isOpen: boolean; filePath: string; title: string; content?: string }) => { isOpen: boolean; filePath: string; title: string; content?: string })) => {
+        setSessionEditorState(prev => {
+            const current = prev[sessionId] ?? defaultEditorState;
+            const next = typeof valueOrUpdater === 'function' ? valueOrUpdater(current) : valueOrUpdater;
+            return { ...prev, [sessionId]: next };
+        });
+    }, [defaultEditorState]);
 
     // Document Viewer: one state entry per session so switching chats never overwrites or loses data.
     const [sessionViewerState, setSessionViewerState] = useState<Record<string, { isOpen: boolean; documents: DocumentViewerDoc[] }>>({});
@@ -1417,16 +1430,21 @@ export default function VAFDashboard() {
                     appendWorkflowLine(line);
                 }
                 else if (data.type === 'document_ready') {
-                    // A document was created (workflow, document_agent, etc.) – always open it in the Document Editor
-                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
-                    setDocumentEditorState({
-                        isOpen: true,
-                        filePath: data.filePath || '',
-                        title: data.title || 'Document',
-                    });
-                    setShowSubAgentPanel(true);
-                    if (currentSessionId) setDocumentViewerStateForSession(currentSessionId, (prev) => ({ ...prev, isOpen: false }));
-                    else setDocumentViewerState((prev) => ({ ...prev, isOpen: false }));
+                    // Store editor state for the session that received the document (per-session like Viewer).
+                    const sid = data.sessionId || currentSessionId;
+                    if (sid) {
+                        setDocumentEditorStateForSession(sid, {
+                            isOpen: true,
+                            filePath: data.filePath || '',
+                            title: data.title || 'Document',
+                            content: undefined, // new document: load from server; clears any previous doc content
+                        });
+                        // Only switch UI if this event is for the currently visible chat
+                        if (sid === currentSessionId) {
+                            setShowSubAgentPanel(true);
+                            setDocumentViewerStateForSession(sid, (prev) => ({ ...prev, isOpen: false }));
+                        }
+                    }
                 }
                 else if (data.type === 'sidebar_documents_set') {
                     const contents = (data.contents || []) as Array<{ name: string; content: string }>;
@@ -3021,6 +3039,8 @@ export default function VAFDashboard() {
                                     onClose={() => setDocumentEditorState(prev => ({ ...prev, isOpen: false }))}
                                     filePath={documentEditorState.filePath}
                                     title={documentEditorState.title}
+                                    initialContent={documentEditorState.content ?? ''}
+                                    onContentChange={(content) => setDocumentEditorState(prev => ({ ...prev, content }))}
                                     mode="dock"
                                 />
                             ) : (

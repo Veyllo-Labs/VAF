@@ -29,6 +29,8 @@ export type DocumentEditorProps = {
     filePath?: string;
     title?: string;
     initialContent?: string;
+    /** Called whenever content changes (typing, load, toolbar). Parent can store per-session to restore on chat switch. */
+    onContentChange?: (content: string) => void;
     mode?: 'overlay' | 'dock';
     status?: string;
     presence?: 'online' | 'idle' | 'error';
@@ -102,6 +104,7 @@ export default function DocumentEditor({
     filePath = '',
     title = 'Document Editor',
     initialContent = '',
+    onContentChange,
     mode = 'overlay',
     status = '',
     presence,
@@ -123,6 +126,8 @@ export default function DocumentEditor({
     const attachmentsContentRef = useRef<HTMLDivElement>(null);
     const onInsertSelectionRef = useRef(onInsertSelection);
     onInsertSelectionRef.current = onInsertSelection;
+    const onContentChangeRef = useRef(onContentChange);
+    onContentChangeRef.current = onContentChange;
     /** When true, the last content update came from the iframe (user typing). Skip rewriting iframe to avoid focus loss. */
     const contentFromIframeRef = useRef(false);
     /** Saved selection when user clicks toolbar (so we can restore and execCommand). */
@@ -210,12 +215,12 @@ export default function DocumentEditor({
             setSelectedAttachmentId(documents[0].id);
     }, [isAttachmentsMode, documents, selectedAttachmentId]);
 
-    // Load content from file when opened (skip binary formats: Word, Excel, PDF, etc.)
+    // Load content from file when opened. Skip load when initialContent is set (restored from session).
     useEffect(() => {
         if (isOpen && filePath && !initialContent && !isBinaryDocument) {
             loadDocument();
         }
-    }, [isOpen, filePath, isBinaryDocument]);
+    }, [isOpen, filePath, isBinaryDocument, initialContent]);
 
     // Update iframe content when content changes from outside (load/save); do NOT rewrite when user is typing (would steal focus)
     useEffect(() => {
@@ -234,7 +239,9 @@ export default function DocumentEditor({
         doc.body.style.padding = '20px';
         doc.body.addEventListener('input', () => {
             contentFromIframeRef.current = true;
-            setContent(doc.body.innerHTML);
+            const html = doc.body.innerHTML;
+            setContent(html);
+            onContentChangeRef.current?.(html);
         });
         const handleMouseUp = () => {
             const fn = onInsertSelectionRef.current;
@@ -270,6 +277,7 @@ export default function DocumentEditor({
                 throw new Error(detail);
             }
             setContent(text);
+            onContentChangeRef.current?.(text);
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Failed to load document');
         } finally {
@@ -369,7 +377,9 @@ export default function DocumentEditor({
         try {
             doc.execCommand(command, false, value ?? '');
             contentFromIframeRef.current = true;
-            setContent(doc.body.innerHTML);
+            const html = doc.body.innerHTML;
+            setContent(html);
+            onContentChangeRef.current?.(html);
         } finally {
             savedSelectionRef.current = null;
         }

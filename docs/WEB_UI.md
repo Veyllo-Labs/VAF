@@ -102,9 +102,19 @@ Singleton pattern manager that:
 
 Under **Settings → Interface**, the **Date & Time** section lets you set your timezone, date format, and time format (24h/12h). These values are stored in your user identity and used in the system prompt and when the agent shows dates and times.
 
-### 7. Document Editor: Text prompts and drafts
+### 7. Document Editor
 
-When you ask in the Web UI for the agent to write or compose text (e.g. *"Schreib mir einen Text …"*, *"Verfasse …"*, *"Write me a text …"*), the agent’s reply is also opened in the **Document Editor** as a draft. The draft is saved under the session’s data folder (`data_dir/drafts/<session_id>/entwurf.md`). You can edit the text there, improve it, and use **Save** to overwrite the draft or **Download HTML** to export it. This only applies to Web UI prompts (not e.g. Telegram), and only when the reply is substantial (after stripping `<think>` blocks).
+The Document Editor is a rich-text editor in the right panel (dock or overlay). It supports opening files (HTML, DOCX, etc.), editing, and exporting.
+
+**Layout and behaviour:** A4 page layout (210×297 mm, Word-style; overflow flows to the next page below with a separator line every 297 mm). Per-session state: editor content and open file are stored per chat session; switching sessions restores the correct document and unsaved content.
+
+**Agent context:** When the editor is open, its plain-text content is sent with each chat message. The backend prepends it as `--- CURRENT DOCUMENT (Editor): <title> ---` so the agent sees the current document. You can select text in the editor (e.g. placeholders); the selection is added as a chip and sent with the message. The agent can replace that range via the `replace_editor_selection` tool (only available when there are marked selections); the UI applies the replacement and removes the chip.
+
+**Workflow behaviour:** If the message contains the editor document block (`CURRENT DOCUMENT (Editor)`), workflow matching is skipped so the agent uses tools (e.g. `replace_editor_selection`) instead of starting a workflow.
+
+**UI:** Closing the editor (X) shows a browser confirm dialog. PDF export preserves formatting (font size, bold, italic) by cloning content into the main document before conversion (html2pdf.js/html2canvas).
+
+**Drafts from agent:** When you ask in the Web UI for the agent to write or compose text (e.g. *"Schreib mir einen Text …"*, *"Verfasse …"*, *"Write me a text …"*), the agent’s reply is also opened in the **Document Editor** as a draft. The draft is saved under the session’s data folder (`data_dir/drafts/<session_id>/entwurf.md`). You can edit the text there, improve it, and use **Save** to overwrite the draft or **Download HTML** to export it. This only applies to Web UI prompts (not e.g. Telegram), and only when the reply is substantial (after stripping `<think>` blocks).
 
 ## Local Model Idle Behavior
 
@@ -125,9 +135,15 @@ The local LLM runs as a single HTTP backend on `127.0.0.1:8080`. When a prompt a
 ```json
 {
   "type": "chat",
-  "content": "User message text"
+  "content": "User message text",
+  "sessionId": "uuid",
+  "sidebarDocuments": [],
+  "editorDocument": { "name": "Document title", "content": "Plain text of editor body" },
+  "editorSelections": [{ "start": 0, "end": 10, "text": "selected text" }]
 }
 ```
+
+- `sessionId` is required. Optional: `sidebarDocuments` (Document Viewer attachments), `editorDocument` (when Document Editor is open; plain text only), `editorSelections` (marked ranges in the editor for `replace_editor_selection`).
 
 ```json
 {
@@ -208,6 +224,18 @@ The local LLM runs as a single HTTP backend on `127.0.0.1:8080`. When a prompt a
   "sessionId": "uuid"
 }
 ```
+
+```json
+{
+  "type": "editor_apply_edit",
+  "sessionId": "uuid",
+  "selectionIndex": 0,
+  "newText": "replacement text",
+  "start": 0,
+  "end": 10
+}
+```
+Sent when the agent calls `replace_editor_selection`; the frontend replaces the character range `[start, end]` in the Document Editor with `newText` and removes that selection chip.
 
 ```json
 {

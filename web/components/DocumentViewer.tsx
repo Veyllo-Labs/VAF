@@ -98,28 +98,35 @@ export default function DocumentViewer({
 }: DocumentViewerProps) {
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [listExpanded, setListExpanded] = useState(true);
-    const [listContentVisible, setListContentVisible] = useState(true);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const contentAreaRef = useRef<HTMLDivElement>(null);
     const autoCollapseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const expandContentRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const handleContentMouseUp = () => {
-        if (!onInsertSelection || !selectedDoc) return;
+        if (!onInsertSelection) return;
         const sel = typeof window !== 'undefined' ? window.getSelection() : null;
         if (!sel || !contentAreaRef.current || !sel.rangeCount) return;
         const text = sel.toString().trim();
         if (!text) return;
         if (!contentAreaRef.current.contains(sel.anchorNode)) return;
-        const pre = contentAreaRef.current.querySelector('pre');
+        const pres = contentAreaRef.current.querySelectorAll('pre[data-document-id]');
+        let pre: Element | null = null;
+        for (const p of pres) {
+            if (p.contains(sel.anchorNode)) {
+                pre = p;
+                break;
+            }
+        }
         if (!pre) return;
+        const documentId = pre.getAttribute('data-document-id') ?? '';
+        if (!documentId) return;
         const r = sel.getRangeAt(0);
         const startRange = document.createRange();
         startRange.setStart(pre, 0);
         startRange.setEnd(r.startContainer, r.startOffset);
         const start = startRange.toString().length;
         const end = start + text.length;
-        onInsertSelection(text, { start, end, documentId: selectedDoc.id });
+        onInsertSelection(text, { start, end, documentId });
     };
 
     useEffect(() => {
@@ -136,50 +143,40 @@ export default function DocumentViewer({
     }, [isOpen]);
 
     useEffect(() => {
-        if (listExpanded) {
-            setListContentVisible(false);
-            if (expandContentRef.current) clearTimeout(expandContentRef.current);
-            expandContentRef.current = setTimeout(() => {
-                setListContentVisible(true);
-                expandContentRef.current = null;
-            }, 120);
-        } else {
-            setListContentVisible(true);
-            if (expandContentRef.current) clearTimeout(expandContentRef.current);
-        }
-        return () => {
-            if (expandContentRef.current) clearTimeout(expandContentRef.current);
-        };
-    }, [listExpanded]);
+        if (!selectedId || !contentAreaRef.current) return;
+        const el = contentAreaRef.current.querySelector(`[data-document-id="${selectedId}"]`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, [selectedId]);
 
     const hasDocuments = documents.length > 0;
     const selectedDoc = documents.find((d) => d.id === selectedId) ?? documents[0];
-    const displayContent = selectedDoc?.content ?? '';
-    const isImage = selectedDoc?.mimeType?.startsWith('image/');
 
-    const contentWithHighlights = React.useMemo(() => {
-        const content = displayContent || '(Kein Textinhalt)';
-        const rangesForDoc = insertedSelections
-            .map((s, i) => ({ start: s.start, end: s.end, colorIndex: i, documentId: s.documentId }))
-            .filter((s) => s.documentId === selectedDoc?.id)
-            .map(({ start, end, colorIndex }) => ({ start, end, colorIndex }));
-        if (rangesForDoc.length === 0) return null;
-        const segments = buildHighlightSegments(content.length, rangesForDoc);
-        const parts: React.ReactNode[] = [];
-        let lastEnd = 0;
-        for (let i = 0; i < segments.length; i++) {
-            const seg = segments[i];
-            if (seg.start > lastEnd) parts.push(content.slice(lastEnd, seg.start));
-            parts.push(
-                <span key={i} className={cn('rounded-sm', CHIP_BG_CLASSES[seg.colorIndex % CHIP_BG_CLASSES.length])}>
-                    {content.slice(seg.start, seg.end)}
-                </span>
-            );
-            lastEnd = seg.end;
-        }
-        if (lastEnd < content.length) parts.push(content.slice(lastEnd));
-        return parts;
-    }, [displayContent, selectedDoc?.id, insertedSelections]);
+    const getContentWithHighlightsForDoc = React.useCallback(
+        (doc: DocumentViewerDocument) => {
+            const content = doc.content ?? '(Kein Textinhalt)';
+            const rangesForDoc = insertedSelections
+                .map((s, i) => ({ start: s.start, end: s.end, colorIndex: i, documentId: s.documentId }))
+                .filter((s) => s.documentId === doc.id)
+                .map(({ start, end, colorIndex }) => ({ start, end, colorIndex }));
+            if (rangesForDoc.length === 0) return null;
+            const segments = buildHighlightSegments(content.length, rangesForDoc);
+            const parts: React.ReactNode[] = [];
+            let lastEnd = 0;
+            for (let i = 0; i < segments.length; i++) {
+                const seg = segments[i];
+                if (seg.start > lastEnd) parts.push(content.slice(lastEnd, seg.start));
+                parts.push(
+                    <span key={i} className={cn('rounded-sm', CHIP_BG_CLASSES[seg.colorIndex % CHIP_BG_CLASSES.length])}>
+                        {content.slice(seg.start, seg.end)}
+                    </span>
+                );
+                lastEnd = seg.end;
+            }
+            if (lastEnd < content.length) parts.push(content.slice(lastEnd));
+            return parts;
+        },
+        [insertedSelections]
+    );
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = e.target.files ? Array.from(e.target.files) : [];
@@ -202,68 +199,90 @@ export default function DocumentViewer({
             >
                 <div className="flex h-full w-full min-w-0">
                     <div className="flex flex-1 flex-col min-w-0 w-0 bg-[#F9FAFB] rounded-r-2xl overflow-hidden">
-                        <div className="flex h-12 items-center justify-between border-b border-gray-200 bg-white px-4">
-                            <div className="flex items-center gap-3">
-                                <div className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-blue-600">
+                        <div className="flex h-12 items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 shrink-0">
+                            <div className="flex items-center gap-3 min-w-0">
+                                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-white text-blue-600">
                                     <FileText size={14} />
                                 </div>
-                                <div>
+                                <div className="min-w-0">
                                     <div className="text-xs font-semibold text-gray-900">{title}</div>
-                                    <div className="flex items-center gap-2 text-[10px] text-gray-500">
-                                        <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+                                    <div className="flex items-center gap-2 text-[10px] text-gray-500 flex-wrap">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-gray-400 shrink-0" />
                                         <span className="uppercase">Ready</span>
+                                        <span className="text-gray-300">·</span>
+                                        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-500 shrink-0">
+                                            Anhänge
+                                        </span>
+                                        <span className="truncate font-mono text-[11px] text-gray-600">
+                                            {documents.length === 0
+                                                ? 'Kein Dokument'
+                                                : documents.length === 1
+                                                    ? documents[0].name
+                                                    : `${documents.length} Dokumente (durchscrollen)`}
+                                        </span>
                                     </div>
                                 </div>
                             </div>
                             <button
                                 onClick={onClose}
-                                className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+                                className="rounded-full p-1 text-gray-400 shrink-0 transition hover:bg-gray-100 hover:text-gray-600"
                                 aria-label="Close"
                             >
                                 <X size={14} />
                             </button>
                         </div>
-                        <div className="flex h-9 items-center gap-2 border-b border-gray-100 bg-white/80 px-4 text-xs text-gray-500">
-                            <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-500">
-                                Anhänge
-                            </span>
-                            <span className="truncate font-mono text-[11px]">
-                                {selectedDoc?.name ?? 'Kein Dokument ausgewählt'}
-                            </span>
-                        </div>
-                        <div className="flex-1 min-h-0 min-w-0 overflow-hidden p-4 flex flex-col">
-                            <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
-                                <div className="flex h-8 shrink-0 items-center border-b border-gray-100 bg-gray-50 px-3 text-[10px] text-gray-400">
-                                    <div className="flex-1 min-w-0 truncate text-center font-mono">
-                                        {selectedDoc?.name ?? '—'}
+                        <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+                            <div
+                                ref={contentAreaRef}
+                                onMouseUp={handleContentMouseUp}
+                                className="flex-1 min-h-0 min-w-0 overflow-auto bg-[#e5e7eb] w-full"
+                            >
+                                {!hasDocuments ? (
+                                    <div className="flex flex-col items-center justify-center h-full min-h-[200px] gap-2 text-gray-400 text-sm">
+                                        <FileText size={32} className="opacity-50" />
+                                        <p>Keine Dokumente. Klicke auf &quot;Dokument hinzufügen&quot;, um Anhänge zu öffnen.</p>
+                                        <p className="text-xs">Der Assistent kann dann auf deren Inhalt antworten.</p>
                                     </div>
-                                </div>
-                                <div
-                                    ref={contentAreaRef}
-                                    onMouseUp={handleContentMouseUp}
-                                    className="flex-1 min-h-0 min-w-0 overflow-auto bg-white p-4 w-full"
-                                >
-                                    {!hasDocuments ? (
-                                        <div className="flex flex-col items-center justify-center h-full gap-2 text-gray-400 text-sm">
-                                            <FileText size={32} className="opacity-50" />
-                                            <p>Keine Dokumente. Klicke auf &quot;Dokument hinzufügen&quot;, um Anhänge zu öffnen.</p>
-                                            <p className="text-xs">Der Assistent kann dann auf deren Inhalt antworten.</p>
-                                        </div>
-                                    ) : !selectedDoc ? (
-                                        <div className="text-gray-400 text-sm">Dokument auswählen.</div>
-                                    ) : isImage && selectedDoc.content?.startsWith('data:') ? (
-                                        <img src={selectedDoc.content} alt={selectedDoc.name} className="max-w-full h-auto" />
-                                    ) : (
-                                        <pre
-                                            className={cn(
-                                                'w-full max-w-full whitespace-pre-wrap break-words font-sans text-sm text-gray-800',
-                                                INSERTION_COLOR_CLASSES[insertedSelectionsCount % INSERTION_COLOR_CLASSES.length]
-                                            )}
-                                        >
-                                            {contentWithHighlights ?? (displayContent || '(Kein Textinhalt)')}
-                                        </pre>
-                                    )}
-                                </div>
+                                ) : (
+                                    <div className="min-h-full flex flex-col items-center py-4 px-2 gap-6">
+                                        {documents.map((doc) => {
+                                            const isImg = doc.mimeType?.startsWith('image/') && doc.content?.startsWith('data:');
+                                            return (
+                                                <div
+                                                    key={doc.id}
+                                                    className="w-[210mm] max-w-full flex justify-center"
+                                                    data-document-id={doc.id}
+                                                >
+                                                    <div
+                                                        className="w-[210mm] max-w-full min-h-[297mm] bg-white shadow-sm box-border py-[25mm] px-[25mm] rounded-sm flex flex-col"
+                                                        style={{
+                                                            backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0, transparent 297mm, rgba(0,0,0,0.06) 297mm, rgba(0,0,0,0.06) 298mm)',
+                                                        }}
+                                                    >
+                                                        <div className="text-[10px] text-gray-400 font-mono mb-2 shrink-0">
+                                                            {doc.name}
+                                                        </div>
+                                                        {isImg ? (
+                                                            <div className="flex flex-1 min-h-0 items-center justify-center">
+                                                                <img src={doc.content} alt={doc.name} className="max-w-full max-h-full object-contain rounded shadow-sm" />
+                                                            </div>
+                                                        ) : (
+                                                            <pre
+                                                                data-document-id={doc.id}
+                                                                className={cn(
+                                                                    'w-full max-w-full whitespace-pre-wrap break-words font-sans text-sm text-gray-800 m-0 flex-1 min-h-0',
+                                                                    INSERTION_COLOR_CLASSES[insertedSelectionsCount % INSERTION_COLOR_CLASSES.length]
+                                                                )}
+                                                            >
+                                                                {getContentWithHighlightsForDoc(doc) ?? (doc.content ?? '(Kein Textinhalt)')}
+                                                            </pre>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -271,9 +290,10 @@ export default function DocumentViewer({
                     <div
                         className={cn(
                             'flex flex-col border-l border-gray-200 bg-white overflow-hidden shrink-0',
-                            'transition-[width] duration-350 ease-in-out',
-                            listExpanded ? 'w-[36%] min-w-[280px]' : 'w-12'
+                            'transition-[width] duration-300 ease-out',
+                            listExpanded ? 'w-[280px]' : 'w-12'
                         )}
+                        style={{ willChange: 'width' }}
                     >
                         {listExpanded ? (
                             <>
@@ -291,12 +311,7 @@ export default function DocumentViewer({
                                         <ChevronRight size={16} />
                                     </button>
                                 </div>
-                                <div
-                                    className={cn(
-                                        'flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-2 min-h-0 transition-opacity duration-200',
-                                        listContentVisible ? 'opacity-100' : 'opacity-0'
-                                    )}
-                                >
+                                <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-2 min-h-0 min-w-0">
                                     <button
                                         type="button"
                                         onClick={() => fileInputRef.current?.click()}
@@ -379,63 +394,94 @@ export default function DocumentViewer({
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 sm:p-8">
             <div className="relative flex h-[90vh] w-full max-w-[1400px] overflow-hidden rounded-2xl bg-[#F3F4F6] shadow-2xl min-w-0">
                 <div className="flex flex-1 flex-col min-w-0 w-0 bg-[#F9FAFB] overflow-hidden">
-                    <div className="flex h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white px-6">
-                        <div className="flex items-center gap-3">
-                            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm">
+                    <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-gray-200 bg-white px-6">
+                        <div className="flex items-center gap-3 min-w-0">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm">
                                 <FileText size={18} />
                             </div>
-                            <div>
+                            <div className="min-w-0">
                                 <div className="text-sm font-semibold text-gray-900">{title}</div>
-                                <div className="text-xs text-gray-500">Ready</div>
+                                <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap">
+                                    <span>Ready</span>
+                                    <span className="text-gray-300">·</span>
+                                    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                                        Anhänge
+                                    </span>
+                                    <span className="truncate font-mono text-gray-600">
+                                        {documents.length === 0 ? '—' : documents.length === 1 ? documents[0].name : `${documents.length} Dokumente (durchscrollen)`}
+                                    </span>
+                                </div>
                             </div>
                         </div>
                         <button
                             onClick={onClose}
-                            className="rounded-full p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                            className="rounded-full p-2 shrink-0 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
                             aria-label="Close"
                         >
                             <X size={16} />
                         </button>
                     </div>
-                    <div className="flex h-9 items-center border-b border-gray-100 bg-white/80 px-6 text-xs text-gray-500">
-                        <span className="truncate font-mono">{selectedDoc?.name ?? '—'}</span>
-                    </div>
-                    <div className="flex-1 min-h-0 min-w-0 overflow-hidden p-6 flex flex-col">
-                        <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-                            <div
-                                ref={contentAreaRef}
-                                onMouseUp={handleContentMouseUp}
-                                className="flex-1 min-h-0 min-w-0 overflow-auto p-4 w-full"
-                            >
-                                {!hasDocuments ? (
-                                    <div className="flex flex-col items-center justify-center h-full gap-2 text-gray-400 text-sm">
-                                        <FileText size={40} className="opacity-50" />
-                                        <p>Keine Dokumente. Dokument hinzufügen, um Anhänge zu öffnen.</p>
-                                    </div>
-                                ) : selectedDoc ? (
-                                    isImage && selectedDoc.content?.startsWith('data:') ? (
-                                        <img src={selectedDoc.content} alt={selectedDoc.name} className="max-w-full h-auto" />
-                                    ) : (
-                                        <pre
-                                            className={cn(
-                                                'w-full max-w-full whitespace-pre-wrap break-words font-sans text-sm text-gray-800',
-                                                INSERTION_COLOR_CLASSES[insertedSelectionsCount % INSERTION_COLOR_CLASSES.length]
-                                            )}
-                                        >
-                                            {contentWithHighlights ?? (displayContent || '(Kein Textinhalt)')}
-                                        </pre>
-                                    )
-                                ) : null}
-                            </div>
+                    <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+                        <div
+                            ref={contentAreaRef}
+                            onMouseUp={handleContentMouseUp}
+                            className="flex-1 min-h-0 min-w-0 overflow-auto bg-[#e5e7eb] w-full"
+                        >
+                            {!hasDocuments ? (
+                                <div className="flex flex-col items-center justify-center h-full min-h-[280px] gap-2 text-gray-400 text-sm">
+                                    <FileText size={40} className="opacity-50" />
+                                    <p>Keine Dokumente. Dokument hinzufügen, um Anhänge zu öffnen.</p>
+                                </div>
+                            ) : (
+                                <div className="min-h-full flex flex-col items-center py-6 px-4 gap-6">
+                                    {documents.map((doc) => {
+                                        const isImg = doc.mimeType?.startsWith('image/') && doc.content?.startsWith('data:');
+                                        return (
+                                            <div
+                                                key={doc.id}
+                                                className="w-[210mm] max-w-full flex justify-center"
+                                                data-document-id={doc.id}
+                                            >
+                                                <div
+                                                    className="w-[210mm] max-w-full min-h-[297mm] bg-white shadow-sm box-border py-[25mm] px-[25mm] rounded-sm flex flex-col"
+                                                    style={{
+                                                        backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0, transparent 297mm, rgba(0,0,0,0.06) 297mm, rgba(0,0,0,0.06) 298mm)',
+                                                    }}
+                                                >
+                                                    <div className="text-xs text-gray-400 font-mono mb-2 shrink-0">
+                                                        {doc.name}
+                                                    </div>
+                                                    {isImg ? (
+                                                        <div className="flex flex-1 min-h-0 items-center justify-center">
+                                                            <img src={doc.content} alt={doc.name} className="max-w-full max-h-full object-contain rounded shadow-sm" />
+                                                        </div>
+                                                    ) : (
+                                                        <pre
+                                                            data-document-id={doc.id}
+                                                            className={cn(
+                                                                'w-full max-w-full whitespace-pre-wrap break-words font-sans text-sm text-gray-800 m-0 flex-1 min-h-0',
+                                                                INSERTION_COLOR_CLASSES[insertedSelectionsCount % INSERTION_COLOR_CLASSES.length]
+                                                            )}
+                                                        >
+                                                            {getContentWithHighlightsForDoc(doc) ?? (doc.content ?? '(Kein Textinhalt)')}
+                                                        </pre>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
                 <div
                     className={cn(
                         'flex flex-col border-l border-gray-200 bg-white overflow-hidden shrink-0',
-                        'transition-[width] duration-350 ease-in-out',
-                        listExpanded ? 'w-[35%] min-w-[320px]' : 'w-14'
+                        'transition-[width] duration-300 ease-out',
+                        listExpanded ? 'w-[320px]' : 'w-14'
                     )}
+                    style={{ willChange: 'width' }}
                 >
                     {listExpanded ? (
                         <>
@@ -453,8 +499,7 @@ export default function DocumentViewer({
                             </div>
                             <div
                                 className={cn(
-                                    'flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3 min-h-0 transition-opacity duration-200',
-                                    listContentVisible ? 'opacity-100' : 'opacity-0'
+                                    'flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3 min-h-0 min-w-0'
                                 )}
                             >
                                 <button

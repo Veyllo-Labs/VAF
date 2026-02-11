@@ -568,6 +568,14 @@ def run_headless_agent():
                     except FileNotFoundError:
                         pass  # no session yet, use raw input_text
 
+                    # replace_editor_selection only when Document Editor is open with marked selections
+                    try:
+                        session_for_editor = session_mgr.load(task.session_id)
+                        editor_selections = (getattr(session_for_editor, "runtime_state", None) or {}).get("editor_selections") or []
+                        agent._excluded_tools = set() if editor_selections else {"replace_editor_selection"}
+                    except Exception:
+                        agent._excluded_tools = {"replace_editor_selection"}
+
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt

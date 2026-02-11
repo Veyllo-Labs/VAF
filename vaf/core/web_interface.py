@@ -264,6 +264,23 @@ class WebInterfaceManager:
             "stats": stats
         })
 
+    def emit_editor_apply_edit(self, session_id: str, selection_index: int, new_text: str, start: int = None, end: int = None):
+        """
+        Ask the Web UI to replace the text at the given marked selection in the Document Editor.
+        If start/end are provided, the frontend replaces that character range; otherwise it uses selectionIndex.
+        """
+        if not session_id:
+            return
+        payload = {
+            "type": "editor_apply_edit",
+            "selectionIndex": selection_index,
+            "newText": new_text,
+        }
+        if start is not None and end is not None:
+            payload["start"] = start
+            payload["end"] = end
+        self._push_session_update(session_id, payload)
+
     # ═══════════════════════════════════════════════════════════════════════════
     # THREAD-SAFE BRIDGING
     # ═══════════════════════════════════════════════════════════════════════════

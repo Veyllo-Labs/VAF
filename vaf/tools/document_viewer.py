@@ -163,3 +163,71 @@ Pass the full file path. The document opens in the right-hand Document Editor (s
             return f"Error: Could not open document in Web UI: {e}"
 
         return f"Document \"{path.name}\" has been opened in the Document Editor. The user can view and edit it in the right panel."
+
+
+class ReplaceEditorSelectionTool(BaseTool):
+    """
+    Replace the text of a marked selection in the Document Editor.
+    Use when the user has marked a region (e.g. placeholder) and asked you to fill or edit it.
+    selection_index is 0-based: 0 = first marked region, 1 = second, etc.
+    """
+
+    name = "replace_editor_selection"
+    description = """Replace the text at a marked selection in the Document Editor.
+Use when the user has marked a region in the editor (e.g. a placeholder like [NAME] or a sentence) and asked you to fill or edit it.
+selection_index: 0 = first marked region, 1 = second, etc. (order matches the chips shown in the prompt).
+new_text: the exact text to put in place of the marked region."""
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "selection_index": {
+                "type": "integer",
+                "description": "Zero-based index of the marked selection (0 = first, 1 = second, ...).",
+            },
+            "new_text": {
+                "type": "string",
+                "description": "The text to replace the marked region with.",
+            },
+        },
+        "required": ["selection_index", "new_text"],
+    }
+
+    def run(self, **kwargs) -> str:
+        selection_index = kwargs.get("selection_index", 0)
+        new_text = kwargs.get("new_text") or ""
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id
+            from vaf.core.web_interface import get_web_interface
+            from vaf.core.session import SessionManager
+        except ImportError as e:
+            return f"Error: Could not load dependencies: {e}"
+
+        session_id = get_current_session_id()
+        if not session_id:
+            return "Error: No active session (replace in editor is only available in the Web UI with an active chat session)."
+
+        if selection_index < 0:
+            return "Error: selection_index must be >= 0."
+
+        start, end = None, None
+        try:
+            session_mgr = SessionManager()
+            session = session_mgr.load(session_id)
+            selections = (getattr(session, "runtime_state", None) or {}).get("editor_selections") or []
+            if 0 <= selection_index < len(selections):
+                s = selections[selection_index]
+                if isinstance(s, dict):
+                    start = s.get("start")
+                    end = s.get("end")
+        except Exception:
+            pass
+
+        try:
+            get_web_interface().emit_editor_apply_edit(
+                session_id, selection_index, new_text, start=start, end=end
+            )
+        except Exception as e:
+            return f"Error: Could not send edit to Web UI: {e}"
+
+        return "The marked region in the Document Editor has been updated with the new text."

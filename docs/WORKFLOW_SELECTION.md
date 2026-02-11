@@ -97,6 +97,10 @@ The router is smart enough to say **"No"**.
 - Router: "This is too simple for a workflow. Return `none`."
 - Result: Main Agent uses `web_search` tool directly (faster!).
 
+### 4. Document Editor Mode (Skip Workflow)
+
+When the user message contains the **Document Editor** context block (`--- CURRENT DOCUMENT (Editor): ... ---`), workflow matching is **skipped entirely**. The agent is given the editor content and optional marked selections; it should use tools such as `replace_editor_selection` or `document_editor` instead of starting a workflow (e.g. code_review). This avoids the router selecting an inappropriate workflow when the user is editing a document and has marked text to replace.
+
 ## Configuration
 
 Workflow selection behavior can be tuned in `~/.vaf/config.json`:

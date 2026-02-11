@@ -1824,6 +1824,33 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if not session_id:
                             session_id = "web-default"
 
+                        # Editor document: prepend to this turn so agent has current editor content (like Document Viewer)
+                        editor_doc = cmd.get("editorDocument")
+                        if editor_doc and isinstance(editor_doc, dict):
+                            name = editor_doc.get("name") or "Document"
+                            ed_content = editor_doc.get("content") or ""
+                            if ed_content:
+                                block = f"--- CURRENT DOCUMENT (Editor): {name} ---\n{ed_content}\n----------------\n\n"
+                                content = (block + content) if content else block
+
+                        # Editor selections: store for replace_editor_selection tool (start/end per index)
+                        editor_selections = cmd.get("editorSelections")
+                        if isinstance(editor_selections, list) and editor_selections:
+                            try:
+                                loaded = session_mgr.load(session_id)
+                            except FileNotFoundError:
+                                loaded = Session(
+                                    id=session_id,
+                                    name=f"Session {session_id}",
+                                    runtime_state={"editor_selections": editor_selections},
+                                )
+                                session_mgr.save(loaded, sync_state=False)
+                            else:
+                                if not getattr(loaded, "runtime_state", None):
+                                    loaded.runtime_state = {}
+                                loaded.runtime_state["editor_selections"] = editor_selections
+                                session_mgr.save(loaded, sync_state=False)
+
                         # Ensure sidebar documents are in session before queueing (so headless has context)
                         if sidebar_docs_payload:
                             try:

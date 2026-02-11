@@ -48,6 +48,37 @@ type Session = {
     messageCount?: number;
 };
 
+/** Replace plain-text range [start, end] in HTML with newText; returns new HTML. */
+function replaceTextInHtml(html: string, start: number, end: number, newText: string): string {
+    const wrap = `<div id="__replaceRoot">${html}</div>`;
+    const doc = new DOMParser().parseFromString(wrap, 'text/html');
+    const root = doc.getElementById('__replaceRoot');
+    if (!root) return html;
+    const textNodes: { node: Text; nodeStart: number; nodeEnd: number }[] = [];
+    let offset = 0;
+    const walk = (node: Node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const len = (node.textContent || '').length;
+            textNodes.push({ node: node as Text, nodeStart: offset, nodeEnd: offset + len });
+            offset += len;
+        } else {
+            node.childNodes.forEach(walk);
+        }
+    };
+    root.childNodes.forEach(walk);
+    let first = true;
+    for (const { node, nodeStart, nodeEnd } of textNodes) {
+        const overlapStart = Math.max(0, start - nodeStart);
+        const overlapEnd = Math.min(nodeEnd - nodeStart, end - nodeStart);
+        if (overlapStart >= overlapEnd) continue;
+        const overlapLen = overlapEnd - overlapStart;
+        const replaceWith = first ? newText : '';
+        first = false;
+        node.replaceData(overlapStart, overlapLen, replaceWith);
+    }
+    return root.innerHTML;
+}
+
 /**
  * Convert audio Blob (webm/opus) to WAV format for better Whisper compatibility.
  * Uses Web Audio API to decode and re-encode as 16-bit PCM WAV.
@@ -1446,6 +1477,21 @@ export default function VAFDashboard() {
                         }
                     }
                 }
+                else if (data.type === 'editor_apply_edit') {
+                    const sid = data.sessionId || currentSessionId;
+                    const start = typeof data.start === 'number' ? data.start : undefined;
+                    const end = typeof data.end === 'number' ? data.end : undefined;
+                    const selectionIndex = typeof data.selectionIndex === 'number' ? data.selectionIndex : 0;
+                    const newText = typeof data.newText === 'string' ? data.newText : '';
+                    if (!sid || start === undefined || end === undefined) return;
+                    setSessionEditorState(prev => {
+                        const cur = prev[sid];
+                        if (!cur?.content) return prev;
+                        const nextContent = replaceTextInHtml(cur.content, start, end, newText);
+                        return { ...prev, [sid]: { ...cur, content: nextContent } };
+                    });
+                    setInsertedSelections(prev => prev.filter((_, i) => i !== selectionIndex));
+                }
                 else if (data.type === 'sidebar_documents_set') {
                     const contents = (data.contents || []) as Array<{ name: string; content: string }>;
                     const sid = data.sessionId || activeSessionId;
@@ -1885,11 +1931,25 @@ export default function VAFDashboard() {
         const sidebarPayload = documentViewerState.documents.filter(d => d.data).length > 0
             ? documentViewerState.documents.filter(d => d.data).map(d => ({ name: d.name, data: d.data, mimeType: d.mimeType || '' }))
             : undefined;
+        const editorDoc =
+            documentEditorState.isOpen && documentEditorState.content
+                ? (() => {
+                    const div = document.createElement('div');
+                    div.innerHTML = documentEditorState.content;
+                    return { name: documentEditorState.title || 'Document', content: (div.textContent || div.innerText || '').trim() };
+                })()
+                : undefined;
+        const editorSelectionsPayload =
+            insertedSelections
+                .filter((s) => s.documentId === 'editor')
+                .map((s) => ({ start: s.start, end: s.end, text: s.text }));
         ws.send(JSON.stringify({
             type: 'chat',
             content: textToSend,
             sessionId: currentSessionId,
             ...(sidebarPayload && sidebarPayload.length > 0 ? { sidebarDocuments: sidebarPayload } : {}),
+            ...(editorDoc && editorDoc.content !== '' ? { editorDocument: editorDoc } : {}),
+            ...(editorSelectionsPayload.length > 0 ? { editorSelections: editorSelectionsPayload } : {}),
         }));
         setInput('');
         setInsertedSelections([]);
@@ -3041,6 +3101,9 @@ export default function VAFDashboard() {
                                     title={documentEditorState.title}
                                     initialContent={documentEditorState.content ?? ''}
                                     onContentChange={(content) => setDocumentEditorState(prev => ({ ...prev, content }))}
+                                    onInsertSelection={(text, range) => setInsertedSelections(prev => [...prev, { text, ...range }])}
+                                    insertedSelectionsCount={insertedSelections.length}
+                                    insertedSelections={insertedSelections}
                                     mode="dock"
                                 />
                             ) : (

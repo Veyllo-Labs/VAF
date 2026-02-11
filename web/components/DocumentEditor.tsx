@@ -97,6 +97,90 @@ function buildHighlightSegments(
     return segments;
 }
 
+/** Same colors as CHIP_BG – applied via setProperty(..., 'important') so they win in the iframe. */
+const INSERTION_HIGHLIGHT_COLORS: { bg: string; text: string }[] = [
+    { bg: '#1f2937', text: '#ffffff' },
+    { bg: '#f97316', text: '#ffffff' },
+    { bg: '#ec4899', text: '#ffffff' },
+    { bg: '#3b82f6', text: '#ffffff' },
+    { bg: '#059669', text: '#ffffff' },
+];
+
+function getTextNodesInOrder(root: Node): { node: Text; start: number; end: number }[] {
+    const result: { node: Text; start: number; end: number }[] = [];
+    let offset = 0;
+    const walk = (node: Node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const len = (node.textContent || '').length;
+            if (len > 0) {
+                result.push({ node: node as Text, start: offset, end: offset + len });
+                offset += len;
+            }
+        } else {
+            for (let i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
+        }
+    };
+    walk(root);
+    return result;
+}
+
+function injectHighlightsInBody(body: HTMLElement, segments: { start: number; end: number; colorIndex: number }[], doc: Document): void {
+    if (segments.length === 0) return;
+    const existing = body.querySelectorAll('span[data-highlight]');
+    existing.forEach((span) => {
+        const parent = span.parentNode;
+        if (!parent) return;
+        while (span.firstChild) parent.insertBefore(span.firstChild, span);
+        parent.removeChild(span);
+    });
+    const textNodes = getTextNodesInOrder(body);
+    const totalLen = textNodes.length ? textNodes[textNodes.length - 1].end : 0;
+    if (totalLen === 0) return;
+    for (const seg of segments) {
+        const segStart = Math.max(0, seg.start);
+        const segEnd = Math.min(totalLen, seg.end);
+        if (segEnd <= segStart) continue;
+        const overlapping: { node: Text; localStart: number; localEnd: number }[] = [];
+        for (const { node, start, end } of textNodes) {
+            const overlapStart = Math.max(segStart, start);
+            const overlapEnd = Math.min(segEnd, end);
+            if (overlapEnd <= overlapStart) continue;
+            overlapping.push({
+                node,
+                localStart: overlapStart - start,
+                localEnd: overlapEnd - start,
+            });
+        }
+        for (const { node, localStart, localEnd } of overlapping.reverse()) {
+            const range = doc.createRange();
+            try {
+                range.setStart(node, localStart);
+                range.setEnd(node, localEnd);
+            } catch {
+                continue;
+            }
+            let fragment: DocumentFragment | null = null;
+            try {
+                fragment = range.extractContents();
+                if (!fragment || fragment.childNodes.length === 0) {
+                    if (fragment) range.insertNode(fragment);
+                    continue;
+                }
+                const span = doc.createElement('span');
+                span.setAttribute('data-highlight', String(seg.colorIndex));
+                const colors = INSERTION_HIGHLIGHT_COLORS[seg.colorIndex % INSERTION_HIGHLIGHT_COLORS.length];
+                span.style.setProperty('background-color', colors.bg, 'important');
+                span.style.setProperty('color', colors.text, 'important');
+                span.style.setProperty('padding', '0 2px', 'important');
+                span.appendChild(fragment);
+                range.insertNode(span);
+            } catch {
+                if (fragment) try { range.insertNode(fragment); } catch { /* restore */ }
+            }
+        }
+    }
+}
+
 export default function DocumentEditor({
     isOpen,
     onClose,
@@ -117,10 +201,38 @@ export default function DocumentEditor({
     insertedSelections = [],
 }: DocumentEditorProps) {
     const [content, setContent] = useState<string>(initialContent);
+    /** Sync from parent when content is pushed from outside (e.g. agent replace_editor_selection). */
+    useEffect(() => {
+        if (isOpen && initialContent !== undefined && initialContent !== content) {
+            setContent(initialContent);
+        }
+    }, [isOpen, initialContent]);
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [saveMessage, setSaveMessage] = useState<string | null>(null);
+    /** Current selection format so toolbar reflects it (like Word). */
+    const [selectionFormat, setSelectionFormat] = useState<{
+        fontName: string;
+        fontSize: string;
+        foreColor: string;
+        bold: boolean;
+        italic: boolean;
+        underline: boolean;
+        justifyLeft: boolean;
+        justifyCenter: boolean;
+        justifyRight: boolean;
+    }>({
+        fontName: 'Arial',
+        fontSize: '3',
+        foreColor: '#000000',
+        bold: false,
+        italic: false,
+        underline: false,
+        justifyLeft: true,
+        justifyCenter: false,
+        justifyRight: false,
+    });
     const iframeRef = useRef<HTMLIFrameElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const attachmentsContentRef = useRef<HTMLDivElement>(null);
@@ -128,6 +240,17 @@ export default function DocumentEditor({
     onInsertSelectionRef.current = onInsertSelection;
     const onContentChangeRef = useRef(onContentChange);
     onContentChangeRef.current = onContentChange;
+    /** When user requests close, show browser confirm and only call onClose if they confirm. */
+    const handleRequestClose = useCallback(() => {
+        if (typeof window === 'undefined') {
+            onClose();
+            return;
+        }
+        const message = 'Möchten Sie den Dokument-Editor wirklich schließen? Ungespeicherte Änderungen können verloren gehen.';
+        if (window.confirm(message)) {
+            onClose();
+        }
+    }, [onClose]);
     /** When true, the last content update came from the iframe (user typing). Skip rewriting iframe to avoid focus loss. */
     const contentFromIframeRef = useRef(false);
     /** Saved selection when user clicks toolbar (so we can restore and execCommand). */
@@ -222,6 +345,35 @@ export default function DocumentEditor({
         }
     }, [isOpen, filePath, isBinaryDocument, initialContent]);
 
+    const FONT_SIZES = [['1', '10 pt'], ['2', '11 pt'], ['3', '12 pt'], ['4', '14 pt'], ['5', '16 pt'], ['6', '18 pt'], ['7', '24 pt']] as const;
+    const FONT_FAMILIES = ['Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Courier New', 'Verdana'];
+
+    /** Read current selection format from iframe and update toolbar state (Word-style). */
+    const updateSelectionFormat = useCallback(() => {
+        const doc = iframeRef.current?.contentDocument;
+        if (!doc) return;
+        const fontName = (doc.queryCommandValue('fontName') || '').replace(/['"]/g, '') || 'Arial';
+        const fontSize = doc.queryCommandValue('fontSize') || '3';
+        let foreColor = doc.queryCommandValue('foreColor') || '#000000';
+        if (foreColor.startsWith('rgb')) {
+            const m = foreColor.match(/\d+/g);
+            if (m && m.length >= 3)
+                foreColor = '#' + [Number(m[0]), Number(m[1]), Number(m[2])].map(x => x.toString(16).padStart(2, '0')).join('');
+        }
+        if (!foreColor.startsWith('#')) foreColor = '#000000';
+        setSelectionFormat({
+            fontName: FONT_FAMILIES.includes(fontName) ? fontName : 'Arial',
+            fontSize: ['1','2','3','4','5','6','7'].includes(fontSize) ? fontSize : '3',
+            foreColor,
+            bold: doc.queryCommandState('bold'),
+            italic: doc.queryCommandState('italic'),
+            underline: doc.queryCommandState('underline'),
+            justifyLeft: doc.queryCommandState('justifyLeft'),
+            justifyCenter: doc.queryCommandState('justifyCenter'),
+            justifyRight: doc.queryCommandState('justifyRight'),
+        });
+    }, []);
+
     // Update iframe content when content changes from outside (load/save); do NOT rewrite when user is typing (would steal focus)
     useEffect(() => {
         if (!iframeRef.current || !content) return;
@@ -234,32 +386,82 @@ export default function DocumentEditor({
         doc.open();
         doc.write(content);
         doc.close();
-        doc.body.contentEditable = 'true';
+        if (!doc.head?.querySelector('style[data-a4]')) {
+            const style = doc.createElement('style');
+            style.setAttribute('data-a4', '1');
+            style.textContent = `
+                body { margin: 0; background: #e5e7eb; padding: 16px 0; min-height: 100%; }
+                .a4-page { width: 210mm; min-height: 297mm; margin: 0 auto 24px; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.12); padding: 25mm; box-sizing: border-box; background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 297mm, rgba(0,0,0,0.06) 297mm, rgba(0,0,0,0.06) 298mm); }
+            `;
+            if (doc.head) doc.head.appendChild(style);
+        }
+        if (!doc.body.querySelector('.a4-page')) {
+            const wrap = doc.createElement('div');
+            wrap.className = 'a4-page';
+            wrap.setAttribute('contenteditable', 'true');
+            while (doc.body.firstChild) wrap.appendChild(doc.body.firstChild);
+            doc.body.appendChild(wrap);
+        }
+        const editRoot = doc.body.querySelector('.a4-page') || doc.body;
+        editRoot.contentEditable = 'true';
+        (editRoot as HTMLElement).style.outline = 'none';
         doc.body.style.outline = 'none';
-        doc.body.style.padding = '20px';
-        doc.body.addEventListener('input', () => {
+        doc.body.style.padding = '0';
+        const focusBodyOnMouseDown = () => (editRoot as HTMLElement).focus();
+        doc.body.addEventListener('mousedown', focusBodyOnMouseDown);
+        const captureContent = () => {
             contentFromIframeRef.current = true;
             const html = doc.body.innerHTML;
             setContent(html);
             onContentChangeRef.current?.(html);
-        });
+        };
+        editRoot.addEventListener('input', captureContent);
         const handleMouseUp = () => {
             const fn = onInsertSelectionRef.current;
             if (!fn) return;
             try {
                 const sel = doc.getSelection();
                 if (!sel || sel.isCollapsed) return;
-                const text = sel.toString().trim();
-                if (text) fn(text, { start: 0, end: text.length, documentId: 'editor' });
+                const r = sel.getRangeAt(0);
+                const text = r.toString().trim();
+                if (!text) return;
+                const root = (doc.body.querySelector('.a4-page') || doc.body) as Node;
+                if (!root.contains(r.startContainer) || !root.contains(r.endContainer)) return;
+                const startRange = doc.createRange();
+                startRange.selectNodeContents(root);
+                startRange.setEnd(r.startContainer, r.startOffset);
+                const start = startRange.toString().length;
+                const end = start + text.length;
+                const overlapsExisting = (insertedSelections || []).some(
+                    (s) => s.documentId === 'editor' && start < s.end && end > s.start
+                );
+                if (overlapsExisting) return;
+                fn(text, { start, end, documentId: 'editor' });
             } catch {
                 // cross-origin or no selection
             }
         };
-        doc.body.addEventListener('mouseup', handleMouseUp);
-        return () => {
-            doc.body.removeEventListener('mouseup', handleMouseUp);
+        const handleSelectionChange = () => {
+            updateSelectionFormat();
         };
-    }, [content, isOpen]);
+        doc.body.addEventListener('mouseup', handleMouseUp);
+        doc.addEventListener('selectionchange', handleSelectionChange);
+        const rangesForEditor = (insertedSelections || [])
+            .map((s, i) => ({ start: s.start, end: s.end, colorIndex: i, documentId: s.documentId }))
+            .filter((s) => s.documentId === 'editor');
+        const bodyEl = (doc.body.querySelector('.a4-page') || doc.body) as HTMLElement;
+        const segments = buildHighlightSegments((bodyEl.textContent || '').length, rangesForEditor);
+        const rafId = requestAnimationFrame(() => {
+            if (!bodyEl.isConnected) return;
+            injectHighlightsInBody(bodyEl, segments, doc);
+        });
+        return () => {
+            cancelAnimationFrame(rafId);
+            doc.body.removeEventListener('mousedown', focusBodyOnMouseDown);
+            doc.body.removeEventListener('mouseup', handleMouseUp);
+            doc.removeEventListener('selectionchange', handleSelectionChange);
+        };
+    }, [content, isOpen, updateSelectionFormat, insertedSelections]);
 
     const loadDocument = async () => {
         setIsLoading(true);
@@ -327,15 +529,47 @@ export default function DocumentEditor({
         if (!body) return;
         setIsExportingPdf(true);
         try {
-            const html2pdf = (await import('html2pdf.js')).default;
-            const baseName = (displayFile || 'document').replace(/\.[^.]+$/, '') || 'document';
-            const filename = `${baseName}.pdf`;
-            await html2pdf().set({
-                margin: 10,
-                filename,
-                image: { type: 'jpeg', quality: 0.98 },
-                html2canvas: { scale: 2 },
-            }).from(body).save();
+            // Clone content into main document so html2canvas preserves fonts and formatting
+            // (rendering from iframe body often drops styles in html2canvas)
+            const wrapper = document.createElement('div');
+            wrapper.style.position = 'absolute';
+            wrapper.style.left = '-9999px';
+            wrapper.style.top = '0';
+            wrapper.style.width = '210mm';
+            wrapper.style.background = 'white';
+            wrapper.style.padding = '25mm';
+            wrapper.style.boxSizing = 'border-box';
+            const style = document.createElement('style');
+            style.textContent = `
+                .pdf-export-page { width: 210mm; min-height: 297mm; background: white; padding: 0; box-sizing: border-box; }
+                .pdf-export-page b, .pdf-export-page strong { font-weight: bold; }
+                .pdf-export-page i, .pdf-export-page em { font-style: italic; }
+                .pdf-export-page u { text-decoration: underline; }
+            `;
+            wrapper.appendChild(style);
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'pdf-export-page';
+            contentDiv.innerHTML = body.innerHTML;
+            wrapper.appendChild(contentDiv);
+            document.body.appendChild(wrapper);
+            try {
+                const html2pdf = (await import('html2pdf.js')).default;
+                const baseName = (displayFile || 'document').replace(/\.[^.]+$/, '') || 'document';
+                const filename = `${baseName}.pdf`;
+                await html2pdf().set({
+                    margin: 10,
+                    filename,
+                    image: { type: 'jpeg', quality: 0.98 },
+                    html2canvas: {
+                        scale: 2,
+                        useCss: true,
+                        letterRendering: true,
+                        logging: false,
+                    },
+                }).from(wrapper).save();
+            } finally {
+                wrapper.remove();
+            }
         } catch (e) {
             setError(e instanceof Error ? e.message : 'PDF-Export fehlgeschlagen');
         } finally {
@@ -380,34 +614,36 @@ export default function DocumentEditor({
             const html = doc.body.innerHTML;
             setContent(html);
             onContentChangeRef.current?.(html);
+            setTimeout(() => updateSelectionFormat(), 0);
         } finally {
             savedSelectionRef.current = null;
         }
-    }, []);
-
-    const FONT_SIZES = [['1', '10 pt'], ['2', '11 pt'], ['3', '12 pt'], ['4', '14 pt'], ['5', '16 pt'], ['6', '18 pt'], ['7', '24 pt']] as const;
-    const FONT_FAMILIES = ['Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Courier New', 'Verdana'];
+    }, [updateSelectionFormat]);
 
     const toolbar = (
         <div
             className="flex flex-wrap items-center gap-0.5 border-b border-gray-200 bg-gray-50 px-2 py-1 shrink-0"
             onMouseDown={saveSelectionFromIframe}
         >
-            <button type="button" onClick={() => execEditorCommand('bold')} className="p-1.5 rounded hover:bg-gray-200" title="Fett"><Bold size={16} /></button>
-            <button type="button" onClick={() => execEditorCommand('italic')} className="p-1.5 rounded hover:bg-gray-200" title="Kursiv"><Italic size={16} /></button>
-            <button type="button" onClick={() => execEditorCommand('underline')} className="p-1.5 rounded hover:bg-gray-200" title="Unterstrichen"><Underline size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('bold')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.bold && "bg-gray-300")} title="Fett"><Bold size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('italic')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.italic && "bg-gray-300")} title="Kursiv"><Italic size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('underline')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.underline && "bg-gray-300")} title="Unterstrichen"><Underline size={16} /></button>
             <span className="w-px h-5 bg-gray-300 mx-0.5" />
             <select
                 className="text-xs border border-gray-300 rounded px-1.5 py-1 bg-white min-w-[4rem]"
+                value={selectionFormat.fontSize}
                 onChange={(e) => execEditorCommand('fontSize', e.target.value)}
                 onMouseDown={saveSelectionFromIframe}
+                title="Schriftgröße"
             >
                 {FONT_SIZES.map(([val, label]) => <option key={val} value={val}>{label}</option>)}
             </select>
             <select
                 className="text-xs border border-gray-300 rounded px-1.5 py-1 bg-white min-w-[7rem]"
+                value={selectionFormat.fontName}
                 onChange={(e) => execEditorCommand('fontName', e.target.value)}
                 onMouseDown={saveSelectionFromIframe}
+                title="Schriftart"
             >
                 {FONT_FAMILIES.map((f) => <option key={f} value={f}>{f}</option>)}
             </select>
@@ -415,16 +651,16 @@ export default function DocumentEditor({
             <input
                 type="color"
                 className="w-7 h-7 cursor-pointer border border-gray-300 rounded p-0.5 bg-white"
-                defaultValue="#000000"
+                value={selectionFormat.foreColor}
                 onMouseDown={saveSelectionFromIframe}
                 onChange={(e) => execEditorCommand('foreColor', e.target.value)}
                 title="Schriftfarbe"
             />
             <button type="button" onClick={() => execEditorCommand('backColor', '#ffff00')} className="p-1.5 rounded hover:bg-gray-200" title="Markieren"><Highlighter size={16} /></button>
             <span className="w-px h-5 bg-gray-300 mx-0.5" />
-            <button type="button" onClick={() => execEditorCommand('justifyLeft')} className="p-1.5 rounded hover:bg-gray-200" title="Links"><AlignLeft size={16} /></button>
-            <button type="button" onClick={() => execEditorCommand('justifyCenter')} className="p-1.5 rounded hover:bg-gray-200" title="Zentriert"><AlignCenter size={16} /></button>
-            <button type="button" onClick={() => execEditorCommand('justifyRight')} className="p-1.5 rounded hover:bg-gray-200" title="Rechts"><AlignRight size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('justifyLeft')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.justifyLeft && "bg-gray-300")} title="Links"><AlignLeft size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('justifyCenter')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.justifyCenter && "bg-gray-300")} title="Zentriert"><AlignCenter size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('justifyRight')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.justifyRight && "bg-gray-300")} title="Rechts"><AlignRight size={16} /></button>
             <span className="w-px h-5 bg-gray-300 mx-0.5" />
             <button type="button" onClick={() => execEditorCommand('insertUnorderedList')} className="p-1.5 rounded hover:bg-gray-200" title="Aufzählung"><List size={16} /></button>
             <button type="button" onClick={() => execEditorCommand('insertOrderedList')} className="p-1.5 rounded hover:bg-gray-200" title="Nummerierung"><ListOrdered size={16} /></button>
@@ -543,7 +779,7 @@ export default function DocumentEditor({
                                 </div>
                             </div>
                             <button
-                                onClick={onClose}
+                                onClick={handleRequestClose}
                                 className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 shrink-0"
                                 aria-label="Close"
                             >
@@ -679,7 +915,7 @@ export default function DocumentEditor({
                                     </a>
                                 )}
                                 <button
-                                    onClick={onClose}
+                                    onClick={handleRequestClose}
                                     className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
                                     aria-label="Close"
                                 >
@@ -828,7 +1064,7 @@ export default function DocumentEditor({
                                 </a>
                             )}
                             <button
-                                onClick={onClose}
+                                onClick={handleRequestClose}
                                 className="rounded-full p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
                                 aria-label="Close"
                             >

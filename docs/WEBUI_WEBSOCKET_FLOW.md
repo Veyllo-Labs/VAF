@@ -53,7 +53,7 @@ Key rules:
 
 ### Client → Server
 
-- `chat`: user input (must include `sessionId`). Optional `sidebarDocuments`: `Array<{ name, data, mimeType? }>` (same format as `set_sidebar_documents`). If present, the backend writes these into `session.runtime_state["sidebar_documents"]` before queueing so the agent has document context for that turn even if a prior `set_sidebar_documents` was not yet persisted.
+- `chat`: user input (must include `sessionId`). Optional: `sidebarDocuments` (`Array<{ name, data, mimeType? }>`, same format as `set_sidebar_documents`); `editorDocument` (`{ name, content }`, plain text of Document Editor when open); `editorSelections` (`Array<{ start, end, text }>`, marked ranges in the editor for `replace_editor_selection`). If present, the backend stores sidebar docs in `session.runtime_state["sidebar_documents"]`, editor doc is prepended to the user turn as `--- CURRENT DOCUMENT (Editor): ... ---`, and editor selections in `session.runtime_state["editor_selections"]` for the tool.
 - `set_sidebar_documents`: set documents shown in the document panel (DocumentEditor in attachments mode) for the current session. Payload: `{ sessionId?, documents: Array<{ name, data (base64/data-URL), mimeType? }> }`. Backend stores extracted text in `session.runtime_state["sidebar_documents"]` and injects it into the next user turn for the LLM. Send `documents: []` to clear.
 - `get_sessions`, `new_session`, `load_session`, `delete_session`
 - `get_config`, `get_models`, `get_tools`, `get_workflows`
@@ -61,6 +61,7 @@ Key rules:
 ### Server → Client
 
 - `sidebar_documents_set`: sent after processing `set_sidebar_documents`. Payload: `{ contents: Array<{ name, content }>, sessionId?, error? }`. The frontend uses `contents` to display extracted text in DocumentEditor (attachments mode).
+- `editor_apply_edit`: sent when the agent calls `replace_editor_selection`. Payload: `{ sessionId, selectionIndex, newText, start, end }`. The frontend replaces the character range `[start, end]` in the Document Editor with `newText` and removes that selection chip.
 - `session_list`: available sessions
 - `history_update`: session history (also sets active session). The frontend does not clear document-panel attachment state for that session, so per-session attachment documents persist across repeated switches.
 - `agent_message_update`: streaming assistant text

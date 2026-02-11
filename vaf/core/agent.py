@@ -2758,6 +2758,12 @@ class Agent:
         # Automations have their own workflow_steps if they need multi-step execution
         if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
             return None
+
+        # Skip workflow matching when Document Editor is active (user has editor content in context).
+        # Otherwise the workflow router may pick code_review or other workflows; the agent should
+        # use replace_editor_selection / document_editor tools instead.
+        if "CURRENT DOCUMENT (Editor)" in (user_input or ""):
+            return None
             
         # Determine language for UI messages
         lang = "auto"
@@ -6151,9 +6157,10 @@ class Agent:
 
         # Use active tools if available, otherwise all tools
         tools_to_use = self._active_tools if self._active_tools is not None else self.tools.keys()
+        excluded = getattr(self, "_excluded_tools", None) or set()
 
         for name in tools_to_use:
-            if name not in self.tools:
+            if name not in self.tools or name in excluded:
                 continue
             tool = self.tools[name]
             

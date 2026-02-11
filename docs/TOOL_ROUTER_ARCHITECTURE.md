@@ -116,6 +116,8 @@ def TOOLS(self):
     return schema
 ```
 
+Tools whose names are in `_excluded_tools` are omitted from the schema for that turn. For example, `replace_editor_selection` is excluded when the session has no `editor_selections` (Document Editor with marked text), so the agent is not offered that tool when the user has not marked anything.
+
 ## 4. Context Consumption Analysis
 
 ### Without Router (Legacy)

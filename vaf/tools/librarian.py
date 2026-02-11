@@ -19,7 +19,7 @@ from vaf.tools.base import BaseTool
 from vaf.cli.ui import UI, AnimatedHeader
 from vaf.tools.filesystem import ReadFileTool, ListFilesTool, TreeTool, FinderTool, WriteFileTool, FolderSizeTool
 from vaf.tools.python_sandbox import PythonSandboxTool
-from vaf.tools.document_viewer import DocumentViewerTool, DocumentEditorTool
+from vaf.tools.document_viewer import DocumentViewerTool, DocumentEditorTool, ReplaceEditorSelectionTool
 from vaf.core.fs_map import CachedFilesystemMap
 
 # Try to import psutil for better disk info (optional)
@@ -72,6 +72,7 @@ class LibrarianTool(BaseTool):
             "folder_size": FolderSizeTool(),
             "document_viewer": DocumentViewerTool(),
             "document_editor": DocumentEditorTool(),
+            "replace_editor_selection": ReplaceEditorSelectionTool(),
         }
         
         # Cross-platform home directory
@@ -1942,7 +1943,7 @@ Common paths:
                         # Get available tool names dynamically
                         available_tool_names = list(self.tools.keys()) if hasattr(self, 'tools') and self.tools else []
                         # Also check for common tool names used by librarian
-                        common_tool_names = ["read_file", "write_file", "list_files", "find_files", "tree", "folder_size", "python_sandbox", "document_viewer", "document_editor"]
+                        common_tool_names = ["read_file", "write_file", "list_files", "find_files", "tree", "folder_size", "python_sandbox", "document_viewer", "document_editor", "replace_editor_selection"]
                         all_tool_names = list(set(available_tool_names + common_tool_names))
                         
                         # Check if any tool name appears in the last assistant message (case-insensitive)
@@ -2063,6 +2064,7 @@ Common paths:
                         "folder_size": "Sizing",
                         "document_viewer": "Opening in viewer",
                         "document_editor": "Opening in editor",
+                        "replace_editor_selection": "Replacing marked text in editor",
                     }
                     icon = tool_icons.get(fn_name, "Calling")
                     UI.event("Librarian", f"{icon}: {fn_name}", style="bold green")

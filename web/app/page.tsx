@@ -146,6 +146,21 @@ function formatDayLabel(ts: number): string {
     return new Date(ts).toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
+/** Kurze Uhrzeit unter Nachrichten (Messenger-Stil): heute nur Uhrzeit, gestern/älter mit Datum. */
+function formatMessageTime(ts: number): string {
+    const d = new Date(ts);
+    const now = new Date();
+    const today = now.getDate() === d.getDate() && now.getMonth() === d.getMonth() && now.getFullYear() === d.getFullYear();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const isYesterday = yesterday.getDate() === d.getDate() && yesterday.getMonth() === d.getMonth() && yesterday.getFullYear() === d.getFullYear();
+    const time = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    if (today) return time;
+    if (isYesterday) return `Gestern ${time}`;
+    if (d.getFullYear() === now.getFullYear()) return `${d.toLocaleDateString('de-DE', { weekday: 'short' })} ${time}`;
+    return d.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' }) + ' ' + time;
+}
+
 /** Trennlinie im Chatverlauf: Tagwechsel mit Datum oben (Ende) und unten (Fortsetzung). */
 function DaySeparator({ endDate, startDate }: { endDate: number; startDate: number }) {
     return (
@@ -2038,6 +2053,7 @@ export default function VAFDashboard() {
     // When we get a session after user already added docs (no session before), sync sidebar to backend
     useEffect(() => {
         if (!currentSessionId || !ws || sidebarDocsSyncedForSessionRef.current === currentSessionId) return;
+        if (ws.readyState !== WebSocket.OPEN) return; // avoid "Still in CONNECTING state" when adding attachment early
         const withData = documentViewerState.documents.filter(d => d.data);
         if (withData.length === 0) return;
         ws.send(JSON.stringify({
@@ -2821,6 +2837,12 @@ export default function VAFDashboard() {
                                                 </div>
                                             )}
 
+                                            {/* Unauffällige Uhrzeit unter der Blase (Messenger-Stil) */}
+                                            {(msg.role === 'user' || msg.role === 'assistant') && (
+                                                <div className={cn("w-full mt-0.5", isBot ? "text-left" : "text-right")}>
+                                                    <span className="text-[10px] text-gray-400" title={new Date(msg.timestamp).toLocaleString('de-DE')}>{formatMessageTime(msg.timestamp)}</span>
+                                                </div>
+                                            )}
                                             {/* Show status steps below the active message if streaming */}
                                             {loading && isBot && i === filteredMessages.length - 1 && statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && (
                                                 <span className="text-[10px] text-gray-400 mt-1 ml-1 animate-in fade-in">{statusMessage}</span>
@@ -2971,18 +2993,20 @@ export default function VAFDashboard() {
                             )}
                         </div>
 
-                        {/* Stop button left of message box */}
+                        {/* Stop button left of message box — fixed-width slot so message box doesn't shrink when button appears */}
                         <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
-                            {loading && (
-                                <button
-                                    type="button"
-                                    onClick={stopGeneration}
-                                    title="Stop"
-                                    className="shrink-0 p-2 rounded-full bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-all shadow-md flex items-center justify-center animate-in fade-in slide-in-from-bottom-2"
-                                >
-                                    <Square size={12} fill="currentColor" />
-                                </button>
-                            )}
+                            <div className="w-9 shrink-0 flex items-center justify-center">
+                                {loading && (
+                                    <button
+                                        type="button"
+                                        onClick={stopGeneration}
+                                        title="Stop"
+                                        className="p-2 rounded-full bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-all shadow-md flex items-center justify-center animate-in fade-in slide-in-from-bottom-2"
+                                    >
+                                        <Square size={12} fill="currentColor" />
+                                    </button>
+                                )}
+                            </div>
                             <form onSubmit={sendMessage} className="flex-1 min-w-0 flex items-end bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden">
                             <input
                                 type="file"

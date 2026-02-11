@@ -170,7 +170,7 @@ You’re not a chatbot. You’re becoming someone.
 
             # One-time migration: local admin used to use username "Local Admin"; data may still be there
             local_admin_username = Config.get("local_admin_username", "admin")
-            if self.username == local_admin_username and self._is_default_user_identity(data):
+            if self.username == local_admin_username and self.is_default_user_identity(data):
                 migrated = self._migrate_from_local_admin()
                 if migrated:
                     return migrated
@@ -178,7 +178,7 @@ You’re not a chatbot. You’re becoming someone.
         except Exception:
             return defaults.copy()
 
-    def _is_default_user_identity(self, data: Dict[str, Any]) -> bool:
+    def is_default_user_identity(self, data: Dict[str, Any]) -> bool:
         """True if this looks like a fresh default (no real user details)."""
         name = (data.get("name") or "").strip()
         lang = data.get("preferred_language")

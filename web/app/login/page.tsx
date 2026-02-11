@@ -9,8 +9,8 @@ import {
 } from 'lucide-react';
 import SoulWizard from '@/components/SoulWizard';
 import { cn } from '@/lib/utils';
-import { CONNECTION_APPS, CATEGORIES, DiscordSetupWizard } from '@/components/connections';
-import type { DiscordConfig } from '@/components/connections';
+import { CONNECTION_APPS, CATEGORIES, DiscordSetupWizard, TelegramSetupWizard, EmailSetupWizard } from '@/components/connections';
+import type { DiscordConfig, TelegramConfig } from '@/components/connections';
 import { getApiBase } from '@/lib/utils';
 
 export default function LoginPage() {
@@ -33,6 +33,8 @@ export default function LoginPage() {
     const [createAdminSubStep, setCreateAdminSubStep] = useState<'username' | 'password' | '2fa'>('username');
     const [onboardingConfig, setOnboardingConfig] = useState<Record<string, unknown>>({});
     const [showDiscordWizard, setShowDiscordWizard] = useState(false);
+    const [showTelegramWizard, setShowTelegramWizard] = useState(false);
+    const [showEmailWizard, setShowEmailWizard] = useState(false);
     const [backendUnreachable, setBackendUnreachable] = useState(false);
 
     useEffect(() => {
@@ -679,7 +681,7 @@ export default function LoginPage() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -20 }}
-                        className="w-full max-w-md max-h-[85vh] overflow-y-auto"
+                        className="w-full max-w-2xl max-h-[85vh] overflow-y-auto"
                     >
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
                             <div className="bg-gray-50 px-8 py-3 flex items-center gap-2 border-b border-gray-100">
@@ -701,7 +703,7 @@ export default function LoginPage() {
                                                 {CONNECTION_APPS.filter((app) => app.category === category.id).map((app) => {
                                                     const Icon = app.icon;
                                                     const configured = (onboardingConfig[app.configKey] as { verified?: boolean })?.verified === true;
-                                                    const canSetup = app.id === 'discord' && !app.comingSoon;
+                                                    const canSetup = (app.id === 'discord' || app.id === 'telegram' || app.id === 'email') && !app.comingSoon;
                                                     return (
                                                         <div
                                                             key={app.id}
@@ -736,7 +738,11 @@ export default function LoginPage() {
                                                                 </div>
                                                                 {canSetup ? (
                                                                     <button
-                                                                        onClick={() => setShowDiscordWizard(true)}
+                                                                        onClick={() => {
+                                                                            if (app.id === 'discord') setShowDiscordWizard(true);
+                                                                            if (app.id === 'telegram') setShowTelegramWizard(true);
+                                                                            if (app.id === 'email') setShowEmailWizard(true);
+                                                                        }}
                                                                         className={cn(
                                                                             'flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors',
                                                                             configured ? 'bg-gray-100 hover:bg-gray-200 text-gray-700' : 'bg-gray-900 hover:bg-gray-800 text-white'
@@ -786,10 +792,40 @@ export default function LoginPage() {
                         headers: { 'Content-Type': 'application/json' },
                         credentials: 'include',
                         body: JSON.stringify({ discord_config: config }),
-                    }).catch(() => {});
+                    }).catch(() => { });
                     setShowDiscordWizard(false);
                 }}
                 existingConfig={onboardingConfig.discord_config as DiscordConfig | undefined}
+            />
+
+            <TelegramSetupWizard
+                isOpen={showTelegramWizard}
+                onClose={() => setShowTelegramWizard(false)}
+                onComplete={(config: TelegramConfig) => {
+                    setOnboardingConfig((prev) => ({ ...prev, telegram_config: config }));
+                    fetch(`${getApiBase()}/api/config`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ telegram_config: config }),
+                    }).catch(() => { });
+                    setShowTelegramWizard(false);
+                }}
+                existingConfig={onboardingConfig.telegram_config as TelegramConfig | undefined}
+            />
+
+            <EmailSetupWizard
+                isOpen={showEmailWizard}
+                onClose={() => setShowEmailWizard(false)}
+                onComplete={() => {
+                    // Email wizard handles its own config persistence
+                    setShowEmailWizard(false);
+                    // Reload config to show updated email accounts
+                    fetch(`${getApiBase()}/api/config`, { credentials: 'include' })
+                        .then((res) => res.ok ? res.json() : {})
+                        .then((data) => setOnboardingConfig(data))
+                        .catch(() => { });
+                }}
             />
         </div>
     );

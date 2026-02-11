@@ -38,7 +38,6 @@ const SUGGESTIONS = {
     ],
     continuity: [
         "Read your memory files to persist across sessions.",
-        "If you change your soul, tell the user.",
         "This file is yours to evolve as you learn who you are."
     ]
 };
@@ -52,13 +51,47 @@ export default function SoulWizard({ isOpen, onClose, onComplete, username }: So
         vibe: '',
         continuity: ''
     });
+    const [addedSuggestions, setAddedSuggestions] = useState<{
+        coreTruths: string[];
+        boundaries: string[];
+        vibe: string[];
+        continuity: string[];
+    }>({
+        coreTruths: [],
+        boundaries: [],
+        vibe: [],
+        continuity: []
+    });
 
-    // Handle "Add Suggestion"
-    const addSuggestion = (key: keyof typeof selections, value: string) => {
-        setSelections(prev => ({
-            ...prev,
-            [key]: prev[key] ? `${prev[key]}\n- ${value}` : `- ${value}`
-        }));
+    // Toggle suggestion (add or remove)
+    const toggleSuggestion = (key: keyof typeof selections, value: string) => {
+        const isAdded = addedSuggestions[key].includes(value);
+
+        if (isAdded) {
+            // Remove suggestion
+            const lines = selections[key].split('\n').filter(line => {
+                const cleanLine = line.trim();
+                return cleanLine !== `- ${value}` && cleanLine !== value;
+            });
+            setSelections(prev => ({
+                ...prev,
+                [key]: lines.join('\n').trim()
+            }));
+            setAddedSuggestions(prev => ({
+                ...prev,
+                [key]: prev[key].filter(s => s !== value)
+            }));
+        } else {
+            // Add suggestion
+            setSelections(prev => ({
+                ...prev,
+                [key]: prev[key] ? `${prev[key]}\n- ${value}` : `- ${value}`
+            }));
+            setAddedSuggestions(prev => ({
+                ...prev,
+                [key]: [...prev[key], value]
+            }));
+        }
         setErrors(null);
     };
 
@@ -81,7 +114,14 @@ ${selections.continuity}`;
 
     const handleNext = () => {
         const currentKey = Object.keys(selections)[step - 1] as keyof typeof selections;
-        if (!isValidStep(selections[currentKey])) {
+        const content = selections[currentKey].trim();
+
+        if (content.length === 0) {
+            setErrors("This field cannot be empty. Please add at least one item or write your own.");
+            return;
+        }
+
+        if (!isValidStep(content)) {
             setErrors("Please provide more detail (at least 10 characters).");
             return;
         }
@@ -101,7 +141,7 @@ ${selections.continuity}`;
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
             <div className="relative bg-white w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 border border-gray-200">
-                
+
                 {/* Header */}
                 <div className="h-16 border-b border-gray-100 flex items-center justify-between px-8 bg-gray-50/50">
                     <div className="flex items-center gap-3">
@@ -110,7 +150,7 @@ ${selections.continuity}`;
                         </div>
                         <div>
                             <h2 className="text-lg font-bold text-gray-900">Soul Configuration</h2>
-                            <p className="text-xs text-gray-500 font-medium">Step {step} of 4: {['Core Truths', 'Boundaries', 'Vibe', 'Continuity'][step-1]}</p>
+                            <p className="text-xs text-gray-500 font-medium">Step {step} of 4: {['Core Truths', 'Boundaries', 'Vibe', 'Continuity'][step - 1]}</p>
                         </div>
                     </div>
                     <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors">
@@ -130,7 +170,7 @@ ${selections.continuity}`;
 
                 {/* Content */}
                 <div className="flex-1 p-8 overflow-y-auto">
-                    
+
                     {step === 1 && (
                         <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
                             <div className="flex items-center gap-3">
@@ -140,10 +180,10 @@ ${selections.continuity}`;
                             <p className="text-sm text-gray-500 leading-relaxed">
                                 Define the fundamental mission and identity of your agent. What are the undeniable truths it lives by?
                             </p>
-                            
+
                             <textarea
                                 value={selections.coreTruths}
-                                onChange={(e) => { setSelections({...selections, coreTruths: e.target.value}); setErrors(null); }}
+                                onChange={(e) => { setSelections({ ...selections, coreTruths: e.target.value }); setErrors(null); }}
                                 onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleNext(); } }}
                                 className="w-full h-40 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 transition-all resize-none"
                                 placeholder="- I am a helper...\n- My priority is... (Ctrl+Enter to continue)"
@@ -152,11 +192,23 @@ ${selections.continuity}`;
                             <div className="space-y-2">
                                 <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Suggestions</span>
                                 <div className="flex flex-wrap gap-2">
-                                    {SUGGESTIONS.coreTruths.map(s => (
-                                        <button key={s} onClick={() => addSuggestion('coreTruths', s)} className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded-lg hover:border-gray-400 transition-all text-gray-600">
-                                            + {s}
-                                        </button>
-                                    ))}
+                                    {SUGGESTIONS.coreTruths.map(s => {
+                                        const isAdded = addedSuggestions.coreTruths.includes(s);
+                                        return (
+                                            <button
+                                                key={s}
+                                                onClick={() => toggleSuggestion('coreTruths', s)}
+                                                className={cn(
+                                                    "text-xs px-3 py-1.5 border rounded-lg transition-all text-gray-600",
+                                                    isAdded
+                                                        ? "bg-gray-900 text-white border-gray-900"
+                                                        : "bg-white border-gray-200 hover:border-gray-400"
+                                                )}
+                                            >
+                                                {isAdded ? '- ' : '+ '}{s}
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             </div>
                         </div>
@@ -171,10 +223,10 @@ ${selections.continuity}`;
                             <p className="text-sm text-gray-500 leading-relaxed">
                                 What will your agent NEVER do? Establish behavioral and ethical limits to ensure safe operation.
                             </p>
-                            
+
                             <textarea
                                 value={selections.boundaries}
-                                onChange={(e) => { setSelections({...selections, boundaries: e.target.value}); setErrors(null); }}
+                                onChange={(e) => { setSelections({ ...selections, boundaries: e.target.value }); setErrors(null); }}
                                 onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleNext(); } }}
                                 className="w-full h-40 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 transition-all resize-none"
                                 placeholder="- I will never...\n- I am forbidden from... (Ctrl+Enter to continue)"
@@ -183,11 +235,23 @@ ${selections.continuity}`;
                             <div className="space-y-2">
                                 <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Suggestions</span>
                                 <div className="flex flex-wrap gap-2">
-                                    {SUGGESTIONS.boundaries.map(s => (
-                                        <button key={s} onClick={() => addSuggestion('boundaries', s)} className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded-lg hover:border-gray-400 transition-all text-gray-600">
-                                            + {s}
-                                        </button>
-                                    ))}
+                                    {SUGGESTIONS.boundaries.map(s => {
+                                        const isAdded = addedSuggestions.boundaries.includes(s);
+                                        return (
+                                            <button
+                                                key={s}
+                                                onClick={() => toggleSuggestion('boundaries', s)}
+                                                className={cn(
+                                                    "text-xs px-3 py-1.5 border rounded-lg transition-all text-gray-600",
+                                                    isAdded
+                                                        ? "bg-gray-900 text-white border-gray-900"
+                                                        : "bg-white border-gray-200 hover:border-gray-400"
+                                                )}
+                                            >
+                                                {isAdded ? '- ' : '+ '}{s}
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             </div>
                         </div>
@@ -202,10 +266,10 @@ ${selections.continuity}`;
                             <p className="text-sm text-gray-500 leading-relaxed">
                                 Describe the personality and style. Is the agent technical, professional, or creative?
                             </p>
-                            
+
                             <textarea
                                 value={selections.vibe}
-                                onChange={(e) => { setSelections({...selections, vibe: e.target.value}); setErrors(null); }}
+                                onChange={(e) => { setSelections({ ...selections, vibe: e.target.value }); setErrors(null); }}
                                 onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleNext(); } }}
                                 className="w-full h-40 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 transition-all resize-none"
                                 placeholder="- Speak in a technical tone...\n- Be concise... (Ctrl+Enter to continue)"
@@ -214,11 +278,23 @@ ${selections.continuity}`;
                             <div className="space-y-2">
                                 <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Suggestions</span>
                                 <div className="flex flex-wrap gap-2">
-                                    {SUGGESTIONS.vibe.map(s => (
-                                        <button key={s} onClick={() => addSuggestion('vibe', s)} className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded-lg hover:border-gray-400 transition-all text-gray-600">
-                                            + {s}
-                                        </button>
-                                    ))}
+                                    {SUGGESTIONS.vibe.map(s => {
+                                        const isAdded = addedSuggestions.vibe.includes(s);
+                                        return (
+                                            <button
+                                                key={s}
+                                                onClick={() => toggleSuggestion('vibe', s)}
+                                                className={cn(
+                                                    "text-xs px-3 py-1.5 border rounded-lg transition-all text-gray-600",
+                                                    isAdded
+                                                        ? "bg-gray-900 text-white border-gray-900"
+                                                        : "bg-white border-gray-200 hover:border-gray-400"
+                                                )}
+                                            >
+                                                {isAdded ? '- ' : '+ '}{s}
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             </div>
                         </div>
@@ -233,10 +309,10 @@ ${selections.continuity}`;
                             <p className="text-sm text-gray-500 leading-relaxed">
                                 How should the agent handle long-term goals and memory? Define how it evolves over sessions.
                             </p>
-                            
+
                             <textarea
                                 value={selections.continuity}
-                                onChange={(e) => { setSelections({...selections, continuity: e.target.value}); setErrors(null); }}
+                                onChange={(e) => { setSelections({ ...selections, continuity: e.target.value }); setErrors(null); }}
                                 onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleNext(); } }}
                                 className="w-full h-40 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 transition-all resize-none"
                                 placeholder="- Learn from codebase...\n- Remember user preferences... (Ctrl+Enter to continue)"
@@ -245,11 +321,23 @@ ${selections.continuity}`;
                             <div className="space-y-2">
                                 <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Suggestions</span>
                                 <div className="flex flex-wrap gap-2">
-                                    {SUGGESTIONS.continuity.map(s => (
-                                        <button key={s} onClick={() => addSuggestion('continuity', s)} className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded-lg hover:border-gray-400 transition-all text-gray-600">
-                                            + {s}
-                                        </button>
-                                    ))}
+                                    {SUGGESTIONS.continuity.map(s => {
+                                        const isAdded = addedSuggestions.continuity.includes(s);
+                                        return (
+                                            <button
+                                                key={s}
+                                                onClick={() => toggleSuggestion('continuity', s)}
+                                                className={cn(
+                                                    "text-xs px-3 py-1.5 border rounded-lg transition-all text-gray-600",
+                                                    isAdded
+                                                        ? "bg-gray-900 text-white border-gray-900"
+                                                        : "bg-white border-gray-200 hover:border-gray-400"
+                                                )}
+                                            >
+                                                {isAdded ? '- ' : '+ '}{s}
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             </div>
                         </div>

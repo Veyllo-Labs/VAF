@@ -363,7 +363,7 @@ export default function DocumentEditor({
         if (!foreColor.startsWith('#')) foreColor = '#000000';
         setSelectionFormat({
             fontName: FONT_FAMILIES.includes(fontName) ? fontName : 'Arial',
-            fontSize: ['1','2','3','4','5','6','7'].includes(fontSize) ? fontSize : '3',
+            fontSize: ['1', '2', '3', '4', '5', '6', '7'].includes(fontSize) ? fontSize : '3',
             foreColor,
             bold: doc.queryCommandState('bold'),
             italic: doc.queryCommandState('italic'),
@@ -403,7 +403,7 @@ export default function DocumentEditor({
             doc.body.appendChild(wrap);
         }
         const editRoot = doc.body.querySelector('.a4-page') || doc.body;
-        editRoot.contentEditable = 'true';
+        (editRoot as HTMLElement).contentEditable = 'true';
         (editRoot as HTMLElement).style.outline = 'none';
         doc.body.style.outline = 'none';
         doc.body.style.padding = '0';

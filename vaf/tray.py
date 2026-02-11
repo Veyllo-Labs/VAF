@@ -82,6 +82,30 @@ def _atexit_stop_server():
 
 atexit.register(_atexit_stop_server)
 
+
+def _signal_handler(signum, frame):
+    """
+    Handle SIGTERM and SIGINT to ensure clean shutdown.
+    This is critical for Mac where 'Quit VAF' sends SIGTERM.
+    """
+    print(f"Received signal {signum}, shutting down...")
+# Signal Handler for Clean Shutdown (Cmd+Q, Dock Quit, Terminal Ctrl+C)
+def _signal_handler(sig, frame):
+    """Handle termination signals and ensure clean shutdown."""
+    print(f"\n[Signal] Received signal {sig}, initiating clean shutdown...")
+    logger.info(f"[Signal] Received signal {sig}, initiating clean shutdown...")
+    quit_app(None)
+
+# Register signal handlers for ALL termination scenarios
+signal.signal(signal.SIGTERM, _signal_handler)  # Dock Quit, kill command
+signal.signal(signal.SIGINT, _signal_handler)   # Terminal Ctrl+C
+if platform.system() == "Darwin":
+    # macOS-specific: Handle Cmd+Q
+    try:
+        signal.signal(signal.SIGHUP, _signal_handler)
+    except:
+        pass
+
 def check_singleton():
     """Ensure only one instance runs. If another instance is running, notify it to open browser."""
     log("Tray", "Checking singleton status...")
@@ -90,10 +114,9 @@ def check_singleton():
         # Try to bind to port 8002 to ensure singleton
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         
-        # Windows: DO NOT use SO_REUSEADDR for singleton checks as it allows multiple binds.
-        # Unix: SO_REUSEADDR is fine/needed to restart quickly.
-        if platform.system() != "Windows":
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # STRICT SINGLETON: Do NOT use SO_REUSEADDR. We want bind to FAIL if active.
+        # if platform.system() != "Windows":
+        #    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             
         s.bind(("127.0.0.1", 8002))
         s.listen(5)
@@ -101,6 +124,7 @@ def check_singleton():
         return s
     except socket.error as e:
         log("Tray", f"Singleton check failed: {e}")
+        logger.warning(f"[Tray] Singleton check failed: {e}")
         # Port is busy, another instance is running.
         # Try to notify it.
         try:
@@ -114,6 +138,14 @@ def check_singleton():
             logger.error(f"[Tray] Failed to notify existing instance: {e}")
             log("Tray", f"Failed to notify existing instance: {e}")
         
+        # Fallback: Just open the browser directly since we know VAF is running
+        try:
+             import webbrowser
+             webbrowser.open("http://localhost:3000")
+             logger.info("[Tray] Opened Web UI directly via fallback.")
+        except:
+             pass
+
         print("VAF is already running. Notifying existing instance...")
         return None
 
@@ -213,28 +245,51 @@ def stop_memory_stack():
         elif parent_file.exists():
             project_root = Path(__file__).resolve().parents[1]
         else:
+            log("Tray", "docker-compose.memory.yml not found, skipping Docker stop")
             return
+        
         compose_file = project_root / "docker-compose.memory.yml"
+        log("Tray", f"Stopping Docker stack at {project_root}")
+        
         # Use 'stop' instead of 'down' to preserve containers (faster restart, keeps data)
+        success = False
         for cmd in (
             ["docker", "compose", "-f", "docker-compose.memory.yml", "stop"],
             ["docker-compose", "-f", "docker-compose.memory.yml", "stop"],
         ):
             try:
-                kwargs = {"cwd": str(project_root), "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+                # Add timeout to prevent hanging indefinitely
+                kwargs = {"cwd": str(project_root), "capture_output": True, "text": True, "timeout": 15}
                 if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
                     kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                
                 result = subprocess.run(cmd, **kwargs, timeout=60)
+                
                 if result.returncode == 0:
-                    log("Tray", "Memory stack (DB/Redis/Sandbox/TTS/STT) stopped via Docker")
-                return
+                    log("Tray", "Memory stack (DB/Redis/Sandbox/TTS/STT) stopped successfully")
+                    success = True
+                    break
+                else:
+                    log("Tray", f"Docker stop command failed with code {result.returncode}: {result.stderr}")
             except FileNotFoundError:
                 continue
             except subprocess.TimeoutExpired:
-                log("Tray", "Memory stack stop timed out")
-                return
+                log("Tray", "Docker stop timed out after 60s")
+                break
+            except Exception as e:
+                log("Tray", f"Docker stop error: {e}")
+                break
+        
+        if not success:
+            log("Tray", "Warning: Docker stack may not have stopped properly")
+            
     except Exception as e:
-        logger.debug("[Tray] Memory stack stop failed: %s", e)
+        log("Tray", f"Memory stack stop failed: {e}")
+        try:
+            logger.debug("[Tray] Memory stack stop failed: %s", e)
+        except:
+            pass
+
 
 def command_listener(lock_socket):
     """Listens for 'ACTIVATE' signals from other instances."""
@@ -264,7 +319,6 @@ def start_uvicorn():
     log("Tray", "start_uvicorn thread started")
     try:
         import asyncio
-        import pythoncom
         import sys
         import os
 
@@ -280,7 +334,13 @@ def start_uvicorn():
         if sys.stdin is None:
             sys.stdin = open(os.devnull, 'r')
 
-        pythoncom.CoInitialize()
+        # Windows-specific: Initialize COM for this thread
+        if platform.system() == "Windows":
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+            except ImportError:
+                pass  # pythoncom not available, skip COM init
 
         # Create a new event loop for this thread
         loop = asyncio.new_event_loop()
@@ -401,6 +461,10 @@ def get_icon_path(status):
 
     if not filename.exists() or True: # Force recreate for now to see changes
         try:
+            if not logo_path.exists():
+                logger.warning(f"[Tray] Logo not found at {logo_path}, using default icon behavior.")
+                return None
+
             if logo_path.exists():
                 # Load logo
                 img_src = Image.open(logo_path).convert("RGBA")
@@ -411,25 +475,31 @@ def get_icon_path(status):
                 if bbox:
                     img_src = img_src.crop(bbox)
                 
-                # Create 64x64 canvas
-                img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+                # Resize logo to fit standard Menu Bar height (22px) -> use 22x22 (or 44x44 for Retina)
+                # We use 44x44 to look good on Retina, macOS will downscale if needed
+                target_size = 44 
+                img = Image.new('RGBA', (target_size, target_size), (0, 0, 0, 0))
                 
-                # Resize logo to fill the ENTIRE canvas (64x64)
-                img_src.thumbnail((64, 64), Image.Resampling.LANCZOS)
+                img_src.thumbnail((target_size, target_size), Image.Resampling.LANCZOS)
                 
-                # Center the logo on the canvas
-                offset = ((64 - img_src.width) // 2, (64 - img_src.height) // 2)
+                # Center the logo
+                offset = ((target_size - img_src.width) // 2, (target_size - img_src.height) // 2)
                 img.paste(img_src, offset, img_src)
             else:
-                # Fallback to transparent canvas
-                img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+                # Fallback to High Contrast Circle (White)
+                # This ensures visibility in Dark Mode (and usually Light Mode too)
+                target_size = 44
+                img = Image.new('RGBA', (target_size, target_size), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+                # Draw white background circle (visible on dark menu bar)
+                draw.ellipse((4, 4, 40, 40), fill=(200, 200, 200, 255))
             
             draw = ImageDraw.Draw(img)
             
-            # Draw a small indicator circle in the bottom right corner
-            # Smaller indicator to not cover the now even larger logo
-            draw.ellipse((46, 46, 64, 64), fill=(255, 255, 255, 255)) 
-            draw.ellipse((48, 48, 62, 62), fill=color)
+            # Draw status indicator (Bottom Right)
+            # Coordinates for 44x44
+            draw.ellipse((28, 28, 42, 42), fill=(255, 255, 255, 255)) 
+            draw.ellipse((30, 30, 40, 40), fill=color)
             
             img.save(filename)
         except Exception as e:
@@ -573,18 +643,18 @@ def check_activity_loop(update_icon_callback):
         time.sleep(1)
 
 def open_webui(_):
-    log("Tray", "open_webui called")
+    logger.info("[Tray] open_webui called")
     from vaf.core.frontend_manager import FrontendManager
     fm = FrontendManager()
     
     # Check/Start frontend
     port = fm.start_frontend()
     if not port:
-        log("Tray", "open_webui: Failed to start/find Web UI port")
+        logger.error("[Tray] open_webui: Failed to start/find Web UI port")
         return
 
     url = f"http://localhost:{port}"
-    log("Tray", f"open_webui: Target URL is {url}")
+    logger.info(f"[Tray] open_webui: Target URL is {url}")
     
     if platform.system() == "Windows":
         try:
@@ -617,50 +687,50 @@ def open_webui(_):
                         ctx['found'] = True
                         ctx['hwnd'] = hwnd
                     except Exception as e:
-                        log("Tray", f"open_webui: Focus window failed: {e}")
+                        logger.error(f"[Tray] open_webui: Focus window failed: {e}")
 
             context = {'found': False, 'hwnd': None}
             win32gui.EnumWindows(window_enum_handler, context)
             
             if context['found']:
-                log("Tray", f"open_webui: Existing window found and focused (hwnd={context['hwnd']})")
+                logger.info(f"[Tray] open_webui: Existing window found and focused (hwnd={context['hwnd']})")
                 return
         except Exception as e:
-            log("Tray", f"open_webui: Windows focus check failed: {e}")
+            logger.error(f"[Tray] open_webui: Windows focus check failed: {e}")
 
     if platform.system() == "Darwin":
         # ... (macOS logic stays same) ...
         pass
 
     # Fallback: Open new tab using the most reliable method
-    log("Tray", "open_webui: Opening new browser tab...")
+    logger.info("[Tray] open_webui: Opening new browser tab...")
     if platform.system() == "Windows":
         # On Windows, use shell start command - most reliable for background processes
         try:
             # Use os.startfile which is the most reliable for URLs on Windows
             import os
             os.startfile(url)
-            log("Tray", "open_webui: Opened via os.startfile")
+            logger.info("[Tray] open_webui: Opened via os.startfile")
             return
         except Exception as e:
-            log("Tray", f"open_webui: os.startfile failed: {e}")
+            logger.error(f"[Tray] open_webui: os.startfile failed: {e}")
         
         try:
             # Fallback to start command
             subprocess.Popen(["cmd", "/c", "start", "", url], shell=False, 
                            creationflags=subprocess.CREATE_NO_WINDOW)
-            log("Tray", "open_webui: Opened via cmd /c start")
+            logger.info("[Tray] open_webui: Opened via cmd /c start")
             return
         except Exception as e2:
-            log("Tray", f"open_webui: cmd start failed: {e2}")
+            logger.error(f"[Tray] open_webui: cmd start failed: {e2}")
     
     # Final fallback: webbrowser module
     try:
         import webbrowser
         webbrowser.open(url)
-        log("Tray", "open_webui: Opened via webbrowser.open")
+        logger.info("[Tray] open_webui: Opened via webbrowser.open")
     except Exception as e:
-        log("Tray", f"open_webui: webbrowser.open failed: {e}")
+        logger.error(f"[Tray] open_webui: webbrowser.open failed: {e}")
 
 def toggle_persistence(item):
     new_state = not tray_context.is_persistent()
@@ -669,6 +739,14 @@ def toggle_persistence(item):
 
 def quit_app(icon_or_app):
     """Handle quit action with safety check."""
+    # Force exit after 5 seconds if cleanup hangs
+    def force_exit():
+        time.sleep(5)
+        print("Force quitting after timeout...")
+        os._exit(1)
+    
+    threading.Thread(target=force_exit, daemon=True).start()
+
     # Check if CLI is running (heartbeat active)
     if tray_context.active_websockets > 0 or (time.time() - tray_context.last_heartbeat < 30):
         pass
@@ -683,6 +761,16 @@ def quit_app(icon_or_app):
     except Exception as e:
         print(f"Error stopping frontend: {e}")
 
+    # Stop uvicorn Web Server (API Backend on port 8001)
+    global uvicorn_server
+    if uvicorn_server:
+        try:
+            uvicorn_server.should_exit = True
+            print("Web server (uvicorn) shutdown signal sent")
+            time.sleep(0.5)  # Give it time to shutdown gracefully
+        except Exception as e:
+            print(f"Error stopping web server: {e}")
+
     # Stop Docker memory stack (Postgres, Redis, Sandbox)
     try:
         stop_memory_stack()
@@ -690,9 +778,42 @@ def quit_app(icon_or_app):
         print(f"Error stopping memory stack: {e}")
 
     # Stop local llama-server so it does not stay running after quit
-    server_mgr.stop_server(force_external=True)
+    try:
+        server_mgr.stop_server(force_external=True)
+    except Exception as e:
+        print(f"Error stopping llama-server: {e}")
+
     time.sleep(0.5)  # Give taskkill / process exit a moment
+    
+    # AGGRESSIVE SHUTDOWN for macOS (and Linux)
+    # This ensures uvicorn, npm, next-server, and any detached subprocesses are killed.
+    if platform.system() != "Windows":
+        try:
+            print("[Quit] Killing all VAF-related processes (Node.js, Python)...")
+            # Kill all Node.js processes in VAF directory
+            subprocess.run(
+                ["pkill", "-9", "-f", "node.*VAF"],
+                stderr=subprocess.DEVNULL,
+                timeout=2
+            )
+            # Kill all Python VAF processes
+            subprocess.run(
+                ["pkill", "-9", "-f", "python.*vaf"],
+                stderr=subprocess.DEVNULL,
+                timeout=2
+            )
+            print("[Quit] All processes killed")
+        except Exception as e:
+            print(f"[Quit] Error during aggressive cleanup: {e}")
+            # Last resort: kill process group
+            try:
+                import signal
+                os.killpg(os.getpgrp(), signal.SIGKILL)
+            except Exception:
+                pass
+            
     os._exit(0)
+
 
 def on_config_changed(key, value):
     """Handle dynamic config changes."""
@@ -757,139 +878,76 @@ def on_config_changed(key, value):
 # ==========================================
 # macOS Implementation (Rumps)
 # ==========================================
-# ==========================================
-# macOS Implementation (Rumps)
 if platform.system() == "Darwin":
     try:
-        logger.info("[Tray] Attempting to import rumps...")
         import rumps
         logger.info("[Tray] Rumps imported successfully.")
+    except ImportError as e:
+        import sys
+        print(f"CRITICAL ERROR: 'rumps' module not found.\nError: {e}\nPlease run: pip install rumps pyobjc-framework-Cocoa", file=sys.stderr)
+        sys.exit(1)
 
-        class VafTrayApp(rumps.App):
-            def __init__(self):
-                # Simple Icon Logic
+    class VafTrayApp(rumps.App):
+        def __init__(self):
+            # Simple Icon Logic
+            icon_path = get_icon_path("idle")
+            logger.info(f"[Tray] Init with icon: {icon_path}")
+            
+            # Init Rumps App
+            super(VafTrayApp, self).__init__("VAF", icon=icon_path, quit_button=None)
+
+            self.menu = [
+                rumps.MenuItem("Status: Idle", callback=None),
+                rumps.separator,
+                rumps.MenuItem("Open WebUI", callback=self.on_open_webui),
+                rumps.MenuItem("Persistent Server", callback=self.on_toggle_persist, key="P"),
+                rumps.separator,
+                rumps.MenuItem("Quit VAF", callback=self.on_quit)
+            ]
+            
+            # Start Timer immediately
+            self.timer = rumps.Timer(self.update_loop, 1)
+            self.timer.start()
+
+            # Robust macOS Dock Reopen Handler
+            self._dock_timer = rumps.Timer(self.setup_mac_handlers, 1)
+            self._dock_timer.start()
+            
+            # CRITICAL FIX: Start backend/frontend threads AFTER rumps RunLoop is ready
+            # Use threading.Timer (not rumps.Timer) because rumps timers need RunLoop active
+            import threading
+            self._init_thread_timer = threading.Timer(0.5, self.delayed_init)
+            self._init_thread_timer.daemon = True
+            self._init_thread_timer.start()
+            logger.info("[Tray] Scheduled delayed_init via threading.Timer")
+        
+        def delayed_init(self):
+            """Initialize backend/frontend threads after rumps is ready."""
+            logger.info("[Tray] Starting delayed initialization (backend/frontend)...")
+            
+            # CRITICAL: Force icon refresh to make it visible (macOS Finder launch bug)
+            try:
                 icon_path = get_icon_path("idle")
-                logger.info(f"[Tray] Init with icon: {icon_path}")
-                
-                # Init Rumps App
-                super(VafTrayApp, self).__init__("VAF", icon=icon_path, quit_button=None)
-
-                self.menu = [
-                    rumps.MenuItem("Status: Idle", callback=None),
-                    rumps.separator,
-                    rumps.MenuItem("Open WebUI", callback=self.on_open_webui),
-                    rumps.MenuItem("Persistent Server", callback=self.on_toggle_persist, key="P"),
-                    rumps.separator,
-                    rumps.MenuItem("Quit VAF", callback=self.on_quit)
-                ]
-                
-                # Start Timer immediately
-                self.timer = rumps.Timer(self.update_loop, 1)
-                self.timer.start()
-
-                # Robust macOS Dock Reopen Handler
-                self._dock_timer = rumps.Timer(self.setup_mac_handlers, 1)
-                self._dock_timer.start()
-
-                self._last_open = 0
-
-            def setup_mac_handlers(self, _):
-                """Setup notification observers for macOS."""
-                self._dock_timer.stop()
-                try:
-                    from AppKit import NSNotificationCenter, NSApplicationDidBecomeActiveNotification
-                    from Foundation import NSObject
-                    import objc
-
-                    # We MUST use a real NSObject subclass to handle selectors reliably
-                    class ActivationObserver(NSObject):
-                        def onActivate_(self, notification):
-                            # Debounce check
-                            current_time = time.time()
-                            if current_time - self.app_instance._last_open < 1.0:
-                                return
-                            
-                            self.app_instance._last_open = current_time
-                            logger.info("[Tray] App activation detected (Dock click/Focus).")
-                            threading.Thread(target=open_webui, args=(None,), daemon=True).start()
-
-                    self._observer_obj = ActivationObserver.alloc().init()
-                    self._observer_obj.app_instance = self
-                    
-                    NSNotificationCenter.defaultCenter().addObserver_selector_name_object_(
-                        self._observer_obj, 
-                        objc.selector(self._observer_obj.onActivate_, signature=b"v@:@"),
-                        NSApplicationDidBecomeActiveNotification, 
-                        None
-                    )
-                    
-                    logger.info("[Tray] Registered robust macOS Activation observer.")
-                except Exception as e:
-                    logger.error(f"[Tray] Failed to setup macOS observers: {e}")
-
-            def update_loop(self, _):
-                """Main logic loop called by timer."""
-                try:
-                    is_active = tray_context.is_active()
-                    is_persistent = tray_context.is_persistent()
-                    
-                    status_text = "Persistent" if is_persistent else ("Active" if is_active else "Idle")
-                    self.menu["Status: Idle"].title = f"Status: {status_text}"
-                    self.menu["Persistent Server"].state = 1 if is_persistent else 0
-
-                    # Icon Update Logic
-                    target_status = "idle"
-                    if is_persistent:
-                        target_status = "persistent"
-                    elif is_active:
-                        target_status = "active"
-                    
-                    new_icon = get_icon_path(target_status)
-                    if self.icon != new_icon and os.path.exists(new_icon):
-                        self.icon = new_icon
-
-                except Exception as e:
-                    logger.error(f"Error in update loop: {e}")
-
-            def on_open_webui(self, _):
-                open_webui(None)
-
-            def on_toggle_persist(self, sender):
-                toggle_persistence(sender)
-                
-            def on_quit(self, _):
-                # Check for active session
-                if tray_context.is_active():
-                    resp = rumps.alert("Active Session", "A VAF session is currently active. Are you sure you want to quit?", ok="Quit", cancel="Cancel")
-                    if resp != 1:
-                        return
-                quit_app(self)
-
-        def run_app():
-            logger.info("[Tray] run_app (Rumps) called")
-            # Register config observer
-            Config.add_observer(on_config_changed)
-
-            # Singleton Check
-            lock_socket = check_singleton()
-            if not lock_socket:
-                logger.warning("[Tray] Singleton check failed")
-                return
-
-            # Start Memory stack (Postgres, Redis, Sandbox) automatically if Docker is available
+                self.icon = icon_path
+                logger.info(f"[Tray] Forced icon refresh: {icon_path}")
+            except Exception as e:
+                logger.error(f"[Tray] Icon refresh failed: {e}")
+            
+            # Start Memory stack
+            import threading
             threading.Thread(target=ensure_memory_stack_up, daemon=True).start()
-
+            
             # Start Web Server
             logger.info("[Tray] Starting Web Server thread...")
             t = threading.Thread(target=start_uvicorn, daemon=True)
             t.start()
             
-            # Start Headless Agent Loop (for Web UI processing)
+            # Start Headless Agent Loop
             from vaf.core.headless_runner import run_headless_agent
             t_agent = threading.Thread(target=run_headless_agent, daemon=True)
             t_agent.start()
             
-            # Start Frontend (Next.js) automatically
+            # Start Frontend
             def start_frontend_bg():
                 logger.info("[Tray] Starting Frontend manager...")
                 from vaf.core.frontend_manager import FrontendManager
@@ -903,165 +961,395 @@ if platform.system() == "Darwin":
             t_fe = threading.Thread(target=start_frontend_bg, daemon=True)
             t_fe.start()
             
-            # Start App
-            logger.info("Initializing VafTrayApp().run()")
-            
-            # Start Command Listener thread
-            t_cmd = threading.Thread(target=command_listener, args=(lock_socket,), daemon=True)
-            t_cmd.start()
-            
-            VafTrayApp().run()
+            logger.info("[Tray] Delayed initialization complete!")
 
-    except ImportError:
-        # Fallback to pystray if rumps is not available
-        pass
+
+        def setup_mac_handlers(self, _):
+            """Setup notification observers for macOS."""
+            self._dock_timer.stop()
+            try:
+                from AppKit import NSNotificationCenter, NSApplicationDidBecomeActiveNotification
+                from Foundation import NSObject
+                import objc
+
+                # We MUST use a real NSObject subclass to handle selectors reliably
+                class ActivationObserver(NSObject):
+                    def onActivate_(self, notification):
+                        # Debounce check
+                        current_time = time.time()
+                        if current_time - getattr(self.app_instance, "_last_open", 0) < 1.0:
+                            return
+                        
+                        self.app_instance._last_open = current_time
+                        logger.info("[Tray] App activation detected (Dock click/Focus).")
+                        threading.Thread(target=open_webui, args=(None,), daemon=True).start()
+
+                self._observer_obj = ActivationObserver.alloc().init()
+                self._observer_obj.app_instance = self
+                self._last_open = 0
+                
+                NSNotificationCenter.defaultCenter().addObserver_selector_name_object_(
+                    self._observer_obj, 
+                    objc.selector(self._observer_obj.onActivate_, signature=b"v@:@"),
+                    NSApplicationDidBecomeActiveNotification, 
+                    None
+                )
+                
+                logger.info("[Tray] Registered robust macOS Activation observer.")
+            except Exception as e:
+                logger.error(f"[Tray] Failed to setup macOS handlers: {e}")
+
+        def update_loop(self, _):
+            """Main logic loop called by timer."""
+            try:
+                is_active = tray_context.is_active()
+                is_persistent = tray_context.is_persistent()
+                
+                status_text = "Persistent" if is_persistent else ("Active" if is_active else "Idle")
+                self.menu["Status: Idle"].title = f"Status: {status_text}"
+                self.menu["Persistent Server"].state = 1 if is_persistent else 0
+
+                # Icon Update Logic
+                target_status = "idle"
+                if is_persistent:
+                    target_status = "persistent"
+                elif is_active:
+                    target_status = "active"
+                
+                new_icon = get_icon_path(target_status)
+                if self.icon != new_icon and os.path.exists(new_icon):
+                    self.icon = new_icon
+
+            except Exception as e:
+                logger.error(f"Error in update loop: {e}")
+
+        def on_open_webui(self, sender):
+            try:
+                logger.info("[Tray] on_open_webui clicked")
+                threading.Thread(target=open_webui, args=(None,), daemon=True).start()
+            except Exception as e:
+                logger.error(f"Failed to open Web UI: {e}")
+
+        def on_toggle_persist(self, sender):
+            toggle_persistence(None)
+            sender.state = not sender.state
+        
+        def on_quit(self, sender):
+            quit_app(None)
+
+    def run_app():
+        logger.info("[Tray] run_app (Rumps) called")
+        # Register config observer
+        Config.add_observer(on_config_changed)
+
+        # Singleton Check
+        lock_socket = check_singleton()
+        if not lock_socket:
+            logger.warning("[Tray] Singleton check failed - Instance exists")
+            return
+
+        # Start App (threads will be initialized via delayed_init timer)
+        logger.info("Initializing VafTrayApp().run()...")
+        
+        # Start Command Listener thread
+        t_cmd = threading.Thread(target=command_listener, args=(lock_socket,), daemon=True)
+        t_cmd.start()
+        
+        VafTrayApp().run()
 
 # ==========================================
 # Cross-Platform Implementation (Pystray)
 # ==========================================
-if platform.system() != "Darwin" or "rumps" not in sys.modules:
-    import pystray
-    from PIL import Image, ImageDraw
+# Use pystray for ALL platforms (Windows, macOS, Linux)
+# This ensures consistent behavior and avoids rumps app bundle issues
+import pystray
+from PIL import Image, ImageDraw
+logger.info(f"[Tray] Using pystray for tray icon")
 
-    def create_image(color_name):
-        # Map color names to tuples/strings that PIL accepts if needed, or pass through
-        # But we want to match get_icon_path logic or reuse it
-        # Pystray wants an Image object, not a path
-        path = get_icon_path(color_name)
-        if path:
-            return Image.open(path)
-        return Image.new('RGB', (64, 64), 'red') # Fallback
+def create_image(color_name):
+    """Create PIL Image for pystray icon."""
+    path = get_icon_path(color_name)
+    if path:
+        return Image.open(path)
+    return Image.new('RGB', (64, 64), 'red')  # Fallback
 
-    def run_app():
-        clear_log()
-        log("Tray", "run_app called (Pystray)")
-        # Register config observer
-        Config.add_observer(on_config_changed)
-        
-        print("[Tray] run_app called (Pystray)")
-        # Singleton Check
-        lock_socket = check_singleton()
-        if not lock_socket:
-            print("[Tray] Singleton check failed (another instance running)")
-            log("Tray", "Singleton check failed - aborting")
-            return
 
-        print("[Tray] Singleton check passed")
-        log("Tray", "Singleton check passed")
+def run_headless():
+    """Run VAF backend + frontend WITHOUT tray icon (for native macOS wrapper)."""
+    clear_log()
+    log("Tray", "run_headless called (native wrapper mode)")
+    print("[VAF] Running headless - native Swift app handles tray icon")
+    
+    # Register config observer
+    Config.add_observer(on_config_changed)
+    
+    # Singleton Check
+    lock_socket = check_singleton()
+    if not lock_socket:
+        print("[VAF] Singleton check failed (another instance running)")
+        return
+    
+    # Start Memory stack
+    threading.Thread(target=ensure_memory_stack_up, daemon=True).start()
+    
+    # Start Web Server
+    print("[VAF] Starting Web Server thread...")
+    t = threading.Thread(target=start_uvicorn, daemon=True)
+    t.start()
+    
+    # Start Headless Agent Loop
+    from vaf.core.headless_runner import run_headless_agent
+    t_agent = threading.Thread(target=run_headless_agent, daemon=True)
+    t_agent.start()
+    
+    # Start Frontend
+    def start_frontend_bg():
+        print("[VAF] Starting Frontend manager...")
+        from vaf.core.frontend_manager import FrontendManager
+        port = FrontendManager().start_frontend()
+        if port:
+            print(f"[VAF] Frontend started on port {port}")
+    
+    threading.Thread(target=start_frontend_bg, daemon=True).start()
+    
+    # Start command listener
+    t_cmd = threading.Thread(target=command_listener, args=(lock_socket,), daemon=True)
+    t_cmd.start()
+    
+    # Block forever (native wrapper handles quit via SIGTERM)
+    print("[VAF] Headless mode active. Waiting for termination signal...")
+    try:
+        import signal as sig_module
+        while True:
+            sig_module.pause()
+    except (KeyboardInterrupt, SystemExit):
+        print("[VAF] Shutting down headless mode...")
+        quit_app(None)
 
-        # Start Memory stack (Postgres, Redis, Sandbox) automatically if Docker is available
-        threading.Thread(target=ensure_memory_stack_up, daemon=True).start()
 
-        # Initialize SpeechManager on Main Thread to avoid COM issues
-        try:
-            log("Tray", "Initializing SpeechManager (Main Thread)...")
-            from vaf.core.speech import SpeechManager
-            SpeechManager.get_instance()
-            log("Tray", "SpeechManager initialized")
-        except Exception as e:
-            log("Tray", f"SpeechManager init failed: {e}")
+def run_app():
+    clear_log()
+    log("Tray", "run_app called (Pystray)")
+    # Register config observer
+    Config.add_observer(on_config_changed)
+    
+    print("[Tray] run_app called (Pystray)")
+    # Singleton Check
+    lock_socket = check_singleton()
+    if not lock_socket:
+        print("[Tray] Singleton check failed (another instance running)")
+        log("Tray", "Singleton check failed - aborting")
+        return
 
-        # Start Web Server
-        print("[Tray] Starting Web Server thread...")
-        log("Tray", "Spawning Web Server thread...")
-        t = threading.Thread(target=start_uvicorn, daemon=True)
-        t.start()
+    print("[Tray] Singleton check passed")
+    log("Tray", "Singleton check passed")
 
-        # Start Headless Agent Loop (for Web UI processing)
-        print("[Tray] Starting Agent thread...")
-        log("Tray", "Spawning Agent thread...")
-        from vaf.core.headless_runner import run_headless_agent
-        t_agent = threading.Thread(target=run_headless_agent, daemon=True)
-        t_agent.start()
+    # Start Memory stack (Postgres, Redis, Sandbox) automatically if Docker is available
+    threading.Thread(target=ensure_memory_stack_up, daemon=True).start()
 
-        # Start Frontend (Next.js) automatically
-        def start_frontend_bg():
-            print("[Tray] Starting Frontend manager...")
-            log("Tray", "Starting Frontend Manager...")
-            from vaf.core.frontend_manager import FrontendManager
-            auto_open = Config.get("web_ui_enabled", True)
+    # Initialize SpeechManager on Main Thread to avoid COM issues
+    try:
+        log("Tray", "Initializing SpeechManager (Main Thread)...")
+        from vaf.core.speech import SpeechManager
+        SpeechManager.get_instance()
+        log("Tray", "SpeechManager initialized")
+    except Exception as e:
+        log("Tray", f"SpeechManager init failed: {e}")
+
+    # Start Web Server
+    print("[Tray] Starting Web Server thread...")
+    log("Tray", "Spawning Web Server thread...")
+    t = threading.Thread(target=start_uvicorn, daemon=True)
+    t.start()
+
+    # Start Headless Agent Loop (for Web UI processing)
+    print("[Tray] Starting Agent thread...")
+    log("Tray", "Spawning Agent thread...")
+    from vaf.core.headless_runner import run_headless_agent
+    t_agent = threading.Thread(target=run_headless_agent, daemon=True)
+    t_agent.start()
+
+    # Start Frontend (Next.js) automatically
+    def start_frontend_bg():
+        print("[Tray] Starting Frontend manager...")
+        log("Tray", "Starting Frontend Manager...")
+        from vaf.core.frontend_manager import FrontendManager
+        auto_open = Config.get("web_ui_enabled", True)
+        port = FrontendManager().start_frontend(log_callback=lambda msg, style: log("Frontend", msg))
+        if not port:
+            # After reboot, PATH/npm may not be ready yet; retry once after a short delay
+            log("Tray", "Frontend start failed, retrying in 10s (e.g. after reboot)...")
+            time.sleep(10)
             port = FrontendManager().start_frontend(log_callback=lambda msg, style: log("Frontend", msg))
-            if not port:
-                # After reboot, PATH/npm may not be ready yet; retry once after a short delay
-                log("Tray", "Frontend start failed, retrying in 10s (e.g. after reboot)...")
-                time.sleep(10)
-                port = FrontendManager().start_frontend(log_callback=lambda msg, style: log("Frontend", msg))
-            if port:
-                # Wait for backend (Uvicorn on 8001) to be reachable so the Web UI can call the API
-                log("Tray", "Waiting for backend (port 8001) to be reachable...")
-                backend_ready = False
-                for _ in range(60):
-                    try:
-                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.settimeout(1)
-                        if sock.connect_ex(("127.0.0.1", 8001)) == 0:
-                            backend_ready = True
-                            sock.close()
-                            break
+        if port:
+            # Wait for backend (Uvicorn on 8001) to be reachable so the Web UI can call the API
+            log("Tray", "Waiting for backend (port 8001) to be reachable...")
+            backend_ready = False
+            for _ in range(60):
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(1)
+                    if sock.connect_ex(("127.0.0.1", 8001)) == 0:
+                        backend_ready = True
                         sock.close()
-                    except Exception:
-                        pass
-                    time.sleep(0.5)
-                if backend_ready:
-                    log("Tray", "Backend (8001) is reachable")
-                else:
-                    log("Tray", "Backend (8001) not ready after 30s; opening Web UI anyway")
-                print(f"[Tray] Frontend started on port {port}, opening browser...")
-                log("Tray", f"Frontend started on port {port}")
-                if auto_open:
-                    open_webui(None)
+                        break
+                    sock.close()
+                except Exception:
+                    pass
+                time.sleep(0.5)
+            if backend_ready:
+                log("Tray", "Backend (8001) is reachable")
             else:
-                print("[Tray] Frontend failed to start.")
-                log("Tray", "Frontend failed to start")
-        print("[Tray] Starting Frontend thread...")
-        t_fe = threading.Thread(target=start_frontend_bg, daemon=True)
-        t_fe.start()
+                log("Tray", "Backend (8001) not ready after 30s; opening Web UI anyway")
+            print(f"[Tray] Frontend started on port {port}, opening browser...")
+            log("Tray", f"Frontend started on port {port}")
+            if auto_open:
+                open_webui(None)
+        else:
+            print("[Tray] Frontend failed to start.")
+            log("Tray", "Frontend failed to start")
+    print("[Tray] Starting Frontend thread...")
+    t_fe = threading.Thread(target=start_frontend_bg, daemon=True)
+    t_fe.start()
 
-        # Menu
-        print("[Tray] Initializing Pystray icon...")
-        log("Tray", "Initializing System Tray Icon...")
+    print("[Tray] Starting Frontend thread...")
+    t_fe = threading.Thread(target=start_frontend_bg, daemon=True)
+    t_fe.start()
+
+    # ==========================================
+    # macOS Rumps Loop (Priority)
+    # ==========================================
+    if platform.system() == "Darwin" and "rumps" in sys.modules:
+        log("Tray", "Entering macOS Rumps main loop")
+        print("[Tray] Starting Rumps App...")
         
-        menu = pystray.Menu(
-            pystray.MenuItem("Status: Idle", lambda icon, item: None, enabled=False),
-            pystray.MenuItem("Open WebUI", open_webui, default=True),
-            pystray.MenuItem("Persistent Server", toggle_persistence, checked=lambda item: tray_context.is_persistent()),
-            pystray.MenuItem("Quit", quit_app)
-        )
-
-        icon = pystray.Icon("VAF", create_image("idle"), "VAF Agent", menu)
-
-        def update_icon(state):
-            if state == "active":
-                icon.icon = create_image("active")
-                try:
-                    logger.info("[Tray] Icon state -> active")
-                except Exception:
-                    pass
-            elif state == "idle":
-                icon.icon = create_image("idle")
-                try:
-                    logger.info("[Tray] Icon state -> idle")
-                except Exception:
-                    pass
-            elif state == "persistent":
-                icon.icon = create_image("persistent")
-                try:
-                    logger.info("[Tray] Icon state -> persistent")
-                except Exception:
-                    pass
+        # Create Rumps App Instance
+        app = VafTrayApp()
         
-        # Logic Thread
-        log("Tray", "Starting Activity Logic thread...")
-        t_logic = threading.Thread(target=check_activity_loop, args=(update_icon,), daemon=True)
-        t_logic.start()
-
-        # Command Listener thread (for singleton activation)
-        log("Tray", "Starting Command Listener thread...")
+        # Helper to map Rumps callbacks to our logic functions
+        # Note: Rumps handles the loop, so we just set up the app and run it.
+        # We need to bridge the update_icon logic.
+        
+        # Since Rumps runs its own loop, we can't easily share the exact same update_icon function
+        # expecting a Pystray icon. But VafTrayApp has its own update_loop!
+        # See VafTrayApp class definition earlier in file.
+        
+        # However, we still need to start the background logic threads that update state?
+        # VafTrayApp handles its own state updates via self.timer calling self.update_loop
+        # which checks tray_context. So we just need to ensure tray_context is updated by the activity loop?
+        
+        # Actually, check_activity_loop updates GLOBAL state or calls a callback?
+        # It calls 'callback(state)'
+        
+        # Let's adjust check_activity_loop to update the Rumps app if running?
+        # Or better: VafTrayApp has a timer (self.timer) that runs self.update_loop every 1s.
+        # that update_loop calls get_icon_path(status).
+        # So as long as tray_context status changes, Rumps will update.
+        
+        # We still need the logic thread to update tray_context?
+        # check_activity_loop does: 
+        #   state = "active" if websockets > 0 else "idle"
+        #   callback(state)
+        
+        # If we use Rumps, we don't need the pystray-specific check_activity_loop callback.
+        # We can run check_activity_loop with a dummy callback or one that updates a global var.
+        # But wait, tray_context has active_websockets.
+        # So VafTrayApp.update_loop just needs to check tray_context.
+        
+        # Let's ensure command_listener is running (it is started above? no, below Pystray init).
+        # We need to start command listener for Rumps too.
+        
+        log("Tray", "Starting Command Listener thread (Rumps)...")
         t_cmd = threading.Thread(target=command_listener, args=(lock_socket,), daemon=True)
         t_cmd.start()
+        
+        # Logic Thread for Rumps?
+        # monitoring active_websockets is done by main.py/server via tray_context updates?
+        # No, check_activity_loop CALCULATES state.
+        
+        # We need a bridge.
+        def rumps_state_updater(state):
+            # This callback updates the global state that Rumps reads?
+            # VafTrayApp.update_loop reads tray_context?
+            # Let's look at VafTrayApp again (it's defined earlier).
+            pass
 
-        log("Tray", "Entering Pystray main loop (icon.run)")
-        icon.run()
+        # Actually, standard check_activity_loop logic:
+        # It monitors active_websockets and calls callback.
+        # We can define a callback that updates the rumps app icon directly if we have access to 'app'
+        
+        def rumps_icon_callback(state):
+            if app:
+                path = get_icon_path(state)
+                if path:
+                    app.icon = path
+        
+        log("Tray", "Starting Activity Logic thread (Rumps)...")
+        t_logic = threading.Thread(target=check_activity_loop, args=(rumps_icon_callback,), daemon=True)
+        t_logic.start()
+
+        app.run()
+        return
+        
+    # ==========================================
+    # Pystray Logic (Windows/Linux fallback)
+    # ==========================================
+
+    # Menu
+    print("[Tray] Initializing Pystray icon...")
+    log("Tray", "Initializing System Tray Icon...")
+    
+    menu = pystray.Menu(
+        pystray.MenuItem("Status: Idle", lambda icon, item: None, enabled=False),
+        pystray.MenuItem("Open WebUI", open_webui, default=True),
+        pystray.MenuItem("Persistent Server", toggle_persistence, checked=lambda item: tray_context.is_persistent()),
+        pystray.MenuItem("Quit", quit_app)
+    )
+
+    icon = pystray.Icon("VAF", create_image("idle"), "VAF Agent", menu)
+
+    def update_icon(icon_obj, state):
+        if state == "idle":
+            icon_obj.icon = create_image("idle")
+            try:
+                logger.info("[Tray] Icon state -> idle")
+            except Exception:
+                pass
+        elif state == "active":
+            icon_obj.icon = create_image("active")
+            try:
+                logger.info("[Tray] Icon state -> active")
+            except Exception:
+                pass
+        elif state == "persistent":
+            icon_obj.icon = create_image("persistent")
+            try:
+                logger.info("[Tray] Icon state -> persistent")
+            except Exception:
+                pass
+    
+    # Create icon
+    icon = pystray.Icon("VAF", create_image("idle"), "VAF", menu)
+    
+    # CRITICAL for macOS: Set visible=True explicitly
+    icon.visible = True
+    
+    print("[Tray] Starting Tray Icon (pystray)...")
+    log("Tray", "Starting Tray Icon (pystray)...")
+    
+    # Start activity monitoring thread
+    t_logic = threading.Thread(target=check_activity_loop, args=(lambda state: update_icon(icon, state),), daemon=True)
+    t_logic.start()
+    
+    # Start command listener
+    t_cmd = threading.Thread(target=command_listener, args=(lock_socket,), daemon=True)
+    t_cmd.start()
+    
+    # CRITICAL for macOS: icon.run() MUST be called from main thread
+    # This is a blocking call that starts the macOS RunLoop
+    print("[Tray] Running icon.run() on main thread...")
+    log("Tray", "Entering Pystray main loop (icon.run)")
+    icon.run()  # Blocks here until quit
 
 if __name__ == "__main__":
     run_app()

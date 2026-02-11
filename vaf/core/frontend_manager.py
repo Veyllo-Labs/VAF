@@ -353,15 +353,56 @@ class FrontendManager:
                     time.sleep(0.1)
 
         else:
-            # Unix: terminate process group
+            # Unix/Mac: terminate process group with escalating signals
             if self.process:
                 try:
                     import signal
-                    os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                    # Try SIGTERM first (graceful)
+                    try:
+                        os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                    except Exception:
+                        pass
+                    
+                    # Wait briefly for graceful shutdown
+                    time.sleep(0.5)
+                    
+                    # If process still alive, use SIGKILL
+                    try:
+                        if self.process.poll() is None:
+                            os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                    except Exception:
+                        pass
+                    
+                    # Also terminate the process directly as fallback
+                    try:
+                        self.process.terminate()
+                        time.sleep(0.2)
+                        if self.process.poll() is None:
+                            self.process.kill()
+                    except Exception:
+                        pass
                 except Exception:
                     pass
+            
+            # Mac-specific: Kill process on port using lsof + kill
+            if stopped_port:
                 try:
-                    self.process.terminate()
+                    # Find process using the port
+                    result = subprocess.run(
+                        ["lsof", "-ti", f":{stopped_port}"],
+                        capture_output=True,
+                        text=True,
+                        timeout=2
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        pids = result.stdout.strip().split('\n')
+                        for pid in pids:
+                            if pid.strip():
+                                try:
+                                    # Kill process group
+                                    subprocess.run(["kill", "-9", pid], timeout=1)
+                                except Exception:
+                                    pass
                 except Exception:
                     pass
 

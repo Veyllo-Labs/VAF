@@ -3775,6 +3775,72 @@ class Agent:
         if user_input:
             self.history.append({"role": "user", "content": user_input})
             
+            # ═══════════════════════════════════════════════════════════════════════
+            # FIRST-TIME USER: Automatic Greeting & Language Detection
+            # ═══════════════════════════════════════════════════════════════════════
+            # If user_identity.json is still default (no name, language, or preferences),
+            # inject a friendly greeting in the user's detected language asking for their name.
+            # This creates a natural onboarding flow without forcing a form.
+            if not skip_input:
+                try:
+                    from vaf.auth.user_workspace import get_user_workspace
+                    username = getattr(self, "_current_username", None)
+                    if username:
+                        ws = get_user_workspace(username)
+                        user_identity = ws.get_user_identity()
+                        
+                        # Check if this is a first-time user (default values only)
+                        if ws.is_default_user_identity(user_identity):
+                            # Detect language from user's first message
+                            try:
+                                import langid
+                                detected_lang, confidence = langid.classify(user_input)
+                                # Map to common 2-letter codes
+                                lang_code = detected_lang if detected_lang in ("de", "en", "es", "fr", "it", "zh", "ja") else "en"
+                            except Exception:
+                                lang_code = "en"  # Fallback to English
+                            
+                            # Get agent identity for personalized greeting
+                            agent_identity = ws.get_identity()
+                            agent_name = agent_identity.get("name", "VAF")
+                            agent_emoji = agent_identity.get("emoji", "🤖")
+                            
+                            # Multilingual greetings
+                            greetings = {
+                                "de": f"Hallo! Ich bin {agent_name} {agent_emoji} – freut mich, dich kennenzulernen! Bevor ich dir helfe, würde ich gerne wissen: **Wie heißt du?** (Das hilft mir, unsere Unterhaltung persönlicher zu gestalten.)",
+                                "en": f"Hey! I'm {agent_name} {agent_emoji} – nice to meet you! Before I help you, I'd like to know: **What's your name?** (This helps me make our conversations more personal.)",
+                                "es": f"¡Hola! Soy {agent_name} {agent_emoji} – encantado de conocerte! Antes de ayudarte, me gustaría saber: **¿Cómo te llamas?**",
+                                "fr": f"Salut ! Je suis {agent_name} {agent_emoji} – ravi de te rencontrer ! Avant de t'aider, j'aimerais savoir : **Comment t'appelles-tu ?**",
+                                "it": f"Ciao! Sono {agent_name} {agent_emoji} – piacere di conoscerti! Prima di aiutarti, vorrei sapere: **Come ti chiami?**",
+                                "zh": f"你好！我是 {agent_name} {agent_emoji} – 很高兴认识你！在我帮助你之前，我想知道：**你叫什么名字？**",
+                                "ja": f"こんにちは！私は {agent_name} {agent_emoji} です – はじめまして！お手伝いする前に、**お名前は何ですか？**",
+                            }
+                            
+                            greeting = greetings.get(lang_code, greetings["en"])
+                            
+                            # Inject system message BEFORE LLM processes, instructing it to:
+                            # 1. Use the greeting above
+                            # 2. Address the user's original message
+                            # 3. Use update_user_identity tool when they provide their name
+                            first_time_instruction = (
+                                f"## FIRST-TIME USER DETECTED\\n\\n"
+                                f"This user has just sent their first message. Their language appears to be: **{lang_code}** (detected from input).\\n\\n"
+                                f"**Your Response should:**\\n"
+                                f"1. Start with this greeting: \\\"{greeting}\\\"\\n"
+                                f"2. Then briefly address their original message: \\\"{user_input}\\\"\\n"
+                                f"3. When they tell you their name (in their next message), use `update_user_identity` tool to save it along with `preferred_language={lang_code}`.\\n\\n"
+                                f"Keep it natural and friendly – you're meeting someone new!"
+                            )
+                            
+                            # Insert system instruction right before LLM call
+                            # This goes into history so it's immediately before the assistant's response
+                            self.history.append({"role": "system", "content": first_time_instruction})
+                            
+                            UI.event("Onboarding", f"First-time user detected (lang: {lang_code})", style="success")
+                except Exception as e:
+                    # Don't crash if first-time detection fails - just skip it
+                    UI.event("Onboarding", f"First-time check failed: {e}", style="dim")
+            
             # 🔒 INTENT LOCK: Save the fresh user intent to persistence
             if hasattr(self, 'main_persistence') and self.main_persistence:
                 try:
@@ -4224,7 +4290,7 @@ class Agent:
                         # X-RAY: Send EXACT payload to WebUI for inspection
                         try:
                             from vaf.core.web_interface import get_web_interface
-                            import json
+                            # json is already imported globally
                             # Extract System Prompt (first system message)
                             sys_prompt = next((m["content"] for m in prepared_messages if m["role"] == "system"), "")
                             # Extract History (everything else)

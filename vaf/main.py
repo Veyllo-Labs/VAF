@@ -5,6 +5,10 @@ import os
 
 def bootstrap():
     """Checks for ALL dependencies and auto-installs if confirmed."""
+    # Safety hatch for App Bundles / CI
+    if os.environ.get("VAF_SKIP_DEP_CHECK"):
+        return
+
     # Map: pip package name -> Python import name
     # Some packages have different names when importing
     DEPENDENCIES = {
@@ -296,8 +300,15 @@ app.command(name="install-gpu")(info.install_gpu)
 def tray_command():
     """Start the VAF System Tray application (Persistent Background Service)."""
     try:
-        from vaf.tray import run_app
-        run_app()
+        # Check if launched from native macOS Swift wrapper
+        if os.environ.get("VAF_NATIVE_WRAPPER") == "1":
+            # Native wrapper handles tray icon - run headless (backend + frontend only)
+            print("[VAF] Native wrapper detected - running headless (no Python tray)")
+            from vaf.tray import run_headless
+            run_headless()
+        else:
+            from vaf.tray import run_app
+            run_app()
     except ImportError as e:
         print(f"Error starting tray app: {e}")
         print("Please ensure requirements are installed: pip install -r requirements.txt")
@@ -760,7 +771,11 @@ def callback(
 
 def main():
     """Entry point for console script."""
-    app()
+    # Check if we are running in a Py2App bundle (Frozen)
+    if getattr(sys, "frozen", False):
+        tray_command()
+    else:
+        app()
 
 if __name__ == "__main__":
     main()

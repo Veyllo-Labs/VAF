@@ -183,6 +183,17 @@ function stripAttachmentBlocks(content: string): { text: string; fileNames: stri
     return { text, fileNames };
 }
 
+/** Strip OpenAI tool_calls JSON blocks from message content for display */
+function stripToolCallsJSON(content: string): string {
+    if (!content) return content;
+
+    // Match JSON blocks that look like {"tool_calls": [...]}
+    // This regex handles both single-line and multi-line JSON blocks
+    const toolCallsPattern = /\{"tool_calls":\s*\[[\s\S]*?\]\s*\}/g;
+
+    return content.replace(toolCallsPattern, '').trim();
+}
+
 /** Extract file paths from text (Windows and Unix paths with common extensions) */
 function extractFilePaths(text: string): { path: string; start: number; end: number }[] {
     const results: { path: string; start: number; end: number }[] = [];
@@ -792,7 +803,7 @@ export default function VAFDashboard() {
             if (tools.length === 0 && ws) {
                 ws.send(JSON.stringify({ type: 'get_tools' }));
             }
-            
+
             // Merge Tools + Commands (Tools First!)
             const allOptions = [
                 ...tools.map(t => ({ name: t.name, description: t.description })),
@@ -802,7 +813,7 @@ export default function VAFDashboard() {
             const filtered = allOptions
                 .filter(c => c.name.toLowerCase().includes(query))
                 .slice(0, 15); // Increased limit
-                
+
             setSuggestionList(filtered);
             setSuggestionType('tool');
             setSelectedSuggestionIndex(0);
@@ -1867,7 +1878,7 @@ export default function VAFDashboard() {
     // Sync sttEnabled state with config changes
     useEffect(() => {
         setSttEnabled(config.stt_enabled === true);
-        
+
         // Initialize context stats if empty (so bar is always visible)
         if (!contextStats && config.n_ctx) {
             setContextStats({
@@ -2317,7 +2328,7 @@ export default function VAFDashboard() {
             animationFrameRef.current = null;
         }
         if (audioContextRef.current) {
-            audioContextRef.current.close().catch(() => {});
+            audioContextRef.current.close().catch(() => { });
             audioContextRef.current = null;
         }
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
@@ -2525,74 +2536,74 @@ export default function VAFDashboard() {
                             className="absolute inset-0 overflow-y-auto overflow-x-hidden p-2 pt-0 space-y-1 scrollbar-hide"
                             style={{ WebkitOverflowScrolling: 'touch' }}
                         >
-                        {/* New Chat Button */}
-                        <div
-                            onClick={() => ws?.send(JSON.stringify({ type: 'new_session' }))}
-                            className="flex items-center gap-3 p-2 pl-3 rounded-lg cursor-pointer hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors"
-                        >
-                            <Plus size={16} className="shrink-0" />
-                            <span className="text-sm font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-200">New Chat</span>
-                        </div>
+                            {/* New Chat Button */}
+                            <div
+                                onClick={() => ws?.send(JSON.stringify({ type: 'new_session' }))}
+                                className="flex items-center gap-3 p-2 pl-3 rounded-lg cursor-pointer hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors"
+                            >
+                                <Plus size={16} className="shrink-0" />
+                                <span className="text-sm font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-200">New Chat</span>
+                            </div>
 
-                        {sessions.map(s => (
-                            <div key={s.id} data-session-id={s.id} onClick={() => handleSessionSwitch(s.id)}
-                                className={cn("flex items-center gap-3 p-2 pl-3 rounded-lg cursor-pointer group/item relative", currentSessionId === s.id ? 'bg-transparent' : 'hover:bg-gray-100')}>
+                            {sessions.map(s => (
+                                <div key={s.id} data-session-id={s.id} onClick={() => handleSessionSwitch(s.id)}
+                                    className={cn("flex items-center gap-3 p-2 pl-3 rounded-lg cursor-pointer group/item relative", currentSessionId === s.id ? 'bg-transparent' : 'hover:bg-gray-100')}>
 
-                                {/* Active Indicator (Dot) */}
-                                {currentSessionId === s.id && (
-                                    <div className="absolute left-1 my-auto w-1 h-1 bg-black rounded-full" />
-                                )}
-
-                                <MessageSquare size={16} className={cn("shrink-0", currentSessionId === s.id ? "text-gray-900" : "text-gray-400")} />
-
-                                <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 transition-opacity min-w-0 pr-1">
-                                    {editingId === s.id ? (
-                                        <input
-                                            autoFocus
-                                            className="w-full text-xs border-b border-gray-500 focus:outline-none bg-transparent"
-                                            value={editName}
-                                            onChange={e => setEditName(e.target.value)}
-                                            onKeyDown={e => {
-                                                if (e.key === 'Enter') submitRename();
-                                                if (e.key === 'Escape') setEditingId(null);
-                                            }}
-                                            onBlur={submitRename}
-                                            onClick={e => e.stopPropagation()}
-                                        />
-                                    ) : (
-                                        <span className={cn("truncate text-sm transition-colors", currentSessionId === s.id ? "font-medium text-gray-900" : "text-gray-600")}>
-                                            {s.title.replace(".json", "")}
-                                        </span>
+                                    {/* Active Indicator (Dot) */}
+                                    {currentSessionId === s.id && (
+                                        <div className="absolute left-1 my-auto w-1 h-1 bg-black rounded-full" />
                                     )}
 
-                                    {/* Action Icons (Hover Only) */}
-                                    <div className="flex items-center gap-1.5 opacity-0 group-hover/item:opacity-100 transition-opacity">
-                                        {!editingId && (
-                                            <>
-                                                <Edit2 size={12} className="text-gray-400 hover:text-gray-900" onClick={(e) => { e.stopPropagation(); startEditing(s); }} />
-                                                <Trash2 size={12} className="text-gray-400 hover:text-red-600" onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    ws?.send(JSON.stringify({ type: 'delete_session', id: s.id }));
-                                                    if (currentSessionId === s.id) {
-                                                        const remaining = sessions.filter(sess => sess.id !== s.id);
-                                                        const empty = remaining.find(sess => (sess.messageCount || 0) === 0);
-                                                        if (empty) {
-                                                            handleSessionSwitch(empty.id);
-                                                        } else if (remaining.length > 0) {
-                                                            handleSessionSwitch(remaining[0].id);
-                                                        } else {
-                                                            setTimeout(() => {
-                                                                ws?.send(JSON.stringify({ type: 'new_session' }));
-                                                            }, 100);
-                                                        }
-                                                    }
-                                                }} />
-                                            </>
+                                    <MessageSquare size={16} className={cn("shrink-0", currentSessionId === s.id ? "text-gray-900" : "text-gray-400")} />
+
+                                    <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 transition-opacity min-w-0 pr-1">
+                                        {editingId === s.id ? (
+                                            <input
+                                                autoFocus
+                                                className="w-full text-xs border-b border-gray-500 focus:outline-none bg-transparent"
+                                                value={editName}
+                                                onChange={e => setEditName(e.target.value)}
+                                                onKeyDown={e => {
+                                                    if (e.key === 'Enter') submitRename();
+                                                    if (e.key === 'Escape') setEditingId(null);
+                                                }}
+                                                onBlur={submitRename}
+                                                onClick={e => e.stopPropagation()}
+                                            />
+                                        ) : (
+                                            <span className={cn("truncate text-sm transition-colors", currentSessionId === s.id ? "font-medium text-gray-900" : "text-gray-600")}>
+                                                {s.title.replace(".json", "")}
+                                            </span>
                                         )}
+
+                                        {/* Action Icons (Hover Only) */}
+                                        <div className="flex items-center gap-1.5 opacity-0 group-hover/item:opacity-100 transition-opacity">
+                                            {!editingId && (
+                                                <>
+                                                    <Edit2 size={12} className="text-gray-400 hover:text-gray-900" onClick={(e) => { e.stopPropagation(); startEditing(s); }} />
+                                                    <Trash2 size={12} className="text-gray-400 hover:text-red-600" onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        ws?.send(JSON.stringify({ type: 'delete_session', id: s.id }));
+                                                        if (currentSessionId === s.id) {
+                                                            const remaining = sessions.filter(sess => sess.id !== s.id);
+                                                            const empty = remaining.find(sess => (sess.messageCount || 0) === 0);
+                                                            if (empty) {
+                                                                handleSessionSwitch(empty.id);
+                                                            } else if (remaining.length > 0) {
+                                                                handleSessionSwitch(remaining[0].id);
+                                                            } else {
+                                                                setTimeout(() => {
+                                                                    ws?.send(JSON.stringify({ type: 'new_session' }));
+                                                                }, 100);
+                                                            }
+                                                        }
+                                                    }} />
+                                                </>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        ))}
+                            ))}
                             <div className="h-28 shrink-0" aria-hidden />
                         </div>
                         {/* Nebel: weißer Fade (statt grau), letzter sichtbarer Chat „verschwindet“ */}
@@ -2648,252 +2659,254 @@ export default function VAFDashboard() {
                 >
                     <div className="flex-1 flex flex-col relative bg-white overflow-hidden">
                         <div className="flex-1 overflow-y-auto p-6" ref={containerRef}>
-                        <div className={cn(messagesAreaWidthClass, "mx-auto space-y-2 pb-32")}>
-                            {/* Sub-Agent banner removed; reopen via tool cards or system log */}
-                            {/* Empty state welcome is shown in the centered input block below */}
-                            {(() => {
-                                const filteredMessages = messages.filter(m => !m.content.includes('__CMD__'));
-                                return filteredMessages.map((msg, i) => {
-                                    const trueIndex = messages.indexOf(msg);
-                                    const prevMsg = i > 0 ? filteredMessages[i - 1] : null;
-                                    const showDaySeparator = prevMsg !== null && !isSameDay(prevMsg.timestamp, msg.timestamp);
-                                    return (
-                                        <Fragment key={trueIndex}>
-                                            {showDaySeparator && <DaySeparator endDate={prevMsg.timestamp} startDate={msg.timestamp} />}
-                                            {/* Message content */}
-                                            {(() => {
-                                                // Render System Steps (Timeline Style)
-                                                if (msg.role === 'system') {
-                                                    const isLast = i === filteredMessages.length - 1;
-                                                    const isSubAgentMessage = msg.content.toLowerCase().includes('sub-agent');
-                                                    const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
-                                                    return (
-                                                        <div key={`system-${trueIndex}`} className={cn("flex justify-center", prevWasSystem ? "pt-0" : "pt-4")}>
-                                                            <SystemStep
-                                                                message={msg.content}
-                                                                isLoading={loading && isLast}
-                                                                useBotIcon={loading && isLast}
-                                                                onClick={isSubAgentMessage ? () => openSubAgentWindow(true) : undefined}
+                            <div className={cn(messagesAreaWidthClass, "mx-auto space-y-2 pb-32")}>
+                                {/* Sub-Agent banner removed; reopen via tool cards or system log */}
+                                {/* Empty state welcome is shown in the centered input block below */}
+                                {(() => {
+                                    const filteredMessages = messages.filter(m => !m.content.includes('__CMD__'));
+                                    return filteredMessages.map((msg, i) => {
+                                        const trueIndex = messages.indexOf(msg);
+                                        const prevMsg = i > 0 ? filteredMessages[i - 1] : null;
+                                        const showDaySeparator = prevMsg !== null && !isSameDay(prevMsg.timestamp, msg.timestamp);
+                                        return (
+                                            <Fragment key={trueIndex}>
+                                                {showDaySeparator && <DaySeparator endDate={prevMsg.timestamp} startDate={msg.timestamp} />}
+                                                {/* Message content */}
+                                                {(() => {
+                                                    // Render System Steps (Timeline Style)
+                                                    if (msg.role === 'system') {
+                                                        const isLast = i === filteredMessages.length - 1;
+                                                        const isSubAgentMessage = msg.content.toLowerCase().includes('sub-agent');
+                                                        const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
+                                                        return (
+                                                            <div key={`system-${trueIndex}`} className={cn("flex justify-center", prevWasSystem ? "pt-0" : "pt-4")}>
+                                                                <SystemStep
+                                                                    message={msg.content}
+                                                                    isLoading={loading && isLast}
+                                                                    useBotIcon={loading && isLast}
+                                                                    onClick={isSubAgentMessage ? () => openSubAgentWindow(true) : undefined}
+                                                                />
+                                                            </div>
+                                                        );
+                                                    }
+
+                                                    // Render Tool Messages
+                                                    if (msg.role === 'tool') {
+                                                        const toolLower = (msg.toolName || '').toLowerCase();
+                                                        const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding)_agent(?:$|[^a-z])/.test(toolLower);
+                                                        return (
+                                                            <ToolMessage
+                                                                key={`tool-${trueIndex}`}
+                                                                id={msg.toolId || `tool-${trueIndex}`}
+                                                                name={msg.toolName || 'Unknown Tool'}
+                                                                status={msg.toolStatus || 'completed'}
+                                                                result={msg.content}
+                                                                args={msg.toolArgs}
+                                                                startTime={msg.toolStartTime}
+                                                                endTime={msg.toolEndTime}
+                                                                onToggleScroll={preserveChatScroll}
+                                                                onToggle={isSubAgentTool ? (nextExpanded) => {
+                                                                    if (nextExpanded) {
+                                                                        openSubAgentWindow(true);
+                                                                    } else {
+                                                                        closeSubAgentWindow(true);
+                                                                    }
+                                                                } : undefined}
                                                             />
+                                                        );
+                                                    }
+
+                                                    // Render Workflow Messages
+                                                    if (msg.role === 'workflow') {
+                                                        return (
+                                                            <div key={`workflow-${trueIndex}`} className="flex justify-center gap-4 pt-4">
+                                                                <div className="flex gap-4 max-w-[85%] w-full items-start">
+                                                                    <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
+                                                                    <WorkflowChatElement
+                                                                        workflowId={msg.workflowId || ""}
+                                                                        name={msg.workflowName || "Workflow"}
+                                                                        initialSteps={msg.initialSteps}
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    }
+
+                                                    const { thought, answer, isThinkingComplete } = parseContent(msg.content);
+                                                    const isBot = msg.role === 'assistant';
+                                                    const isLastMessage = i === filteredMessages.length - 1;
+                                                    // Simple: thinking is done when the </think> tag is found (isThinkingComplete)
+                                                    // For non-last messages, always treat as complete
+                                                    const thinkingDone = !isLastMessage || isThinkingComplete;
+                                                    // For user messages: don't show attachment content in bubble (strip --- FILE: ... --- blocks); keep chips from msg.files or parsed from content after reload
+                                                    const attachmentStripped = !isBot ? stripAttachmentBlocks(msg.content) : null;
+                                                    const displayAnswer = !isBot && attachmentStripped ? attachmentStripped.text : answer;
+                                                    const displayFiles = !isBot && (msg.files?.length ? msg.files : (attachmentStripped?.fileNames.length ? attachmentStripped.fileNames.map(name => ({ name, mimeType: '' })) : undefined));
+
+                                                    // Filter out tool_calls JSON from bot answers
+                                                    const cleanAnswer = isBot ? stripToolCallsJSON(answer) : answer;
+                                                    // Add top margin if following a system step
+                                                    const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
+
+                                                    const bubbleContent = (
+                                                        <>
+                                                            {isBot && thought && <ThinkingDetails thought={thought} isComplete={thinkingDone} />}
+
+                                                            {/* Show answer bubble: always for user, for bot if there's an answer OR if there's no thought (fallback) */}
+                                                            {(displayAnswer || !isBot || (isBot && !thought)) && (
+                                                                <div className="flex flex-col gap-3 w-full">
+                                                                    {isBot && parseWorkflowAsync(answer) ? (() => {
+                                                                        const wf = parseWorkflowAsync(answer)!;
+                                                                        return (
+                                                                            <>
+                                                                                <WorkflowChatElement
+                                                                                    workflowId={wf.workflowId}
+                                                                                    name={wf.name}
+                                                                                    initialSteps={4}
+                                                                                />
+                                                                                {wf.rest ? (
+                                                                                    <div className="relative group flex items-end">
+                                                                                        <div className="px-5 py-3 rounded-2xl shadow-sm text-[15px] leading-relaxed bg-white text-gray-800 rounded-tl-none border border-transparent">
+                                                                                            <div className="chat-markdown"><ChatMarkdown>{wf.rest}</ChatMarkdown></div>
+                                                                                        </div>
+                                                                                        <button
+                                                                                            onClick={(e) => {
+                                                                                                e.stopPropagation();
+                                                                                                if (playingMessageId === trueIndex) handleStopSpeech();
+                                                                                                else handleSpeak(trueIndex, wf.rest);
+                                                                                            }}
+                                                                                            className="ml-2 mb-1 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all opacity-40 hover:opacity-100 data-[active=true]:opacity-100 shrink-0"
+                                                                                            data-active={playingMessageId === trueIndex || loadingMessageId === trueIndex}
+                                                                                            title={playingMessageId === trueIndex ? "Stop Speaking" : "Read Aloud"}
+                                                                                        >
+                                                                                            {loadingMessageId === trueIndex ? <Loader2 size={14} className="animate-spin" /> : playingMessageId === trueIndex ? (
+                                                                                                <div className="relative"><Volume2 size={14} className="text-gray-600" /><span className="absolute -inset-1 rounded-full bg-gray-400/20 animate-ping" /></div>
+                                                                                            ) : <Volume2 size={14} />}
+                                                                                        </button>
+                                                                                    </div>
+                                                                                ) : null}
+                                                                            </>
+                                                                        );
+                                                                    })() : (
+                                                                        <div className="relative group flex items-end">
+                                                                            <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-[15px] leading-relaxed",
+                                                                                isBot ? "bg-white text-gray-800 rounded-tl-none border border-transparent" : "bg-gray-800 text-white rounded-tr-none")}>
+                                                                                <div className="chat-markdown"><ChatMarkdown dark={!isBot}>{isBot ? cleanAnswer : displayAnswer}</ChatMarkdown></div>
+                                                                            </div>
+                                                                            {isBot && (
+                                                                                <button
+                                                                                    onClick={(e) => {
+                                                                                        e.stopPropagation();
+                                                                                        if (playingMessageId === trueIndex) handleStopSpeech();
+                                                                                        else handleSpeak(trueIndex, cleanAnswer);
+                                                                                    }}
+                                                                                    className="ml-2 mb-1 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all opacity-40 hover:opacity-100 data-[active=true]:opacity-100 shrink-0"
+                                                                                    data-active={playingMessageId === trueIndex || loadingMessageId === trueIndex}
+                                                                                    title={playingMessageId === trueIndex ? "Stop Speaking" : "Read Aloud"}
+                                                                                >
+                                                                                    {loadingMessageId === trueIndex ? (
+                                                                                        <Loader2 size={14} className="animate-spin" />
+                                                                                    ) : playingMessageId === trueIndex ? (
+                                                                                        <div className="relative">
+                                                                                            <Volume2 size={14} className="text-gray-600" />
+                                                                                            <span className="absolute -inset-1 rounded-full bg-gray-400/20 animate-ping" />
+                                                                                        </div>
+                                                                                    ) : (
+                                                                                        <Volume2 size={14} />
+                                                                                    )}
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
+                                                                    )}
+                                                                    {/* User message: show attachment chips below the bubble (from msg.files or parsed from content after reload) */}
+                                                                    {!isBot && displayFiles && displayFiles.length > 0 && (
+                                                                        <div className="flex gap-2 flex-wrap mt-1 justify-end">
+                                                                            {displayFiles.map((f, idx) => (
+                                                                                <div key={idx} className="flex items-center gap-1.5 bg-gray-100 rounded-lg px-2.5 py-1 text-xs text-gray-600">
+                                                                                    <Paperclip size={12} className="shrink-0 text-gray-400" />
+                                                                                    <span className="truncate max-w-[140px]">{f.name}</span>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+                                                                    {/* User message: indicator that Document Viewer had attachments when this was sent (only when viewer is closed) */}
+                                                                    {!isBot && !documentViewerState.isOpen && msg.sidebarDocs && msg.sidebarDocs.length > 0 && (
+                                                                        <div className="flex gap-1.5 flex-wrap mt-1 justify-end items-center">
+                                                                            <span className="text-[10px] text-gray-400">Anhänge:</span>
+                                                                            {msg.sidebarDocs.slice(0, 3).map((name, idx) => (
+                                                                                <span
+                                                                                    key={idx}
+                                                                                    className="inline-flex items-center gap-1 bg-gray-100/80 rounded px-2 py-0.5 text-[10px] text-gray-500 truncate max-w-[120px]"
+                                                                                    title={name}
+                                                                                >
+                                                                                    {name.length > 10 ? `${name.slice(0, 10)}…` : name}
+                                                                                </span>
+                                                                            ))}
+                                                                            {msg.sidebarDocs.length > 3 && (
+                                                                                <span className="text-[10px] text-gray-400">+{msg.sidebarDocs.length - 3}</span>
+                                                                            )}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+
+                                                            {/* Unauffällige Uhrzeit unter der Blase (Messenger-Stil) */}
+                                                            {(msg.role === 'user' || msg.role === 'assistant') && (
+                                                                <div className={cn("w-full mt-0.5", isBot ? "text-left" : "text-right")}>
+                                                                    <span className="text-[10px] text-gray-400" title={new Date(msg.timestamp).toLocaleString('de-DE')}>{formatMessageTime(msg.timestamp)}</span>
+                                                                </div>
+                                                            )}
+                                                            {/* Show status steps below the active message if streaming */}
+                                                            {loading && isBot && i === filteredMessages.length - 1 && statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && (
+                                                                <span className="text-[10px] text-gray-400 mt-1 ml-1 animate-in fade-in">{statusMessage}</span>
+                                                            )}
+                                                        </>
+                                                    );
+
+                                                    return (
+                                                        <div key={`bubble-${trueIndex}`} className={cn("flex gap-4 pt-4", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
+                                                            {isBot ? (
+                                                                <div className="w-full max-w-[85%] flex gap-4">
+                                                                    <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
+                                                                    <div className="flex flex-col flex-1 min-w-0 items-start">
+                                                                        {bubbleContent}
+                                                                    </div>
+                                                                </div>
+                                                            ) : (
+                                                                <>
+                                                                    <div className={cn("flex flex-col", "max-w-[72%] items-end shrink-0")}>
+                                                                        {bubbleContent}
+                                                                    </div>
+                                                                    <div className="w-9 h-9 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-gray-500 shadow-sm shrink-0"><User size={18} /></div>
+                                                                </>
+                                                            )}
                                                         </div>
                                                     );
-                                                }
+                                                })()}
+                                            </Fragment>
+                                        );
+                                    });
+                                })()}
 
-                                // Render Tool Messages
-                                if (msg.role === 'tool') {
-                                    const toolLower = (msg.toolName || '').toLowerCase();
-                                    const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding)_agent(?:$|[^a-z])/.test(toolLower);
-                                    return (
-                                        <ToolMessage
-                                            key={`tool-${trueIndex}`}
-                                            id={msg.toolId || `tool-${trueIndex}`}
-                                            name={msg.toolName || 'Unknown Tool'}
-                                            status={msg.toolStatus || 'completed'}
-                                            result={msg.content}
-                                            args={msg.toolArgs}
-                                            startTime={msg.toolStartTime}
-                                            endTime={msg.toolEndTime}
-                                            onToggleScroll={preserveChatScroll}
-                                            onToggle={isSubAgentTool ? (nextExpanded) => {
-                                                if (nextExpanded) {
-                                                    openSubAgentWindow(true);
-                                                } else {
-                                                    closeSubAgentWindow(true);
-                                                }
-                                            } : undefined}
-                                        />
-                                    );
-                                }
-
-                                // Render Workflow Messages
-                                if (msg.role === 'workflow') {
-                                    return (
-                                        <div key={`workflow-${trueIndex}`} className="flex justify-center gap-4 pt-4">
-                                            <div className="flex gap-4 max-w-[85%] w-full items-start">
-                                                <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
-                                                <WorkflowChatElement
-                                                    workflowId={msg.workflowId || ""}
-                                                    name={msg.workflowName || "Workflow"}
-                                                    initialSteps={msg.initialSteps}
-                                                />
+                                {loading && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
+                                    <div className="flex gap-4 items-center justify-center animate-pulse pt-4">
+                                        <div className="w-9 h-9 rounded-xl bg-gray-200 flex items-center justify-center text-gray-400"><Bot size={18} /></div>
+                                        <div className="flex flex-col gap-1">
+                                            <div className="bg-gray-100 px-4 py-2 rounded-2xl rounded-tl-none w-fit flex gap-1">
+                                                <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
+                                                <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
+                                                <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150"></span>
                                             </div>
+                                            {statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && <span className="text-[10px] text-gray-400 ml-2">{statusMessage}</span>}
                                         </div>
-                                    );
-                                }
-
-                                const { thought, answer, isThinkingComplete } = parseContent(msg.content);
-                                const isBot = msg.role === 'assistant';
-                                const isLastMessage = i === filteredMessages.length - 1;
-                                // Simple: thinking is done when the </think> tag is found (isThinkingComplete)
-                                // For non-last messages, always treat as complete
-                                const thinkingDone = !isLastMessage || isThinkingComplete;
-                                // For user messages: don't show attachment content in bubble (strip --- FILE: ... --- blocks); keep chips from msg.files or parsed from content after reload
-                                const attachmentStripped = !isBot ? stripAttachmentBlocks(msg.content) : null;
-                                const displayAnswer = !isBot && attachmentStripped ? attachmentStripped.text : answer;
-                                const displayFiles = !isBot && (msg.files?.length ? msg.files : (attachmentStripped?.fileNames.length ? attachmentStripped.fileNames.map(name => ({ name, mimeType: '' })) : undefined));
-
-                                // Add top margin if following a system step
-                                const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
-
-                                const bubbleContent = (
-                                                <>
-                                            {isBot && thought && <ThinkingDetails thought={thought} isComplete={thinkingDone} />}
-
-                                            {/* Show answer bubble: always for user, for bot if there's an answer OR if there's no thought (fallback) */}
-                                                    {(displayAnswer || !isBot || (isBot && !thought)) && (
-                                                <div className="flex flex-col gap-3 w-full">
-                                                    {isBot && parseWorkflowAsync(answer) ? (() => {
-                                                        const wf = parseWorkflowAsync(answer)!;
-                                                        return (
-                                                            <>
-                                                                <WorkflowChatElement
-                                                                    workflowId={wf.workflowId}
-                                                                    name={wf.name}
-                                                                    initialSteps={4}
-                                                                />
-                                                                {wf.rest ? (
-                                                                    <div className="relative group flex items-end">
-                                                                        <div className="px-5 py-3 rounded-2xl shadow-sm text-[15px] leading-relaxed bg-white text-gray-800 rounded-tl-none border border-transparent">
-                                                                            <div className="chat-markdown"><ChatMarkdown>{wf.rest}</ChatMarkdown></div>
-                                                                        </div>
-                                                                        <button
-                                                                            onClick={(e) => {
-                                                                                e.stopPropagation();
-                                                                                if (playingMessageId === trueIndex) handleStopSpeech();
-                                                                                else handleSpeak(trueIndex, wf.rest);
-                                                                            }}
-                                                                            className="ml-2 mb-1 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all opacity-40 hover:opacity-100 data-[active=true]:opacity-100 shrink-0"
-                                                                            data-active={playingMessageId === trueIndex || loadingMessageId === trueIndex}
-                                                                            title={playingMessageId === trueIndex ? "Stop Speaking" : "Read Aloud"}
-                                                                        >
-                                                                            {loadingMessageId === trueIndex ? <Loader2 size={14} className="animate-spin" /> : playingMessageId === trueIndex ? (
-                                                                                <div className="relative"><Volume2 size={14} className="text-gray-600" /><span className="absolute -inset-1 rounded-full bg-gray-400/20 animate-ping" /></div>
-                                                                            ) : <Volume2 size={14} />}
-                                                                        </button>
-                                                                    </div>
-                                                                ) : null}
-                                                            </>
-                                                        );
-                                                    })() : (
-                                                        <div className="relative group flex items-end">
-                                                            <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-[15px] leading-relaxed",
-                                                                isBot ? "bg-white text-gray-800 rounded-tl-none border border-transparent" : "bg-gray-800 text-white rounded-tr-none")}>
-                                                                <div className="chat-markdown"><ChatMarkdown dark={!isBot}>{isBot ? answer : displayAnswer}</ChatMarkdown></div>
-                                                            </div>
-                                                            {isBot && (
-                                                                <button
-                                                                    onClick={(e) => {
-                                                                        e.stopPropagation();
-                                                                        if (playingMessageId === trueIndex) handleStopSpeech();
-                                                                        else handleSpeak(trueIndex, answer);
-                                                                    }}
-                                                                    className="ml-2 mb-1 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all opacity-40 hover:opacity-100 data-[active=true]:opacity-100 shrink-0"
-                                                                    data-active={playingMessageId === trueIndex || loadingMessageId === trueIndex}
-                                                                    title={playingMessageId === trueIndex ? "Stop Speaking" : "Read Aloud"}
-                                                                >
-                                                                    {loadingMessageId === trueIndex ? (
-                                                                        <Loader2 size={14} className="animate-spin" />
-                                                                    ) : playingMessageId === trueIndex ? (
-                                                                        <div className="relative">
-                                                                            <Volume2 size={14} className="text-gray-600" />
-                                                                            <span className="absolute -inset-1 rounded-full bg-gray-400/20 animate-ping" />
-                                                                        </div>
-                                                                    ) : (
-                                                                        <Volume2 size={14} />
-                                                                    )}
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    )}
-                                                    {/* User message: show attachment chips below the bubble (from msg.files or parsed from content after reload) */}
-                                                    {!isBot && displayFiles && displayFiles.length > 0 && (
-                                                        <div className="flex gap-2 flex-wrap mt-1 justify-end">
-                                                            {displayFiles.map((f, idx) => (
-                                                                <div key={idx} className="flex items-center gap-1.5 bg-gray-100 rounded-lg px-2.5 py-1 text-xs text-gray-600">
-                                                                    <Paperclip size={12} className="shrink-0 text-gray-400" />
-                                                                    <span className="truncate max-w-[140px]">{f.name}</span>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                    {/* User message: indicator that Document Viewer had attachments when this was sent (only when viewer is closed) */}
-                                                    {!isBot && !documentViewerState.isOpen && msg.sidebarDocs && msg.sidebarDocs.length > 0 && (
-                                                        <div className="flex gap-1.5 flex-wrap mt-1 justify-end items-center">
-                                                            <span className="text-[10px] text-gray-400">Anhänge:</span>
-                                                            {msg.sidebarDocs.slice(0, 3).map((name, idx) => (
-                                                                <span
-                                                                    key={idx}
-                                                                    className="inline-flex items-center gap-1 bg-gray-100/80 rounded px-2 py-0.5 text-[10px] text-gray-500 truncate max-w-[120px]"
-                                                                    title={name}
-                                                                >
-                                                                    {name.length > 10 ? `${name.slice(0, 10)}…` : name}
-                                                                </span>
-                                                            ))}
-                                                            {msg.sidebarDocs.length > 3 && (
-                                                                <span className="text-[10px] text-gray-400">+{msg.sidebarDocs.length - 3}</span>
-                                                            )}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {/* Unauffällige Uhrzeit unter der Blase (Messenger-Stil) */}
-                                            {(msg.role === 'user' || msg.role === 'assistant') && (
-                                                <div className={cn("w-full mt-0.5", isBot ? "text-left" : "text-right")}>
-                                                    <span className="text-[10px] text-gray-400" title={new Date(msg.timestamp).toLocaleString('de-DE')}>{formatMessageTime(msg.timestamp)}</span>
-                                                </div>
-                                            )}
-                                            {/* Show status steps below the active message if streaming */}
-                                            {loading && isBot && i === filteredMessages.length - 1 && statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && (
-                                                <span className="text-[10px] text-gray-400 mt-1 ml-1 animate-in fade-in">{statusMessage}</span>
-                                            )}
-                                                </>
-                                            );
-
-                                return (
-                                    <div key={`bubble-${trueIndex}`} className={cn("flex gap-4 pt-4", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
-                                        {isBot ? (
-                                            <div className="w-full max-w-[85%] flex gap-4">
-                                                <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
-                                                <div className="flex flex-col flex-1 min-w-0 items-start">
-                                                    {bubbleContent}
-                                                </div>
-                                            </div>
-                                        ) : (
-                                            <>
-                                                <div className={cn("flex flex-col", "max-w-[72%] items-end shrink-0")}>
-                                                    {bubbleContent}
-                                                </div>
-                                                <div className="w-9 h-9 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-gray-500 shadow-sm shrink-0"><User size={18} /></div>
-                                            </>
-                                        )}
                                     </div>
-                                );
-                                            })()}
-                                        </Fragment>
-                                    );
-                                });
-                            })()}
+                                )}
 
-                            {loading && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
-                                <div className="flex gap-4 items-center justify-center animate-pulse pt-4">
-                                    <div className="w-9 h-9 rounded-xl bg-gray-200 flex items-center justify-center text-gray-400"><Bot size={18} /></div>
-                                    <div className="flex flex-col gap-1">
-                                        <div className="bg-gray-100 px-4 py-2 rounded-2xl rounded-tl-none w-fit flex gap-1">
-                                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
-                                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
-                                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150"></span>
-                                        </div>
-                                        {statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && <span className="text-[10px] text-gray-400 ml-2">{statusMessage}</span>}
-                                    </div>
-                                </div>
-                            )}
+                                {/* Active Tools Panel Removed (Now Inline) */}
 
-                            {/* Active Tools Panel Removed (Now Inline) */}
-
-                            <div ref={scrollRef} />
+                                <div ref={scrollRef} />
+                            </div>
                         </div>
-                    </div>
 
                         <div
                             className={cn(
@@ -2911,188 +2924,188 @@ export default function VAFDashboard() {
                                         <p className="text-gray-400 mt-1 text-sm">Start a conversation or choose a workflow</p>
                                     </div>
                                 )}
-                        {/* Suggestions Popup - Fixed centered, with arrow key navigation */}
-                        {suggestionList.length > 0 && (
-                            <div
-                                className="fixed left-1/2 -translate-x-1/2 w-80 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden z-[9999]"
-                                style={{ bottom: '120px' }}
-                            >
-                                <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider flex justify-between">
-                                    <span>{suggestionType === 'tool' ? 'Tools' : 'Workflows'}</span>
-                                    <span className="text-gray-300">↑↓ Navigate · Enter Select</span>
-                                </div>
-                                <div className="max-h-64 overflow-y-auto" ref={suggestionListRef}>
-                                    {suggestionList.map((item, idx) => (
-                                        <div
-                                            key={idx}
-                                            className={cn(
-                                                "px-4 py-3 cursor-pointer flex items-center gap-3 transition-colors border-b border-gray-50 last:border-0",
-                                                idx === selectedSuggestionIndex
-                                                    ? "bg-gray-900 text-white"
-                                                    : "hover:bg-gray-100 text-gray-700"
-                                            )}
-                                            onClick={() => handleSuggestionClick(item)}
-                                            onMouseEnter={() => setSelectedSuggestionIndex(idx)}
-                                        >
-                                            <div className={cn(
-                                                "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200",
-                                                suggestionType === 'tool' ? "bg-orange-100 text-orange-600" : "bg-gray-100 text-gray-600",
-                                                idx === selectedSuggestionIndex && (
-                                                    suggestionType === 'tool' 
-                                                        ? "shadow-[0_0_12px_rgba(249,115,22,0.5)] scale-105" 
-                                                        : "shadow-[0_0_12px_rgba(59,130,246,0.5)] scale-105"
-                                                )
-                                            )}>
-                                                {suggestionType === 'tool' ? <Wrench size={16}/> : <Workflow size={16}/>}
-                                            </div>
-                                            <div className="flex flex-col min-w-0">
-                                                <span className="text-sm font-medium truncate">{item.name || item.id}</span>
-                                                {item.description && <span className={cn("text-xs truncate", idx === selectedSuggestionIndex ? "text-gray-400" : "text-gray-400")}>{item.description}</span>}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Memory Learning Banner */}
-                        {memoryLearning && (
-                            <div className={cn(chatWidthClass, "mx-auto mb-2")}>
-                                <div className={cn(
-                                    "flex items-center gap-2 px-4 py-2 rounded-xl border shadow-sm transition-all animate-in fade-in slide-in-from-bottom-2",
-                                    memoryLearning.active
-                                        ? "bg-violet-50 border-violet-300 text-violet-700"
-                                        : "bg-green-50 border-green-300 text-green-700"
-                                )}>
-                                    {memoryLearning.active ? (
-                                        <div className="w-4 h-4 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-                                    ) : (
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                        </svg>
-                                    )}
-                                    <span className="text-sm font-medium">{memoryLearning.message}</span>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Token Stats (Clickable) */}
-                        <div className={cn(chatWidthClass, "mx-auto mb-1 flex justify-end min-h-[16px]")}>
-                            {contextStats && (
-                                <span
-                                    className="text-[10px] sm:text-xs font-mono text-gray-400 opacity-80 select-none cursor-pointer hover:text-black hover:opacity-100 transition-all"
-                                    onClick={() => setIsContextModalOpen(true)}
-                                >
-                                    Tokens:
-                                    <span className="mx-1 tracking-tighter">
-                                        {"●".repeat(Math.min(10, Math.max(0, Math.round(contextStats.percent / 10))))}
-                                        {"○".repeat(Math.max(0, 10 - Math.min(10, Math.max(0, Math.round(contextStats.percent / 10)))))}
-                                    </span>
-                                    {Math.round(contextStats.percent)}% ({contextStats.tokens.toLocaleString()}/{contextStats.max_tokens.toLocaleString()})
-                                </span>
-                            )}
-                        </div>
-
-                        {/* Stop button left of message box — fixed-width slot so message box doesn't shrink when button appears */}
-                        <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
-                            <div className="w-9 shrink-0 flex items-center justify-center">
-                                {loading && (
-                                    <button
-                                        type="button"
-                                        onClick={stopGeneration}
-                                        title="Stop"
-                                        className="p-2 rounded-full bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-all shadow-md flex items-center justify-center animate-in fade-in slide-in-from-bottom-2"
+                                {/* Suggestions Popup - Fixed centered, with arrow key navigation */}
+                                {suggestionList.length > 0 && (
+                                    <div
+                                        className="fixed left-1/2 -translate-x-1/2 w-80 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden z-[9999]"
+                                        style={{ bottom: '120px' }}
                                     >
-                                        <Square size={12} fill="currentColor" />
-                                    </button>
-                                )}
-                            </div>
-                            <form onSubmit={sendMessage} className="flex-1 min-w-0 flex items-end bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden">
-                            <input
-                                type="file"
-                                ref={fileInputRef}
-                                onChange={handleFileSelect}
-                                className="hidden"
-                                multiple
-                                accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv"
-                            />
-                            <button
-                                type="button"
-                                onClick={() => fileInputRef.current?.click()}
-                                className={cn(
-                                    "p-4 transition-colors",
-                                    documentViewerState.isOpen ? "text-blue-600" : "text-gray-400 hover:text-gray-900"
-                                )}
-                                title="Anhänge (Document Viewer) – bleiben im Kontext, solange die Leiste offen ist"
-                            >
-                                <Paperclip size={20} />
-                            </button>
-                            <div className="flex-1 relative flex flex-col min-w-0">
-                                {insertedSelections.length > 0 && (
-                                    <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2 pb-1 border-b border-gray-100">
-                                        {insertedSelections.map((s, i) => (
-                                            <button
-                                                key={i}
-                                                type="button"
-                                                onClick={() => setInsertedSelections(prev => prev.filter((_, idx) => idx !== i))}
-                                                className={cn(
-                                                    'max-w-[200px] truncate text-xs rounded px-2 py-0.5 transition-colors',
-                                                    CHIP_BG_CLASSES[i % CHIP_BG_CLASSES.length],
-                                                    'hover:bg-red-500 hover:text-white'
-                                                )}
-                                                title={`${s.text}\nKlicken zum Entfernen`}
-                                            >
-                                                &quot;{s.text.slice(0, 30)}{s.text.length > 30 ? '…' : ''}&quot;
-                                            </button>
-                                        ))}
+                                        <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider flex justify-between">
+                                            <span>{suggestionType === 'tool' ? 'Tools' : 'Workflows'}</span>
+                                            <span className="text-gray-300">↑↓ Navigate · Enter Select</span>
+                                        </div>
+                                        <div className="max-h-64 overflow-y-auto" ref={suggestionListRef}>
+                                            {suggestionList.map((item, idx) => (
+                                                <div
+                                                    key={idx}
+                                                    className={cn(
+                                                        "px-4 py-3 cursor-pointer flex items-center gap-3 transition-colors border-b border-gray-50 last:border-0",
+                                                        idx === selectedSuggestionIndex
+                                                            ? "bg-gray-900 text-white"
+                                                            : "hover:bg-gray-100 text-gray-700"
+                                                    )}
+                                                    onClick={() => handleSuggestionClick(item)}
+                                                    onMouseEnter={() => setSelectedSuggestionIndex(idx)}
+                                                >
+                                                    <div className={cn(
+                                                        "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200",
+                                                        suggestionType === 'tool' ? "bg-orange-100 text-orange-600" : "bg-gray-100 text-gray-600",
+                                                        idx === selectedSuggestionIndex && (
+                                                            suggestionType === 'tool'
+                                                                ? "shadow-[0_0_12px_rgba(249,115,22,0.5)] scale-105"
+                                                                : "shadow-[0_0_12px_rgba(59,130,246,0.5)] scale-105"
+                                                        )
+                                                    )}>
+                                                        {suggestionType === 'tool' ? <Wrench size={16} /> : <Workflow size={16} />}
+                                                    </div>
+                                                    <div className="flex flex-col min-w-0">
+                                                        <span className="text-sm font-medium truncate">{item.name || item.id}</span>
+                                                        {item.description && <span className={cn("text-xs truncate", idx === selectedSuggestionIndex ? "text-gray-400" : "text-gray-400")}>{item.description}</span>}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                 )}
-                                <div className="relative flex items-end flex-1 min-h-0">
-                                <div className="absolute inset-0 py-4 px-1 pointer-events-none text-sm text-gray-400 whitespace-pre overflow-hidden">
-                                    <span className="text-transparent">{input}</span>
-                                    {suggestion}
+
+                                {/* Memory Learning Banner */}
+                                {memoryLearning && (
+                                    <div className={cn(chatWidthClass, "mx-auto mb-2")}>
+                                        <div className={cn(
+                                            "flex items-center gap-2 px-4 py-2 rounded-xl border shadow-sm transition-all animate-in fade-in slide-in-from-bottom-2",
+                                            memoryLearning.active
+                                                ? "bg-violet-50 border-violet-300 text-violet-700"
+                                                : "bg-green-50 border-green-300 text-green-700"
+                                        )}>
+                                            {memoryLearning.active ? (
+                                                <div className="w-4 h-4 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                                            ) : (
+                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                </svg>
+                                            )}
+                                            <span className="text-sm font-medium">{memoryLearning.message}</span>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Token Stats (Clickable) */}
+                                <div className={cn(chatWidthClass, "mx-auto mb-1 flex justify-end min-h-[16px]")}>
+                                    {contextStats && (
+                                        <span
+                                            className="text-[10px] sm:text-xs font-mono text-gray-400 opacity-80 select-none cursor-pointer hover:text-black hover:opacity-100 transition-all"
+                                            onClick={() => setIsContextModalOpen(true)}
+                                        >
+                                            Tokens:
+                                            <span className="mx-1 tracking-tighter">
+                                                {"●".repeat(Math.min(10, Math.max(0, Math.round(contextStats.percent / 10))))}
+                                                {"○".repeat(Math.max(0, 10 - Math.min(10, Math.max(0, Math.round(contextStats.percent / 10)))))}
+                                            </span>
+                                            {Math.round(contextStats.percent)}% ({contextStats.tokens.toLocaleString()}/{contextStats.max_tokens.toLocaleString()})
+                                        </span>
+                                    )}
                                 </div>
-                                <textarea
-                                    ref={inputRef}
-                                    rows={1}
-                                    value={input}
-                                    onChange={handleInputChange}
-                                    onKeyDown={handleKeyDown}
-                                    placeholder={input ? "" : "Ask anything..."}
-                                    className="w-full min-h-[2.5rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
-                                    disabled={loading}
-                                />
+
+                                {/* Stop button left of message box — fixed-width slot so message box doesn't shrink when button appears */}
+                                <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
+                                    <div className="w-9 shrink-0 flex items-center justify-center">
+                                        {loading && (
+                                            <button
+                                                type="button"
+                                                onClick={stopGeneration}
+                                                title="Stop"
+                                                className="p-2 rounded-full bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-all shadow-md flex items-center justify-center animate-in fade-in slide-in-from-bottom-2"
+                                            >
+                                                <Square size={12} fill="currentColor" />
+                                            </button>
+                                        )}
+                                    </div>
+                                    <form onSubmit={sendMessage} className="flex-1 min-w-0 flex items-end bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden">
+                                        <input
+                                            type="file"
+                                            ref={fileInputRef}
+                                            onChange={handleFileSelect}
+                                            className="hidden"
+                                            multiple
+                                            accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => fileInputRef.current?.click()}
+                                            className={cn(
+                                                "p-4 transition-colors",
+                                                documentViewerState.isOpen ? "text-blue-600" : "text-gray-400 hover:text-gray-900"
+                                            )}
+                                            title="Anhänge (Document Viewer) – bleiben im Kontext, solange die Leiste offen ist"
+                                        >
+                                            <Paperclip size={20} />
+                                        </button>
+                                        <div className="flex-1 relative flex flex-col min-w-0">
+                                            {insertedSelections.length > 0 && (
+                                                <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2 pb-1 border-b border-gray-100">
+                                                    {insertedSelections.map((s, i) => (
+                                                        <button
+                                                            key={i}
+                                                            type="button"
+                                                            onClick={() => setInsertedSelections(prev => prev.filter((_, idx) => idx !== i))}
+                                                            className={cn(
+                                                                'max-w-[200px] truncate text-xs rounded px-2 py-0.5 transition-colors',
+                                                                CHIP_BG_CLASSES[i % CHIP_BG_CLASSES.length],
+                                                                'hover:bg-red-500 hover:text-white'
+                                                            )}
+                                                            title={`${s.text}\nKlicken zum Entfernen`}
+                                                        >
+                                                            &quot;{s.text.slice(0, 30)}{s.text.length > 30 ? '…' : ''}&quot;
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            <div className="relative flex items-end flex-1 min-h-0">
+                                                <div className="absolute inset-0 py-4 px-1 pointer-events-none text-sm text-gray-400 whitespace-pre overflow-hidden">
+                                                    <span className="text-transparent">{input}</span>
+                                                    {suggestion}
+                                                </div>
+                                                <textarea
+                                                    ref={inputRef}
+                                                    rows={1}
+                                                    value={input}
+                                                    onChange={handleInputChange}
+                                                    onKeyDown={handleKeyDown}
+                                                    placeholder={input ? "" : "Ask anything..."}
+                                                    className="w-full min-h-[2.5rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
+                                                    disabled={loading}
+                                                />
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={isRecording ? stopRecording : startRecording}
+                                            disabled={isProcessingAudio || loading}
+                                            className={cn(
+                                                "m-2 p-2 rounded-xl transition-all shadow-sm",
+                                                isRecording ? "bg-red-500 text-white" :
+                                                    isProcessingAudio ? "bg-gray-300 text-gray-500" :
+                                                        "bg-gray-900 text-white hover:bg-black disabled:bg-gray-200"
+                                            )}
+                                            style={{
+                                                boxShadow: isRecording ? `0 0 0 ${Math.min(volume / 5, 15)}px rgba(239, 68, 68, 0.4)` : 'none',
+                                                transition: 'box-shadow 0.05s ease-out'
+                                            }}
+                                            title={isRecording ? "Stop recording (Auto-stop active)" : isProcessingAudio ? "Processing..." : "Voice input"}
+                                        >
+                                            {isProcessingAudio ? (
+                                                <Loader2 size={18} className="mx-2 animate-spin" />
+                                            ) : isRecording ? (
+                                                <MicOff size={18} className="mx-2" />
+                                            ) : (
+                                                <Mic size={18} className="mx-2" />
+                                            )}
+                                        </button>
+                                    </form>
                                 </div>
                             </div>
-                            <button
-                                type="button"
-                                onClick={isRecording ? stopRecording : startRecording}
-                                disabled={isProcessingAudio || loading}
-                                className={cn(
-                                    "m-2 p-2 rounded-xl transition-all shadow-sm",
-                                    isRecording ? "bg-red-500 text-white" :
-                                        isProcessingAudio ? "bg-gray-300 text-gray-500" :
-                                            "bg-gray-900 text-white hover:bg-black disabled:bg-gray-200"
-                                )}
-                                style={{
-                                    boxShadow: isRecording ? `0 0 0 ${Math.min(volume / 5, 15)}px rgba(239, 68, 68, 0.4)` : 'none',
-                                    transition: 'box-shadow 0.05s ease-out'
-                                }}
-                                title={isRecording ? "Stop recording (Auto-stop active)" : isProcessingAudio ? "Processing..." : "Voice input"}
-                            >
-                                {isProcessingAudio ? (
-                                    <Loader2 size={18} className="mx-2 animate-spin" />
-                                ) : isRecording ? (
-                                    <MicOff size={18} className="mx-2" />
-                                ) : (
-                                    <Mic size={18} className="mx-2" />
-                                )}
-                            </button>
-                        </form>
                         </div>
-                            </div>
                     </div>
-                </div>
                     {/* Right Panel: DocumentViewer, DocumentEditor, or SubAgentWindow (dock mode) */}
                     {showSubAgentPanel && (
                         <div
@@ -3272,143 +3285,143 @@ export default function VAFDashboard() {
 
                             {/* Diagram - Right side */}
                             <div className="flex-1 flex flex-col min-h-0">
-                            {(() => {
-                                // 1. Calculate Data - USE BACKEND VALUES (not frontend estimates!)
-                                const totalCap = contextStats.max_tokens;
-                                const used = contextStats.tokens;
+                                {(() => {
+                                    // 1. Calculate Data - USE BACKEND VALUES (not frontend estimates!)
+                                    const totalCap = contextStats.max_tokens;
+                                    const used = contextStats.tokens;
 
-                                // Use real backend token counts if available, fallback to estimates
-                                const systemEst = contextStats.system_tokens ?? Math.round(used * 0.3);
-                                const historyEst = contextStats.history_tokens ?? Math.round(used * 0.5);
-                                const toolsEst = contextStats.tools_tokens ?? Math.round(used * 0.2);
-                                const freeEst = totalCap - used;
+                                    // Use real backend token counts if available, fallback to estimates
+                                    const systemEst = contextStats.system_tokens ?? Math.round(used * 0.3);
+                                    const historyEst = contextStats.history_tokens ?? Math.round(used * 0.5);
+                                    const toolsEst = contextStats.tools_tokens ?? Math.round(used * 0.2);
+                                    const freeEst = totalCap - used;
 
-                                // 2. Layout Configuration
-                                const w = 800;
-                                const h = 500;
-                                const pad = 20;
-                                const nodeW = 20;
-                                const leftX = pad;
-                                const rightX = w - pad - nodeW;
-                                const gap = 30;
+                                    // 2. Layout Configuration
+                                    const w = 800;
+                                    const h = 500;
+                                    const pad = 20;
+                                    const nodeW = 20;
+                                    const leftX = pad;
+                                    const rightX = w - pad - nodeW;
+                                    const gap = 30;
 
-                                // 3. Scale Factor (map tokens to pixels)
-                                // Available height for left nodes (minus gaps)
-                                const totalAvailableH = h - (pad * 2);
-                                // We map 'totalCap' to 'totalAvailableH' to keep scale consistent
-                                const scale = totalAvailableH / totalCap;
+                                    // 3. Scale Factor (map tokens to pixels)
+                                    // Available height for left nodes (minus gaps)
+                                    const totalAvailableH = h - (pad * 2);
+                                    // We map 'totalCap' to 'totalAvailableH' to keep scale consistent
+                                    const scale = totalAvailableH / totalCap;
 
-                                // 4. Calculate Node Heights & Positions
-                                // Left Nodes (Source) - We stack them with gaps, but scale them correctly
-                                // Note: "RAG" node now shows Tools tokens (since RAG is part of System)
-                                const hSystem = Math.max(2, systemEst * scale);
-                                const hTools = Math.max(2, toolsEst * scale);  // Tools instead of RAG
-                                const hHistory = Math.max(2, historyEst * scale);
+                                    // 4. Calculate Node Heights & Positions
+                                    // Left Nodes (Source) - We stack them with gaps, but scale them correctly
+                                    // Note: "RAG" node now shows Tools tokens (since RAG is part of System)
+                                    const hSystem = Math.max(2, systemEst * scale);
+                                    const hTools = Math.max(2, toolsEst * scale);  // Tools instead of RAG
+                                    const hHistory = Math.max(2, historyEst * scale);
 
-                                // Center the source group vertically
-                                const totalLeftH = hSystem + hTools + hHistory + (2 * gap);
-                                let currentY = (h - totalLeftH) / 2;
+                                    // Center the source group vertically
+                                    const totalLeftH = hSystem + hTools + hHistory + (2 * gap);
+                                    let currentY = (h - totalLeftH) / 2;
 
-                                const ySystem = currentY;
-                                currentY += hSystem + gap;
-                                const yTools = currentY;  // Renamed from yRag
-                                currentY += hTools + gap;
-                                const yHistory = currentY;
+                                    const ySystem = currentY;
+                                    currentY += hSystem + gap;
+                                    const yTools = currentY;  // Renamed from yRag
+                                    currentY += hTools + gap;
+                                    const yHistory = currentY;
 
-                                // Right Nodes (Target) - Stacked without gaps (it's one memory block)
-                                const hUsed = used * scale;
-                                const hFree = freeEst * scale;
-                                const totalRightH = hUsed + hFree;
-                                const yRightStart = (h - totalRightH) / 2;
-                                
-                                const yUsed = yRightStart;
-                                const yFree = yUsed + hUsed;
+                                    // Right Nodes (Target) - Stacked without gaps (it's one memory block)
+                                    const hUsed = used * scale;
+                                    const hFree = freeEst * scale;
+                                    const totalRightH = hUsed + hFree;
+                                    const yRightStart = (h - totalRightH) / 2;
 
-                                // Target Offsets for Flow (where the ribbon lands on the right bar)
-                                // They stack up exactly on the right side
-                                const yTargetSystem = yUsed;
-                                const yTargetRag = yTargetSystem + hSystem; // Simplified: usually calculated by exact proportion
-                                // Recalculate target heights based on exact left heights to ensure perfect alignment
-                                // Actually, 'used' on right might slightly differ from sum(left) due to estimates.
-                                // For visual coherence, we force the Right Used Bar to match the sum of inputs visually here.
-                                
-                                // Better approach for flow:
-                                // Map Left Height -> Target Height directly
-                                
-                                // 5. Path Generator (Bezier Ribbon) - Non-interactive
-                                const makeRibbon = (yLeft: number, hLeft: number, yRight: number, color: string) => {
-                                    const c1x = leftX + nodeW + 150;
-                                    const c2x = rightX - 150;
+                                    const yUsed = yRightStart;
+                                    const yFree = yUsed + hUsed;
 
-                                    const p1 = `M ${leftX + nodeW} ${yLeft}`;
-                                    const c1 = `C ${c1x} ${yLeft}, ${c2x} ${yRight}, ${rightX} ${yRight}`;
-                                    const l1 = `L ${rightX} ${yRight + hLeft}`;
-                                    const c2 = `C ${c2x} ${yRight + hLeft}, ${c1x} ${yLeft + hLeft}, ${leftX + nodeW} ${yLeft + hLeft}`;
-                                    const z = `Z`;
+                                    // Target Offsets for Flow (where the ribbon lands on the right bar)
+                                    // They stack up exactly on the right side
+                                    const yTargetSystem = yUsed;
+                                    const yTargetRag = yTargetSystem + hSystem; // Simplified: usually calculated by exact proportion
+                                    // Recalculate target heights based on exact left heights to ensure perfect alignment
+                                    // Actually, 'used' on right might slightly differ from sum(left) due to estimates.
+                                    // For visual coherence, we force the Right Used Bar to match the sum of inputs visually here.
 
-                                    return (
-                                        <path
-                                            d={`${p1} ${c1} ${l1} ${c2} ${z}`}
-                                            fill={color}
-                                            opacity={0.35}
-                                            className="transition-all duration-300"
-                                        />
-                                    );
-                                };
+                                    // Better approach for flow:
+                                    // Map Left Height -> Target Height directly
 
-                                // Node renderer - Non-interactive
-                                const makeNode = (x: number, y: number, w: number, h: number, color: string, label: string, sub: string) => {
-                                    return (
-                                        <g>
-                                            <rect x={x} y={y} width={w} height={h} fill={color} rx="4" />
+                                    // 5. Path Generator (Bezier Ribbon) - Non-interactive
+                                    const makeRibbon = (yLeft: number, hLeft: number, yRight: number, color: string) => {
+                                        const c1x = leftX + nodeW + 150;
+                                        const c2x = rightX - 150;
+
+                                        const p1 = `M ${leftX + nodeW} ${yLeft}`;
+                                        const c1 = `C ${c1x} ${yLeft}, ${c2x} ${yRight}, ${rightX} ${yRight}`;
+                                        const l1 = `L ${rightX} ${yRight + hLeft}`;
+                                        const c2 = `C ${c2x} ${yRight + hLeft}, ${c1x} ${yLeft + hLeft}, ${leftX + nodeW} ${yLeft + hLeft}`;
+                                        const z = `Z`;
+
+                                        return (
+                                            <path
+                                                d={`${p1} ${c1} ${l1} ${c2} ${z}`}
+                                                fill={color}
+                                                opacity={0.35}
+                                                className="transition-all duration-300"
+                                            />
+                                        );
+                                    };
+
+                                    // Node renderer - Non-interactive
+                                    const makeNode = (x: number, y: number, w: number, h: number, color: string, label: string, sub: string) => {
+                                        return (
+                                            <g>
+                                                <rect x={x} y={y} width={w} height={h} fill={color} rx="4" />
                                                 {h > 15 && (
-                                                <>
-                                                    <text x={x + 25} y={y + (h/2) + 4} className="text-[11px] font-bold fill-gray-700 uppercase">{label}</text>
-                                                    <text x={x + 25} y={y + (h/2) + 18} className="text-[10px] fill-gray-500">{sub}</text>
-                                                </>
-                                            )}
-                                        </g>
+                                                    <>
+                                                        <text x={x + 25} y={y + (h / 2) + 4} className="text-[11px] font-bold fill-gray-700 uppercase">{label}</text>
+                                                        <text x={x + 25} y={y + (h / 2) + 18} className="text-[10px] fill-gray-500">{sub}</text>
+                                                    </>
+                                                )}
+                                            </g>
+                                        );
+                                    };
+
+                                    return (
+                                        <div className="w-full bg-gray-50 rounded-xl border border-gray-200 overflow-hidden relative flex-1 min-h-[300px] flex flex-col">
+                                            <svg viewBox={`0 0 ${w} ${h}`} className="w-full flex-1 select-none">
+                                                <defs>
+                                                    <linearGradient id="gradUsed" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                        <stop offset="0%" stopColor="#1f2937" />
+                                                        <stop offset="50%" stopColor="#a78bfa" />
+                                                        <stop offset="100%" stopColor="#7c3aed" />
+                                                    </linearGradient>
+                                                </defs>
+
+                                                {/* --- RIBBONS (Flows): Gold, Lilac, Violet --- */}
+                                                <g>
+                                                    {makeRibbon(ySystem, hSystem, yUsed, "#1f2937")}
+                                                    {makeRibbon(yTools, hTools, yUsed + hSystem, "#a78bfa")}
+                                                    {makeRibbon(yHistory, hHistory, yUsed + hSystem + hTools, "#7c3aed")}
+                                                </g>
+
+                                                {/* --- LEFT: Source Components --- */}
+                                                {makeNode(leftX, ySystem, nodeW, hSystem, "#1f2937", "System Prompt", `${Math.round(systemEst).toLocaleString()} tokens`)}
+                                                {makeNode(leftX, yTools, nodeW, hTools, "#a78bfa", "Tool Schemas", `${Math.round(toolsEst).toLocaleString()} tokens`)}
+                                                {makeNode(leftX, yHistory, nodeW, hHistory, "#7c3aed", "Conversation", `${Math.round(historyEst).toLocaleString()} tokens`)}
+
+                                                {/* --- RIGHT: Context Usage --- */}
+                                                <g>
+                                                    <rect x={rightX} y={yUsed} width={nodeW} height={hUsed} fill="url(#gradUsed)" rx="4" />
+                                                    <rect x={rightX} y={yFree} width={nodeW} height={hFree} fill="#e5e7eb" rx="4" />
+
+                                                    <text x={rightX - 10} y={yUsed + (hUsed / 2)} textAnchor="end" className="text-[12px] font-bold fill-gray-700">Used</text>
+                                                    <text x={rightX - 10} y={yUsed + (hUsed / 2) + 16} textAnchor="end" className="text-[11px] fill-gray-500">{used.toLocaleString()} tokens ({contextStats.percent}%)</text>
+
+                                                    <text x={rightX - 10} y={yFree + (hFree / 2)} textAnchor="end" className="text-[12px] font-bold fill-gray-400">Free</text>
+                                                    <text x={rightX - 10} y={yFree + (hFree / 2) + 16} textAnchor="end" className="text-[11px] fill-gray-400">{Math.round(freeEst).toLocaleString()} tokens</text>
+                                                </g>
+                                            </svg>
+                                        </div>
                                     );
-                                };
-
-                                return (
-                                    <div className="w-full bg-gray-50 rounded-xl border border-gray-200 overflow-hidden relative flex-1 min-h-[300px] flex flex-col">
-                                        <svg viewBox={`0 0 ${w} ${h}`} className="w-full flex-1 select-none">
-                                            <defs>
-                                                <linearGradient id="gradUsed" x1="0%" y1="0%" x2="0%" y2="100%">
-                                                    <stop offset="0%" stopColor="#1f2937" />
-                                                    <stop offset="50%" stopColor="#a78bfa" />
-                                                    <stop offset="100%" stopColor="#7c3aed" />
-                                                </linearGradient>
-                                            </defs>
-
-                                            {/* --- RIBBONS (Flows): Gold, Lilac, Violet --- */}
-                                            <g>
-                                                {makeRibbon(ySystem, hSystem, yUsed, "#1f2937")}
-                                                {makeRibbon(yTools, hTools, yUsed + hSystem, "#a78bfa")}
-                                                {makeRibbon(yHistory, hHistory, yUsed + hSystem + hTools, "#7c3aed")}
-                                            </g>
-
-                                            {/* --- LEFT: Source Components --- */}
-                                            {makeNode(leftX, ySystem, nodeW, hSystem, "#1f2937", "System Prompt", `${Math.round(systemEst).toLocaleString()} tokens`)}
-                                            {makeNode(leftX, yTools, nodeW, hTools, "#a78bfa", "Tool Schemas", `${Math.round(toolsEst).toLocaleString()} tokens`)}
-                                            {makeNode(leftX, yHistory, nodeW, hHistory, "#7c3aed", "Conversation", `${Math.round(historyEst).toLocaleString()} tokens`)}
-
-                                            {/* --- RIGHT: Context Usage --- */}
-                                            <g>
-                                                <rect x={rightX} y={yUsed} width={nodeW} height={hUsed} fill="url(#gradUsed)" rx="4" />
-                                                <rect x={rightX} y={yFree} width={nodeW} height={hFree} fill="#e5e7eb" rx="4" />
-
-                                                <text x={rightX - 10} y={yUsed + (hUsed/2)} textAnchor="end" className="text-[12px] font-bold fill-gray-700">Used</text>
-                                                <text x={rightX - 10} y={yUsed + (hUsed/2) + 16} textAnchor="end" className="text-[11px] fill-gray-500">{used.toLocaleString()} tokens ({contextStats.percent}%)</text>
-
-                                                <text x={rightX - 10} y={yFree + (hFree/2)} textAnchor="end" className="text-[12px] font-bold fill-gray-400">Free</text>
-                                                <text x={rightX - 10} y={yFree + (hFree/2) + 16} textAnchor="end" className="text-[11px] fill-gray-400">{Math.round(freeEst).toLocaleString()} tokens</text>
-                                            </g>
-                                        </svg>
-                                    </div>
-                                );
-                            })()}
+                                })()}
                             </div>
                         </div>
 

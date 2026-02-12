@@ -269,6 +269,49 @@ async def _convert_wav_to_ogg_local(wav_data: bytes) -> Optional[bytes]:
         return None
 
 
+async def _download_telegram_file(bot_token: str, file_id: str, suffix: str = "") -> Optional[str]:
+    """
+    Download a file from Telegram by file_id. Returns path to temp file or None on error.
+    Caller must delete the temp file when done.
+    """
+    try:
+        file_url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}"
+        resp = requests.get(file_url, timeout=10)
+        if not resp.ok:
+            logger.warning("getFile failed: %s", resp.status_code)
+            return None
+        file_info = resp.json()
+        tg_path = file_info.get("result", {}).get("file_path")
+        if not tg_path:
+            return None
+        download_url = f"https://api.telegram.org/file/bot{bot_token}/{tg_path}"
+        dl_resp = requests.get(download_url, timeout=60)
+        if not dl_resp.ok:
+            logger.warning("File download failed: %s", dl_resp.status_code)
+            return None
+        ext = suffix or os.path.splitext(tg_path)[1] or ".bin"
+        if not ext.startswith("."):
+            ext = "." + ext
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
+            f.write(dl_resp.content)
+            return f.name
+    except Exception as e:
+        logger.exception("Download Telegram file failed: %s", e)
+        return None
+
+
+def _extract_document_text(temp_path: str) -> str:
+    """Extract text from document (PDF, DOCX, etc.) using Librarian. Returns extracted content or error message."""
+    try:
+        from pathlib import Path
+        from vaf.tools.librarian import LibrarianTool
+        librarian = LibrarianTool()
+        return librarian._read_file(Path(temp_path), enable_chunking=True)
+    except Exception as e:
+        logger.warning("Document extraction failed: %s", e)
+        return f"[ERROR] Could not extract text from document: {e}"
+
+
 async def _send_audio_as_document(bot_token: str, chat_id: str, audio_path: str) -> bool:
     """Fallback: send audio as document if voice conversion fails."""
     try:
@@ -291,38 +334,60 @@ _voice_reply_lock = threading.Lock()
 
 
 def _sender_loop(bot_token: str):
-    """Run in a thread: read (chat_id, text, voice_lang) from _outgoing_queue and POST to Telegram."""
+    """Run in a thread: read (chat_id, text, voice_lang?, file_path?) from _outgoing_queue and POST to Telegram."""
     global _outgoing_queue
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    url_message = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    url_document = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     while True:
         try:
             item = _outgoing_queue.get(timeout=1.0)
             if item is None:
                 break
 
-            # Item can be (chat_id, text) or (chat_id, text, voice_lang)
-            if len(item) == 3:
+            # Item: (chat_id, text) | (chat_id, text, voice_lang) | (chat_id, text, voice_lang, file_path)
+            if len(item) == 4:
+                chat_id, text, voice_lang, file_path = item
+            elif len(item) == 3:
                 chat_id, text, voice_lang = item
+                file_path = None
             else:
                 chat_id, text = item
                 voice_lang = None
+                file_path = None
 
             if not chat_id or not text:
                 continue
 
-            # Check if we should reply with voice
-            send_voice = False
-            if voice_lang:
-                send_voice = True
-            else:
-                # Check pending voice replies
+            # 1. Document: send file with caption (file_path takes precedence)
+            if file_path and os.path.isfile(file_path):
+                try:
+                    with open(file_path, "rb") as doc_file:
+                        resp = requests.post(
+                            url_document,
+                            data={"chat_id": chat_id, "caption": text[:1024]},
+                            files={"document": (os.path.basename(file_path), doc_file)},
+                            timeout=30,
+                        )
+                    if resp.ok:
+                        try:
+                            from vaf.core.log_helper import log_telegram_reply
+                            log_telegram_reply(f"SENDER document ok chat_id={chat_id} file={os.path.basename(file_path)}")
+                        except Exception:
+                            pass
+                        continue
+                    logger.warning("Telegram sendDocument failed: %s %s", resp.status_code, resp.text[:200])
+                except Exception as e:
+                    logger.warning("Telegram document send error: %s, falling back to text", e)
+
+            # 2. Voice: send as voice message (if user sent voice)
+            send_voice = bool(voice_lang)
+            if not send_voice:
                 with _voice_reply_lock:
                     if chat_id in _voice_reply_pending:
                         voice_lang = _voice_reply_pending.pop(chat_id)
                         send_voice = True
 
             if send_voice and voice_lang:
-                # Send voice reply using async in a new event loop
                 try:
                     import asyncio
                     loop = asyncio.new_event_loop()
@@ -334,13 +399,13 @@ def _sender_loop(bot_token: str):
                             log_telegram_reply(f"SENDER voice ok chat_id={chat_id} lang={voice_lang}")
                         except Exception:
                             pass
-                        continue  # Voice sent successfully, skip text
+                        continue
                 except Exception as e:
-                    logger.warning(f"Voice reply failed, falling back to text: {e}")
+                    logger.warning("Voice reply failed, falling back to text: %s", e)
 
-            # Send as plain text (no parse_mode) so model output with < & > doesn't break
+            # 3. Text: send as plain message
             payload = {"chat_id": chat_id, "text": text[:4096]}
-            resp = requests.post(url, json=payload, timeout=10)
+            resp = requests.post(url_message, json=payload, timeout=10)
             if not resp.ok:
                 logger.warning("Telegram sendMessage failed: %s %s", resp.status_code, resp.text)
                 try:
@@ -365,16 +430,18 @@ def _sender_loop(bot_token: str):
                 pass
 
 
-def _enqueue_reply(chat_id: str, text: str, voice_lang: Optional[str] = None) -> None:
-    """Enqueue a reply. If voice_lang is set, reply will be sent as voice message."""
+def _enqueue_reply(chat_id: str, text: str, voice_lang: Optional[str] = None, *, file_path: Optional[str] = None) -> None:
+    """Enqueue a reply. If voice_lang is set, reply as voice. If file_path is set, send as document with caption."""
     try:
         from vaf.core.log_helper import log_telegram_reply
-        log_telegram_reply(f"BRIDGE enqueue chat_id={chat_id} len={len(text)} voice={voice_lang} queue={_outgoing_queue is not None}")
+        log_telegram_reply(f"BRIDGE enqueue chat_id={chat_id} len={len(text)} voice={voice_lang} file={bool(file_path)} queue={_outgoing_queue is not None}")
     except Exception:
         pass
     if _outgoing_queue is not None:
         try:
-            if voice_lang:
+            if file_path:
+                _outgoing_queue.put((chat_id, text, None, file_path))
+            elif voice_lang:
                 _outgoing_queue.put((chat_id, text, voice_lang))
             else:
                 _outgoing_queue.put((chat_id, text))
@@ -570,6 +637,138 @@ def _run_bot():
 
     application.add_handler(
         MessageHandler(filters.VOICE, handle_voice)
+    )
+
+    # Supported document extensions for text extraction (PDF, Word, Excel, PowerPoint, text)
+    _DOCUMENT_EXTS = (".pdf", ".docx", ".xlsx", ".pptx", ".xls", ".txt", ".md", ".csv", ".json", ".xml")
+
+    async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle incoming documents (PDF, DOCX, etc.): download, extract text, pass to agent as context."""
+        if not update.message or not update.message.document:
+            return
+        doc = update.message.document
+        user = update.effective_user
+        if not user:
+            return
+        telegram_user_id = str(user.id)
+        chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
+
+        entry = _whitelist_lookup(telegram_user_id)
+        relay_entry = None
+        if not entry:
+            relay_entry = _relay_whitelist_lookup(telegram_user_id)
+            if not relay_entry:
+                await update.message.reply_text(
+                    "You are not authorized to use this bot. Please add your Telegram in VAF Settings → Connections."
+                )
+                return
+
+        if entry:
+            user_scope_id = entry.get("user_scope_id")
+            vaf_username = entry.get("vaf_username") or "admin"
+            is_relay = False
+        else:
+            user_scope_id = relay_entry.get("user_scope_id")
+            vaf_username = relay_entry.get("vaf_username") or "admin"
+            is_relay = True
+
+        file_name = doc.file_name or "document"
+        ext = os.path.splitext(file_name.lower())[1]
+
+        if ext not in _DOCUMENT_EXTS:
+            await update.message.reply_text(
+                f"Dokumentformat {ext or 'unbekannt'} wird noch nicht unterstützt. "
+                f"Bitte sende PDF, DOCX, XLSX oder Textdateien."
+            )
+            return
+
+        # Download file from Telegram
+        temp_path = await _download_telegram_file(bot_token, doc.file_id, ext)
+        if not temp_path:
+            await update.message.reply_text("❌ Datei konnte nicht heruntergeladen werden.")
+            return
+
+        try:
+            # Extract text (sync, run in thread)
+            loop = asyncio.get_event_loop()
+            extracted = await loop.run_in_executor(None, _extract_document_text, temp_path)
+        finally:
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+
+        caption = (update.message.caption or "").strip()
+        if caption:
+            user_message = f"[Document: {file_name}] (User: {caption})\n\n--- Document content ---\n{extracted}"
+        else:
+            user_message = f"[Document: {file_name}]\n\n--- Document content ---\n{extracted}"
+
+        _append_chat_activity(chat_id, user_scope_id, "in")
+        try:
+            from vaf.core.messaging_connections import save_telegram_chat_id
+            save_telegram_chat_id(user_scope_id, vaf_username, str(chat_id))
+        except Exception:
+            pass
+
+        session_id = f"telegram_{telegram_user_id}"
+        tq = TaskQueue()
+        metadata = {
+            "user_scope_id": user_scope_id,
+            "username": vaf_username,
+            "telegram_chat_id": str(chat_id),
+        }
+        if is_relay:
+            metadata["relay"] = True
+            metadata["relay_to_username"] = vaf_username
+
+        tq.add(
+            session_id=session_id,
+            input_text=user_message,
+            source="telegram",
+            metadata=metadata,
+        )
+        try:
+            TrayContext().register_telegram_activity()
+        except Exception:
+            pass
+        logger.info("Document %s from chat %s enqueued, %d chars extracted", file_name, chat_id, len(extracted))
+
+    application.add_handler(
+        MessageHandler(filters.Document.ALL, handle_document)
+    )
+
+    # -------------------------------------------------------------------------
+    # PHOTO HANDLER – Placeholder for future implementation
+    # -------------------------------------------------------------------------
+    # When implementing photo support, consider:
+    # 1. Download photo via _download_telegram_file(bot_token, photo.file_id, ".jpg")
+    # 2. Option A (OCR): Use pytesseract.image_to_string() for text extraction (receipts, screenshots)
+    # 3. Option B (Vision): If LLM supports vision, pass base64 image to multimodal API
+    # 4. Build user_message similar to documents: "[Photo] (caption)\n\n--- OCR/Vision output ---"
+    # 5. Register: MessageHandler(filters.PHOTO, handle_photo)
+    # Dependencies: pytesseract + Tesseract (OCR), or vision-capable model (GPT-4V, Claude, etc.)
+    # -------------------------------------------------------------------------
+
+    async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder: Photo support not yet implemented. Replies with info for future implementation."""
+        if not update.message or not update.message.photo:
+            return
+        user = update.effective_user
+        if not user:
+            return
+        entry = _whitelist_lookup(str(user.id))
+        relay = _relay_whitelist_lookup(str(user.id))
+        if not entry and not relay:
+            return  # Silently ignore unauthorized
+        await update.message.reply_text(
+            "📷 Foto-Unterstützung kommt bald. Aktuell kannst du mir Dokumente (PDF, DOCX) schicken – "
+            "diese werden verarbeitet. Für Fotos (z.B. Rechnung abfotografiert) ist OCR/Vision in Planung."
+        )
+        logger.info("Photo received from user %s – placeholder reply (photo support planned)", user.id)
+
+    application.add_handler(
+        MessageHandler(filters.PHOTO, handle_photo)
     )
 
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):

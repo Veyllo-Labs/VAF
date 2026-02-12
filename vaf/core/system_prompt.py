@@ -477,13 +477,13 @@ Then use the results to answer. Do NOT guess from your training data!
 | `memory_search` | **Look up** any stored facts | "user name", "project X", "last meeting" |
 | `memory_save` | **Save** general facts, projects, notes | "Project VAF uses Docker", "Meeting scheduled for Friday" |
 | `update_user_identity` | **Save PERSONAL user info** (name, language, city, country, preferences, do's/don'ts, main_messenger, timezone, date_format, time_format) | "My name is Mert", "I'm in Berlin", "Send it via Telegram", "Use Europe/Berlin for time" |
-| `send_telegram` | **Send a message to the user via Telegram** (when they asked to receive something there; use if main_messenger is Telegram or user said "via Telegram") | Send summary, result, or notification |
+| `send_telegram` | **Send a message or document via Telegram** (message, optional file_path). Use when user asked to receive something; for documents (invoice, contract, PDF), pass file_path with the full path | Send summary, notification, or document |
 | `send_discord` | **Send a message to the user via Discord** (when they asked to receive something there; use if main_messenger is Discord or user said "via Discord") | Send summary, result, or notification |
 | `mail_inbox` | **Show inbox** (list of emails). Use **max_messages** to control how many (e.g. max_messages=20 for 20 mails, 50 for 50). Omit account_id for ALL accounts; optional account_id, folder. Output: From, Date, Subject, account_id, message_id, provider_message_id per line | When user asks "list 20 mails", "die anderen 20", "alle Mails" → call with max_messages=20 (or 50); show the full list, do not summarize to 3 |
 | `find_mail` | **Search mailbox** by subject or sender (query, optional folder, limit). Returns matches with account_id, message_id, provider_message_id; if exactly one match, returns full body. Use when user asks "what does the X mail say?" or "details about the X email" | Prefer find_mail(query="X") for "Postman mail", "Twitch email", etc.; if result includes full body use it, else call read_mail with first match's IDs |
 | `read_mail` | **Read full body of one email** (account_id, message_id, folder, optional provider_message_id). Use IDs from find_mail or mail_inbox output | When you have account_id and message_id (e.g. from find_mail), call read_mail to get body. Do NOT ask the user for email ID |
 | `mark_mail_answered` | **Mark email as answered** (account_id, message_id, folder) | Call after processing/replying so it shows "Benatwortet am ..." and is not handled again |
-| `send_mail` | **Send an email** from a connected account (account_id, to, subject, body) | Send email on behalf of user |
+| `send_mail` | **Send an email** (account_id, to, subject, body; optional attachment_paths for documents) | Send email; for documents pass attachment_paths |
 
 ### Email (mail_inbox, find_mail, read_mail):
 - When the user asks **how many or which mails** (e.g. "list 20 mails", "die anderen 20", "zeig mir alle Mails", "lies die anderen Mails") → call **mail_inbox** with **max_messages** set to the requested number (e.g. 20 or 50). Present the **full list** in your reply; do NOT summarize to only 3 mails. If the user said "read the other mails", list them with mail_inbox(max_messages=50) and then either read a few with read_mail or offer to read specific ones.
@@ -606,13 +606,15 @@ Then use the results to answer. Do NOT guess from your training data!
                 f"**Wichtig:** Der Nutzer chattet über {chan} – er hat KEINEN Zugriff auf die Web-UI. "
                 "Er kann keine Dokumente, Anhänge-Listen oder Seiten im Browser ansehen. "
                 "Gib alle relevanten Informationen direkt in deiner Antwort an – extrahiere und zitiere Inhalte, "
-                "anstatt ihn auf etwas \"anzuschauen\" zu verweisen (z.B. nicht \"Schau dir die Seiten an\" oder \"Das Dokument ist in den Anhängen\")."
+                "anstatt ihn auf etwas \"anzuschauen\" zu verweisen (z.B. nicht \"Schau dir die Seiten an\" oder \"Das Dokument ist in den Anhängen\"). "
+                "Wenn der Nutzer nach einem Dokument fragt (Rechnung, Vertrag, PDF) oder du eines erstellt hast: sende es mit `send_telegram(message=\"...\", file_path=\"vollständiger Pfad zur Datei\")`."
             )
             caps_en = (
                 f"**Important:** The user is chatting via {chan} – they do NOT have access to the Web UI. "
                 "They cannot view documents, attachment lists, or pages in a browser. "
                 "Provide all relevant information directly in your answer – extract and quote content, "
-                "instead of telling them to \"look at\" something (e.g. do not say \"Look at the pages\" or \"The document is in the attachments\")."
+                "instead of telling them to \"look at\" something (e.g. do not say \"Look at the pages\" or \"The document is in the attachments\"). "
+                "When the user asks for a document (invoice, contract, PDF) or you created one: send it with `send_telegram(message=\"...\", file_path=\"full path to file\")`."
             )
             caps = caps_de if self.user_language == "de" else caps_en
             parts.append(f"\n## Channel capabilities\n{caps}\n")
@@ -753,7 +755,8 @@ You are talking to the following user.
                         "When the user asks you to send them something (e.g. a summary, a file, or a notification), "
                         "if preferred channel is not set, ask once: e.g. \"Soll ich es dir per Discord, Telegram oder Slack schicken?\" / \"Should I send it via Discord, Telegram or Slack?\". "
                         "Store their answer with `update_user_identity(main_messenger=\"telegram\")` (or discord/slack). "
-                        "Then use the matching tool: `send_telegram`, `send_discord`, or `send_slack` depending on the preferred channel or user request (e.g. use send_telegram when main_messenger is Telegram or they said \"via Telegram\").\n"
+                        "Then use the matching tool: `send_telegram`, `send_discord`, or `send_slack` depending on the preferred channel or user request (e.g. use send_telegram when main_messenger is Telegram or they said \"via Telegram\"). "
+                        "**For documents** (invoice, contract, PDF): use `send_telegram(message=\"Caption\", file_path=\"/full/path/to/file.pdf\")` to send the file directly.\n"
                     )
                     identity_block += (
                         "**Telegram / Sprachnachricht:** When the user asks you to write something (e.g. email, contact names, list of people) or when their last message was a voice message (Sprachnachricht): "

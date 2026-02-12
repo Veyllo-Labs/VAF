@@ -9,6 +9,8 @@ The Telegram bridge allows users to interact with VAF through Telegram, supporti
 - **Text Messages**: Standard text-based conversations
 - **Voice Messages**: Automatic transcription via Whisper STT
 - **Voice Replies**: Agent responses as voice messages (TTS)
+- **Incoming Documents**: PDF, DOCX, XLSX, PPTX, TXT, MD, CSV, JSON, XML – downloaded, text extracted via Librarian, passed to agent as context
+- **Photos**: Placeholder – replies with "coming soon"; full OCR/Vision implementation planned
 - **Multi-User Support**: User whitelisting with scope isolation
 - **Memory Integration**: Conversations are stored in VAF's memory system
 
@@ -30,6 +32,8 @@ Telegram User
 │  telegram_bridge.py         │
 │  ├─ handle_message()        │  ◄── Text messages
 │  ├─ handle_voice()          │  ◄── Voice messages
+│  ├─ handle_document()       │  ◄── PDF, DOCX, etc. (extract → agent)
+│  ├─ handle_photo()          │  ◄── Placeholder (OCR/Vision planned)
 │  ├─ _transcribe_voice()     │  ◄── Whisper STT
 │  └─ _send_voice_reply()     │  ◄── TTS response
 └─────────────────────────────┘
@@ -271,9 +275,41 @@ async def _sender_loop():
 | Field | Type | Description |
 |-------|------|-------------|
 | `chat_id` | string | Telegram chat ID |
-| `text` | string | Response text |
+| `text` | string | Response text (or caption for documents) |
 | `voice_lang` | string | Language code for TTS (optional) |
+| `file_path` | string | Full path to file for send_document (optional) |
 | `user_scope_id` | string | VAF user scope UUID |
+
+### Proactive Document Delivery
+
+When the user asks for a document (e.g. "Schick mir die Rechnung XYZ" or "Send me the contract") via Telegram, the agent uses `send_telegram` with `file_path`:
+
+```
+send_telegram(message="Hier deine Rechnung", file_path="/path/to/invoice.pdf")
+```
+
+The Telegram bridge sends the file via `sendDocument` API with the message as caption. Supports PDF, DOCX, and other document types.
+
+### Incoming Documents (User → Agent)
+
+When the user sends a **document** (PDF, DOCX, XLSX, PPTX, TXT, etc.) via Telegram:
+
+1. Bridge downloads the file via Telegram Bot API
+2. Librarian extracts text (PyPDF2, python-docx, OCR for scanned PDFs)
+3. Agent receives: `[Document: filename.pdf] (User caption if any)\n\n--- Document content ---\n{extracted text}`
+
+The agent can then answer questions about the document, summarize it, or extract data.
+
+**Supported formats:** `.pdf`, `.docx`, `.xlsx`, `.pptx`, `.xls`, `.txt`, `.md`, `.csv`, `.json`, `.xml`
+
+### Incoming Photos (Placeholder)
+
+Photo support is **planned** but not yet implemented. When a user sends a photo, the bot replies with a "coming soon" message. Future implementation options:
+
+- **OCR (pytesseract):** Extract text from receipts, screenshots, photographed documents
+- **Vision API:** Pass image to multimodal LLM (GPT-4V, Claude) for content understanding
+
+See the inline comment block in `telegram_bridge.py` above `handle_photo` for implementation notes.
 
 ---
 

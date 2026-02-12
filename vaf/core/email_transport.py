@@ -15,7 +15,11 @@ import quopri
 import re
 import smtplib
 from email import message_from_bytes, message_from_string
+from email.encoders import encode_base64
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -476,6 +480,41 @@ def _get_body_gmail(account_id: str, provider_message_id: str, username: Optiona
         return None
 
 
+def _build_mime_message(
+    from_addr: str,
+    to: str,
+    subject: str,
+    body: str,
+    subtype: str = "plain",
+    attachments: Optional[List[Dict[str, str]]] = None,
+) -> Any:
+    """Build MIME message, with optional attachments. Returns MIMEMultipart or MIMEText."""
+    if attachments:
+        msg = MIMEMultipart()
+        msg["Subject"] = subject
+        msg["From"] = from_addr
+        msg["To"] = to
+        msg.attach(MIMEText(body, subtype, "utf-8"))
+        for att in attachments:
+            path_str = att.get("path") or ""
+            filename = att.get("filename") or Path(path_str).name
+            path = Path(path_str)
+            if not path.is_file():
+                continue
+            with open(path, "rb") as f:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(f.read())
+            encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=filename)
+            msg.attach(part)
+        return msg
+    msg = MIMEText(body, subtype, "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = to
+    return msg
+
+
 def _send_mail_gmail(
     account_id: str,
     to: str,
@@ -483,6 +522,7 @@ def _send_mail_gmail(
     body: str,
     subtype: str = "plain",
     username: Optional[str] = None,
+    attachments: Optional[List[Dict[str, str]]] = None,
 ) -> bool:
     """Send mail via Gmail API (users.messages.send with raw RFC 2822)."""
     acc = get_account(account_id, username)
@@ -493,10 +533,7 @@ def _send_mail_gmail(
         logger.warning("No valid Gmail token for account %s", account_id[:8] + "***")
         return False
     from_addr = acc.get("email") or account_id
-    msg = MIMEText(body, subtype, "utf-8")
-    msg["Subject"] = subject
-    msg["From"] = from_addr
-    msg["To"] = to
+    msg = _build_mime_message(from_addr, to, subject, body, subtype, attachments)
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
     try:
         r = requests.post(
@@ -618,6 +655,7 @@ def _send_mail_microsoft(
     body: str,
     subtype: str = "plain",
     username: Optional[str] = None,
+    attachments: Optional[List[Dict[str, str]]] = None,
 ) -> bool:
     """Send mail via Microsoft Graph (POST /me/sendMail)."""
     acc = get_account(account_id, username)
@@ -627,13 +665,30 @@ def _send_mail_microsoft(
     if not token:
         logger.warning("No valid Microsoft token for account %s", account_id[:8] + "***")
         return False
-    payload = {
-        "message": {
-            "subject": subject,
-            "body": {"contentType": "html" if subtype == "html" else "text", "content": body},
-            "toRecipients": [{"emailAddress": {"address": to}}],
-        },
+    message_obj: Dict[str, Any] = {
+        "subject": subject,
+        "body": {"contentType": "html" if subtype == "html" else "text", "content": body},
+        "toRecipients": [{"emailAddress": {"address": to}}],
     }
+    if attachments:
+        att_list: List[Dict[str, Any]] = []
+        for att in attachments:
+            path_str = att.get("path") or ""
+            filename = att.get("filename") or Path(path_str).name
+            path = Path(path_str)
+            if not path.is_file():
+                continue
+            with open(path, "rb") as f:
+                content_b64 = base64.b64encode(f.read()).decode("ascii")
+            att_list.append({
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": filename,
+                "contentType": "application/octet-stream",
+                "contentBytes": content_b64,
+            })
+        if att_list:
+            message_obj["attachments"] = att_list
+    payload = {"message": message_obj}
     try:
         r = requests.post(
             "https://graph.microsoft.com/v1.0/me/sendMail",
@@ -841,25 +896,26 @@ def send_mail(
     body: str,
     subtype: str = "plain",
     username: Optional[str] = None,
+    attachments: Optional[List[Dict[str, str]]] = None,
 ) -> bool:
-    """Send one email. Returns True on success. Dispatches to Gmail API, Graph, or SMTP by provider. Optional username for multi-user scope."""
+    """Send one email. Returns True on success. Dispatches to Gmail API, Graph, or SMTP by provider.
+    attachments: optional list of [{"path": "/full/path/to/file", "filename": "optional_name.pdf"}].
+    Optional username for multi-user scope."""
     acc = get_account(account_id, username)
     if not acc:
         return False
     provider = (acc.get("provider") or "imap").lower()
     if provider == "gmail":
-        return _send_mail_gmail(account_id, to, subject, body, subtype, username)
+        return _send_mail_gmail(account_id, to, subject, body, subtype, username, attachments)
     if provider == "microsoft":
-        return _send_mail_microsoft(account_id, to, subject, body, subtype, username)
+        return _send_mail_microsoft(account_id, to, subject, body, subtype, username, attachments)
     conn = _smtp_connect(account_id, username)
     if not conn:
         return False
     try:
-        msg = MIMEText(body, subtype, "utf-8")
-        msg["Subject"] = subject
-        msg["From"] = acc.get("email") or account_id
-        msg["To"] = to
-        conn.sendmail(acc.get("email") or account_id, [to], msg.as_string())
+        from_addr = acc.get("email") or account_id
+        msg = _build_mime_message(from_addr, to, subject, body, subtype, attachments)
+        conn.sendmail(from_addr, [to], msg.as_string())
         return True
     except Exception as e:
         logger.warning("Send mail failed: %s", e)

@@ -29,6 +29,22 @@ try:
 except Exception:
     pass
 
+
+def _tray_startup_log(msg: str, error: str = ""):
+    """Always write to tray_startup.txt for diagnostics (even when Debug Logs is off)."""
+    try:
+        log_dir = Path(__file__).resolve().parents[1] / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        fpath = log_dir / "tray_startup.txt"
+        ts = __import__("datetime").datetime.now().isoformat()
+        with open(fpath, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {msg}")
+            if error:
+                f.write(f" | ERROR: {error}")
+            f.write("\n")
+    except Exception:
+        pass
+
 import atexit
 import time
 import threading
@@ -83,12 +99,6 @@ def _atexit_stop_server():
 atexit.register(_atexit_stop_server)
 
 
-def _signal_handler(signum, frame):
-    """
-    Handle SIGTERM and SIGINT to ensure clean shutdown.
-    This is critical for Mac where 'Quit VAF' sends SIGTERM.
-    """
-    print(f"Received signal {signum}, shutting down...")
 # Signal Handler for Clean Shutdown (Cmd+Q, Dock Quit, Terminal Ctrl+C)
 def _signal_handler(sig, frame):
     """Handle termination signals and ensure clean shutdown."""
@@ -259,7 +269,7 @@ def stop_memory_stack():
         ):
             try:
                 # Add timeout to prevent hanging indefinitely
-                kwargs = {"cwd": str(project_root), "capture_output": True, "text": True, "timeout": 15}
+                kwargs = {"cwd": str(project_root), "capture_output": True, "text": True}
                 if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
                     kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
                 
@@ -642,7 +652,7 @@ def check_activity_loop(update_icon_callback):
                 
         time.sleep(1)
 
-def open_webui(_):
+def open_webui(icon_or_item=None, item=None):
     logger.info("[Tray] open_webui called")
     from vaf.core.frontend_manager import FrontendManager
     fm = FrontendManager()
@@ -717,8 +727,8 @@ def open_webui(_):
         
         try:
             # Fallback to start command
-            subprocess.Popen(["cmd", "/c", "start", "", url], shell=False, 
-                           creationflags=subprocess.CREATE_NO_WINDOW)
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.Popen(["cmd", "/c", "start", "", url], shell=False, creationflags=creationflags)
             logger.info("[Tray] open_webui: Opened via cmd /c start")
             return
         except Exception as e2:
@@ -732,13 +742,15 @@ def open_webui(_):
     except Exception as e:
         logger.error(f"[Tray] open_webui: webbrowser.open failed: {e}")
 
-def toggle_persistence(item):
+def toggle_persistence(icon=None, item=None):
+    """Pystray passes (icon, item); Rumps passes (sender). Accept both."""
     new_state = not tray_context.is_persistent()
     tray_context.set_persistent(new_state)
-    item.state = new_state # Update menu checkmark (if supported)
+    if item is not None and hasattr(item, "state"):
+        item.state = new_state
 
-def quit_app(icon_or_app):
-    """Handle quit action with safety check."""
+def quit_app(icon=None, item=None):
+    """Handle quit action with safety check. Pystray passes (icon, item); Rumps passes (sender)."""
     # Force exit after 5 seconds if cleanup hangs
     def force_exit():
         time.sleep(5)
@@ -1070,8 +1082,12 @@ def create_image(color_name):
     """Create PIL Image for pystray icon."""
     path = get_icon_path(color_name)
     if path:
-        return Image.open(path)
-    return Image.new('RGB', (64, 64), 'red')  # Fallback
+        img = Image.open(path)
+        # Windows taskbar expects 16x16 or 32x32; 64x64 may render poorly
+        if platform.system() == "Windows" and (img.width > 32 or img.height > 32):
+            img = img.resize((32, 32), Image.Resampling.LANCZOS)
+        return img
+    return Image.new('RGB', (32, 32), 'red')  # Fallback
 
 
 def run_headless():
@@ -1128,6 +1144,7 @@ def run_headless():
 
 
 def run_app():
+    _tray_startup_log("Tray run_app started (Pystray)")
     clear_log()
     log("Tray", "run_app called (Pystray)")
     # Register config observer
@@ -1137,6 +1154,7 @@ def run_app():
     # Singleton Check
     lock_socket = check_singleton()
     if not lock_socket:
+        _tray_startup_log("Tray singleton failed (another instance running) - exiting")
         print("[Tray] Singleton check failed (another instance running)")
         log("Tray", "Singleton check failed - aborting")
         return
@@ -1208,10 +1226,6 @@ def run_app():
         else:
             print("[Tray] Frontend failed to start.")
             log("Tray", "Frontend failed to start")
-    print("[Tray] Starting Frontend thread...")
-    t_fe = threading.Thread(target=start_frontend_bg, daemon=True)
-    t_fe.start()
-
     print("[Tray] Starting Frontend thread...")
     t_fe = threading.Thread(target=start_frontend_bg, daemon=True)
     t_fe.start()
@@ -1331,9 +1345,8 @@ def run_app():
     # Create icon
     icon = pystray.Icon("VAF", create_image("idle"), "VAF", menu)
     
-    # CRITICAL for macOS: Set visible=True explicitly
-    icon.visible = True
-    
+    # NOTE: Do NOT set icon.visible=True before run() - the window doesn't exist yet.
+    # pystray's default setup (when setup=None) sets visible=True after the icon is ready.
     print("[Tray] Starting Tray Icon (pystray)...")
     log("Tray", "Starting Tray Icon (pystray)...")
     
@@ -1345,11 +1358,13 @@ def run_app():
     t_cmd = threading.Thread(target=command_listener, args=(lock_socket,), daemon=True)
     t_cmd.start()
     
-    # CRITICAL for macOS: icon.run() MUST be called from main thread
-    # This is a blocking call that starts the macOS RunLoop
+    # CRITICAL: icon.run() MUST be called from main thread (required on macOS)
+    # setup= ensures icon is shown AFTER the event loop is ready (fixes Windows visibility)
+    _tray_startup_log("Tray icon.run() starting (blocks until quit)")
     print("[Tray] Running icon.run() on main thread...")
     log("Tray", "Entering Pystray main loop (icon.run)")
-    icon.run()  # Blocks here until quit
+    icon.run(setup=lambda i: setattr(i, "visible", True))  # Blocks here until quit
+    _tray_startup_log("Tray icon.run() ended (normal quit)")
 
 if __name__ == "__main__":
     run_app()

@@ -808,10 +808,12 @@ class ResearchAgentTool(BaseTool):
             # ═══════════════════════════════════════════════════════════════
             html = self._assemble_html(topic, rendered_sections, all_sources, lang=lang, quality_warning=global_quality_warning)
             
-            # Check if running as sub-agent (separate terminal)
+            # Check if running as sub-agent (separate terminal) - but NOT when in a workflow.
+            # In workflows (e.g. deep_research), the workflow expects full HTML for repair_report + write_file
+            # to save to output_file. The subagent flag in workflow context only prevents nested terminals.
             is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL") == "1"
             
-            if is_subagent:
+            if is_subagent and not in_workflow:
                 # Generate filename
                 from datetime import datetime
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

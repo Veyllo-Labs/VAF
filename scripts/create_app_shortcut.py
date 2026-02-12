@@ -121,7 +121,93 @@ exec ./run_vaf.sh tray >> "$LOG_FILE" 2>&1
     print(f"✅ VAF.app created at {app_dir}")
 
 def create_windows_shortcut():
-    pass # Not needed for Mac task
+    """Create a .lnk shortcut on Windows using PowerShell."""
+    print("Creating Windows Desktop Shortcut...")
+    
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    venv_python = os.path.join(base_dir, "venv", "Scripts", "pythonw.exe")
+    target = venv_python if os.path.exists(venv_python) else sys.executable
+    if target and "python.exe" in target.lower():
+        target = target.replace("python.exe", "pythonw.exe").replace("Python.exe", "pythonw.exe")
+
+    arguments = "-m vaf.main tray"
+    
+    logo_candidates = [
+        os.path.join(base_dir, "vaf", "media", "logo_original.png"),
+        os.path.join(base_dir, "web", "public", "logo.png")
+    ]
+    
+    logo_path = None
+    for cand in logo_candidates:
+        if os.path.exists(cand):
+            logo_path = cand
+            break
+            
+    icon_path = logo_path or ""
+    
+    if logo_path:
+        try:
+            from PIL import Image
+            ico_filename = "vaf_icon_v6.ico"
+            ico_path = os.path.join(base_dir, "vaf", "media", ico_filename)
+            os.makedirs(os.path.dirname(ico_path), exist_ok=True)
+            img = Image.open(logo_path).convert("RGBA")
+            
+            bbox = img.getbbox()
+            if bbox:
+                img = img.crop(bbox)
+            
+            canvas_size = 256
+            new_img = Image.new('RGBA', (canvas_size, canvas_size), (0, 0, 0, 0))
+            fill_factor = 0.98
+            target_size = int(canvas_size * fill_factor)
+            w, h = img.size
+            if w > h:
+                new_w = target_size
+                new_h = int(h * (target_size / w))
+            else:
+                new_h = target_size
+                new_w = int(w * (target_size / h))
+            img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            offset = ((canvas_size - new_w) // 2, (canvas_size - new_h) // 2)
+            new_img.paste(img_resized, offset, img_resized)
+            new_img.save(ico_path, format='ICO', sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)])
+            icon_path = ico_path
+            print(f"OK Converted icon to .ico: {icon_path}")
+        except Exception as e:
+            print(f"WARNING: Icon conversion failed: {e}")
+
+    desktop = os.path.join(os.environ["USERPROFILE"], "Desktop")
+    start_menu = os.path.join(os.environ["APPDATA"], "Microsoft", "Windows", "Start Menu", "Programs")
+    shortcut_paths = {
+        "Desktop": os.path.join(desktop, "VAF Agent.lnk"),
+        "StartMenu": os.path.join(start_menu, "VAF Agent.lnk")
+    }
+
+    ps_script = "$WshShell = New-Object -comObject WScript.Shell\n"
+    for name, path in shortcut_paths.items():
+        ps_script += f'if (Test-Path "{path}") {{ Remove-Item "{path}" -Force }}\n'
+        ps_script += f'$Shortcut = $WshShell.CreateShortcut("{path}")\n'
+        ps_script += f'$Shortcut.TargetPath = "{target}"\n'
+        ps_script += f'$Shortcut.Arguments = "{arguments}"\n'
+        ps_script += f'$Shortcut.WorkingDirectory = "{base_dir}"\n'
+        if icon_path:
+            ps_script += f'$Shortcut.IconLocation = "{icon_path}"\n'
+        ps_script += f'$Shortcut.Save()\n'
+        ps_script += f'Write-Host "OK Recreated {name} Shortcut"\n'
+    
+    try:
+        subprocess.run(["powershell", "-Command", ps_script], check=True)
+    except Exception as e:
+        print(f"ERROR: Failed: {e}")
+
 
 if __name__ == "__main__":
-    create_mac_app()
+    system = platform.system()
+    if system == "Darwin":
+        create_mac_app()
+    elif system == "Windows":
+        create_windows_shortcut()
+    else:
+        print(f"Shortcut creation not implemented for {system}.")

@@ -3,6 +3,14 @@ import subprocess
 import importlib.util
 import os
 
+# CRITICAL: Patch stdout/stderr/stdin for pythonw (no console) - must be before any print/input
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+if sys.stdin is None:
+    sys.stdin = open(os.devnull, "r")
+
 def bootstrap():
     """Checks for ALL dependencies and auto-installs if confirmed."""
     # Safety hatch for App Bundles / CI
@@ -299,7 +307,24 @@ app.command(name="install-gpu")(info.install_gpu)
 @app.command(name="tray")
 def tray_command():
     """Start the VAF System Tray application (Persistent Background Service)."""
+    def _log_tray_error(msg: str, err: str = ""):
+        """Write to logs/tray_startup.txt for diagnostics (works even before tray import)."""
+        try:
+            log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+            os.makedirs(log_dir, exist_ok=True)
+            fpath = os.path.join(log_dir, "tray_startup.txt")
+            import datetime
+            ts = datetime.datetime.now().isoformat()
+            with open(fpath, "a", encoding="utf-8") as f:
+                f.write(f"[{ts}] {msg}")
+                if err:
+                    f.write(f" | ERROR: {err}")
+                f.write("\n")
+        except Exception:
+            pass
+
     try:
+        _log_tray_error("Tray command started (main.py)")
         # Check if launched from native macOS Swift wrapper
         if os.environ.get("VAF_NATIVE_WRAPPER") == "1":
             # Native wrapper handles tray icon - run headless (backend + frontend only)
@@ -310,9 +335,12 @@ def tray_command():
             from vaf.tray import run_app
             run_app()
     except ImportError as e:
+        _log_tray_error("Tray ImportError", str(e))
         print(f"Error starting tray app: {e}")
         print("Please ensure requirements are installed: pip install -r requirements.txt")
     except Exception as e:
+        import traceback
+        _log_tray_error("Tray exception", f"{e}\n{traceback.format_exc()}")
         print(f"Tray app error: {e}")
 
 # ═══════════════════════════════════════════════════════════════════════════════

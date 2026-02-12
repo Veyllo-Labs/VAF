@@ -641,7 +641,7 @@ export default function VAFDashboard() {
     const pendingSessionRequestRef = useRef(false);
     const sidebarListRef = useRef<HTMLDivElement>(null);
     const sidebarDocsSyncedForSessionRef = useRef<string | null>(null);
-    type DocumentViewerDoc = { id: string; name: string; mimeType?: string; data?: string; content?: string };
+    type DocumentViewerDoc = { id: string; name: string; mimeType?: string; data?: string; content?: string; htmlContent?: string };
 
     const [ws, setWs] = useState<WebSocket | null>(null);
     const [loading, setLoading] = useState(false);
@@ -1528,7 +1528,7 @@ export default function VAFDashboard() {
                     setInsertedSelections(prev => prev.filter((_, i) => i !== selectionIndex));
                 }
                 else if (data.type === 'sidebar_documents_set') {
-                    const contents = (data.contents || []) as Array<{ name: string; content: string; data?: string; mimeType?: string }>;
+                    const contents = (data.contents || []) as Array<{ name: string; content: string; data?: string; mimeType?: string; htmlContent?: string }>;
                     const sid = data.sessionId || activeSessionId;
                     const updater = (prev: { isOpen: boolean; documents: DocumentViewerDoc[] }) => {
                         if (contents.length === 0) return { ...prev, documents: [] };
@@ -1539,9 +1539,10 @@ export default function VAFDashboard() {
                                 ...(prev.documents[i] || {}),
                                 id: prev.documents[i]?.id ?? `doc-${i}-${c.name}`,
                                 name: c.name,
-                                content: c.content,
+                                content: c.content ?? prev.documents[i]?.content ?? '',
                                 ...(c.data != null && { data: c.data }),
                                 ...(c.mimeType != null && { mimeType: c.mimeType }),
+                                ...(typeof c.htmlContent === 'string' && c.htmlContent.length > 0 && { htmlContent: c.htmlContent }),
                             })),
                         };
                     };
@@ -1906,7 +1907,7 @@ export default function VAFDashboard() {
             });
         } else if (contextStats.max_tokens !== max_tokens) {
             // Provider or n_ctx changed: update max_tokens so display matches backend
-            setContextStats((prev) => ({
+            setContextStats((prev: { tokens: number; max_tokens: number; percent: number; message_count?: number }) => ({
                 ...prev,
                 max_tokens,
                 percent: prev.tokens && max_tokens ? Math.round((prev.tokens / max_tokens) * 1000) / 10 : prev.percent,

@@ -611,7 +611,8 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
 
     // Nur memory ↔ tag. Must be before early returns (Rules of Hooks).
     const isValidConnection = useCallback(
-        (conn: { source?: string; target?: string; sourceHandle?: string | null; targetHandle?: string | null }) => {
+        (conn: Connection) => {
+            if (!conn.source || !conn.target) return false;
             const src = storeNodes.find((n) => n.id === conn.source);
             const tgt = storeNodes.find((n) => n.id === conn.target);
             if (!src || !tgt) return false;

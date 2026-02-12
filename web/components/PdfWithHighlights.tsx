@@ -208,10 +208,10 @@ const PdfWithHighlightsInner = function PdfWithHighlights({
     );
 
     const onPageLoadSuccess = useCallback(
-        async (page: { pageNumber: number; getTextContent: () => Promise<{ items: { str: string }[] }> }) => {
+        async (page: Parameters<NonNullable<React.ComponentProps<typeof Page>['onLoadSuccess']>>[0]) => {
             try {
                 const textContent = await page.getTextContent();
-                const items = textContent.items.map((it: { str?: string }) => ('str' in it ? (it.str as string) : ''));
+                const items = textContent.items.map((it) => ('str' in it ? (it.str as string) : ''));
                 setPdfTextByPage((prev) => {
                     const filtered = prev.filter((p) => p.pageNum !== page.pageNumber);
                     return [...filtered, { pageNum: page.pageNumber, items: items.map((str) => ({ str })) }].sort(

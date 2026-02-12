@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import dynamic from 'next/dynamic';
+import { marked } from 'marked';
 import { X, FileText, Plus, Trash2, ChevronRight, ChevronLeft, List } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -16,6 +17,8 @@ export type DocumentViewerDocument = {
     content?: string;
     /** Base64 or data-URL for raw file; used to display original PDF. */
     data?: string;
+    /** Pre-rendered HTML for Office docs (docx/xlsx/pptx) from backend. */
+    htmlContent?: string;
 };
 
 /** One inserted selection: text plus range in a specific document, for persistent highlight. */
@@ -83,6 +86,19 @@ function isPdfWithData(doc: DocumentViewerDocument): boolean {
     const name = (doc.name || '').toLowerCase();
     const mime = (doc.mimeType || '').toLowerCase();
     return name.endsWith('.pdf') || mime === 'application/pdf';
+}
+
+/** Check if document has pre-rendered HTML (docx/xlsx/pptx from backend). */
+function isOfficeWithHtml(doc: DocumentViewerDocument): boolean {
+    if (!doc.htmlContent) return false;
+    const name = (doc.name || '').toLowerCase();
+    return name.endsWith('.docx') || name.endsWith('.xlsx') || name.endsWith('.pptx');
+}
+
+/** Check if document is Markdown. */
+function isMarkdownDocument(doc: DocumentViewerDocument): boolean {
+    const name = (doc.name || '').toLowerCase();
+    return name.endsWith('.md') || name.endsWith('.markdown');
 }
 
 /** Build data URL for PDF from base64 or existing data URL. */
@@ -437,7 +453,12 @@ export default function DocumentViewer({
                 aria-hidden={!isOpen}
             >
                 <div className="relative flex flex-row h-full w-full min-w-0">
-                    <div className="flex flex-1 flex-col min-w-0 bg-[#F9FAFB] rounded-r-2xl overflow-hidden">
+                    <div
+                        className={cn(
+                            'flex flex-1 flex-col min-w-0 bg-[#F9FAFB] rounded-r-2xl overflow-hidden transition-[padding] duration-300 ease-out',
+                            !listExpanded && 'pr-12'
+                        )}
+                    >
                         <div className="flex h-12 items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 shrink-0">
                             <div className="flex items-center gap-3 min-w-0">
                                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-white text-blue-600">
@@ -487,22 +508,28 @@ export default function DocumentViewer({
                                         {documents.map((doc) => {
                                             const isImg = doc.mimeType?.startsWith('image/') && doc.content?.startsWith('data:');
                                             const htmlContent = isHtmlDocument(doc) ? extractHtmlContent(doc.content ?? '') : null;
+                                            const officeHtml = isOfficeWithHtml(doc) ? doc.htmlContent! : null;
+                                            const mdHtml = isMarkdownDocument(doc) && doc.content
+                                                ? `<div class="markdown-body">${marked(doc.content, { async: false })}</div>`
+                                                : null;
+                                            const displayHtml = htmlContent ?? officeHtml ?? (mdHtml ? `<!DOCTYPE html><html><head><meta charset="utf-8"/><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css"/><style>.markdown-body{box-sizing:border-box;min-width:200px;max-width:980px;margin:0 auto;padding:45px;}</style></head><body>${mdHtml}</body></html>` : null);
                                             const showPdf = isPdfWithData(doc);
+                                            const showAsDocument = showPdf || !!displayHtml;
                                             return (
                                                 <div
                                                     key={doc.id}
                                                     className={cn(
                                                         'flex justify-center',
-                                                        showPdf ? 'w-full max-w-4xl' : 'w-[210mm] max-w-full'
+                                                        showAsDocument ? 'w-full max-w-4xl' : 'w-[210mm] max-w-full'
                                                     )}
                                                     data-document-id={doc.id}
                                                 >
                                                     <div
                                                         className={cn(
                                                             'box-border rounded-sm flex flex-col',
-                                                            showPdf ? 'w-full min-h-[calc(100vh-6rem)] p-2 pt-0 bg-transparent' : 'w-[210mm] max-w-full min-h-[297mm] py-[25mm] px-[25mm] bg-white shadow-sm',
+                                                            showAsDocument ? 'w-full min-h-[calc(100vh-6rem)] p-2 pt-0 bg-transparent' : 'w-[210mm] max-w-full min-h-[297mm] py-[25mm] px-[25mm] bg-white shadow-sm',
                                                         )}
-                                                        style={showPdf ? undefined : {
+                                                        style={showAsDocument ? undefined : {
                                                             backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0, transparent 297mm, rgba(0,0,0,0.06) 297mm, rgba(0,0,0,0.06) 298mm)',
                                                         }}
                                                     >
@@ -527,10 +554,10 @@ export default function DocumentViewer({
                                                                 content={doc.content}
                                                                 onInsertSelection={onInsertSelection}
                                                             />
-                                                        ) : htmlContent ? (
+                                                        ) : displayHtml ? (
                                                             <HtmlDocumentIframe
                                                                 doc={doc}
-                                                                htmlContent={htmlContent}
+                                                                htmlContent={displayHtml}
                                                                 onInsertSelection={onInsertSelection}
                                                                 insertedSelections={insertedSelections}
                                                                 insertedSelectionsCount={insertedSelectionsCount}
@@ -661,7 +688,12 @@ export default function DocumentViewer({
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 sm:p-8">
             <div className="relative flex flex-row h-[90vh] w-full max-w-[1500px] overflow-hidden rounded-2xl bg-[#F3F4F6] shadow-2xl min-w-0">
-                <div className="flex flex-1 flex-col min-w-0 bg-[#F9FAFB] overflow-hidden">
+                <div
+                    className={cn(
+                        'flex flex-1 flex-col min-w-0 bg-[#F9FAFB] overflow-hidden transition-[padding] duration-300 ease-out',
+                        !listExpanded && 'pr-12'
+                    )}
+                >
                     <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-gray-200 bg-white px-6">
                         <div className="flex items-center gap-3 min-w-0">
                             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm">
@@ -705,22 +737,28 @@ export default function DocumentViewer({
                                     {documents.map((doc) => {
                                         const isImg = doc.mimeType?.startsWith('image/') && doc.content?.startsWith('data:');
                                         const htmlContent = isHtmlDocument(doc) ? extractHtmlContent(doc.content ?? '') : null;
+                                        const officeHtml = isOfficeWithHtml(doc) ? doc.htmlContent! : null;
+                                        const mdHtml = isMarkdownDocument(doc) && doc.content
+                                            ? `<div class="markdown-body">${marked(doc.content, { async: false })}</div>`
+                                            : null;
+                                        const displayHtml = htmlContent ?? officeHtml ?? (mdHtml ? `<!DOCTYPE html><html><head><meta charset="utf-8"/><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css"/><style>.markdown-body{box-sizing:border-box;min-width:200px;max-width:980px;margin:0 auto;padding:45px;}</style></head><body>${mdHtml}</body></html>` : null);
                                         const showPdfOverlay = isPdfWithData(doc);
+                                        const showAsDocumentOverlay = showPdfOverlay || !!displayHtml;
                                         return (
                                             <div
                                                 key={doc.id}
                                                 className={cn(
                                                     'flex justify-center',
-                                                    showPdfOverlay ? 'w-full max-w-4xl' : 'w-[210mm] max-w-full'
+                                                    showAsDocumentOverlay ? 'w-full max-w-4xl' : 'w-[210mm] max-w-full'
                                                 )}
                                                 data-document-id={doc.id}
                                             >
                                                 <div
                                                     className={cn(
                                                         'box-border rounded-sm flex flex-col',
-                                                        showPdfOverlay ? 'w-full min-h-[calc(100vh-8rem)] p-2 pt-0 bg-transparent' : 'w-[210mm] max-w-full min-h-[297mm] py-[25mm] px-[25mm] bg-white shadow-sm'
+                                                        showAsDocumentOverlay ? 'w-full min-h-[calc(100vh-8rem)] p-2 pt-0 bg-transparent' : 'w-[210mm] max-w-full min-h-[297mm] py-[25mm] px-[25mm] bg-white shadow-sm'
                                                     )}
-                                                    style={showPdfOverlay ? undefined : {
+                                                    style={showAsDocumentOverlay ? undefined : {
                                                         backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0, transparent 297mm, rgba(0,0,0,0.06) 297mm, rgba(0,0,0,0.06) 298mm)',
                                                     }}
                                                 >
@@ -742,10 +780,10 @@ export default function DocumentViewer({
                                                             content={doc.content}
                                                             onInsertSelection={onInsertSelection}
                                                         />
-                                                    ) : htmlContent ? (
+                                                    ) : displayHtml ? (
                                                         <HtmlDocumentIframe
                                                             doc={doc}
-                                                            htmlContent={htmlContent}
+                                                            htmlContent={displayHtml}
                                                             onInsertSelection={onInsertSelection}
                                                             insertedSelections={insertedSelections}
                                                             insertedSelectionsCount={insertedSelectionsCount}

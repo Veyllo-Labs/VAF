@@ -2483,6 +2483,24 @@ async def process_files_to_sidebar_list(files: list) -> list:
                     entry["data"] = base64_part
                 if mime_type:
                     entry["mimeType"] = mime_type
+                # Add HTML for Office docs so Document Viewer can render original layout
+                suf = file_ext.lower()
+                if suf in (".docx", ".xlsx", ".pptx"):
+                    try:
+                        if suf == ".docx":
+                            html_body = _docx_to_html(temp_path)
+                        elif suf == ".xlsx":
+                            html_body = _xlsx_to_html(temp_path)
+                        else:
+                            html_body = _pptx_to_html(temp_path)
+                        entry["htmlContent"] = (
+                            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/>"
+                            "<style>body{font-family:system-ui,sans-serif;padding:1.5rem;max-width:80ch;}"
+                            "table{border-collapse:collapse;}td,th{border:1px solid #ccc;padding:6px;}</style>"
+                            "</head><body>" + html_body + "</body></html>"
+                        )
+                    except Exception as e:
+                        log("WebServer", f"Office to HTML failed for {filename}: {e}")
                 results.append(entry)
             finally:
                 try:

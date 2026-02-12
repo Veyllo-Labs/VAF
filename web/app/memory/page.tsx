@@ -499,6 +499,7 @@ export default function MemoryPage() {
                 onRemove={async (a, b) => {
                     await removeTagLink(a, b);
                     setTagLinks(await fetchTagLinks());
+                    return true;
                 }}
             />
         </div>

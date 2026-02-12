@@ -695,6 +695,59 @@ def _escape_html(s: str) -> str:
     return html.escape(s, quote=True)
 
 
+def _office_to_pdf_via_gotenberg(file_path: str, filename: str) -> bytes | None:
+    """
+    Convert Office docs (DOCX, XLSX, PPTX, ODT, ODS, ODP) to PDF via Gotenberg Docker service.
+    Returns PDF bytes or None if unavailable. Gotenberg uses LibreOffice under the hood; MIT license.
+    """
+    url = (Config.get("document_conversion_docker_url") or "").strip().rstrip("/")
+    if not url:
+        return None
+    try:
+        import requests
+        api_url = f"{url}/forms/libreoffice/convert"
+        with open(file_path, "rb") as f:
+            files = {"files": (filename, f, "application/octet-stream")}
+            r = requests.post(api_url, files=files, timeout=60)
+        if r.status_code == 200 and r.headers.get("content-type", "").lower().startswith("application/pdf"):
+            return r.content
+    except Exception as e:
+        log("WebServer", f"Gotenberg conversion failed for {filename}: {e}")
+    return None
+
+
+def _docx_to_pdf_via_libreoffice(docx_path: str) -> bytes | None:
+    """
+    Convert DOCX to PDF using LibreOffice headless. Returns PDF bytes or None if unavailable.
+    LibreOffice is MPL 2.0 - compatible with MIT projects. Use in Docker: install libreoffice in the image.
+    """
+    import subprocess
+    import shutil
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        return None
+    out_dir = os.path.dirname(docx_path)
+    try:
+        subprocess.run(
+            [soffice, "--headless", "--convert-to", "pdf", "--outdir", out_dir, docx_path],
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
+        if os.path.isfile(pdf_path):
+            with open(pdf_path, "rb") as f:
+                data = f.read()
+            try:
+                os.unlink(pdf_path)
+            except Exception:
+                pass
+            return data
+    except (subprocess.TimeoutExpired, OSError, Exception):
+        pass
+    return None
+
+
 def _docx_to_html(target) -> str:
     from docx import Document
     doc = Document(str(target))
@@ -2483,24 +2536,33 @@ async def process_files_to_sidebar_list(files: list) -> list:
                     entry["data"] = base64_part
                 if mime_type:
                     entry["mimeType"] = mime_type
-                # Add HTML for Office docs so Document Viewer can render original layout
                 suf = file_ext.lower()
-                if suf in (".docx", ".xlsx", ".pptx"):
-                    try:
-                        if suf == ".docx":
-                            html_body = _docx_to_html(temp_path)
-                        elif suf == ".xlsx":
-                            html_body = _xlsx_to_html(temp_path)
-                        else:
-                            html_body = _pptx_to_html(temp_path)
-                        entry["htmlContent"] = (
-                            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/>"
-                            "<style>body{font-family:system-ui,sans-serif;padding:1.5rem;max-width:80ch;}"
-                            "table{border-collapse:collapse;}td,th{border:1px solid #ccc;padding:6px;}</style>"
-                            "</head><body>" + html_body + "</body></html>"
-                        )
-                    except Exception as e:
-                        log("WebServer", f"Office to HTML failed for {filename}: {e}")
+                if suf in (".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp"):
+                    # Prefer Gotenberg (LibreOffice in Docker): full design fidelity, DOCX/XLSX/PPTX → PDF.
+                    pdf_bytes = await asyncio.to_thread(_office_to_pdf_via_gotenberg, temp_path, filename)
+                    if not pdf_bytes and suf == ".docx":
+                        pdf_bytes = await asyncio.to_thread(_docx_to_pdf_via_libreoffice, temp_path)
+                    if pdf_bytes:
+                        entry["data"] = base64.b64encode(pdf_bytes).decode("ascii")
+                        entry["mimeType"] = "application/pdf"
+                    else:
+                        try:
+                            if suf == ".docx":
+                                html_body = _docx_to_html(temp_path)
+                            elif suf == ".xlsx":
+                                html_body = _xlsx_to_html(temp_path)
+                            elif suf == ".pptx":
+                                html_body = _pptx_to_html(temp_path)
+                            else:
+                                html_body = "<p>[ODT/ODS/ODP: Gotenberg nicht erreichbar. Bitte starten Sie den Docker-Stack.]</p>"
+                            entry["htmlContent"] = (
+                                "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/>"
+                                "<style>body{font-family:system-ui,sans-serif;padding:1.5rem;max-width:80ch;}"
+                                "table{border-collapse:collapse;}td,th{border:1px solid #ccc;padding:6px;}</style>"
+                                "</head><body>" + html_body + "</body></html>"
+                            )
+                        except Exception as e:
+                            log("WebServer", f"Office to HTML failed for {filename}: {e}")
                 results.append(entry)
             finally:
                 try:

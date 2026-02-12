@@ -147,6 +147,35 @@ services:
           memory: 512M
 
   # ==========================================================================
+  # Document Conversion (Gotenberg) – LibreOffice-based Office → PDF
+  # Converts DOCX, XLSX, PPTX, ODT, ODS, ODP etc. to PDF for native display in Document Viewer.
+  # Set document_conversion_docker_url=http://localhost:5005
+  # API: POST /forms/libreoffice/convert (multipart: files=@doc.docx)
+  # MIT license – compatible with VAF.
+  # ==========================================================================
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    container_name: vaf-gotenberg
+    restart: unless-stopped
+    ports:
+      - "${GOTENBERG_PORT:-5005}:3000"
+    command: ["gotenberg", "--api-timeout=60s"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/ 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - vaf-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  # ==========================================================================
   # STT (Whisper HTTP) – optional; for local STT via Docker instead of in-process
   # VAF uses POST /asr with multipart file (audio/webm). Set speech_stt_engine=docker and speech_stt_docker_url=http://localhost:5003
   # ==========================================================================

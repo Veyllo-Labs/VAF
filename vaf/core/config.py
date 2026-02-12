@@ -92,6 +92,7 @@ class Config:
         "librarian_max_doc_size_mb": 20,       # Max Word/PowerPoint size in MB (default: 20)
         "librarian_max_excel_size_mb": 30,     # Max Excel size in MB (default: 30)
         "librarian_max_text_size_kb": 500,     # Max text file size in KB (default: 500)
+        "document_conversion_docker_url": "http://localhost:5005",  # Gotenberg: DOCX/XLSX/PPTX → PDF (LibreOffice in Docker)
         "librarian_auto_chunk_large_files": True,  # Auto-chunk large files (default: True)
         "librarian_pdf_max_pages_preview": 50, # Max pages to show in preview (default: 50)
         

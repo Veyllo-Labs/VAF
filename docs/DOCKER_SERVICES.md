@@ -9,6 +9,7 @@ VAF uses **one** Docker Compose file for auxiliary services: **`docker-compose.m
 | PostgreSQL | `vaf-memory-db` | 5432 | Database (pgvector) for Memory/RAG and Auth/User DB |
 | Redis | `vaf-redis` | 6379 | Cache (embeddings, sessions) |
 | Sandbox | `vaf-sandbox` | — | Python sandbox for safe code execution |
+| Gotenberg | `vaf-gotenberg` | 5005 | LibreOffice-based Office→PDF (DOCX, XLSX, PPTX, ODT, ODS, ODP) |
 | TTS Multi-Lang | `vaf-tts` | 5002 | Piper TTS with German, English, French voices + OGG output |
 | TTS English | `vaf-tts-en` | 5004 | Dedicated English TTS (Kusal) |
 | TTS French | `vaf-tts-fr` | 5006 | Dedicated French TTS (Siwis) |
@@ -170,6 +171,28 @@ redis://localhost:6379/0
 
 ---
 
+## Document Conversion (Gotenberg)
+
+The `vaf-gotenberg` container converts Office documents (DOCX, XLSX, PPTX, ODT, ODS, ODP) to PDF using LibreOffice. This enables the Document Viewer to display the original layout with full design fidelity (fonts, colors, images).
+
+**API Endpoint:** `POST http://localhost:5005/forms/libreoffice/convert`  
+**Form field:** `files` (multipart file upload)
+
+```bash
+# Test DOCX → PDF
+curl -X POST http://localhost:5005/forms/libreoffice/convert \
+  -F "files=@document.docx" \
+  -o result.pdf
+```
+
+**Configuration:** `document_conversion_docker_url` in `~/.vaf/config.json` (default: `http://localhost:5005`)
+
+When Gotenberg is running, uploaded Office documents in the Document Viewer are converted to PDF and displayed in their original design. Without Gotenberg, VAF falls back to HTML rendering (python-docx, openpyxl, python-pptx).
+
+**License:** Gotenberg is MIT; LibreOffice is MPL 2.0 – both compatible with MIT+Conclus projects.
+
+---
+
 ## Sandbox Service
 
 The `vaf-sandbox` container provides a secure Python environment for code execution.
@@ -257,6 +280,8 @@ VAF configuration for Docker services (`~/.vaf/config.json`):
   "speech_stt_enabled": true,
   "speech_stt_engine": "docker",
   "speech_stt_docker_url": "http://localhost:5003",
+
+  "document_conversion_docker_url": "http://localhost:5005",
 
   "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",
   "redis_url": "redis://localhost:6379/0",

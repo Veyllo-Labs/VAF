@@ -187,9 +187,9 @@ function stripAttachmentBlocks(content: string): { text: string; fileNames: stri
 function stripToolCallsJSON(content: string): string {
     if (!content) return content;
 
-    // Match JSON blocks that look like {"tool_calls": [...]}
-    // This regex handles both single-line and multi-line JSON blocks
-    const toolCallsPattern = /\{"tool_calls":\s*\[[\s\S]*?\]\s*\}/g;
+    // Match JSON blocks: {"tool_calls": [...]} or malformed {"tool_calls": } or {"tool_calls":}
+    // Handles empty, empty array, and populated array variants
+    const toolCallsPattern = /\{"tool_calls":\s*(?:\[[\s\S]*?\]\s*)?\}/g;
 
     return content.replace(toolCallsPattern, '').trim();
 }
@@ -231,6 +231,11 @@ const parseContent = (content: string): { thought: string | null; answer: string
             // Complete thinking block - has both open and close tags
             const thought = merged.substring(openIndex + openTag.length, closeIndex).trim();
             const answer = (merged.substring(0, openIndex) + merged.substring(closeIndex + closeTag.length)).trim();
+            // Safeguard: content inside think tags may be a user-facing answer (API models sometimes misuse tags)
+            const looksLikeUserAnswer = /\b(was ich über dich weiß|hier die Übersicht|Das sind die Infos|Name:\s*[A-Z]|Standort:)/i.test(thought);
+            if (answer.length < 50 && looksLikeUserAnswer) {
+                return { thought: null, answer: thought, isThinkingComplete: true };
+            }
             return { thought, answer, isThinkingComplete: true };
         } else {
             // Incomplete thinking - has open tag but no close tag (still streaming)
@@ -241,10 +246,11 @@ const parseContent = (content: string): { thought: string | null; answer: string
     }
 
     // Method 2: Heuristic detection of thinking patterns (VQ-1 style, no tags)
-    // Look for reasoning paragraphs at the start that end with a clear transition
+    // Look for reasoning paragraphs at the start that end with a clear transition.
+    // NOTE: Do NOT include "Okay," / "Okay I" - they often start the actual answer in DE/EN (e.g. "Okay, hier die Übersicht")
     const thinkingIndicators = [
         'First, I', 'I called', 'I need to', 'I should', 'I will',
-        'Now, I', 'Now I', 'Let me', 'The user', 'Okay,', 'Okay I',
+        'Now, I', 'Now I', 'Let me', 'The user',
         'I\'ll check', 'I\'ll use', 'I\'ll need'
     ];
 
@@ -1883,14 +1889,26 @@ export default function VAFDashboard() {
     useEffect(() => {
         setSttEnabled(config.stt_enabled === true);
 
+        const isApi = config.provider && config.provider !== 'local';
+        const nCtx = config.n_ctx ?? 8192;
+        const max_tokens = isApi && nCtx <= 16384 ? 128000 : nCtx;
+
         // Initialize context stats if empty (so bar is always visible)
-        if (!contextStats && config.n_ctx) {
+        // Use provider-aware max_tokens: API mode (e.g. OpenAI) uses 128k, local uses n_ctx
+        if (!contextStats) {
             setContextStats({
                 tokens: 0,
-                max_tokens: config.n_ctx,
+                max_tokens,
                 percent: 0,
                 message_count: 0
             });
+        } else if (contextStats.max_tokens !== max_tokens) {
+            // Provider or n_ctx changed: update max_tokens so display matches backend
+            setContextStats((prev) => ({
+                ...prev,
+                max_tokens,
+                percent: prev.tokens && max_tokens ? Math.round((prev.tokens / max_tokens) * 1000) / 10 : prev.percent,
+            }));
         }
     }, [config, contextStats]);
 

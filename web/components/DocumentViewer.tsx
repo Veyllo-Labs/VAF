@@ -488,10 +488,6 @@ export default function DocumentViewer({
                                             const isImg = doc.mimeType?.startsWith('image/') && doc.content?.startsWith('data:');
                                             const htmlContent = isHtmlDocument(doc) ? extractHtmlContent(doc.content ?? '') : null;
                                             const showPdf = isPdfWithData(doc);
-                                            const selectionsForDoc = insertedSelections
-                                                .map((s, i) => ({ text: s.text, colorIndex: i, documentId: s.documentId, pageNumber: s.pageNumber, itemIndices: s.itemIndices }))
-                                                .filter((s) => s.documentId === doc.id)
-                                                .map(({ text, colorIndex, pageNumber, itemIndices }) => ({ text, colorIndex, pageNumber, itemIndices }));
                                             return (
                                                 <div
                                                     key={doc.id}
@@ -525,7 +521,8 @@ export default function DocumentViewer({
                                                                 src={pdfDataUrl(doc)}
                                                                 title={doc.name}
                                                                 className="flex-1 min-h-0"
-                                                                selections={selectionsForDoc}
+                                                                insertedSelections={insertedSelections}
+                                                                nextSelectionColorIndex={insertedSelections?.length ?? 0}
                                                                 documentId={doc.id}
                                                                 content={doc.content}
                                                                 onInsertSelection={onInsertSelection}
@@ -710,10 +707,6 @@ export default function DocumentViewer({
                                         const isImg = doc.mimeType?.startsWith('image/') && doc.content?.startsWith('data:');
                                         const htmlContent = isHtmlDocument(doc) ? extractHtmlContent(doc.content ?? '') : null;
                                         const showPdfOverlay = isPdfWithData(doc);
-                                        const selectionsForDocOverlay = insertedSelections
-                                            .map((s, i) => ({ text: s.text, colorIndex: i, documentId: s.documentId, pageNumber: s.pageNumber, itemIndices: s.itemIndices }))
-                                            .filter((s) => s.documentId === doc.id)
-                                            .map(({ text, colorIndex, pageNumber, itemIndices }) => ({ text, colorIndex, pageNumber, itemIndices }));
                                         return (
                                             <div
                                                 key={doc.id}
@@ -744,7 +737,8 @@ export default function DocumentViewer({
                                                             src={pdfDataUrl(doc)}
                                                             title={doc.name}
                                                             className="flex-1 min-h-0"
-                                                            selections={selectionsForDocOverlay}
+                                                            insertedSelections={insertedSelections}
+                                                            nextSelectionColorIndex={insertedSelections?.length ?? 0}
                                                             documentId={doc.id}
                                                             content={doc.content}
                                                             onInsertSelection={onInsertSelection}

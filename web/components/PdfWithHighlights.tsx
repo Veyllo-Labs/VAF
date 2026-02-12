@@ -29,8 +29,12 @@ export type PdfWithHighlightsProps = {
     src: string;
     title?: string;
     className?: string;
-    /** Selections to highlight on PDF - matched by text in PDF. */
+    /** Selections to highlight - either passed directly or computed from insertedSelections. */
     selections?: SelectionHighlight[];
+    /** When provided with documentId, selections are computed from this (avoids flicker on parent re-renders). */
+    insertedSelections?: Array<{ text: string; documentId: string; pageNumber?: number; itemIndices?: number[] }>;
+    /** Index for the next selection's color (used for ::selection during marking). */
+    nextSelectionColorIndex?: number;
     onInsertSelection?: (text: string, range: { start: number; end: number; documentId: string; pageNumber?: number; itemIndices?: number[] }) => void;
     documentId?: string;
     /** Extracted content - used to compute start/end when user selects text in PDF. */
@@ -132,15 +136,27 @@ function buildHighlightMap(
     return map;
 }
 
-export default function PdfWithHighlights({
+const PdfWithHighlightsInner = function PdfWithHighlights({
     src,
     title,
     className,
-    selections = [],
+    selections: selectionsProp,
+    insertedSelections,
+    nextSelectionColorIndex,
     onInsertSelection,
     documentId,
     content,
 }: PdfWithHighlightsProps) {
+    const selections = useMemo(() => {
+        if (insertedSelections?.length && documentId) {
+            return insertedSelections
+                .map((s, i) => ({ text: s.text, colorIndex: i, documentId: s.documentId, pageNumber: s.pageNumber, itemIndices: s.itemIndices }))
+                .filter((s) => s.documentId === documentId)
+                .map(({ text, colorIndex, pageNumber, itemIndices }) => ({ text, colorIndex, pageNumber, itemIndices }));
+        }
+        return selectionsProp ?? [];
+    }, [insertedSelections, documentId, selectionsProp]);
+
     const [numPages, setNumPages] = useState<number>(0);
     const [pdfTextByPage, setPdfTextByPage] = useState<
         { pageNum: number; items: { str: string }[] }[]
@@ -220,10 +236,18 @@ export default function PdfWithHighlights({
         const anchorNode = sel.anchorNode;
         if (!anchorNode || !container.contains(anchorNode)) return;
         const range = sel.getRangeAt(0);
-        const itemsWithData = container.querySelectorAll<HTMLElement>('[data-pdf-item][data-pdf-page]');
+        let fragment: DocumentFragment;
+        try {
+            fragment = range.cloneContents();
+        } catch {
+            return;
+        }
+        const spansInSelection = fragment.querySelectorAll<HTMLElement>('[data-pdf-item][data-pdf-page]');
         const selectedIndicesByPage = new Map<number, number[]>();
-        for (const el of itemsWithData) {
-            if (!range.intersectsNode(el)) continue;
+        const normSel = text.normalize('NFC');
+        for (const el of spansInSelection) {
+            const spanText = (el.textContent ?? '').trim();
+            if (!spanText || !normSel.includes(spanText.normalize('NFC'))) continue;
             const pageNum = parseInt(el.getAttribute('data-pdf-page') ?? '', 10);
             const itemIdx = parseInt(el.getAttribute('data-pdf-item') ?? '', 10);
             if (isNaN(pageNum) || isNaN(itemIdx)) continue;
@@ -245,6 +269,9 @@ export default function PdfWithHighlights({
         sel.removeAllRanges();
     }, [onInsertSelection, documentId, content]);
 
+    const nextColorIndex = nextSelectionColorIndex ?? selections.length;
+    const nextSelectionColor = HIGHLIGHT_COLORS[nextColorIndex % HIGHLIGHT_COLORS.length];
+
     return (
         <div
             ref={containerRef}
@@ -256,8 +283,8 @@ export default function PdfWithHighlights({
                 [data-pdf-highlights] .textLayer { user-select: text !important; }
                 [data-pdf-highlights] .textLayer span { cursor: text; }
                 [data-pdf-highlights] .textLayer ::selection {
-                    background-color: #1f2937 !important;
-                    color: #ffffff !important;
+                    background-color: ${nextSelectionColor.bg} !important;
+                    color: ${nextSelectionColor.text} !important;
                 }
             `}</style>
             <Document
@@ -291,4 +318,22 @@ export default function PdfWithHighlights({
             </Document>
         </div>
     );
-}
+};
+
+export default React.memo(PdfWithHighlightsInner, (prev, next) => {
+    if (prev.documentId !== next.documentId) return false;
+    if (prev.src !== next.src) return false;
+    if (prev.content !== next.content) return false;
+    if ((prev.nextSelectionColorIndex ?? 0) !== (next.nextSelectionColorIndex ?? 0)) return false;
+    const pa = prev.insertedSelections ?? prev.selections ?? [];
+    const na = next.insertedSelections ?? next.selections ?? [];
+    if (pa.length !== na.length) return false;
+    for (let i = 0; i < pa.length; i++) {
+        const p = pa[i], n = na[i];
+        if (p?.text !== n?.text || p?.pageNumber !== n?.pageNumber) return false;
+        const pi = p?.itemIndices ?? [], ni = n?.itemIndices ?? [];
+        if (pi.length !== ni.length) return false;
+        for (let j = 0; j < pi.length; j++) if (pi[j] !== ni[j]) return false;
+    }
+    return true;
+});

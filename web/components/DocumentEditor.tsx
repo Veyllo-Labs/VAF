@@ -945,9 +945,8 @@ export default function DocumentEditor({
                                             src={pdfDataUrl(selectedAttachment)}
                                             title={selectedAttachment.name}
                                             className="w-full min-h-[500px] flex-1"
-                                            selections={insertedSelections
-                                                .filter((s) => s.documentId === selectedAttachment.id)
-                                                .map((s, i) => ({ text: s.text, colorIndex: i, pageNumber: s.pageNumber, itemIndices: s.itemIndices }))}
+                                            insertedSelections={insertedSelections}
+                                            nextSelectionColorIndex={insertedSelections?.length ?? 0}
                                             documentId={selectedAttachment.id}
                                             content={selectedAttachment.content}
                                             onInsertSelection={onInsertSelection}

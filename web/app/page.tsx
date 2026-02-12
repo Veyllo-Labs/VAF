@@ -1973,7 +1973,6 @@ export default function VAFDashboard() {
                 ws.send(JSON.stringify({ type: 'new_session' }));
             }
             setInput('');
-            setInsertedSelections([]);
             setSuggestion('');
             return;
         }
@@ -2002,7 +2001,6 @@ export default function VAFDashboard() {
             ...(editorSelectionsPayload.length > 0 ? { editorSelections: editorSelectionsPayload } : {}),
         }));
         setInput('');
-        setInsertedSelections([]);
         setSuggestion('');
     };
 

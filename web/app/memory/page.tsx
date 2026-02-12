@@ -17,7 +17,7 @@ import MemoryDetailPanel from '@/components/memory/MemoryDetailPanel';
 import RagQueryPanel from '@/components/memory/RagQueryPanel';
 import {
     Plus, RefreshCw, Brain, Link2,
-    ChevronLeft, FileText, Sparkles, X, Tag, AlertTriangle
+    ChevronLeft, FileText, Sparkles, X, Tag, AlertTriangle, Link as LinkIcon
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
@@ -174,6 +174,119 @@ function CreateMemoryModal({
     );
 }
 
+// Tag Links Modal – manage tag connections (A↔B syncs all memories)
+function TagLinksModal({
+    isOpen,
+    onClose,
+    tagLinks,
+    onRefresh,
+    onCreate,
+    onRemove,
+}: {
+    isOpen: boolean;
+    onClose: () => void;
+    tagLinks: { tag_a: string; tag_b: string }[];
+    onRefresh: () => Promise<void>;
+    onCreate: (tagA: string, tagB: string) => Promise<{ memories_synced: number } | null>;
+    onRemove: (tagA: string, tagB: string) => Promise<boolean>;
+}) {
+    const [tagA, setTagA] = useState('');
+    const [tagB, setTagB] = useState('');
+    const [isCreating, setIsCreating] = useState(false);
+
+    useEffect(() => {
+        if (isOpen) onRefresh();
+    }, [isOpen, onRefresh]);
+
+    const handleCreate = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const a = tagA.trim().toLowerCase();
+        const b = tagB.trim().toLowerCase();
+        if (!a || !b || a === b) return;
+        setIsCreating(true);
+        const result = await onCreate(a, b);
+        setIsCreating(false);
+        if (result) {
+            setTagA('');
+            setTagB('');
+            onRefresh();
+        }
+    };
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-gray-200">
+                <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center">
+                            <LinkIcon className="w-5 h-5 text-purple-600" />
+                        </div>
+                        <div>
+                            <h2 className="text-lg font-bold text-gray-900">Tag Links</h2>
+                            <p className="text-xs text-gray-500">Linked tags sync automatically</p>
+                        </div>
+                    </div>
+                    <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-lg">
+                        <X className="w-5 h-5 text-gray-500" />
+                    </button>
+                </div>
+                <div className="p-4 space-y-4">
+                    <form onSubmit={handleCreate} className="flex gap-2">
+                        <input
+                            type="text"
+                            value={tagA}
+                            onChange={(e) => setTagA(e.target.value)}
+                            placeholder="Tag A"
+                            className="flex-1 px-3 py-2 rounded-lg border border-gray-300 text-sm"
+                        />
+                        <span className="self-center text-gray-400">↔</span>
+                        <input
+                            type="text"
+                            value={tagB}
+                            onChange={(e) => setTagB(e.target.value)}
+                            placeholder="Tag B"
+                            className="flex-1 px-3 py-2 rounded-lg border border-gray-300 text-sm"
+                        />
+                        <button
+                            type="submit"
+                            disabled={!tagA.trim() || !tagB.trim() || tagA.trim().toLowerCase() === tagB.trim().toLowerCase() || isCreating}
+                            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
+                        >
+                            Link
+                        </button>
+                    </form>
+                    <p className="text-xs text-gray-500">
+                        Or drag from one tag node to another in the graph.
+                    </p>
+                    <div>
+                        <h3 className="text-sm font-medium text-gray-700 mb-2">Current links</h3>
+                        {tagLinks.length === 0 ? (
+                            <p className="text-sm text-gray-500">No tag links yet.</p>
+                        ) : (
+                            <ul className="space-y-1">
+                                {tagLinks.map((l, i) => (
+                                    <li key={i} className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-gray-50">
+                                        <span className="text-sm">#{l.tag_a} ↔ #{l.tag_b}</span>
+                                        <button
+                                            type="button"
+                                            onClick={() => onRemove(l.tag_a, l.tag_b)}
+                                            className="text-xs text-red-600 hover:text-red-800"
+                                        >
+                                            Remove
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // Stats Badge Component (DESIGN: standard card / meta text)
 function StatsBadge({ label, value, icon: Icon }: { label: string; value: number | string; icon: React.ElementType }) {
     return (
@@ -195,11 +308,16 @@ export default function MemoryPage() {
         fetchGraph,
         fetchStats,
         createMemory,
+        fetchTagLinks,
+        createTagLink,
+        removeTagLink,
         selectedNodeId,
         clearError,
     } = useMemoryStore();
     
     const [showCreateModal, setShowCreateModal] = useState(false);
+    const [showTagLinksModal, setShowTagLinksModal] = useState(false);
+    const [tagLinks, setTagLinks] = useState<{ tag_a: string; tag_b: string }[]>([]);
     const [isInitialized, setIsInitialized] = useState(false);
     const [detailsExpanded, setDetailsExpanded] = useState(true);
     const [showTagConnections, setShowTagConnections] = useState(true);
@@ -260,6 +378,15 @@ export default function MemoryPage() {
                             )}
                             
                             {/* Actions */}
+                            {/* Tag Links */}
+                            <button
+                                onClick={() => setShowTagLinksModal(true)}
+                                className="flex items-center gap-2 px-3 py-2 rounded-lg transition-colors border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                                title="Manage tag links"
+                            >
+                                <LinkIcon className="w-4 h-4" />
+                                <span className="hidden sm:inline text-sm font-medium">Link Tags</span>
+                            </button>
                             {/* Tag Connections Toggle */}
                             <button
                                 onClick={() => setShowTagConnections(!showTagConnections)}
@@ -355,6 +482,24 @@ export default function MemoryPage() {
                 isOpen={showCreateModal}
                 onClose={() => setShowCreateModal(false)}
                 onCreate={handleCreateMemory}
+            />
+            {/* Tag Links Modal */}
+            <TagLinksModal
+                isOpen={showTagLinksModal}
+                onClose={() => setShowTagLinksModal(false)}
+                tagLinks={tagLinks}
+                onRefresh={async () => {
+                    const links = await fetchTagLinks();
+                    setTagLinks(links);
+                }}
+                onCreate={async (a, b) => {
+                    const r = await createTagLink(a, b);
+                    return r;
+                }}
+                onRemove={async (a, b) => {
+                    await removeTagLink(a, b);
+                    setTagLinks(await fetchTagLinks());
+                }}
             />
         </div>
     );

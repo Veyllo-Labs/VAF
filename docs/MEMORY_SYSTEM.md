@@ -132,6 +132,23 @@ Additional settings in `~/.vaf/config.json`:
 
 **Log structure:** One file per domain under the same log directory. **rag.log**: RAG timing, search, embed calls, snippet count, user scope. **memory.log**: compaction, RSS usage, embedding load, profiler, Whisper load. Each line starts with an ISO timestamp. In memory.log, the prefix on each line (`[COMPACTION]`, `[USAGE]`, `[EMBED]`, `[PROFILER]`, `[WHISPER]`) indicates the source.
 
+### Tag Links
+
+**Tag links** create bidirectional associations between tags. When tags A and B are linked:
+
+- All memories with tag A automatically get tag B (and vice versa)
+- New memories saved with tag A get tag B added; new memories with tag B get tag A added
+- Applies to memory_save, compaction ingest, and manual tag adds
+
+**Creation:**
+- In the memory graph: drag from one tag node to another
+- Via API: `POST /api/memory/tag-links` with `{"tag_a": "...", "tag_b": "..."}`
+- Via UI: "Link Tags" button → enter two tags and click Link
+
+**Storage:** Tag links are stored in `~/.vaf/tag_links.json` (or Docker config dir). No database migration required.
+
+**Sync:** When a link is created, existing memories with either tag are updated to include the other tag.
+
 ## API Reference
 
 ### Endpoints

@@ -140,6 +140,11 @@ interface MemoryActions {
     // Tag management
     addTagToMemory: (memoryId: string, tag: string) => Promise<boolean>;
     removeTagFromMemory: (memoryId: string, tag: string) => Promise<boolean>;
+
+    // Tag links (connect tags: A↔B syncs all memories)
+    fetchTagLinks: () => Promise<{ tag_a: string; tag_b: string }[]>;
+    createTagLink: (tagA: string, tagB: string) => Promise<{ memories_synced: number } | null>;
+    removeTagLink: (tagA: string, tagB: string) => Promise<boolean>;
     
     // Selection
     selectMemory: (id: string | null) => void;
@@ -366,6 +371,57 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
             if (!response.ok) throw new Error('Failed to remove tag');
 
             // Refresh graph to update connections
+            await get().fetchGraph();
+            return true;
+        } catch (error) {
+            set({ error: (error as Error).message });
+            return false;
+        }
+    },
+
+    fetchTagLinks: async () => {
+        try {
+            const response = await fetch(`${getMemoryApiBase()}/api/memory/tag-links`, {
+                credentials: 'include',
+            });
+            if (!response.ok) throw new Error('Failed to fetch tag links');
+            const data = await response.json();
+            return data.links || [];
+        } catch (error) {
+            set({ error: (error as Error).message });
+            return [];
+        }
+    },
+
+    createTagLink: async (tagA, tagB) => {
+        try {
+            const response = await fetch(`${getMemoryApiBase()}/api/memory/tag-links`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tag_a: tagA, tag_b: tagB }),
+                credentials: 'include',
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error((err as { detail?: string }).detail || 'Failed to create tag link');
+            }
+            const data = await response.json();
+            await get().fetchGraph();
+            return { memories_synced: data.memories_synced ?? 0 };
+        } catch (error) {
+            set({ error: (error as Error).message });
+            return null;
+        }
+    },
+
+    removeTagLink: async (tagA, tagB) => {
+        try {
+            const params = new URLSearchParams({ tag_a: tagA, tag_b: tagB });
+            const response = await fetch(`${getMemoryApiBase()}/api/memory/tag-links?${params}`, {
+                method: 'DELETE',
+                credentials: 'include',
+            });
+            if (!response.ok) throw new Error('Failed to remove tag link');
             await get().fetchGraph();
             return true;
         } catch (error) {

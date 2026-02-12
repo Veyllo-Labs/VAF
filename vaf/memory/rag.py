@@ -24,6 +24,7 @@ from vaf.memory.graph import GraphManager
 from vaf.memory.database import get_db
 from vaf.core.config import Config
 from vaf.core.log_helper import append_domain_log
+from vaf.memory.tag_links import expand_tags_with_links
 import logging
 import re
 from pathlib import Path
@@ -121,9 +122,10 @@ class RagPipeline:
             if len(content) > 50:
                 metadata["title"] += "..."
 
-        # Normalize tags to lowercase for case-insensitive matching
+        # Normalize tags and expand with linked tags (tag A↔B: memories get both)
         if "tags" in metadata and isinstance(metadata["tags"], list):
-            metadata["tags"] = [t.strip().lower() for t in metadata["tags"] if t and t.strip()]
+            raw = [t.strip().lower() for t in metadata["tags"] if t and t.strip()]
+            metadata["tags"] = expand_tags_with_links(raw)
 
         # Store a preview in metadata (unencrypted, for display)
         metadata["preview"] = content[:200].strip().replace('\n', ' ')
@@ -531,9 +533,10 @@ Always cite which source(s) you used."""
             raise ValueError(f"Memory {memory_id} not found")
 
         if metadata:
-            # Normalize tags to lowercase for case-insensitive matching
+            # Normalize tags and expand with linked tags
             if "tags" in metadata and isinstance(metadata["tags"], list):
-                metadata["tags"] = [t.strip().lower() for t in metadata["tags"] if t and t.strip()]
+                raw = [t.strip().lower() for t in metadata["tags"] if t and t.strip()]
+                metadata["tags"] = expand_tags_with_links(raw)
             memory.meta = {**(memory.meta or {}), **metadata}
         
         if content:

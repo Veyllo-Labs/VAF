@@ -17,6 +17,8 @@ from vaf.memory.database import get_db, init_db, check_db_connection, get_db_sta
 from vaf.memory.rag import RagPipeline, RagSource
 from vaf.memory.graph import GraphManager
 from vaf.memory.cache import get_cache
+from vaf.memory.tag_links import get_linked_tags, add_link, remove_link, list_links
+from vaf.memory.tag_link_sync import sync_memories_for_tag_link
 from vaf.core.config import Config
 import json
 import logging
@@ -69,6 +71,12 @@ class ConnectionUpdate(BaseModel):
 class AddTagRequest(BaseModel):
     """Request model for adding a tag to a memory."""
     tag: str = Field(..., min_length=1, description="Tag to add")
+
+
+class TagLinkRequest(BaseModel):
+    """Request model for creating a tag link."""
+    tag_a: str = Field(..., min_length=1, description="First tag")
+    tag_b: str = Field(..., min_length=1, description="Second tag")
 
 
 class RagQueryRequest(BaseModel):
@@ -270,6 +278,39 @@ async def list_memories(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Tag links (connect tags: A↔B means memories with A get B and vice versa)
+@memory_router.get("/tag-links")
+async def get_tag_links():
+    """List all tag links."""
+    links = list_links()
+    return {"links": [{"tag_a": a, "tag_b": b} for a, b in links]}
+
+
+@memory_router.post("/tag-links")
+async def create_tag_link(
+    request: TagLinkRequest,
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope),
+):
+    """Create a tag link and sync existing memories."""
+    a, b = request.tag_a.strip().lower(), request.tag_b.strip().lower()
+    if not a or not b or a == b:
+        raise HTTPException(status_code=400, detail="Invalid tags: must be two different non-empty tags")
+    if not add_link(a, b):
+        raise HTTPException(status_code=409, detail="Tag link already exists")
+    updated = await sync_memories_for_tag_link(a, b, user_scope_id=user_scope_id)
+    await get_cache().invalidate_graph()
+    return {"status": "created", "tag_a": a, "tag_b": b, "memories_synced": updated}
+
+
+@memory_router.delete("/tag-links")
+async def delete_tag_link(tag_a: str = Query(...), tag_b: str = Query(...)):
+    """Remove a tag link."""
+    if not remove_link(tag_a, tag_b):
+        raise HTTPException(status_code=404, detail="Tag link not found")
+    await get_cache().invalidate_graph()
+    return {"status": "removed"}
+
+
 # Must be before /{memory_id} or "graph" is matched as memory_id
 @memory_router.get("/graph", response_model=GraphResponse)
 async def get_graph(
@@ -443,12 +484,12 @@ async def add_tag_to_memory(memory_id: str, request: AddTagRequest):
             # Normalize all existing tags to lowercase (migration for old data)
             current_tags = [t.strip().lower() for t in current_tags if t and t.strip()]
 
-            # Normalize new tag (lowercase, strip whitespace)
+            # Normalize new tag and expand with linked tags (tag links: A↔B means both get both)
             new_tag = request.tag.strip().lower()
-
-            # Only add if not already present (case-insensitive)
-            if new_tag not in current_tags:
-                current_tags.append(new_tag)
+            tags_to_add = [new_tag] + list(get_linked_tags(new_tag))
+            for t in tags_to_add:
+                if t and t not in current_tags:
+                    current_tags.append(t)
 
             # Always update to ensure normalization is saved
             current_meta["tags"] = current_tags

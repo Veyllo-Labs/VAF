@@ -200,39 +200,29 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
             )}
             style={{ opacity: isFaded ? 0.4 : 1 }}
         >
-            {/* Connection handles - all sides for flexible connections */}
+            {/* Top/Bottom: memory ↔ tag (add tag to memory) */}
             <Handle
                 type="target"
                 position={Position.Top}
+                id="top"
                 className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
             />
             <Handle
                 type="source"
                 position={Position.Top}
-                id="top-source"
+                id="top-src"
                 className="w-2 h-2 bg-purple-400 border border-white opacity-30 hover:opacity-100"
             />
             <Handle
                 type="target"
                 position={Position.Bottom}
+                id="bottom"
                 className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
             />
             <Handle
                 type="source"
                 position={Position.Bottom}
-                id="bottom-source"
-                className="w-2 h-2 bg-purple-400 border border-white opacity-30 hover:opacity-100"
-            />
-            <Handle
-                type="source"
-                position={Position.Left}
-                id="left-source"
-                className="w-2 h-2 bg-purple-400 border border-white opacity-30 hover:opacity-100"
-            />
-            <Handle
-                type="source"
-                position={Position.Right}
-                id="right-source"
+                id="bottom-src"
                 className="w-2 h-2 bg-purple-400 border border-white opacity-30 hover:opacity-100"
             />
 
@@ -316,25 +306,53 @@ const TagNodeComponent = ({ data, selected }: NodeProps) => {
             )}
             style={{ opacity: isFaded ? 0.4 : 1 }}
         >
-            {/* Connection handles */}
+            {/* All 4 sides: memory ↔ tag (add tag to memory) – für übersichtlichere Verbindungen */}
             <Handle
                 type="target"
                 position={Position.Top}
+                id="top"
+                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
+            />
+            <Handle
+                type="source"
+                position={Position.Top}
+                id="top-src"
+                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
+            />
+            <Handle
+                type="target"
+                position={Position.Bottom}
+                id="bottom"
                 className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
             />
             <Handle
                 type="source"
                 position={Position.Bottom}
+                id="bottom-src"
                 className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
             />
             <Handle
                 type="target"
                 position={Position.Left}
+                id="left"
+                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
+            />
+            <Handle
+                type="source"
+                position={Position.Left}
+                id="left-src"
                 className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
             />
             <Handle
                 type="target"
                 position={Position.Right}
+                id="right"
+                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
+            />
+            <Handle
+                type="source"
+                position={Position.Right}
+                id="right-src"
                 className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
             />
 
@@ -485,10 +503,11 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         return nodes;
     }, [storeNodes, selectedNodeId, connectedNodeIds]);
 
-    // Convert store edges to ReactFlow format (filter tag edges based on showTagConnections)
+    // Convert store edges to ReactFlow format. Nur Memory↔Tag; keine Memory↔Memory.
     const initialEdges: Edge[] = useMemo(() =>
         storeEdges
-            .filter(edge => showTagConnections || edge.data.connectionType !== 'tag')
+            .filter(edge => edge.data.connectionType === 'tag')
+            .filter(edge => showTagConnections)
             .map(edge => {
                 // Edge color matches source memory's type (for tag & semantic: source is memory)
                 const sourceNode = storeNodes.find(n => n.id === edge.source);
@@ -590,6 +609,27 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         onNodeSelect?.(null);
     }, [setSelectedNodeId, selectMemory, onNodeSelect]);
 
+    // Nur memory ↔ tag. Must be before early returns (Rules of Hooks).
+    const isValidConnection = useCallback(
+        (conn: { source?: string; target?: string; sourceHandle?: string | null; targetHandle?: string | null }) => {
+            const src = storeNodes.find((n) => n.id === conn.source);
+            const tgt = storeNodes.find((n) => n.id === conn.target);
+            if (!src || !tgt) return false;
+            const srcIsTag = src.type === "tagNode" || src.data?.isTagNode;
+            const tgtIsTag = tgt.type === "tagNode" || tgt.data?.isTagNode;
+            if (srcIsTag === tgtIsTag) return false;
+            const memTagHandles = ["top", "top-src", "bottom", "bottom-src"];
+            const tagAllHandles = ["top", "top-src", "bottom", "bottom-src", "left", "left-src", "right", "right-src"];
+            const srcHandle = conn.sourceHandle ?? "";
+            const tgtHandle = conn.targetHandle ?? "";
+            if (srcIsTag) {
+                return tagAllHandles.includes(srcHandle) && memTagHandles.includes(tgtHandle);
+            }
+            return memTagHandles.includes(srcHandle) && tagAllHandles.includes(tgtHandle);
+        },
+        [storeNodes]
+    );
+
     // Handle connection between memory and tag node (drag to connect)
     const onConnect = useCallback(async (connection: Connection) => {
         const { source, target } = connection;
@@ -603,10 +643,9 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
             return;
         }
 
-        // Check if connecting memory to tag
+        // Memory-to-tag: add tag to memory
         const isMemoryToTag = sourceNode.type === 'memoryNode' && targetNode.type === 'tagNode';
         const isTagToMemory = sourceNode.type === 'tagNode' && targetNode.type === 'memoryNode';
-
         if (isMemoryToTag || isTagToMemory) {
             const memoryId = isMemoryToTag ? source : target;
             const tagNode = isMemoryToTag ? targetNode : sourceNode;
@@ -619,8 +658,6 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                     message: success ? `Added tag #${tag} to memory` : 'Failed to add tag',
                     type: success ? 'success' : 'error'
                 });
-
-                // Hide toast after 2 seconds
                 setTimeout(() => setConnectionToast(prev => ({ ...prev, show: false })), 2000);
             }
         }
@@ -682,6 +719,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                 onNodeClick={onNodeClick}
                 onPaneClick={onPaneClick}
                 onConnect={onConnect}
+                isValidConnection={isValidConnection}
                 nodeTypes={nodeTypes}
                 fitView
                 fitViewOptions={{ padding: 0.2 }}
@@ -724,7 +762,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
             {/* Connection Hint + Legend */}
             <div className="absolute top-2 left-2 flex flex-col gap-2 z-10">
                 <div className="px-3 py-1.5 bg-white/90 rounded-lg shadow text-xs text-gray-500">
-                    <span className="font-medium text-purple-600">Tip:</span> Drag from memory to tag to connect
+                    <span className="font-medium text-purple-600">Tip:</span> Memory ↔ Tag. Tag: alle 4 Seiten für Verbindungen.
                 </div>
                 <div className="px-3 py-2 bg-white/90 rounded-lg shadow text-xs text-gray-500 max-w-[280px]">
                     <div className="font-medium text-gray-600 mb-1.5">Legend</div>

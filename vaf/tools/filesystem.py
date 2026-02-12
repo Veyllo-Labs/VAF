@@ -6,12 +6,14 @@ from typing import List, Tuple
 import heapq
 
 # Common Safety Logic
-# Common Safety Logic
 BLOCKED_DIRS = [
-    "Windows", "Program Files", "Program Files (x86)", "System32", # Windows
-    "/etc", "/usr", "/sys", "/proc", "/var", "/boot", # Linux/Mac
+    "Windows", "Program Files", "Program Files (x86)", "System32",  # Windows
+    "/etc", "/usr", "/sys", "/proc", "/var", "/boot",  # Linux/Mac
     ".git", ".ssh", "node_modules", ".env", "id_rsa"
 ]
+
+# VAF program root - agent must NEVER access this (source code, config, secrets)
+_VAF_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 def _resolve_folder_alias(path_str: str) -> str:
     """Resolve folder aliases like 'Desktop', 'Documents' to actual paths.
@@ -108,15 +110,24 @@ def _resolve_folder_alias(path_str: str) -> str:
 
 def is_safe_path(path):
     try:
-         # First resolve folder aliases
-         resolved = _resolve_folder_alias(path)
-         abs_path = os.path.abspath(os.path.expanduser(resolved))
-         for blocked in BLOCKED_DIRS:
-             if blocked in abs_path:
-                 return False, f"Access denied: {blocked}"
-         return True, abs_path
-    except:
-         return False, "Invalid path"
+        # First resolve folder aliases
+        resolved = _resolve_folder_alias(path)
+        abs_path = os.path.abspath(os.path.expanduser(resolved))
+
+        # CRITICAL: Never allow access to VAF program root (source, config, secrets)
+        try:
+            target = Path(abs_path).resolve()
+            if target == _VAF_PROJECT_ROOT or target.is_relative_to(_VAF_PROJECT_ROOT):
+                return False, "Access denied: VAF program directory is protected"
+        except (ValueError, OSError):
+            pass
+
+        for blocked in BLOCKED_DIRS:
+            if blocked in abs_path:
+                return False, f"Access denied: {blocked}"
+        return True, abs_path
+    except Exception:
+        return False, "Invalid path"
 
 class ListFilesTool(BaseTool):
     name = "list_files"

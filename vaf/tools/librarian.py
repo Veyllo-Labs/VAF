@@ -17,7 +17,15 @@ from rich.live import Live
 
 from vaf.tools.base import BaseTool
 from vaf.cli.ui import UI, AnimatedHeader
-from vaf.tools.filesystem import ReadFileTool, ListFilesTool, TreeTool, FinderTool, WriteFileTool, FolderSizeTool
+from vaf.tools.filesystem import (
+    ReadFileTool,
+    ListFilesTool,
+    TreeTool,
+    FinderTool,
+    WriteFileTool,
+    FolderSizeTool,
+    is_safe_path,
+)
 from vaf.tools.python_sandbox import PythonSandboxTool
 from vaf.tools.document_viewer import DocumentViewerTool, DocumentEditorTool, ReplaceEditorSelectionTool
 from vaf.core.fs_map import CachedFilesystemMap
@@ -766,9 +774,14 @@ Remove duplicates and ensure smooth flow.
     
     def _count_files(self, path: Path, file_type: str = None) -> str:
         """Count files in directory, optionally filtered by extension."""
+        safe, res = is_safe_path(str(path))
+        if not safe:
+            return f"[ERROR] {res}"
+        path = Path(res)
+
         filter_text = f" ({file_type.upper()} files)" if file_type else ""
         UI.event("Librarian", f"Counting files{filter_text} in {path}...", style="dim")
-        
+
         if not path.exists():
             return f"[ERROR] Path does not exist: {path}"
         
@@ -835,8 +848,13 @@ Remove duplicates and ensure smooth flow.
     
     def _list_files(self, path: Path, limit: int = 30) -> str:
         """List files in directory."""
+        safe, res = is_safe_path(str(path))
+        if not safe:
+            return f"[ERROR] {res}"
+        path = Path(res)
+
         UI.event("Librarian", f"Listing files in {path}...", style="dim")
-        
+
         if not path.exists():
             return f"[ERROR] Path does not exist: {path}"
         
@@ -884,8 +902,13 @@ Remove duplicates and ensure smooth flow.
     
     def _find_files(self, path: Path, pattern: str) -> str:
         """Find files matching pattern."""
+        safe, res = is_safe_path(str(path))
+        if not safe:
+            return f"[ERROR] {res}"
+        path = Path(res)
+
         UI.event("Librarian", f"Searching for '{pattern}' in {path}...", style="dim")
-        
+
         if not path.exists():
             return f"[ERROR] Path does not exist: {path}"
         
@@ -960,13 +983,18 @@ Remove duplicates and ensure smooth flow.
     
     def _read_file(self, file_path: Path, enable_chunking: bool = True) -> str:
         """Read file contents - supports text, PDF, Word, Excel, PowerPoint.
-        
+
         Args:
             file_path: Path to the file to read
             enable_chunking: If True, automatically chunk large files (default: True)
         """
+        safe, res = is_safe_path(str(file_path))
+        if not safe:
+            return f"[ERROR] {res}"
+        file_path = Path(res)
+
         UI.event("Librarian", f"Reading {file_path}...", style="dim")
-        
+
         if not file_path.exists():
             return f"[ERROR] File does not exist: {file_path}"
         
@@ -1278,8 +1306,13 @@ Remove duplicates and ensure smooth flow.
     
     def _show_tree(self, path: Path, max_depth: int = 3) -> str:
         """Show directory tree."""
+        safe, res = is_safe_path(str(path))
+        if not safe:
+            return f"[ERROR] {res}"
+        path = Path(res)
+
         UI.event("Librarian", f"Building tree for {path}...", style="dim")
-        
+
         if not path.exists():
             return f"[ERROR] Path does not exist: {path}"
         

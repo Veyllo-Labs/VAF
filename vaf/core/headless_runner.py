@@ -300,13 +300,24 @@ def run_headless_agent():
                 try:
                     agent.load_session_context(task.session_id)
                     # Persist user to session metadata so load_session_context gets it on next load
-                    if meta.get("user_scope_id") is not None or meta.get("username") is not None:
+                    # Also persist telegram_chat_id for sessions from Telegram (needed when subagent completes later)
+                    if (
+                        meta.get("user_scope_id") is not None
+                        or meta.get("username") is not None
+                        or meta.get("telegram_chat_id") is not None
+                    ):
                         try:
                             session = session_mgr.load(task.session_id)
                             if meta.get("user_scope_id") is not None:
                                 session.metadata["user_scope_id"] = meta.get("user_scope_id")
                             if meta.get("username") is not None:
                                 session.metadata["username"] = meta.get("username")
+                            if meta.get("telegram_chat_id") is not None:
+                                session.metadata["telegram_chat_id"] = meta["telegram_chat_id"]
+                            if meta.get("voice_lang"):
+                                session.metadata["voice_lang"] = meta["voice_lang"]
+                            if getattr(task, "source", None) == "telegram":
+                                session.metadata["source"] = "telegram"
                             session_mgr.save(session)
                         except Exception:
                             pass
@@ -1088,6 +1099,26 @@ def run_headless_agent():
                                     disable_workflows=True,
                                     disable_tools=False
                                 )
+
+                                # Send subagent summary to Telegram if this session originated from Telegram
+                                try:
+                                    sid = getattr(agent, "current_session_id", None)
+                                    if sid and response_parts:
+                                        session = session_mgr.load(sid)
+                                        chat_id = session.metadata.get("telegram_chat_id")
+                                        if chat_id:
+                                            from vaf.core.telegram_reply import send_telegram_reply
+
+                                            out = "".join(response_parts)
+                                            out = re.sub(r"<think>.*?</think>", "", out, flags=re.DOTALL)
+                                            out = re.sub(r"\n{3,}", "\n\n", out).strip()
+                                            if not out:
+                                                out = "[No summary generated]"
+                                            send_telegram_reply(str(chat_id), out)
+                                except Exception as e:
+                                    logging.getLogger(__name__).warning(
+                                        "Failed to send subagent summary to Telegram: %s", e
+                                    )
                     except Exception as e:
                         print(f"[Headless] Sub-agent result processing error: {e}")
 

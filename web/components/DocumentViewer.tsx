@@ -364,7 +364,7 @@ function extractDocxBlocks(html: string): string[] {
     return blocks;
 }
 
-const DOCX_BLOCKS_PER_PAGE = 15;
+const DOCX_BLOCKS_PER_PAGE = 28;
 
 /** Paginate DOCX into DIN A4 pages. Tables stay whole. Document-like styling. */
 function wrapDocxAsDocument(bodyHtml: string): string {
@@ -382,6 +382,7 @@ function wrapDocxAsDocument(bodyHtml: string): string {
         p{margin:0 0 6pt;}
         table{border-collapse:collapse;width:100%;margin:6pt 0;}td,th{border:1px solid #333;padding:4pt 6pt;vertical-align:top;}
         ul,ol{margin:0 0 6pt;padding-left:20pt;}
+        .docx-page u,.docx-placeholder{text-decoration:underline;text-underline-offset:1px;}
     `;
     if (blocks.length === 0) {
         return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>${style}</style></head><body><div class="docx-doc"><div class="docx-page-wrap"><span class="docx-page-label">Seite 1 von 1</span><div class="docx-page"><p></p></div></div></div></body></html>`;
@@ -389,7 +390,8 @@ function wrapDocxAsDocument(bodyHtml: string): string {
     const pageCount = Math.max(1, Math.ceil(blocks.length / DOCX_BLOCKS_PER_PAGE));
     const pages: string[] = [];
     for (let p = 0; p < pageCount; p++) {
-        const chunk = blocks.slice(p * DOCX_BLOCKS_PER_PAGE, (p + 1) * DOCX_BLOCKS_PER_PAGE).join('');
+        let chunk = blocks.slice(p * DOCX_BLOCKS_PER_PAGE, (p + 1) * DOCX_BLOCKS_PER_PAGE).join('');
+        chunk = chunk.replace(/\[([^\]]+)\]/g, '<u class="docx-placeholder">[$1]</u>');
         pages.push(`<div class="docx-page-wrap"><span class="docx-page-label">Seite ${p + 1} von ${pageCount}</span><div class="docx-page">${chunk}</div></div>`);
     }
     return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>${style}</style></head><body><div class="docx-doc">${pages.join('')}</div></body></html>`;

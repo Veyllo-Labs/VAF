@@ -2691,8 +2691,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 transition: 'opacity 0.3s ease',
                                             }
                                         }})}
-                                        edges={memoryEdges.map(edge => {
-                                            const isTagEdge = edge.data?.connectionType === 'tag';
+                                        edges={memoryEdges
+                                            .filter(edge => edge.data?.connectionType === 'tag')
+                                            .map(edge => {
                                             const isFaded = selectedMemoryNodeId !== null &&
                                                 !connectedMemoryNodeIds.has(edge.source) &&
                                                 !connectedMemoryNodeIds.has(edge.target);
@@ -2701,17 +2702,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             source: edge.source,
                                             target: edge.target,
                                             type: 'smoothstep',
-                                            animated: edge.data?.connectionType === 'semantic',
+                                            animated: false,
                                             style: {
-                                                stroke: isTagEdge
-                                                    ? '#a855f7'
-                                                    : (edge.data?.connectionType === 'semantic' ? '#6b7280' : '#9ca3af'),
+                                                stroke: '#a855f7',
                                                 strokeWidth: Math.max(1, (edge.data?.strength || 0.5) * 3),
-                                                opacity: isFaded ? 0.15 : (isTagEdge ? 0.5 : 0.6),
-                                                strokeDasharray: isTagEdge ? '5,5' : undefined,
+                                                opacity: isFaded ? 0.15 : 0.5,
+                                                strokeDasharray: '5,5',
                                                 transition: 'opacity 0.3s ease',
                                             },
-                                            markerEnd: isTagEdge ? undefined : { type: MarkerType.ArrowClosed, width: 12, height: 12 },
+                                            markerEnd: undefined,
                                         }})}
                                         onNodeClick={(_, node) => setSelectedMemoryNodeId(node.id)}
                                         onPaneClick={() => setSelectedMemoryNodeId(null)}

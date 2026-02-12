@@ -3,10 +3,18 @@
 import React, { useState, useRef, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { marked } from 'marked';
-import { X, FileText, Plus, Trash2, ChevronRight, ChevronLeft, List } from 'lucide-react';
+import mammoth from 'mammoth';
+import { X, FileText, Plus, Trash2, ChevronRight, ChevronLeft, List, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const PdfWithHighlights = dynamic(() => import('@/components/PdfWithHighlights'), { ssr: false });
+
+/** Check if document is DOCX with raw data for client-side conversion. */
+function isDocxWithData(doc: DocumentViewerDocument): boolean {
+    if (!doc.data) return false;
+    const name = (doc.name || '').toLowerCase();
+    return name.endsWith('.docx');
+}
 
 const AUTO_COLLAPSE_MS = 3000;
 
@@ -337,6 +345,134 @@ function HtmlDocumentIframe({
     );
 }
 
+/** Extract whole blocks in order. Tables, p, h1-h6, ul, ol, div stay intact (never split). */
+function extractDocxBlocks(html: string): string[] {
+    const s = (html || '').trim();
+    if (!s) return [];
+    const re = /<table[\s\S]*?<\/table>|<p[\s\S]*?<\/p>|<h[1-6][^>]*>[\s\S]*?<\/h[1-6]>|<ul[\s\S]*?<\/ul>|<ol[\s\S]*?<\/ol>/gi;
+    const blocks: string[] = [];
+    let match;
+    let lastEnd = 0;
+    while ((match = re.exec(s)) !== null) {
+        const before = s.slice(lastEnd, match.index).trim();
+        if (before) blocks.push(before);
+        blocks.push(match[0]);
+        lastEnd = re.lastIndex;
+    }
+    const rest = s.slice(lastEnd).trim();
+    if (rest) blocks.push(rest);
+    return blocks;
+}
+
+const DOCX_BLOCKS_PER_PAGE = 15;
+
+/** Paginate DOCX into DIN A4 pages. Tables stay whole. Document-like styling. */
+function wrapDocxAsDocument(bodyHtml: string): string {
+    const blocks = extractDocxBlocks((bodyHtml || '').trim());
+    const style = `
+        html,body,*{box-sizing:border-box !important;}
+        body{margin:0;padding:16px 0;min-height:100%;background:#d1d5db !important;
+            font-family:'Times New Roman',Times,serif;font-size:11pt;line-height:1.35;color:#000;}
+        .docx-doc{display:flex;flex-direction:column;align-items:center;gap:24px;width:210mm;margin:0 auto;}
+        .docx-page-wrap{display:flex;flex-direction:column;align-items:flex-start;width:210mm;}
+        .docx-page{width:210mm;min-height:297mm;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,0.12);padding:25mm;}
+        .docx-page-label{font-size:11px;color:#6b7280;margin-bottom:6px;}
+        h1{font-size:18pt;margin:0 0 12pt;font-weight:bold;}
+        h2,h3{font-size:12pt;margin:12pt 0 6pt;font-weight:bold;}
+        p{margin:0 0 6pt;}
+        table{border-collapse:collapse;width:100%;margin:6pt 0;}td,th{border:1px solid #333;padding:4pt 6pt;vertical-align:top;}
+        ul,ol{margin:0 0 6pt;padding-left:20pt;}
+    `;
+    if (blocks.length === 0) {
+        return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>${style}</style></head><body><div class="docx-doc"><div class="docx-page-wrap"><span class="docx-page-label">Seite 1 von 1</span><div class="docx-page"><p></p></div></div></div></body></html>`;
+    }
+    const pageCount = Math.max(1, Math.ceil(blocks.length / DOCX_BLOCKS_PER_PAGE));
+    const pages: string[] = [];
+    for (let p = 0; p < pageCount; p++) {
+        const chunk = blocks.slice(p * DOCX_BLOCKS_PER_PAGE, (p + 1) * DOCX_BLOCKS_PER_PAGE).join('');
+        pages.push(`<div class="docx-page-wrap"><span class="docx-page-label">Seite ${p + 1} von ${pageCount}</span><div class="docx-page">${chunk}</div></div>`);
+    }
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>${style}</style></head><body><div class="docx-doc">${pages.join('')}</div></body></html>`;
+}
+
+/** DOCX viewer using mammoth.js (BSD-2-Clause) – converts in browser, no backend needed. */
+function DocxMammothViewer({
+    doc,
+    onInsertSelection,
+    insertedSelections,
+    insertedSelectionsCount = 0,
+}: {
+    doc: DocumentViewerDocument;
+    onInsertSelection?: (text: string, range: { start: number; end: number; documentId: string }) => void;
+    insertedSelections: InsertedSelectionRange[];
+    insertedSelectionsCount?: number;
+}) {
+    const [htmlContent, setHtmlContent] = React.useState<string | null>(doc.htmlContent || null);
+    const [error, setError] = React.useState<string | null>(null);
+    const [loading, setLoading] = React.useState(!doc.htmlContent && !!doc.data);
+
+    React.useEffect(() => {
+        if (doc.htmlContent) {
+            setHtmlContent(doc.htmlContent);
+            setLoading(false);
+            setError(null);
+            return;
+        }
+        if (!doc.data) {
+            setLoading(false);
+            setError('Keine Dateidaten');
+            return;
+        }
+        let cancelled = false;
+        setLoading(true);
+        setError(null);
+        const base64 = doc.data.startsWith('data:') ? doc.data.split(',', 2)[1] || '' : doc.data;
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        mammoth
+            .convertToHtml({ arrayBuffer: bytes.buffer })
+            .then((result) => {
+                if (cancelled) return;
+                const fullHtml = wrapDocxAsDocument(result.value);
+                setHtmlContent(fullHtml);
+                setLoading(false);
+            })
+            .catch((err) => {
+                if (cancelled) return;
+                setError(err?.message || 'Konvertierung fehlgeschlagen');
+                setLoading(false);
+                setHtmlContent(null);
+            });
+        return () => { cancelled = true; };
+    }, [doc.id, doc.data, doc.htmlContent]);
+
+    if (loading) {
+        return (
+            <div className="flex flex-1 min-h-[300px] items-center justify-center gap-2 text-gray-500">
+                <Loader2 size={20} className="animate-spin" />
+                <span className="text-sm">Dokument wird geladen…</span>
+            </div>
+        );
+    }
+    if (error || !htmlContent) {
+        return (
+            <div className="flex flex-1 min-h-[200px] items-center justify-center text-sm text-amber-600">
+                {error || '(Kein Textinhalt)'}
+            </div>
+        );
+    }
+    return (
+        <HtmlDocumentIframe
+            doc={doc}
+            htmlContent={htmlContent}
+            onInsertSelection={onInsertSelection}
+            insertedSelections={insertedSelections}
+            insertedSelectionsCount={insertedSelectionsCount}
+        />
+    );
+}
+
 export default function DocumentViewer({
     isOpen,
     onClose,
@@ -512,9 +648,10 @@ export default function DocumentViewer({
                                             const mdHtml = isMarkdownDocument(doc) && doc.content
                                                 ? `<div class="markdown-body">${marked(doc.content, { async: false })}</div>`
                                                 : null;
-                                            const displayHtml = htmlContent ?? officeHtml ?? (mdHtml ? `<!DOCTYPE html><html><head><meta charset="utf-8"/><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css"/><style>.markdown-body{box-sizing:border-box;min-width:200px;max-width:980px;margin:0 auto;padding:45px;}</style></head><body>${mdHtml}</body></html>` : null);
+                                            const displayHtml = htmlContent ?? (isDocxWithData(doc) ? null : officeHtml) ?? (mdHtml ? `<!DOCTYPE html><html><head><meta charset="utf-8"/><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css"/><style>.markdown-body{box-sizing:border-box;min-width:200px;max-width:980px;margin:0 auto;padding:45px;}</style></head><body>${mdHtml}</body></html>` : null);
                                             const showPdf = isPdfWithData(doc);
-                                            const showAsDocument = showPdf || !!displayHtml;
+                                            const showDocx = isDocxWithData(doc);
+                                            const showAsDocument = showPdf || showDocx || !!displayHtml;
                                             return (
                                                 <div
                                                     key={doc.id}
@@ -553,6 +690,13 @@ export default function DocumentViewer({
                                                                 documentId={doc.id}
                                                                 content={doc.content}
                                                                 onInsertSelection={onInsertSelection}
+                                                            />
+                                                        ) : showDocx ? (
+                                                            <DocxMammothViewer
+                                                                doc={doc}
+                                                                onInsertSelection={onInsertSelection}
+                                                                insertedSelections={insertedSelections}
+                                                                insertedSelectionsCount={insertedSelectionsCount}
                                                             />
                                                         ) : displayHtml ? (
                                                             <HtmlDocumentIframe
@@ -741,9 +885,10 @@ export default function DocumentViewer({
                                         const mdHtml = isMarkdownDocument(doc) && doc.content
                                             ? `<div class="markdown-body">${marked(doc.content, { async: false })}</div>`
                                             : null;
-                                        const displayHtml = htmlContent ?? officeHtml ?? (mdHtml ? `<!DOCTYPE html><html><head><meta charset="utf-8"/><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css"/><style>.markdown-body{box-sizing:border-box;min-width:200px;max-width:980px;margin:0 auto;padding:45px;}</style></head><body>${mdHtml}</body></html>` : null);
+                                        const displayHtml = htmlContent ?? (isDocxWithData(doc) ? null : officeHtml) ?? (mdHtml ? `<!DOCTYPE html><html><head><meta charset="utf-8"/><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css"/><style>.markdown-body{box-sizing:border-box;min-width:200px;max-width:980px;margin:0 auto;padding:45px;}</style></head><body>${mdHtml}</body></html>` : null);
                                         const showPdfOverlay = isPdfWithData(doc);
-                                        const showAsDocumentOverlay = showPdfOverlay || !!displayHtml;
+                                        const showDocxOverlay = isDocxWithData(doc);
+                                        const showAsDocumentOverlay = showPdfOverlay || showDocxOverlay || !!displayHtml;
                                         return (
                                             <div
                                                 key={doc.id}
@@ -779,6 +924,13 @@ export default function DocumentViewer({
                                                             documentId={doc.id}
                                                             content={doc.content}
                                                             onInsertSelection={onInsertSelection}
+                                                        />
+                                                    ) : showDocxOverlay ? (
+                                                        <DocxMammothViewer
+                                                            doc={doc}
+                                                            onInsertSelection={onInsertSelection}
+                                                            insertedSelections={insertedSelections}
+                                                            insertedSelectionsCount={insertedSelectionsCount}
                                                         />
                                                     ) : displayHtml ? (
                                                         <HtmlDocumentIframe

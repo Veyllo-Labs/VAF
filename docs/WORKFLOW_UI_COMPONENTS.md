@@ -9,7 +9,8 @@ When a workflow runs in VAF, the WebUI provides several visual components:
 1. **WorkflowChatElement** - Inline chat card showing workflow progress
 2. **VAFWorkflowRuntime** - Right panel with workflow steps and terminal output
 3. **SubAgentWindow** - Panel for sub-agent output (hidden during workflow execution)
-4. **DocumentEditor** - Single right-side document panel: workflow-generated documents (edit, save, PDF, download) and attachments (Anhänge) with quote-from-selection and compact document switcher
+4. **DocumentViewer** - Attachments panel (paperclip): PDF, DOCX, Office, and text display with quote-from-selection
+5. **DocumentEditor** - Single right-side document panel: workflow-generated documents (edit, save, PDF, download) and optional attachments mode with compact document switcher
 
 ## Component Architecture
 
@@ -85,15 +86,27 @@ A single right-side panel used for (1) workflow-generated documents and (2) atta
 - Header: title "Anhänge", dropdown to select current document, "Dokument hinzufügen" and per-document remove
 - Read-only extracted text (or image) for the selected document with persistent highlights
 - **Quote from document**: Selecting text inserts it as a quote chip above the chat input; each selection gets a distinct highlight color (dark, orange, pink, blue, green) and a matching chip; click chip to remove
-- Frontend sends `set_sidebar_documents` with document list; backend replies with `sidebar_documents_set` (`contents: [{ name, content }]`); `chat` messages include `sidebarDocuments` so the LLM receives attachment content
+- Frontend sends `set_sidebar_documents` with document list; backend replies with `sidebar_documents_set`; `chat` messages include `sidebarDocuments` so the LLM receives attachment content
 - State is stored per session (`sessionViewerState`); not cleared on `history_update`
 - User messages show an "Anhänge" indicator (document names) under the bubble when the panel is closed
 
-**Integration:** The right panel renders either DocumentEditor (editor or attachments) or SubAgentWindow. Workflow document opens editor mode; Paperclip (attach) opens DocumentEditor in attachments mode.
+**Integration:** The right panel renders either DocumentViewer, DocumentEditor, or SubAgentWindow. Paperclip (attach) opens DocumentViewer with the attachments list. Workflow document opens DocumentEditor with the generated file.
 
-**Shared types/constants:** `web/components/DocumentViewer.tsx` no longer renders a panel; it exports only types (`InsertedSelectionRange`, `DocumentViewerDocument`) and constants (`CHIP_BG_CLASSES`, `INSERTION_COLOR_CLASSES`) for use by DocumentEditor and the chat input chips.
+### DocumentViewer
 
-_(Document Viewer as a separate panel has been removed; its functionality lives in DocumentEditor attachments mode above.)_
+Located at `web/components/DocumentViewer.tsx`
+
+The attachments panel (paperclip). Displays uploaded documents with:
+- **PDF**: Original PDF via react-pdf with text selection and highlights
+- **DOCX**: Converted to HTML via mammoth.js (client-side, BSD-2-Clause) when `data` is present; no backend required for display
+- **Office** (.xlsx, .pptx): HTML from backend `htmlContent` when available
+- **Markdown, HTML, plain text**: Rendered accordingly
+- **Document list**: Collapsible sidebar (overlays when expanded; compact strip when collapsed)
+- **Quote from document**: Text selection inserts a chip; each selection gets a distinct highlight color
+
+Backend `sidebar_documents_set` payload: `contents: [{ name, content, data?, mimeType?, htmlContent? }]`. DOCX display works even without backend `htmlContent` thanks to client-side mammoth.js.
+
+**Shared exports:** `InsertedSelectionRange`, `DocumentViewerDocument`, `CHIP_BG_CLASSES`, `INSERTION_COLOR_CLASSES` for use by DocumentEditor and chat input chips.
 
 ## Data Flow
 
@@ -122,8 +135,8 @@ _(Document Viewer as a separate panel has been removed; its functionality lives 
 | `workflow_output_stream` | Add line to terminal output |
 | `subagent_output_stream` | Sub-agent output (routed to workflow terminal when running) |
 | `document_ready` | Open DocumentEditor with generated file |
-| `set_sidebar_documents` | Client → Server: set/clear sidebar documents for DocumentEditor (attachments mode) |
-| `sidebar_documents_set` | Server → Client: extracted contents for DocumentEditor attachments display |
+| `set_sidebar_documents` | Client → Server: set/clear sidebar documents for Document Viewer (attachments panel) |
+| `sidebar_documents_set` | Server → Client: extracted contents (`name`, `content`, optional `data`, `mimeType`, `htmlContent`) for Document Viewer display |
 
 ## Store Structure
 

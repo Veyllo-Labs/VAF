@@ -3134,7 +3134,7 @@ export default function VAFDashboard() {
                             className={cn(
                                 "hidden lg:flex h-full items-stretch overflow-hidden transition-all duration-300 ease-out",
                                 (subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen)
-                                    ? "w-[58%] min-w-[640px] max-w-[940px] opacity-100"
+                                    ? "w-[58%] min-w-[704px] max-w-[1000px] opacity-100"
                                     : "w-0 min-w-0 max-w-0 opacity-0 pointer-events-none"
                             )}
                             aria-hidden={!subAgentState.isOpen && !documentEditorState.isOpen && !documentViewerState.isOpen}

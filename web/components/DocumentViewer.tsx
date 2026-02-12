@@ -436,8 +436,8 @@ export default function DocumentViewer({
                 )}
                 aria-hidden={!isOpen}
             >
-                <div className="flex h-full w-full min-w-0 relative">
-                    <div className="flex flex-1 flex-col min-w-0 w-0 bg-[#F9FAFB] rounded-r-2xl overflow-hidden">
+                <div className="relative flex flex-row h-full w-full min-w-0">
+                    <div className="flex flex-1 flex-col min-w-0 bg-[#F9FAFB] rounded-r-2xl overflow-hidden">
                         <div className="flex h-12 items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 shrink-0">
                             <div className="flex items-center gap-3 min-w-0">
                                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-white text-blue-600">
@@ -558,11 +558,10 @@ export default function DocumentViewer({
 
                     <div
                         className={cn(
-                            'absolute top-0 right-0 bottom-0 z-10 flex flex-col border-l border-gray-200 overflow-hidden shadow-[-4px_0_12px_rgba(0,0,0,0.08)]',
-                            'transition-[transform] duration-300 ease-out',
-                            listExpanded ? 'w-[280px] translate-x-0 bg-white' : 'w-[280px] translate-x-[232px] bg-white'
+                            'absolute top-0 right-0 bottom-0 z-10 flex flex-col border-l border-gray-200 overflow-hidden bg-white shadow-[-4px_0_12px_rgba(0,0,0,0.08)]',
+                            'transition-[width] duration-300 ease-out',
+                            listExpanded ? 'w-[280px]' : 'w-12'
                         )}
-                        style={{ willChange: 'transform' }}
                     >
                         {listExpanded ? (
                             <>
@@ -661,8 +660,8 @@ export default function DocumentViewer({
 
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 sm:p-8">
-            <div className="relative flex h-[90vh] w-full max-w-[1400px] overflow-hidden rounded-2xl bg-[#F3F4F6] shadow-2xl min-w-0">
-                <div className="flex flex-1 flex-col min-w-0 w-0 bg-[#F9FAFB] overflow-hidden">
+            <div className="relative flex flex-row h-[90vh] w-full max-w-[1500px] overflow-hidden rounded-2xl bg-[#F3F4F6] shadow-2xl min-w-0">
+                <div className="flex flex-1 flex-col min-w-0 bg-[#F9FAFB] overflow-hidden">
                     <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-gray-200 bg-white px-6">
                         <div className="flex items-center gap-3 min-w-0">
                             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm">
@@ -773,11 +772,10 @@ export default function DocumentViewer({
                 </div>
                 <div
                     className={cn(
-                        'absolute top-0 right-0 bottom-0 z-10 flex flex-col border-l border-gray-200 overflow-hidden shadow-[-4px_0_12px_rgba(0,0,0,0.08)]',
-                        'transition-[transform] duration-300 ease-out',
-                        listExpanded ? 'w-[320px] translate-x-0 bg-white' : 'w-[320px] translate-x-[264px] bg-white'
+                        'absolute top-0 right-0 bottom-0 z-10 flex flex-col border-l border-gray-200 overflow-hidden bg-white shadow-[-4px_0_12px_rgba(0,0,0,0.08)]',
+                        'transition-[width] duration-300 ease-out',
+                        listExpanded ? 'w-[320px]' : 'w-12'
                     )}
-                    style={{ willChange: 'transform' }}
                 >
                     {listExpanded ? (
                         <>

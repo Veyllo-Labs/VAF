@@ -257,9 +257,9 @@ Sub-agents run asynchronously - results arrive later
 """,
         }
         
-        # ═══════════════════════════════════════════════════════════════════════
+        #
         # KEYWORD DETECTION FOR MODULE ACTIVATION
-        # ═══════════════════════════════════════════════════════════════════════
+        # 
         
         self.module_keywords = {
             "coding": [
@@ -510,9 +510,9 @@ Then use the results to answer. Do NOT guess from your training data!
 
 
 
-        # ═══════════════════════════════════════════════════════════════════════
+        # 
         # 2. CURRENT TIME & DATE (user timezone and format from user_identity if set)
-        # ═══════════════════════════════════════════════════════════════════════
+        # 
         now = datetime.now()
         ui_for_time = {}
         if username:
@@ -561,9 +561,9 @@ Then use the results to answer. Do NOT guess from your training data!
             time_str = f"Today is {day_name}, {now.strftime(combined_fmt)}."
         parts.append(f"\n## Current Time\n{time_str}\n")
 
-        # ═══════════════════════════════════════════════════════════════════════
+        # 
         # 2b. LAST INTERACTION & CURRENT CHANNEL (optional)
-        # ═══════════════════════════════════════════════════════════════════════
+        # 
         if current_source or last_interaction:
             line_parts = []
             if last_interaction:
@@ -596,9 +596,30 @@ Then use the results to answer. Do NOT guess from your training data!
                 if block:
                     parts.append(f"\n## Session context\n{block}\n")
 
-        # ═══════════════════════════════════════════════════════════════════════
+        
+        # 2c. CHANNEL CAPABILITIES (when user has NO Web UI)
+        
+        _text_only_channels = ("telegram", "discord", "cli")
+        if current_source and str(current_source).strip().lower() in _text_only_channels:
+            chan = self._format_channel(current_source)
+            caps_de = (
+                f"**Wichtig:** Der Nutzer chattet über {chan} – er hat KEINEN Zugriff auf die Web-UI. "
+                "Er kann keine Dokumente, Anhänge-Listen oder Seiten im Browser ansehen. "
+                "Gib alle relevanten Informationen direkt in deiner Antwort an – extrahiere und zitiere Inhalte, "
+                "anstatt ihn auf etwas \"anzuschauen\" zu verweisen (z.B. nicht \"Schau dir die Seiten an\" oder \"Das Dokument ist in den Anhängen\")."
+            )
+            caps_en = (
+                f"**Important:** The user is chatting via {chan} – they do NOT have access to the Web UI. "
+                "They cannot view documents, attachment lists, or pages in a browser. "
+                "Provide all relevant information directly in your answer – extract and quote content, "
+                "instead of telling them to \"look at\" something (e.g. do not say \"Look at the pages\" or \"The document is in the attachments\")."
+            )
+            caps = caps_de if self.user_language == "de" else caps_en
+            parts.append(f"\n## Channel capabilities\n{caps}\n")
+
+        # 
         # 3. WORKSPACE CONTEXT (CWD Awareness)
-        # ═══════════════════════════════════════════════════════════════════════
+        # ═
         if self.agent and hasattr(self.agent, 'workspace'):
             ws_info = self.agent.workspace.get_context_info()
             parts.append(f"""
@@ -608,9 +629,9 @@ Then use the results to answer. Do NOT guess from your training data!
 **Inside Project:** {'Yes' if ws_info['is_in_project'] else 'No'}
 """)
 
-        # ═══════════════════════════════════════════════════════════════════════
+        #
         # 4. ACTIVE MODULES
-        # ═══════════════════════════════════════════════════════════════════════
+        # 
         active_module_parts = []
         # Sort for stable prompt order
         for module_name in sorted(self.active_modules.keys()):
@@ -620,9 +641,9 @@ Then use the results to answer. Do NOT guess from your training data!
         if active_module_parts:
             parts.extend(active_module_parts)
         
-        # ═══════════════════════════════════════════════════════════════════════
+        #
         # 4. PERSISTENT CONTEXT INJECTION (Brain)
-        # ═══════════════════════════════════════════════════════════════════════
+        #
         if self.mpm:
             try:
                 persistent_context = self.mpm.build_context_injection()
@@ -630,17 +651,17 @@ Then use the results to answer. Do NOT guess from your training data!
             except Exception:
                 pass
 
-        # ═══════════════════════════════════════════════════════════════════════
+        # 
         # 5. TOOL DOCUMENTATION
-        # ═══════════════════════════════════════════════════════════════════════
+        # 
         if self.tools:
             tool_docs = self._build_tool_documentation()
             if tool_docs:
                 parts.append(tool_docs)
         
-        # ═══════════════════════════════════════════════════════════════════════
+        # 
         # 6. USER IDENTITY & INSTRUCTIONS (High Priority - End of Prompt)
-        # ═══════════════════════════════════════════════════════════════════════
+        # 
         if username or user_scope_id:
             user_data = {}
             known_facts = ""

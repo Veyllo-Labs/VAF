@@ -47,6 +47,19 @@ If either is set, it appends a **"## Session context"** block after **"## Curren
 
 No session-context block is added if both `current_source` and `last_interaction` are missing (e.g. first message ever, or CLI without this feature).
 
+### 3a. Channel capabilities (text-only channels)
+
+When the current channel is **Telegram**, **Discord**, or **CLI**, the system prompt adds a **"## Channel capabilities"** block that instructs the model:
+
+- The user does **not** have access to the Web UI on this channel.
+- They cannot view documents, attachment lists, or pages in a browser.
+- Provide all relevant information **directly in the answer** – extract and quote content.
+- **Never** tell the user to "look at" something (e.g. "Schau dir die Seiten an", "Look at the document in the attachments").
+
+This prevents the model from giving unhelpful responses such as "The document is in the attachments – look at the pages" when the user is on Telegram or Discord and has no Web UI.
+
+The block is shown only when `current_source` is one of `telegram`, `discord`, or `cli`. When the user is in the **Web UI** (`source="web"`), this block is omitted.
+
 ### 3b. Messaging connections block
 
 When the current user has at least one **messaging connection** (Telegram or Discord) and a username or user_scope_id is available, `build_prompt()` also adds a **"## Messaging connections (proactive messages)"** subsection inside the **"## 👤 CURRENT USER CONTEXT"** block. It states:
@@ -69,6 +82,7 @@ This block is built using `vaf/core/messaging_connections.get_messaging_connecti
 |----------------|------|--------|
 | Store read/write | `vaf/core/last_interaction.py` | `update_last_interaction()`, `get_last_interaction()`, JSON under data dir |
 | Prompt block text | `vaf/core/system_prompt.py` | `build_prompt(..., current_source=..., last_interaction=...)`, section "2b. LAST INTERACTION & CURRENT CHANNEL" |
+| Channel capabilities | `vaf/core/system_prompt.py` | Section "2c. CHANNEL CAPABILITIES" – added when `current_source` is telegram/discord/cli |
 | Passing data into prompt | `vaf/core/agent.py` | Both `build_prompt` calls pass `current_source` and `last_interaction` |
 | Set channel and write store | `vaf/core/headless_runner.py` | Before `chat_step`: set `_current_chat_source`; after `chat_step`: call `update_last_interaction()` |
 | Set channel (Gateway/Discord) | `vaf/core/gateway.py` | Before `chat_step`: set `_current_chat_source` from `context.platform` (e.g. `"discord"`). Discord bridge sends `platform: "discord"` in payload. |

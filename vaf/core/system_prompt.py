@@ -371,10 +371,12 @@ Sub-agents run asynchronously - results arrive later
         return f"{years} years ago" if years != 1 else "1 year ago"
 
     def _format_channel(self, source: str) -> str:
-        """Display name for channel in prompt (WebUI, Telegram, CLI)."""
+        """Display name for channel in prompt (WebUI, Telegram, CLI, Discord)."""
         s = (source or "").strip().lower()
         if s == "telegram":
             return "Telegram"
+        if s == "discord" or s.startswith("discord"):
+            return "Discord"
         if s == "cli":
             return "CLI"
         return "WebUI"

@@ -172,6 +172,13 @@ def run_agent_step(agent: Agent, text: str, context: dict):
     """Blocking function to run the agent step."""
     from vaf.core.config import Config
 
+    # Session context: so the agent knows which channel (e.g. Discord vs CLI)
+    source = (context or {}).get("platform", "cli")
+    if isinstance(source, str) and source.strip():
+        agent._current_chat_source = source.strip().lower()
+    else:
+        agent._current_chat_source = "cli"
+
     # RAG: fetch memory context for this turn (pre-injection, before LLM)
     memory_context = ""
     try:

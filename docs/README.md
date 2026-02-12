@@ -14,7 +14,7 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 
 ### Speech & Voice
 - **SPEECH_FEATURES.md**: Complete TTS/STT integration across CLI, Web UI, and Telegram.
-- **DOCKER_SERVICES.md**: Docker containers for TTS (Piper), STT (Whisper), database, and Redis.
+- **DOCKER_SERVICES.md**: Docker containers for TTS (Piper), STT (Whisper), Gotenberg (Office→PDF), database, and Redis.
 
 ### Messaging & Integration
 - **TELEGRAM_INTEGRATION.md**: Telegram bot with voice message support and user whitelisting.

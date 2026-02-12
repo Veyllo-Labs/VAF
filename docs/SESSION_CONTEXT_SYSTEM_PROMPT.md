@@ -1,6 +1,6 @@
 # Session Context in the System Prompt
 
-This document describes how the agent gets "last user interaction" and "current channel" (WebUI, Telegram, CLI) in its system prompt, and where that text comes from.
+This document describes how the agent gets "last user interaction" and "current channel" (WebUI, Telegram, CLI, Discord) in its system prompt, and where that text comes from.
 
 ## Purpose
 
@@ -19,7 +19,7 @@ After each user message is fully processed (after `chat_step` returns), the head
 
 - **Who:** `user_scope_id` (or a default key for single-user).
 - **When:** current timestamp.
-- **Where:** `source` — `"web"`, `"telegram"`, or `"cli"`.
+- **Where:** `source` — `"web"`, `"telegram"`, `"cli"`, or `"discord"`.
 - **About what:** a short preview of the user message (single line, max 80 characters, whitespace normalized).
 
 That record is written to a JSON file in the platform data directory (see [Storage](#storage)). The **next** turn will read this as "last interaction"; the current turn does not see itself in "last interaction".
@@ -43,7 +43,7 @@ If either is set, it appends a **"## Session context"** block after **"## Curren
 
 - The user’s display name from user identity (or "the user" if none).
 - Relative time from the last interaction timestamp. Steps: under 1 h → minutes; 1–24 h → hours; 1 day → "yesterday"; 2–29 days → days; 30+ days → months (≈30 days each); 365+ days → years. Language follows the prompt language (e.g. "5 min ago" / "vor 5 Min.", "2 months ago" / "vor 2 Monaten").
-- Channel display names: "WebUI", "Telegram", "CLI".
+- Channel display names: "WebUI", "Telegram", "CLI", "Discord".
 
 No session-context block is added if both `current_source` and `last_interaction` are missing (e.g. first message ever, or CLI without this feature).
 
@@ -71,6 +71,7 @@ This block is built using `vaf/core/messaging_connections.get_messaging_connecti
 | Prompt block text | `vaf/core/system_prompt.py` | `build_prompt(..., current_source=..., last_interaction=...)`, section "2b. LAST INTERACTION & CURRENT CHANNEL" |
 | Passing data into prompt | `vaf/core/agent.py` | Both `build_prompt` calls pass `current_source` and `last_interaction` |
 | Set channel and write store | `vaf/core/headless_runner.py` | Before `chat_step`: set `_current_chat_source`; after `chat_step`: call `update_last_interaction()` |
+| Set channel (Gateway/Discord) | `vaf/core/gateway.py` | Before `chat_step`: set `_current_chat_source` from `context.platform` (e.g. `"discord"`). Discord bridge sends `platform: "discord"` in payload. |
 
 ## User isolation
 
@@ -86,7 +87,7 @@ So the "Session context" block in the system prompt always refers to the **same*
 - **Path:** `Platform.data_dir() / "last_interaction.json"` (OS-dependent; see `vaf/core/platform.py`).
 - **Shape:** One object keyed by user. Key is `user_scope_id` as string (e.g. UUID), or `"default"` when there is no scope. Each value has:
   - `ts`: Unix timestamp (float)
-  - `source`: `"web"` | `"telegram"` | `"cli"`
+  - `source`: `"web"` | `"telegram"` | `"cli"` | `"discord"`
   - `preview`: sanitized, truncated preview of the user message (max 80 chars, single line)
 
 Example with two users (Max and Susanne each have their own key):

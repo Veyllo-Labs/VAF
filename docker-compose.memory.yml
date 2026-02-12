@@ -1,6 +1,6 @@
 # VAF Memory System - Docker Compose
 # ====================================
-# Containers: postgres (Memory/Auth DB), redis, sandbox, tts, stt.
+# Containers: postgres (Memory/Auth DB), redis, sandbox, gotenberg, tts, stt.
 #
 # Start (from project root):
 #   docker compose -f docker-compose.memory.yml up -d
@@ -14,6 +14,7 @@
 #   - PostgreSQL 16 + pgvector (vector DB for Memory/RAG + Auth/User DB – do not remove/alter)
 #   - Redis 7 (cache for embeddings, sessions)
 #   - Python sandbox (safe code execution)
+#   - Gotenberg (LibreOffice) – optional, Office→PDF for Document Viewer (document_conversion_docker_url)
 #   - TTS (Piper HTTP) – optional, for speech_tts_engine=docker
 #   - STT (Whisper HTTP) – optional, for local STT via Docker
 #

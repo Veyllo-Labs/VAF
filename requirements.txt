@@ -54,6 +54,7 @@ rumps>=0.4.0; sys_platform == "darwin"      # Native macOS menu bar app
 ruff>=0.1.0  # Fast Python linter and formatter
 
 # Document Processing (PDF, Word, etc.)
+# Gotenberg (Docker): optional Office→PDF for Document Viewer; see docs/DOCKER_SERVICES.md
 PyPDF2>=3.0.0  # PDF reading
 pycryptodome>=3.15.0  # Required by PyPDF2 for AES-encrypted PDFs (e.g. bank statements)
 pdf2image>=1.16.0  # PDF → images for OCR (scanned PDFs); system: poppler required

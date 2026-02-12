@@ -98,13 +98,12 @@ Located at `web/components/DocumentViewer.tsx`
 
 The attachments panel (paperclip). Displays uploaded documents with:
 - **PDF**: Original PDF via react-pdf with text selection and highlights
-- **DOCX**: Converted to HTML via mammoth.js (client-side, BSD-2-Clause) when `data` is present; no backend required for display
-- **Office** (.xlsx, .pptx): HTML from backend `htmlContent` when available
+- **Office** (.docx, .xlsx, .pptx, .odt, .ods, .odp): When Gotenberg is running, the backend converts to PDF and returns `mimeType: application/pdf` with `data` (PDF base64), so the frontend uses the PDF viewer for full design fidelity. Without Gotenberg: DOCX via client-side mammoth.js when `data` is present; .xlsx/.pptx via backend `htmlContent` (HTML)
 - **Markdown, HTML, plain text**: Rendered accordingly
 - **Document list**: Collapsible sidebar (overlays when expanded; compact strip when collapsed)
 - **Quote from document**: Text selection inserts a chip; each selection gets a distinct highlight color
 
-Backend `sidebar_documents_set` payload: `contents: [{ name, content, data?, mimeType?, htmlContent? }]`. DOCX display works even without backend `htmlContent` thanks to client-side mammoth.js.
+Backend `sidebar_documents_set` payload: `contents: [{ name, content, data?, mimeType?, htmlContent? }]`. With Gotenberg, Office docs are converted to PDF for native display. Fallback: `htmlContent` for Office, or mammoth.js for DOCX when `data` is present.
 
 **Shared exports:** `InsertedSelectionRange`, `DocumentViewerDocument`, `CHIP_BG_CLASSES`, `INSERTION_COLOR_CLASSES` for use by DocumentEditor and chat input chips.
 

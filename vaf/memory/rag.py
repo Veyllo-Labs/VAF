@@ -722,28 +722,40 @@ async def auto_capture_memory(
     return 1
 
 
-def _parse_memory_reply(reply: str) -> List[str]:
+def _parse_memory_reply(reply: str) -> List[Tuple[str, List[str]]]:
     """
-    Parse compaction LLM reply for MEMORY: "..." or MEMORY: ... lines.
-    Returns list of content strings; NO_REPLY or no MEMORY lines => [].
+    Parse compaction LLM reply for MEMORY: "..." [tag1, tag2] or MEMORY: "..." lines.
+    Returns list of (content, tags) tuples; NO_REPLY or no MEMORY lines => [].
+    Tags are optional; format: MEMORY: "content" [tag1, tag2]. If no tags, returns [].
     """
     if not reply or not reply.strip():
         return []
     reply_upper = reply.strip().upper()
     if "NO_REPLY" in reply_upper and "MEMORY:" not in reply_upper:
         return []
-    out = []
+    out: List[Tuple[str, List[str]]] = []
+    # Match: MEMORY: "content" [tag1, tag2] or MEMORY: "content" or MEMORY: 'content'
+    tag_suffix_re = re.compile(r'\s+\[([^\]]*)\]$')
     for line in reply.splitlines():
         line = line.strip()
         if not line.upper().startswith("MEMORY:"):
             continue
         rest = line[7:].strip()
+        # Extract optional tags from suffix [tag1, tag2]
+        tags: List[str] = []
+        tag_match = tag_suffix_re.search(rest)
+        if tag_match:
+            tags = [t.strip().lower() for t in tag_match.group(1).split(",") if t.strip()]
+            rest = rest[: tag_match.start()].strip()
+        # Extract quoted content
         if rest.startswith('"') and rest.endswith('"'):
-            rest = rest[1:-1].replace('\\"', '"')
+            content = rest[1:-1].replace('\\"', '"')
         elif rest.startswith("'") and rest.endswith("'"):
-            rest = rest[1:-1].replace("\\'", "'")
-        if rest:
-            out.append(rest)
+            content = rest[1:-1].replace("\\'", "'")
+        else:
+            content = rest
+        if content:
+            out.append((content, tags))
     return out
 
 
@@ -848,18 +860,20 @@ def run_session_compaction_sync(
         prompt = (
             "You are storing durable memories from this chat. Read the conversation below and output concrete facts worth remembering: "
             "user preferences, name, decisions, events, technical choices, or anything the user would want recalled later. "
-            "Output each fact as a single line: MEMORY: \"fact in English\". Do not output meta-commentary (e.g. no \"final check\", \"compliance\", or \"retention policy\"). "
+            'Output each fact as: MEMORY: "fact in English" [tag1, tag2]. '
+            "Use 1-3 relevant tags per memory (e.g. preferences, work, personal, project-x, decisions). Tags help filter in the memory graph. "
+            "Do not output meta-commentary (e.g. no \"final check\", \"compliance\", or \"retention policy\"). "
             f"Reply with exactly NO_REPLY if there is nothing concrete to store.\n\n"
             "--- Conversation ---\n"
             f"{conversation}\n"
             "---\n\n"
-            "Output MEMORY: lines or NO_REPLY."
+            "Output MEMORY: \"...\" [tags] lines or NO_REPLY."
         )
     else:
         prompt = (
             "Session nearing compaction. Store durable memories now. "
             f"Write any lasting notes to memory/{date_str}.md. "
-            "Output each fact as MEMORY: \"...\" in English. Reply with NO_REPLY if nothing to store."
+            'Output each fact as MEMORY: "fact in English" [tag1, tag2]. Use 1-3 tags per memory. Reply with NO_REPLY if nothing to store.'
         )
     try:
         reply = agent._generate_for_compaction(prompt)
@@ -878,8 +892,8 @@ def run_session_compaction_sync(
         except Exception:
             pass
         return
-    memories = _parse_memory_reply(reply)
-    if not memories:
+    memory_tuples = _parse_memory_reply(reply)
+    if not memory_tuples:
         _compaction_log("COMPACTION_NO_REPLY", session_id=session_id)
         state[session_id] = current_turn_count
         _save_compaction_state(state)
@@ -900,16 +914,20 @@ def run_session_compaction_sync(
     async def _ingest_all() -> None:
         async with get_db() as db:
             pipeline = RagPipeline(db)
-            for content in memories:
+            for content, tags in memory_tuples:
                 if not content or not content.strip():
                     continue
+                meta: Dict[str, Any] = {
+                    "source": f"memory/{date_str}",
+                    "type": "conversation",  # From 15-message compaction; orange in graph
+                }
+                if tags:
+                    meta["tags"] = tags
+                else:
+                    meta["tags"] = ["compaction"]  # Fallback so memories are filterable
                 await pipeline.ingest(
                     content=content.strip(),
-                    metadata={
-                        "title": f"Compaction {date_str}",
-                        "source": f"memory/{date_str}",
-                        "type": "memory_flush",
-                    },
+                    metadata=meta,
                     user_scope_id=user_scope_id,
                     auto_connect=False,
                 )
@@ -931,7 +949,7 @@ def run_session_compaction_sync(
     except Exception as e:
         logger.warning("Compaction ingest failed: %s", e)
         _compaction_log("COMPACTION_INGEST_FAIL", session_id=session_id, error=str(e)[:200])
-    _compaction_log("COMPACTION_DONE", session_id=session_id, memories=str(len(memories)), date=date_str)
+    _compaction_log("COMPACTION_DONE", session_id=session_id, memories=str(len(memory_tuples)), date=date_str)
     state[session_id] = current_turn_count
     _save_compaction_state(state)
 
@@ -954,8 +972,8 @@ def run_session_compaction_sync(
             "type": "memory_learning",
             "status": "completed",
             "session_id": session_id,
-            "memories_saved": len(memories),
-            "message": f"Memory Learning complete! Saved {len(memories)} memories."
+            "memories_saved": len(memory_tuples),
+            "message": f"Memory Learning complete! Saved {len(memory_tuples)} memories."
         })
     except Exception:
         pass

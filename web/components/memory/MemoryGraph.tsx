@@ -29,6 +29,7 @@ import ReactFlow, {
     MarkerType,
     Connection,
     ConnectionLineType,
+    getSmoothStepPath,
     NodeChange,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
@@ -143,13 +144,46 @@ function applyCollisionDetection(nodes: Node[]): Node[] {
     return result;
 }
 
+// Type-to-stroke-color map (matches node border colors)
+const TYPE_STROKE_COLORS: Record<string, string> = {
+    note: '#60a5fa',
+    conversation: '#fb923c',
+    memory_flush: '#fb923c',
+    document: '#c084fc',
+    code: '#4ade80',
+};
+const DEFAULT_STROKE = '#9ca3af';
+
+// Custom ConnectionLine: stroke color matches source memory type (orange memory → orange line)
+function MemoryConnectionLine(props: {
+    fromNode?: { data?: { type?: string; isTagNode?: boolean } };
+    fromX: number;
+    fromY: number;
+    toX: number;
+    toY: number;
+    fromPosition: Position;
+    toPosition: Position;
+}) {
+    const { fromNode, fromX, fromY, toX, toY, fromPosition, toPosition } = props;
+    const memoryType = fromNode?.data?.isTagNode ? null : (fromNode?.data?.type ?? 'default');
+    const stroke = memoryType ? (TYPE_STROKE_COLORS[memoryType] ?? DEFAULT_STROKE) : '#8b5cf6';
+    const [path] = getSmoothStepPath({ sourceX: fromX, sourceY: fromY, targetX: toX, targetY: toY, sourcePosition: fromPosition, targetPosition: toPosition });
+    return (
+        <g>
+            <path fill="none" stroke={stroke} strokeWidth={2} d={path} />
+            <circle cx={toX} cy={toY} fill="#fff" r={3} stroke={stroke} strokeWidth={2} />
+        </g>
+    );
+}
+
 // Custom Memory Node Component
 const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
     const typeColors: Record<string, string> = {
-        note: 'border-blue-400 bg-blue-50',
+        note: 'border-blue-400 bg-blue-50',           // memory_save, auto_capture
         document: 'border-purple-400 bg-purple-50',
         code: 'border-green-400 bg-green-50',
-        conversation: 'border-orange-400 bg-orange-50',
+        conversation: 'border-orange-400 bg-orange-50',  // compaction (15 msgs)
+        memory_flush: 'border-orange-400 bg-orange-50',  // legacy compaction – same as conversation
         default: 'border-gray-400 bg-gray-50'
     };
 
@@ -456,18 +490,17 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         storeEdges
             .filter(edge => showTagConnections || edge.data.connectionType !== 'tag')
             .map(edge => {
-                // Determine edge color based on connection type
-                let strokeColor = '#9ca3af'; // default gray
-                if (edge.data.connectionType === 'semantic') {
-                    strokeColor = '#6b7280'; // darker gray for semantic
-                } else if (edge.data.connectionType === 'tag') {
-                    strokeColor = '#8b5cf6'; // purple for tag connections
-                }
+                // Edge color matches source memory's type (for tag & semantic: source is memory)
+                const sourceNode = storeNodes.find(n => n.id === edge.source);
+                const memoryType = sourceNode?.data?.type ?? 'default';
+                const strokeColor = TYPE_STROKE_COLORS[memoryType] ?? DEFAULT_STROKE;
 
                 // Fade edges that are not connected to selected node
                 const isFaded = selectedNodeId !== null &&
                     !connectedNodeIds.has(edge.source) &&
                     !connectedNodeIds.has(edge.target);
+
+                const isTagEdge = edge.data.connectionType === 'tag';
 
                 return {
                     id: edge.id,
@@ -478,10 +511,10 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                     style: {
                         strokeWidth: edge.style.strokeWidth,
                         opacity: isFaded ? 0.15 : edge.style.opacity,
-                        stroke: (edge.style as any).stroke || strokeColor,
-                        strokeDasharray: edge.data.connectionType === 'tag' ? '5,5' : undefined,
+                        stroke: strokeColor,
+                        strokeDasharray: isTagEdge ? '5,5' : undefined,
                     },
-                    markerEnd: edge.data.connectionType !== 'tag' ? {
+                    markerEnd: !isTagEdge ? {
                         type: MarkerType.ArrowClosed,
                         width: 15,
                         height: 15,
@@ -489,12 +522,12 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                     label: edge.data.label || undefined,
                     labelStyle: {
                         fontSize: 10,
-                        fill: edge.data.connectionType === 'tag' ? '#8b5cf6' : '#666',
-                        fontWeight: edge.data.connectionType === 'tag' ? 500 : 400,
+                        fill: strokeColor,
+                        fontWeight: isTagEdge ? 500 : 400,
                     },
                 };
             }),
-        [storeEdges, showTagConnections, selectedNodeId, connectedNodeIds]
+        [storeEdges, storeNodes, showTagConnections, selectedNodeId, connectedNodeIds]
     );
 
     const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
@@ -654,7 +687,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                 fitViewOptions={{ padding: 0.2 }}
                 minZoom={0.1}
                 maxZoom={2}
-                connectionLineStyle={{ stroke: '#8b5cf6', strokeWidth: 2 }}
+                connectionLineComponent={MemoryConnectionLine}
                 connectionLineType={ConnectionLineType.SmoothStep}
                 defaultEdgeOptions={{
                     type: 'smoothstep',
@@ -688,9 +721,36 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                 </div>
             )}
 
-            {/* Connection Hint */}
-            <div className="absolute top-2 left-2 px-3 py-1.5 bg-white/90 rounded-lg shadow text-xs text-gray-500 z-10">
-                <span className="font-medium text-purple-600">Tip:</span> Drag from memory to tag to connect
+            {/* Connection Hint + Legend */}
+            <div className="absolute top-2 left-2 flex flex-col gap-2 z-10">
+                <div className="px-3 py-1.5 bg-white/90 rounded-lg shadow text-xs text-gray-500">
+                    <span className="font-medium text-purple-600">Tip:</span> Drag from memory to tag to connect
+                </div>
+                <div className="px-3 py-2 bg-white/90 rounded-lg shadow text-xs text-gray-500 max-w-[280px]">
+                    <div className="font-medium text-gray-600 mb-1.5">Legend</div>
+                    <div className="grid grid-cols-1 gap-1 text-[11px]">
+                        <div className="flex items-center gap-2">
+                            <span className="w-3 h-3 rounded border border-blue-400 bg-blue-50 flex-shrink-0" />
+                            <span>Note – manually saved (memory_save)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="w-3 h-3 rounded border border-orange-400 bg-orange-50 flex-shrink-0" />
+                            <span>Conversation – from chat (15 msg compaction)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="w-3 h-3 rounded border border-purple-400 bg-purple-50 flex-shrink-0" />
+                            <span>Document</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="w-3 h-3 rounded border border-green-400 bg-green-50 flex-shrink-0" />
+                            <span>Code</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="w-3 h-3 rounded border border-gray-400 bg-gray-50 flex-shrink-0" />
+                            <span>Other</span>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     );

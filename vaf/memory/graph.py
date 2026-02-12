@@ -81,6 +81,17 @@ class GraphManager:
 
         if not memories:
             return {"nodes": [], "edges": []}
+
+        # Type-to-stroke-color (matches frontend MemoryGraph)
+        type_stroke = {
+            "note": "#60a5fa",
+            "conversation": "#fb923c",
+            "memory_flush": "#fb923c",
+            "document": "#c084fc",
+            "code": "#4ade80",
+        }
+        default_stroke = "#9ca3af"
+        memory_id_to_type = {str(m.id): (m.meta or {}).get("type", "note") for m in memories}
         
         memory_ids = [m.id for m in memories]
         
@@ -131,11 +142,13 @@ class GraphManager:
         # Build edges from connections
         edges = []
         for conn in connections:
+            mem_type = memory_id_to_type.get(str(conn.source_id), "note")
+            stroke = type_stroke.get(mem_type, default_stroke)
             edge = {
                 "id": str(conn.id),
                 "source": str(conn.source_id),
                 "target": str(conn.target_id),
-                "type": "smoothstep",  # ReactFlow edge type
+                "type": "smoothstep",
                 "animated": conn.connection_type == "semantic",
                 "data": {
                     "strength": conn.strength,
@@ -145,6 +158,7 @@ class GraphManager:
                 "style": {
                     "strokeWidth": max(1, int(conn.strength * 3)),
                     "opacity": 0.3 + (conn.strength * 0.7),
+                    "stroke": stroke,
                 }
             }
             edges.append(edge)
@@ -211,16 +225,17 @@ class GraphManager:
 
             # Create edges from each memory to its tag node
             for memory_id in memory_ids:
-                # Edge thickness based on how many tags this memory has (stronger connection = more tags)
                 tag_count_for_memory = memory_tag_count.get(memory_id, 1)
                 edge_strength = min(1.0, 0.3 + (tag_count_for_memory * 0.2))
                 stroke_width = max(1, min(5, tag_count_for_memory + 1))
+                mem_type = memory_id_to_type.get(memory_id, "note")
+                stroke = type_stroke.get(mem_type, default_stroke)
 
                 edge = {
                     "id": f"tag-edge-{tag}-{memory_id}",
                     "source": memory_id,
                     "target": tag_node_id,
-                    "type": "default",  # Straight lines for organic look
+                    "type": "default",
                     "animated": False,
                     "data": {
                         "strength": edge_strength,
@@ -230,7 +245,7 @@ class GraphManager:
                     "style": {
                         "strokeWidth": stroke_width,
                         "opacity": 0.4 + (edge_strength * 0.4),
-                        "stroke": "#8b5cf6",
+                        "stroke": stroke,
                     }
                 }
                 edges.append(edge)

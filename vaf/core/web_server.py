@@ -2445,8 +2445,9 @@ async def process_uploaded_files(files: list) -> str:
 
 async def process_files_to_sidebar_list(files: list) -> list:
     """
-    Process uploaded files and return a list of {name, content} for sidebar_documents.
+    Process uploaded files and return a list of {name, content, data?, mimeType?} for sidebar_documents.
     Uses same Librarian extraction as process_uploaded_files.
+    Passes through data (base64) and mimeType for PDF display.
     """
     import base64
     import tempfile
@@ -2463,10 +2464,11 @@ async def process_files_to_sidebar_list(files: list) -> list:
             file_data = file_obj.get("data", "")
             mime_type = file_obj.get("mimeType", "")
 
-            if file_data.startswith("data:"):
-                file_data = file_data.split(",", 1)[1] if "," in file_data else file_data
+            base64_part = file_data
+            if base64_part.startswith("data:"):
+                base64_part = base64_part.split(",", 1)[1] if "," in base64_part else base64_part
 
-            decoded_data = base64.b64decode(file_data)
+            decoded_data = base64.b64decode(base64_part)
             file_ext = Path(filename).suffix or ".txt"
             with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as temp_file:
                 temp_file.write(decoded_data)
@@ -2476,7 +2478,12 @@ async def process_files_to_sidebar_list(files: list) -> list:
                 from vaf.tools.librarian import LibrarianTool
                 librarian = LibrarianTool()
                 content = librarian._read_file(Path(temp_path), enable_chunking=True)
-                results.append({"name": filename, "content": content})
+                entry = {"name": filename, "content": content}
+                if base64_part:
+                    entry["data"] = base64_part
+                if mime_type:
+                    entry["mimeType"] = mime_type
+                results.append(entry)
             finally:
                 try:
                     os.unlink(temp_path)

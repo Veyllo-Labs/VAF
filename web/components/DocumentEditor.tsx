@@ -1,9 +1,12 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import { X, Download, FileText, Save, Loader2, CheckCircle2, Circle, Plus, Trash2, ChevronDown, Bold, Italic, Underline, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, Highlighter, Eraser, Printer } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { CHIP_BG_CLASSES, INSERTION_COLOR_CLASSES } from '@/components/DocumentViewer';
+
+const PdfWithHighlights = dynamic(() => import('@/components/PdfWithHighlights'), { ssr: false });
 
 /** Document for attachments mode (extracted text/image). */
 export type DocumentEditorAttachment = {
@@ -11,7 +14,24 @@ export type DocumentEditorAttachment = {
     name: string;
     mimeType?: string;
     content?: string;
+    /** Base64 or data-URL for raw file; used to display original PDF. */
+    data?: string;
 };
+
+/** Check if attachment is a PDF with raw data for original display. */
+function isPdfWithData(doc: DocumentEditorAttachment): boolean {
+    if (!doc.data) return false;
+    const name = (doc.name || '').toLowerCase();
+    const mime = (doc.mimeType || '').toLowerCase();
+    return name.endsWith('.pdf') || mime === 'application/pdf';
+}
+
+/** Build data URL for PDF from base64 or existing data URL. */
+function pdfDataUrl(doc: DocumentEditorAttachment): string {
+    const d = doc.data || '';
+    if (d.startsWith('data:')) return d;
+    return `data:application/pdf;base64,${d}`;
+}
 
 /** One inserted selection for quote chips and persistent highlight. */
 export type InsertedSelectionRange = {
@@ -19,6 +39,8 @@ export type InsertedSelectionRange = {
     start: number;
     end: number;
     documentId: string;
+    pageNumber?: number;
+    itemIndices?: number[];
 };
 
 export type DocumentEditorProps = {
@@ -44,7 +66,7 @@ export type DocumentEditorProps = {
     documents?: DocumentEditorAttachment[];
     onAddFiles?: (files: File[]) => void;
     onRemoveDocument?: (id: string) => void;
-    onInsertSelection?: (text: string, range: { start: number; end: number; documentId: string }) => void;
+    onInsertSelection?: (text: string, range: { start: number; end: number; documentId: string; pageNumber?: number; itemIndices?: number[] }) => void;
     insertedSelectionsCount?: number;
     insertedSelections?: InsertedSelectionRange[];
 };
@@ -918,6 +940,18 @@ export default function DocumentEditor({
                                         <div className="text-gray-400 text-sm">Dokument auswählen.</div>
                                     ) : isAttachmentImage && selectedAttachment.content?.startsWith('data:') ? (
                                         <img src={selectedAttachment.content} alt={selectedAttachment.name} className="max-w-full h-auto" />
+                                    ) : isPdfWithData(selectedAttachment) ? (
+                                        <PdfWithHighlights
+                                            src={pdfDataUrl(selectedAttachment)}
+                                            title={selectedAttachment.name}
+                                            className="w-full min-h-[500px] flex-1"
+                                            selections={insertedSelections
+                                                .filter((s) => s.documentId === selectedAttachment.id)
+                                                .map((s, i) => ({ text: s.text, colorIndex: i, pageNumber: s.pageNumber, itemIndices: s.itemIndices }))}
+                                            documentId={selectedAttachment.id}
+                                            content={selectedAttachment.content}
+                                            onInsertSelection={onInsertSelection}
+                                        />
                                     ) : (
                                         <pre
                                             className={cn(

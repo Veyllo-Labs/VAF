@@ -7,6 +7,8 @@ Two tools for the Web UI document panel:
 - document_editor: Open a document in the Document Editor (single-file editor). The file
   opens in the right-hand editor so the user can view and edit it.
 """
+import base64
+import mimetypes
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
@@ -79,6 +81,15 @@ Pass the full file path. The document appears in the right-hand Document Viewer 
 
         name = path.name
         new_doc = {"name": name, "content": content}
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+            new_doc["data"] = base64.b64encode(raw).decode("ascii")
+            mime_type, _ = mimetypes.guess_type(str(path))
+            if mime_type:
+                new_doc["mimeType"] = mime_type
+        except Exception:
+            pass
 
         try:
             session_mgr = SessionManager()

@@ -1528,7 +1528,7 @@ export default function VAFDashboard() {
                     setInsertedSelections(prev => prev.filter((_, i) => i !== selectionIndex));
                 }
                 else if (data.type === 'sidebar_documents_set') {
-                    const contents = (data.contents || []) as Array<{ name: string; content: string }>;
+                    const contents = (data.contents || []) as Array<{ name: string; content: string; data?: string; mimeType?: string }>;
                     const sid = data.sessionId || activeSessionId;
                     const updater = (prev: { isOpen: boolean; documents: DocumentViewerDoc[] }) => {
                         if (contents.length === 0) return { ...prev, documents: [] };
@@ -1540,6 +1540,8 @@ export default function VAFDashboard() {
                                 id: prev.documents[i]?.id ?? `doc-${i}-${c.name}`,
                                 name: c.name,
                                 content: c.content,
+                                ...(c.data != null && { data: c.data }),
+                                ...(c.mimeType != null && { mimeType: c.mimeType }),
                             })),
                         };
                     };

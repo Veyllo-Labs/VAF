@@ -1,8 +1,11 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { X, FileText, Plus, Trash2, ChevronRight, ChevronLeft, List } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+const PdfWithHighlights = dynamic(() => import('@/components/PdfWithHighlights'), { ssr: false });
 
 const AUTO_COLLAPSE_MS = 3000;
 
@@ -11,6 +14,8 @@ export type DocumentViewerDocument = {
     name: string;
     mimeType?: string;
     content?: string;
+    /** Base64 or data-URL for raw file; used to display original PDF. */
+    data?: string;
 };
 
 /** One inserted selection: text plus range in a specific document, for persistent highlight. */
@@ -19,6 +24,10 @@ export type InsertedSelectionRange = {
     start: number;
     end: number;
     documentId: string;
+    /** PDF page number (1-based) where selection was made; used for per-page highlight matching. */
+    pageNumber?: number;
+    /** Exact PDF text item indices for precise highlighting; avoids text-search issues. */
+    itemIndices?: number[];
 };
 
 export type DocumentViewerProps = {
@@ -31,7 +40,7 @@ export type DocumentViewerProps = {
     onAddFiles: (files: File[]) => void;
     onRemoveDocument: (id: string) => void;
     /** Called when user selects text; range is used to keep highlight visible in the document. */
-    onInsertSelection?: (text: string, range: { start: number; end: number; documentId: string }) => void;
+    onInsertSelection?: (text: string, range: { start: number; end: number; documentId: string; pageNumber?: number; itemIndices?: number[] }) => void;
     /** Number of selections already inserted; used for next selection color when selecting. */
     insertedSelectionsCount?: number;
     /** All inserted selections; used to render persistent highlights in the current document. */
@@ -66,6 +75,21 @@ function isHtmlDocument(doc: DocumentViewerDocument): boolean {
     const name = (doc.name || '').toLowerCase();
     if (name.endsWith('.html') || name.endsWith('.htm')) return true;
     return !!extractHtmlContent(doc.content ?? '');
+}
+
+/** Check if document is a PDF with raw data for original display. */
+function isPdfWithData(doc: DocumentViewerDocument): boolean {
+    if (!doc.data) return false;
+    const name = (doc.name || '').toLowerCase();
+    const mime = (doc.mimeType || '').toLowerCase();
+    return name.endsWith('.pdf') || mime === 'application/pdf';
+}
+
+/** Build data URL for PDF from base64 or existing data URL. */
+function pdfDataUrl(doc: DocumentViewerDocument): string {
+    const d = doc.data || '';
+    if (d.startsWith('data:')) return d;
+    return `data:application/pdf;base64,${d}`;
 }
 
 /** Selection (and chip) color cycle: dark, orange, pink, blue, emerald. Export for use in chip styling. */
@@ -412,7 +436,7 @@ export default function DocumentViewer({
                 )}
                 aria-hidden={!isOpen}
             >
-                <div className="flex h-full w-full min-w-0">
+                <div className="flex h-full w-full min-w-0 relative">
                     <div className="flex flex-1 flex-col min-w-0 w-0 bg-[#F9FAFB] rounded-r-2xl overflow-hidden">
                         <div className="flex h-12 items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 shrink-0">
                             <div className="flex items-center gap-3 min-w-0">
@@ -450,7 +474,7 @@ export default function DocumentViewer({
                             <div
                                 ref={contentAreaRef}
                                 onMouseUp={handleContentMouseUp}
-                                className="flex-1 min-h-0 min-w-0 overflow-auto bg-[#e5e7eb] w-full"
+                                className="flex-1 min-h-0 min-w-0 overflow-auto bg-[#d1d5db] w-full"
                             >
                                 {!hasDocuments ? (
                                     <div className="flex flex-col items-center justify-center h-full min-h-[200px] gap-2 text-gray-400 text-sm">
@@ -463,15 +487,26 @@ export default function DocumentViewer({
                                         {documents.map((doc) => {
                                             const isImg = doc.mimeType?.startsWith('image/') && doc.content?.startsWith('data:');
                                             const htmlContent = isHtmlDocument(doc) ? extractHtmlContent(doc.content ?? '') : null;
+                                            const showPdf = isPdfWithData(doc);
+                                            const selectionsForDoc = insertedSelections
+                                                .map((s, i) => ({ text: s.text, colorIndex: i, documentId: s.documentId, pageNumber: s.pageNumber, itemIndices: s.itemIndices }))
+                                                .filter((s) => s.documentId === doc.id)
+                                                .map(({ text, colorIndex, pageNumber, itemIndices }) => ({ text, colorIndex, pageNumber, itemIndices }));
                                             return (
                                                 <div
                                                     key={doc.id}
-                                                    className="w-[210mm] max-w-full flex justify-center"
+                                                    className={cn(
+                                                        'flex justify-center',
+                                                        showPdf ? 'w-full max-w-4xl' : 'w-[210mm] max-w-full'
+                                                    )}
                                                     data-document-id={doc.id}
                                                 >
                                                     <div
-                                                        className="w-[210mm] max-w-full min-h-[297mm] bg-white shadow-sm box-border py-[25mm] px-[25mm] rounded-sm flex flex-col"
-                                                        style={{
+                                                        className={cn(
+                                                            'box-border rounded-sm flex flex-col',
+                                                            showPdf ? 'w-full min-h-[calc(100vh-6rem)] p-2 pt-0 bg-transparent' : 'w-[210mm] max-w-full min-h-[297mm] py-[25mm] px-[25mm] bg-white shadow-sm',
+                                                        )}
+                                                        style={showPdf ? undefined : {
                                                             backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0, transparent 297mm, rgba(0,0,0,0.06) 297mm, rgba(0,0,0,0.06) 298mm)',
                                                         }}
                                                     >
@@ -485,6 +520,16 @@ export default function DocumentViewer({
                                                             <div className="flex flex-1 min-h-0 items-center justify-center">
                                                                 <img src={doc.content} alt={doc.name} className="max-w-full max-h-full object-contain rounded shadow-sm" />
                                                             </div>
+                                                        ) : showPdf ? (
+                                                            <PdfWithHighlights
+                                                                src={pdfDataUrl(doc)}
+                                                                title={doc.name}
+                                                                className="flex-1 min-h-0"
+                                                                selections={selectionsForDoc}
+                                                                documentId={doc.id}
+                                                                content={doc.content}
+                                                                onInsertSelection={onInsertSelection}
+                                                            />
                                                         ) : htmlContent ? (
                                                             <HtmlDocumentIframe
                                                                 doc={doc}
@@ -516,11 +561,11 @@ export default function DocumentViewer({
 
                     <div
                         className={cn(
-                            'flex flex-col border-l border-gray-200 bg-white overflow-hidden shrink-0',
-                            'transition-[width] duration-300 ease-out',
-                            listExpanded ? 'w-[280px]' : 'w-12'
+                            'absolute top-0 right-0 bottom-0 z-10 flex flex-col border-l border-gray-200 overflow-hidden shadow-[-4px_0_12px_rgba(0,0,0,0.08)]',
+                            'transition-[transform] duration-300 ease-out',
+                            listExpanded ? 'w-[280px] translate-x-0 bg-white' : 'w-[280px] translate-x-[232px] bg-white'
                         )}
-                        style={{ willChange: 'width' }}
+                        style={{ willChange: 'transform' }}
                     >
                         {listExpanded ? (
                             <>
@@ -590,11 +635,11 @@ export default function DocumentViewer({
                                 </div>
                             </>
                         ) : (
-                            <div className="flex flex-col items-center py-3 gap-2 h-full">
+                            <div className="flex flex-col items-center py-3 gap-2 h-full bg-white">
                                 <button
                                     type="button"
                                     onClick={() => setListExpanded(true)}
-                                    className="flex flex-col items-center gap-1.5 rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition w-full"
+                                    className="flex flex-col items-center gap-1.5 rounded-lg p-2 text-gray-600 hover:bg-gray-300 hover:text-gray-800 transition w-full"
                                     title="Dokumentliste einblenden"
                                     aria-label="Dokumentliste einblenden"
                                 >
@@ -652,7 +697,7 @@ export default function DocumentViewer({
                         <div
                             ref={contentAreaRef}
                             onMouseUp={handleContentMouseUp}
-                            className="flex-1 min-h-0 min-w-0 overflow-auto bg-[#e5e7eb] w-full"
+                            className="flex-1 min-h-0 min-w-0 overflow-auto bg-[#d1d5db] w-full"
                         >
                             {!hasDocuments ? (
                                 <div className="flex flex-col items-center justify-center h-full min-h-[280px] gap-2 text-gray-400 text-sm">
@@ -664,15 +709,26 @@ export default function DocumentViewer({
                                     {documents.map((doc) => {
                                         const isImg = doc.mimeType?.startsWith('image/') && doc.content?.startsWith('data:');
                                         const htmlContent = isHtmlDocument(doc) ? extractHtmlContent(doc.content ?? '') : null;
+                                        const showPdfOverlay = isPdfWithData(doc);
+                                        const selectionsForDocOverlay = insertedSelections
+                                            .map((s, i) => ({ text: s.text, colorIndex: i, documentId: s.documentId, pageNumber: s.pageNumber, itemIndices: s.itemIndices }))
+                                            .filter((s) => s.documentId === doc.id)
+                                            .map(({ text, colorIndex, pageNumber, itemIndices }) => ({ text, colorIndex, pageNumber, itemIndices }));
                                         return (
                                             <div
                                                 key={doc.id}
-                                                className="w-[210mm] max-w-full flex justify-center"
+                                                className={cn(
+                                                    'flex justify-center',
+                                                    showPdfOverlay ? 'w-full max-w-4xl' : 'w-[210mm] max-w-full'
+                                                )}
                                                 data-document-id={doc.id}
                                             >
                                                 <div
-                                                    className="w-[210mm] max-w-full min-h-[297mm] bg-white shadow-sm box-border py-[25mm] px-[25mm] rounded-sm flex flex-col"
-                                                    style={{
+                                                    className={cn(
+                                                        'box-border rounded-sm flex flex-col',
+                                                        showPdfOverlay ? 'w-full min-h-[calc(100vh-8rem)] p-2 pt-0 bg-transparent' : 'w-[210mm] max-w-full min-h-[297mm] py-[25mm] px-[25mm] bg-white shadow-sm'
+                                                    )}
+                                                    style={showPdfOverlay ? undefined : {
                                                         backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0, transparent 297mm, rgba(0,0,0,0.06) 297mm, rgba(0,0,0,0.06) 298mm)',
                                                     }}
                                                 >
@@ -683,6 +739,16 @@ export default function DocumentViewer({
                                                         <div className="flex flex-1 min-h-0 items-center justify-center">
                                                             <img src={doc.content} alt={doc.name} className="max-w-full max-h-full object-contain rounded shadow-sm" />
                                                         </div>
+                                                    ) : showPdfOverlay ? (
+                                                        <PdfWithHighlights
+                                                            src={pdfDataUrl(doc)}
+                                                            title={doc.name}
+                                                            className="flex-1 min-h-0"
+                                                            selections={selectionsForDocOverlay}
+                                                            documentId={doc.id}
+                                                            content={doc.content}
+                                                            onInsertSelection={onInsertSelection}
+                                                        />
                                                     ) : htmlContent ? (
                                                         <HtmlDocumentIframe
                                                             doc={doc}
@@ -713,11 +779,11 @@ export default function DocumentViewer({
                 </div>
                 <div
                     className={cn(
-                        'flex flex-col border-l border-gray-200 bg-white overflow-hidden shrink-0',
-                        'transition-[width] duration-300 ease-out',
-                        listExpanded ? 'w-[320px]' : 'w-14'
+                        'absolute top-0 right-0 bottom-0 z-10 flex flex-col border-l border-gray-200 overflow-hidden shadow-[-4px_0_12px_rgba(0,0,0,0.08)]',
+                        'transition-[transform] duration-300 ease-out',
+                        listExpanded ? 'w-[320px] translate-x-0 bg-white' : 'w-[320px] translate-x-[264px] bg-white'
                     )}
-                    style={{ willChange: 'width' }}
+                    style={{ willChange: 'transform' }}
                 >
                     {listExpanded ? (
                         <>
@@ -785,11 +851,11 @@ export default function DocumentViewer({
                             </div>
                         </>
                     ) : (
-                        <div className="flex flex-col items-center py-4 gap-2 h-full">
+                        <div className="flex flex-col items-center py-4 gap-2 h-full bg-white">
                             <button
                                 type="button"
                                 onClick={() => setListExpanded(true)}
-                                className="flex flex-col items-center gap-2 rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition w-full"
+                                className="flex flex-col items-center gap-2 rounded-lg p-2 text-gray-600 hover:bg-gray-300 hover:text-gray-800 transition w-full"
                                 title="Dokumentliste einblenden"
                                 aria-label="Dokumentliste einblenden"
                             >
@@ -800,7 +866,7 @@ export default function DocumentViewer({
                                 </span>
                             </button>
                             {documents.length > 0 && (
-                                <span className="text-xs text-gray-400 tabular-nums">{documents.length}</span>
+                                <span className="text-xs text-gray-500 tabular-nums">{documents.length}</span>
                             )}
                         </div>
                     )}

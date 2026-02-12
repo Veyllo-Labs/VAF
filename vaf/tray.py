@@ -1,4 +1,14 @@
+"""
+VAF System Tray – persistent background service with platform-specific implementations.
 
+Platform split:
+  - macOS (Darwin): Uses rumps for native Cocoa menu bar. Requires main-thread run loop.
+  - Windows/Linux: Uses pystray for system tray. Icon must be shown only after event loop is ready.
+
+Key platform considerations (see docs/SYSTEM_TRAY.md):
+  - Windows: Icon size 32x32; CREATE_NO_WINDOW for subprocesses; os.startfile() for URLs.
+  - macOS: rumps.VafTrayApp; signal handlers for Cmd+Q; delayed_init for RunLoop readiness.
+"""
 import os
 import sys
 
@@ -1083,7 +1093,7 @@ def create_image(color_name):
     path = get_icon_path(color_name)
     if path:
         img = Image.open(path)
-        # Windows taskbar expects 16x16 or 32x32; 64x64 may render poorly
+        # Windows: taskbar expects 16x16 or 32x32 (see docs/SYSTEM_TRAY.md)
         if platform.system() == "Windows" and (img.width > 32 or img.height > 32):
             img = img.resize((32, 32), Image.Resampling.LANCZOS)
         return img
@@ -1358,8 +1368,8 @@ def run_app():
     t_cmd = threading.Thread(target=command_listener, args=(lock_socket,), daemon=True)
     t_cmd.start()
     
-    # CRITICAL: icon.run() MUST be called from main thread (required on macOS)
-    # setup= ensures icon is shown AFTER the event loop is ready (fixes Windows visibility)
+    # CRITICAL: icon.run() from main thread (macOS). setup= shows icon after loop ready (Windows).
+    # See docs/SYSTEM_TRAY.md § Platform Implementation Notes.
     _tray_startup_log("Tray icon.run() starting (blocks until quit)")
     print("[Tray] Running icon.run() on main thread...")
     log("Tray", "Entering Pystray main loop (icon.run)")

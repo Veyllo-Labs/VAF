@@ -311,38 +311,7 @@ def run_workflow(
 
             if event == "start":
                 UI.event("Workflow", f"Step {current}/{total}: {step.tool}...", style="cyan")
-
-                # Try to speak filler for this tool
-                try:
-                    from vaf.core.speech import get_speech_manager
-                    from vaf.core.speech_fillers import TOOL_FILLERS
-                    from vaf.core.config import Config
-
-                    sm = get_speech_manager()
-                    if sm.is_tts_enabled():
-                        lang = Config.get("language", "de")
-                        # Get filler for this tool
-                        filler = TOOL_FILLERS.get(step.tool, {}).get(lang)
-
-                        # Fallback to English if filler not found for current language
-                        if not filler and lang != "en":
-                            filler = TOOL_FILLERS.get(step.tool, {}).get("en")
-
-                        # If no specific filler, but it's a "thinking" moment, maybe use generic?
-                        # For now, only use if we have a specific match
-                        if filler:
-                            # Format with args if available (e.g. {query})
-                            # We need to reconstruct args from resolved input
-                            try:
-                                # This is a bit hacky as we don't have the resolved args here easily
-                                # But we can try to use raw input if it's simple
-                                pass
-                            except:
-                                pass
-
-                            sm.speak(filler, lang=lang)
-                except Exception:
-                    pass
+                # No TTS tool confirmations (user request: avoid "Ich schreibe die Datei" etc.)
 
             elif event == "success":
                 UI.event("Workflow", f"[OK] Step {current}/{total}: {step.tool}", style="green")
@@ -361,18 +330,26 @@ def run_workflow(
             # Extract final output summary
             final_output = str(result.final_output) if result.final_output else ""
 
-            # Create SHORT summary (not full content!)
-            if "written successfully" in final_output.lower() or "saved" in final_output.lower():
-                # File was written - extract path
+            # Resolve output path: prefer workflow outputs (e.g. output_file from deep_research)
+            output_path = None
+            if result.outputs.get("output_file"):
+                p = result.outputs["output_file"]
+                output_path = str(p) if p else None
+            if not output_path and ("written successfully" in final_output.lower() or "saved" in final_output.lower()):
                 import re
-                path_match = re.search(r'(?:to|saved|written)\s+(.+\.(?:html|md|txt|json))', final_output, re.IGNORECASE)
+                path_match = re.search(
+                    r'(?:to|saved|written)[:\s]+([A-Za-z]:[^\s]+\.(?:html|md|txt|json|docx)|/[^\s]+\.(?:html|md|txt|json|docx))',
+                    final_output, re.IGNORECASE
+                )
                 if path_match:
-                    file_path = path_match.group(1).strip()
-                    final_summary = f"Workflow '{template['name']}' completed successfully.\nOutput saved to: {file_path}"
-                else:
-                    final_summary = f"Workflow '{template['name']}' completed successfully.\n{final_output[:200]}"
+                    output_path = path_match.group(1).strip()
+
+            # Create SHORT summary (not full content!)
+            if output_path:
+                final_summary = f"Workflow '{template['name']}' completed successfully.\nOutput saved to: {output_path}"
+            elif "written successfully" in final_output.lower() or "saved" in final_output.lower():
+                final_summary = f"Workflow '{template['name']}' completed successfully.\n{final_output[:200]}"
             else:
-                # Other output - truncate
                 final_summary = f"Workflow '{template['name']}' completed successfully.\nResult: {final_output[:200]}{'...' if len(final_output) > 200 else ''}"
 
             UI.success(f"\n[OK] {final_summary}")
@@ -383,30 +360,21 @@ def run_workflow(
                 ipc.complete_task(task_id, final_summary)
                 UI.success(f"[OK] Result sent to Main Agent [Task: {task_id}]")
 
-            # Notify Web UI so Document Editor opens with the created document (any doc type)
-            if session_id:
-                import re
-                doc_path_match = re.search(
-                    r'(?:to|saved|written)[:\s]+(.+\.(?:html|md|txt|docx))',
-                    final_output,
-                    re.IGNORECASE
-                )
-                if doc_path_match:
-                    doc_path = doc_path_match.group(1).strip()
-                    try:
-                        from vaf.core.web_interface import notify_document_created
-                        notify_document_created(
-                            session_id,
-                            doc_path,
-                            title=template.get('name', 'Document'),
-                        )
-                    except Exception:
-                        send_web_update({
-                            "type": "document_ready",
-                            "workflowId": workflow_id,
-                            "filePath": doc_path,
-                            "title": template.get('name', 'Document'),
-                        })
+            # Notify Web UI so Document Editor opens with the created document
+            if session_id and output_path:
+                try:
+                    from vaf.core.web_interface import notify_document_created
+                    notify_document_created(
+                        session_id,
+                        output_path,
+                        title=template.get('name', 'Document'),
+                    )
+                except Exception:
+                    send_web_update({
+                        "type": "document_ready",
+                        "filePath": output_path,
+                        "title": template.get('name', 'Document'),
+                    })
         else:
             error_msg = result.error or "Unknown error"
             UI.error(f"Workflow failed: {error_msg}")

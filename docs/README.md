@@ -32,6 +32,7 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 - **SANDBOX_MODULES.md**: Sandboxed module system.
 
 ### Platform & Setup
+- **SYSTEM_TRAY.md**: Tray architecture and platform notes (Windows vs macOS implementation details).
 - **WINDOWS_SETUP.md**: Windows-specific setup and troubleshooting.
 - **DESIGN.md**: UI design tokens and component styles.
 - **MODELL_UND_PROVIDER_WECHSEL.md**: Switching between local models and API providers.

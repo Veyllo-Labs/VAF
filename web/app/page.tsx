@@ -1063,12 +1063,15 @@ export default function VAFDashboard() {
             };
         }
 
-        // 2. Optimistic Switch (viewer state is derived from sessionViewerState[id] automatically)
+        // 2. Close Sub-Agent panel – it belongs to the previous session. Viewer/Editor state is per-session and will show correctly for the new session.
+        setSubAgentState(prev => ({ ...prev, isOpen: false }));
+
+        // 3. Optimistic Switch (viewer state is derived from sessionViewerState[id] automatically)
         setCurrentSessionId(id);
         const cached = sessionCache.current[id] || [];
         setMessages(cached);
 
-        // 3. Restore animation state for target session (or default to idle)
+        // 4. Restore animation state for target session (or default to idle)
         const targetState = sessionLoadingStates.current[id];
         if (targetState) {
             setLoading(targetState.loading);
@@ -1081,7 +1084,7 @@ export default function VAFDashboard() {
             setLoadingMessageId(null);
         }
 
-        // 4. Request sync
+        // 5. Request sync
         ws?.send(JSON.stringify({ type: 'load_session', id }));
     };
 
@@ -1539,6 +1542,7 @@ export default function VAFDashboard() {
                     if (contents.length > 0) setShowSubAgentPanel(true);
                 }
                 else if (data.type === 'subagent_update') {
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
                     const statusText = String(data.status || '').trim();
                     const modelLabel = data.model ? `• ${String(data.model)}` : '';
                     const statusLine = `${statusText}${modelLabel ? ` ${modelLabel}` : ''}`.trim();

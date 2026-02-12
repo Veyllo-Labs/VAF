@@ -1205,9 +1205,10 @@ Remove duplicates and ensure smooth flow.
             else:
                 content = file_path.read_text(encoding='utf-8', errors='replace')
             
-            # Truncate if needed
-            if len(content) > 5000:
-                content = content[:5000] + "\n\n... (truncated)"
+            # Truncate if needed. HTML files need higher limit for Document Viewer rendering.
+            truncate_limit = 100_000 if ext in ('.html', '.htm') else 5000
+            if len(content) > truncate_limit:
+                content = content[:truncate_limit] + "\n\n... (truncated)"
             
             return f"### File: {file_path.name}\n\n```\n{content}\n```"
             

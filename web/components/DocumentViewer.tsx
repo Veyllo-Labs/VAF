@@ -38,7 +38,35 @@ export type DocumentViewerProps = {
     insertedSelections?: InsertedSelectionRange[];
 };
 
-const FILE_ACCEPT = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv';
+const FILE_ACCEPT = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv,.html,.htm';
+
+/** Extract raw HTML from content (librarian wraps in ``` or content may be raw HTML). */
+function extractHtmlContent(content: string): string | null {
+    if (!content || typeof content !== 'string') return null;
+    const s = content.trim();
+    if (/<!doctype\s+html/i.test(s) || /<html[\s>]/i.test(s)) {
+        const start = s.search(/<!doctype\s+html|<html[\s>]/i);
+        if (start >= 0) {
+            const endMatch = s.slice(start).match(/<\/html\s*>/i);
+            return endMatch
+                ? s.slice(start, start + endMatch.index! + endMatch[0].length)
+                : s.slice(start);
+        }
+    }
+    const codeBlock = s.match(/```\n?([\s\S]*?)\n?```/);
+    if (codeBlock) {
+        const inner = codeBlock[1].trim();
+        if (/<!doctype\s+html|<html[\s>]/i.test(inner)) return inner;
+    }
+    return null;
+}
+
+/** Check if document is HTML (by name or content). */
+function isHtmlDocument(doc: DocumentViewerDocument): boolean {
+    const name = (doc.name || '').toLowerCase();
+    if (name.endsWith('.html') || name.endsWith('.htm')) return true;
+    return !!extractHtmlContent(doc.content ?? '');
+}
 
 /** Selection (and chip) color cycle: dark, orange, pink, blue, emerald. Export for use in chip styling. */
 export const INSERTION_COLOR_CLASSES = [
@@ -55,6 +83,94 @@ export const CHIP_BG_CLASSES = [
     'bg-blue-500 text-white',
     'bg-emerald-600 text-white',
 ] as const;
+
+/** Hex colors for inline highlight spans in iframe (matches CHIP_BG_CLASSES). */
+const INSERTION_HIGHLIGHT_COLORS: { bg: string; text: string }[] = [
+    { bg: '#1f2937', text: '#ffffff' },
+    { bg: '#f97316', text: '#ffffff' },
+    { bg: '#ec4899', text: '#ffffff' },
+    { bg: '#3b82f6', text: '#ffffff' },
+    { bg: '#059669', text: '#ffffff' },
+];
+
+function getTextNodesInOrder(root: Node): { node: Text; start: number; end: number }[] {
+    const result: { node: Text; start: number; end: number }[] = [];
+    let offset = 0;
+    const walk = (node: Node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const len = (node.textContent || '').length;
+            if (len > 0) {
+                result.push({ node: node as Text, start: offset, end: offset + len });
+                offset += len;
+            }
+        } else {
+            for (let i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
+        }
+    };
+    walk(root);
+    return result;
+}
+
+function injectHighlightsInBody(
+    body: HTMLElement,
+    segments: { start: number; end: number; colorIndex: number }[],
+    doc: Document
+): void {
+    const existing = body.querySelectorAll('span[data-highlight]');
+    existing.forEach((span) => {
+        const parent = span.parentNode;
+        if (!parent) return;
+        while (span.firstChild) parent.insertBefore(span.firstChild, span);
+        parent.removeChild(span);
+    });
+    if (segments.length === 0) return;
+    const textNodes = getTextNodesInOrder(body);
+    const totalLen = textNodes.length ? textNodes[textNodes.length - 1].end : 0;
+    if (totalLen === 0) return;
+    for (const seg of segments) {
+        const segStart = Math.max(0, seg.start);
+        const segEnd = Math.min(totalLen, seg.end);
+        if (segEnd <= segStart) continue;
+        const overlapping: { node: Text; localStart: number; localEnd: number }[] = [];
+        for (const { node, start, end } of textNodes) {
+            const overlapStart = Math.max(segStart, start);
+            const overlapEnd = Math.min(segEnd, end);
+            if (overlapEnd <= overlapStart) continue;
+            overlapping.push({
+                node,
+                localStart: overlapStart - start,
+                localEnd: overlapEnd - start,
+            });
+        }
+        for (const { node, localStart, localEnd } of overlapping.reverse()) {
+            const range = doc.createRange();
+            try {
+                range.setStart(node, localStart);
+                range.setEnd(node, localEnd);
+            } catch {
+                continue;
+            }
+            let fragment: DocumentFragment | null = null;
+            try {
+                fragment = range.extractContents();
+                if (!fragment || fragment.childNodes.length === 0) {
+                    if (fragment) range.insertNode(fragment);
+                    continue;
+                }
+                const span = doc.createElement('span');
+                span.setAttribute('data-highlight', String(seg.colorIndex));
+                const colors = INSERTION_HIGHLIGHT_COLORS[seg.colorIndex % INSERTION_HIGHLIGHT_COLORS.length];
+                span.style.setProperty('background-color', colors.bg, 'important');
+                span.style.setProperty('color', colors.text, 'important');
+                span.style.setProperty('padding', '0 2px', 'important');
+                span.appendChild(fragment);
+                range.insertNode(span);
+            } catch {
+                if (fragment) try { range.insertNode(fragment); } catch { /* restore */ }
+            }
+        }
+    }
+}
 
 function buildHighlightSegments(
     contentLength: number,
@@ -81,6 +197,104 @@ function buildHighlightSegments(
         prevPos = e.pos;
     }
     return segments;
+}
+
+/** Selection colors for ::selection in iframe (matches CHIP_BG_CLASSES). */
+const IFRAME_SELECTION_COLORS = [
+    { bg: '#1f2937', text: '#ffffff' },
+    { bg: '#f97316', text: '#ffffff' },
+    { bg: '#ec4899', text: '#ffffff' },
+    { bg: '#3b82f6', text: '#ffffff' },
+    { bg: '#059669', text: '#ffffff' },
+];
+
+/** HTML document in iframe: selection → onInsertSelection + persistent highlight injection (from Editor). */
+function HtmlDocumentIframe({
+    doc,
+    htmlContent,
+    onInsertSelection,
+    insertedSelections,
+    insertedSelectionsCount = 0,
+}: {
+    doc: DocumentViewerDocument;
+    htmlContent: string;
+    onInsertSelection?: (text: string, range: { start: number; end: number; documentId: string }) => void;
+    insertedSelections: InsertedSelectionRange[];
+    insertedSelectionsCount?: number;
+}) {
+    const iframeRef = React.useRef<HTMLIFrameElement>(null);
+    const [iframeLoaded, setIframeLoaded] = React.useState(false);
+
+    const applyHighlights = React.useCallback(() => {
+        const iframe = iframeRef.current;
+        const body = iframe?.contentDocument?.body;
+        if (!body) return;
+        const rangesForDoc = insertedSelections
+            .map((s, i) => ({ start: s.start, end: s.end, colorIndex: i, documentId: s.documentId }))
+            .filter((s) => s.documentId === doc.id)
+            .map(({ start, end, colorIndex }) => ({ start, end, colorIndex }));
+        const textLen = (body.textContent || '').length;
+        const segments = buildHighlightSegments(textLen, rangesForDoc);
+        injectHighlightsInBody(body, segments, body.ownerDocument);
+    }, [doc.id, insertedSelections]);
+
+    React.useEffect(() => {
+        if (iframeLoaded) applyHighlights();
+    }, [iframeLoaded, applyHighlights]);
+
+    React.useEffect(() => {
+        if (!iframeLoaded) return;
+        const iframe = iframeRef.current;
+        const iframeDoc = iframe?.contentDocument;
+        if (!iframeDoc?.head) return;
+        let styleEl = iframeDoc.querySelector('style[data-selection-colors]');
+        if (!styleEl) {
+            styleEl = iframeDoc.createElement('style');
+            styleEl.setAttribute('data-selection-colors', '1');
+            iframeDoc.head.appendChild(styleEl);
+        }
+        const colors = IFRAME_SELECTION_COLORS[insertedSelectionsCount % IFRAME_SELECTION_COLORS.length];
+        styleEl.textContent = `*::selection { background-color: ${colors.bg} !important; color: ${colors.text} !important; }`;
+    }, [iframeLoaded, insertedSelectionsCount]);
+
+    React.useEffect(() => {
+        if (!iframeLoaded || !onInsertSelection) return;
+        const iframe = iframeRef.current;
+        const body = iframe?.contentDocument?.body;
+        if (!body) return;
+
+        const handleMouseUp = () => {
+            const iframeDoc = body.ownerDocument;
+            const sel = iframeDoc.getSelection();
+            if (!sel || sel.isCollapsed) return;
+            const r = sel.getRangeAt(0);
+            const text = r.toString().trim();
+            if (!text) return;
+            const startRange = iframeDoc.createRange();
+            startRange.selectNodeContents(body);
+            startRange.setEnd(r.startContainer, r.startOffset);
+            const start = startRange.toString().length;
+            const end = start + text.length;
+            onInsertSelection(text, { start, end, documentId: doc.id });
+            sel.removeAllRanges();
+        };
+
+        body.addEventListener('mouseup', handleMouseUp);
+        return () => body.removeEventListener('mouseup', handleMouseUp);
+    }, [iframeLoaded, doc.id, onInsertSelection]);
+
+    const handleIframeLoad = React.useCallback(() => setIframeLoaded(true), []);
+
+    return (
+        <iframe
+            ref={iframeRef}
+            srcDoc={htmlContent}
+            title={doc.name}
+            className="w-full flex-1 min-h-[400px] border-0 rounded"
+            sandbox="allow-same-origin"
+            onLoad={handleIframeLoad}
+        />
+    );
 }
 
 export default function DocumentViewer({
@@ -127,6 +341,7 @@ export default function DocumentViewer({
         const start = startRange.toString().length;
         const end = start + text.length;
         onInsertSelection(text, { start, end, documentId });
+        sel.removeAllRanges();
     };
 
     useEffect(() => {
@@ -247,6 +462,7 @@ export default function DocumentViewer({
                                     <div className="min-h-full flex flex-col items-center py-4 px-2 gap-6">
                                         {documents.map((doc) => {
                                             const isImg = doc.mimeType?.startsWith('image/') && doc.content?.startsWith('data:');
+                                            const htmlContent = isHtmlDocument(doc) ? extractHtmlContent(doc.content ?? '') : null;
                                             return (
                                                 <div
                                                     key={doc.id}
@@ -259,13 +475,24 @@ export default function DocumentViewer({
                                                             backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0, transparent 297mm, rgba(0,0,0,0.06) 297mm, rgba(0,0,0,0.06) 298mm)',
                                                         }}
                                                     >
-                                                        <div className="text-[10px] text-gray-400 font-mono mb-2 shrink-0">
-                                                            {doc.name}
+                                                        <div className="text-[10px] text-gray-400 font-mono mb-2 shrink-0 flex items-center justify-between gap-2">
+                                                            <span>{doc.name}</span>
+                                                            {onInsertSelection && (
+                                                                <span className="text-[9px] text-gray-400" title="Text markieren → farbiger Anhang an Chat">Markieren → Anhang</span>
+                                                            )}
                                                         </div>
                                                         {isImg ? (
                                                             <div className="flex flex-1 min-h-0 items-center justify-center">
                                                                 <img src={doc.content} alt={doc.name} className="max-w-full max-h-full object-contain rounded shadow-sm" />
                                                             </div>
+                                                        ) : htmlContent ? (
+                                                            <HtmlDocumentIframe
+                                                                doc={doc}
+                                                                htmlContent={htmlContent}
+                                                                onInsertSelection={onInsertSelection}
+                                                                insertedSelections={insertedSelections}
+                                                                insertedSelectionsCount={insertedSelectionsCount}
+                                                            />
                                                         ) : (
                                                             <pre
                                                                 data-document-id={doc.id}
@@ -436,6 +663,7 @@ export default function DocumentViewer({
                                 <div className="min-h-full flex flex-col items-center py-6 px-4 gap-6">
                                     {documents.map((doc) => {
                                         const isImg = doc.mimeType?.startsWith('image/') && doc.content?.startsWith('data:');
+                                        const htmlContent = isHtmlDocument(doc) ? extractHtmlContent(doc.content ?? '') : null;
                                         return (
                                             <div
                                                 key={doc.id}
@@ -455,6 +683,14 @@ export default function DocumentViewer({
                                                         <div className="flex flex-1 min-h-0 items-center justify-center">
                                                             <img src={doc.content} alt={doc.name} className="max-w-full max-h-full object-contain rounded shadow-sm" />
                                                         </div>
+                                                    ) : htmlContent ? (
+                                                        <HtmlDocumentIframe
+                                                            doc={doc}
+                                                            htmlContent={htmlContent}
+                                                            onInsertSelection={onInsertSelection}
+                                                            insertedSelections={insertedSelections}
+                                                            insertedSelectionsCount={insertedSelectionsCount}
+                                                        />
                                                     ) : (
                                                         <pre
                                                             data-document-id={doc.id}

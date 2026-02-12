@@ -1232,19 +1232,30 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                     continue
 
                                 elif cmd_type == "RELOAD_CONFIG":
-                                    # Reload agent config
+                                    # Reload agent config and apply provider change (same logic as headless_runner)
                                     try:
                                         tui.event("System", "Config updated from WebUI", style="dim")
-                                        # We might need to re-init agent or just update its config dict
-                                        # simplest is to just reload the config dict on the agent if exposed
-                                        # But Agent() loads config in __init__.
-                                        # For extensive changes we might need restart, but for simple params:
                                         from vaf.core.config import Config
                                         new_cfg = Config.load()
-                                        if hasattr(agent, 'config'):
+                                        if hasattr(agent, "config"):
                                             agent.config = new_cfg
-                                            # Also re-apply things like voice settings
-                                    except: pass
+                                        new_provider = new_cfg.get("provider", "local")
+                                        old_provider = getattr(agent, "provider", "local")
+                                        if old_provider != new_provider:
+                                            agent.provider = new_provider
+                                            if new_provider != "local":
+                                                try:
+                                                    from vaf.core.api_backend import APIBackendManager
+                                                    agent.api_backend = APIBackendManager(new_provider)
+                                                except Exception:
+                                                    agent.api_backend = None
+                                                agent.use_server = False
+                                                agent.llm = None
+                                            else:
+                                                agent.api_backend = None
+                                            tui.event("System", f"Provider switched to {new_provider.upper()}", style="dim")
+                                    except Exception:
+                                        pass
                                     continue
                                 
                                 else:
@@ -1356,14 +1367,30 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                             continue
                                         
                                         elif cmd_type == "RELOAD_CONFIG":
-                                            # Reload agent config
+                                            # Reload agent config and apply provider change (same logic as headless_runner)
                                             try:
                                                 tui.event("System", "Config updated from WebUI", style="dim")
                                                 from vaf.core.config import Config
                                                 new_cfg = Config.load()
-                                                if hasattr(agent, 'config'):
+                                                if hasattr(agent, "config"):
                                                     agent.config = new_cfg
-                                            except: pass
+                                                new_provider = new_cfg.get("provider", "local")
+                                                old_provider = getattr(agent, "provider", "local")
+                                                if old_provider != new_provider:
+                                                    agent.provider = new_provider
+                                                    if new_provider != "local":
+                                                        try:
+                                                            from vaf.core.api_backend import APIBackendManager
+                                                            agent.api_backend = APIBackendManager(new_provider)
+                                                        except Exception:
+                                                            agent.api_backend = None
+                                                        agent.use_server = False
+                                                        agent.llm = None
+                                                    else:
+                                                        agent.api_backend = None
+                                                    tui.event("System", f"Provider switched to {new_provider.upper()}", style="dim")
+                                            except Exception:
+                                                pass
                                             wake_word_detected_flag.clear()
                                             continue
 

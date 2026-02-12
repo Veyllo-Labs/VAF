@@ -1753,9 +1753,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             log("WebServer", f"Tray autostart update failed: {e}")
 
                         # Use TaskQueue for commands (headless_runner only reads from TaskQueue)
+                        # Priority 1 so RELOAD_CONFIG is processed before any pending chat (priority 10)
                         from vaf.core.task_queue import TaskQueue
                         tq = TaskQueue()
-                        tq.add(session_id="system", input_text="__CMD__:RELOAD_CONFIG", source="web")
+                        tq.add(session_id="system", input_text="__CMD__:RELOAD_CONFIG", source="web", priority=1)
                         await websocket.send_json({
                             "type": "config_saved",
                             "status": "success",

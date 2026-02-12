@@ -124,8 +124,49 @@ function getTextNodesInOrder(root: Node): { node: Text; start: number; end: numb
     return result;
 }
 
+/** Blöcke pro DIN-A4-Seite. */
+const BLOCKS_PER_PAGE = 4;
+
+/** HTML-String in Block-Chunks zerlegen (an öffnenden Block-Tags). Liefert Array von HTML-Strings. */
+function splitHtmlIntoBlocks(html: string): string[] {
+    const trimmed = html.trim();
+    if (!trimmed) return [];
+    const parts = trimmed.split(/(?=<(?:p|h[1-6]|li|ul|ol|div|section|article)[\s>])/i).map((p) => p.trim()).filter(Boolean);
+    return parts;
+}
+
+/** Inhalt auf mehrere DIN-A4-Seiten verteilen – per HTML-Split, Rest auf neue Seite darunter. */
+function paginateIntoA4Pages(doc: Document): void {
+    const singlePage = doc.body.querySelector('.a4-page');
+    if (!singlePage || !(singlePage instanceof HTMLElement)) return;
+
+    let html = singlePage.innerHTML.trim();
+    if (!html) return;
+
+    let blocks = splitHtmlIntoBlocks(html);
+    if (blocks.length <= 1 && /<div[\s>]/i.test(html)) {
+        const inner = html.replace(/^<div[^>]*>|<\/div>\s*$/gi, '').trim();
+        blocks = splitHtmlIntoBlocks(inner);
+    }
+    if (blocks.length <= BLOCKS_PER_PAGE) return;
+
+    const container = doc.createElement('div');
+    container.className = 'a4-pages';
+    container.setAttribute('contenteditable', 'true');
+
+    for (let i = 0; i < blocks.length; i += BLOCKS_PER_PAGE) {
+        const chunk = blocks.slice(i, i + BLOCKS_PER_PAGE).join('');
+        const page = doc.createElement('div');
+        page.className = 'a4-page';
+        page.setAttribute('contenteditable', 'true');
+        page.innerHTML = chunk;
+        container.appendChild(page);
+    }
+
+    singlePage.parentNode?.replaceChild(container, singlePage);
+}
+
 function injectHighlightsInBody(body: HTMLElement, segments: { start: number; end: number; colorIndex: number }[], doc: Document): void {
-    if (segments.length === 0) return;
     const existing = body.querySelectorAll('span[data-highlight]');
     existing.forEach((span) => {
         const parent = span.parentNode;
@@ -133,6 +174,7 @@ function injectHighlightsInBody(body: HTMLElement, segments: { start: number; en
         while (span.firstChild) parent.insertBefore(span.firstChild, span);
         parent.removeChild(span);
     });
+    if (segments.length === 0) return;
     const textNodes = getTextNodesInOrder(body);
     const totalLen = textNodes.length ? textNodes[textNodes.length - 1].end : 0;
     if (totalLen === 0) return;
@@ -238,6 +280,8 @@ export default function DocumentEditor({
     const attachmentsContentRef = useRef<HTMLDivElement>(null);
     const onInsertSelectionRef = useRef(onInsertSelection);
     onInsertSelectionRef.current = onInsertSelection;
+    const insertedSelectionsRef = useRef(insertedSelections);
+    insertedSelectionsRef.current = insertedSelections;
     const onContentChangeRef = useRef(onContentChange);
     onContentChangeRef.current = onContentChange;
     /** When user requests close, show browser confirm and only call onClose if they confirm. */
@@ -386,28 +430,59 @@ export default function DocumentEditor({
         doc.open();
         doc.write(content);
         doc.close();
-        if (!doc.head?.querySelector('style[data-a4]')) {
-            const style = doc.createElement('style');
-            style.setAttribute('data-a4', '1');
-            style.textContent = `
-                body { margin: 0; background: #e5e7eb; padding: 16px 0; min-height: 100%; }
-                .a4-page { width: 210mm; min-height: 297mm; margin: 0 auto 24px; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.12); padding: 25mm; box-sizing: border-box; background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 297mm, rgba(0,0,0,0.06) 297mm, rgba(0,0,0,0.06) 298mm); }
-            `;
-            if (doc.head) doc.head.appendChild(style);
-        }
-        if (!doc.body.querySelector('.a4-page')) {
+        doc.body.classList.add('vaf-a4');
+        if (!doc.body.querySelector('.a4-pages')) {
             const wrap = doc.createElement('div');
             wrap.className = 'a4-page';
             wrap.setAttribute('contenteditable', 'true');
             while (doc.body.firstChild) wrap.appendChild(doc.body.firstChild);
-            doc.body.appendChild(wrap);
+            const centerWrap = doc.createElement('div');
+            centerWrap.className = 'vaf-a4-center';
+            centerWrap.appendChild(wrap);
+            doc.body.appendChild(centerWrap);
+            const runPaginate = () => {
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        void doc.body.offsetHeight;
+                        setTimeout(() => paginateIntoA4Pages(doc), 50);
+                    });
+                });
+            };
+            runPaginate();
         }
-        const editRoot = doc.body.querySelector('.a4-page') || doc.body;
+        const existingPages = doc.body.querySelector('.a4-pages') || doc.body.querySelector('.a4-page');
+        if (existingPages && !doc.body.querySelector('.vaf-a4-center')) {
+            const centerWrap = doc.createElement('div');
+            centerWrap.className = 'vaf-a4-center';
+            existingPages.parentNode?.insertBefore(centerWrap, existingPages);
+            centerWrap.appendChild(existingPages);
+        }
+        if (!doc.querySelector('style[data-a4]')) {
+            const style = doc.createElement('style');
+            style.setAttribute('data-a4', '1');
+            style.textContent = `
+                html, body.vaf-a4, body.vaf-a4 * { box-sizing: border-box !important; }
+                html, body.vaf-a4 { scrollbar-width: none !important; -ms-overflow-style: none !important; }
+                html::-webkit-scrollbar, body.vaf-a4::-webkit-scrollbar { display: none !important; }
+                html { width: 100% !important; margin: 0 !important; padding: 0 !important; }
+                body.vaf-a4 { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 16px 0 !important;
+                    min-height: 100%; background: #e5e7eb !important; overflow-y: auto; scroll-snap-type: y mandatory; }
+                body.vaf-a4 .vaf-a4-center { width: 100% !important; display: flex !important; flex-direction: column !important; align-items: center !important; justify-content: flex-start !important; flex-shrink: 0; }
+                body.vaf-a4 .a4-pages { display: flex; flex-direction: column; align-items: center; gap: 24px; width: 210mm !important; flex-shrink: 0; margin: 0 auto !important; }
+                body.vaf-a4 .a4-page { width: 210mm !important; height: 297mm; min-height: 297mm; flex-shrink: 0; margin: 0 auto !important; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.12); padding: 25mm; box-sizing: border-box; overflow: hidden; scroll-snap-align: start; scroll-snap-stop: always; }
+            `;
+            doc.body.appendChild(style);
+        }
+        const editRoot = doc.body.querySelector('.a4-pages') || doc.body.querySelector('.a4-page') || doc.body;
         (editRoot as HTMLElement).contentEditable = 'true';
         (editRoot as HTMLElement).style.outline = 'none';
         doc.body.style.outline = 'none';
         doc.body.style.padding = '0';
-        const focusBodyOnMouseDown = () => (editRoot as HTMLElement).focus();
+        const focusBodyOnMouseDown = (e: MouseEvent) => {
+            const target = (e.target as Node);
+            const root = doc.body.querySelector('.a4-pages') || doc.body.querySelector('.a4-page') || doc.body;
+            if (root && root.contains(target)) (root as HTMLElement).focus();
+        };
         doc.body.addEventListener('mousedown', focusBodyOnMouseDown);
         const captureContent = () => {
             contentFromIframeRef.current = true;
@@ -415,7 +490,7 @@ export default function DocumentEditor({
             setContent(html);
             onContentChangeRef.current?.(html);
         };
-        editRoot.addEventListener('input', captureContent);
+        doc.body.addEventListener('input', captureContent);
         const handleMouseUp = () => {
             const fn = onInsertSelectionRef.current;
             if (!fn) return;
@@ -425,14 +500,14 @@ export default function DocumentEditor({
                 const r = sel.getRangeAt(0);
                 const text = r.toString().trim();
                 if (!text) return;
-                const root = (doc.body.querySelector('.a4-page') || doc.body) as Node;
+                const root = (doc.body.querySelector('.a4-pages') || doc.body.querySelector('.a4-page') || doc.body) as Node;
                 if (!root.contains(r.startContainer) || !root.contains(r.endContainer)) return;
                 const startRange = doc.createRange();
                 startRange.selectNodeContents(root);
                 startRange.setEnd(r.startContainer, r.startOffset);
                 const start = startRange.toString().length;
                 const end = start + text.length;
-                const overlapsExisting = (insertedSelections || []).some(
+                const overlapsExisting = (insertedSelectionsRef.current || []).some(
                     (s) => s.documentId === 'editor' && start < s.end && end > s.start
                 );
                 if (overlapsExisting) return;
@@ -441,27 +516,64 @@ export default function DocumentEditor({
                 // cross-origin or no selection
             }
         };
+        let selectionChangeTimeoutId: ReturnType<typeof setTimeout> | null = null;
         const handleSelectionChange = () => {
-            updateSelectionFormat();
+            if (selectionChangeTimeoutId) clearTimeout(selectionChangeTimeoutId);
+            selectionChangeTimeoutId = setTimeout(() => {
+                selectionChangeTimeoutId = null;
+                updateSelectionFormat();
+            }, 50);
         };
         doc.body.addEventListener('mouseup', handleMouseUp);
         doc.addEventListener('selectionchange', handleSelectionChange);
-        const rangesForEditor = (insertedSelections || [])
-            .map((s, i) => ({ start: s.start, end: s.end, colorIndex: i, documentId: s.documentId }))
-            .filter((s) => s.documentId === 'editor');
-        const bodyEl = (doc.body.querySelector('.a4-page') || doc.body) as HTMLElement;
-        const segments = buildHighlightSegments((bodyEl.textContent || '').length, rangesForEditor);
-        const rafId = requestAnimationFrame(() => {
-            if (!bodyEl.isConnected) return;
-            injectHighlightsInBody(bodyEl, segments, doc);
-        });
+
         return () => {
-            cancelAnimationFrame(rafId);
+            if (selectionChangeTimeoutId) clearTimeout(selectionChangeTimeoutId);
             doc.body.removeEventListener('mousedown', focusBodyOnMouseDown);
+            doc.body.removeEventListener('input', captureContent);
             doc.body.removeEventListener('mouseup', handleMouseUp);
             doc.removeEventListener('selectionchange', handleSelectionChange);
         };
-    }, [content, isOpen, updateSelectionFormat, insertedSelections]);
+    }, [content, isOpen, updateSelectionFormat]);
+
+    // ::selection color for next selection (same as DocumentViewer HtmlDocumentIframe)
+    useEffect(() => {
+        if (!iframeRef.current || !content || !isOpen) return;
+        const iframeDoc = iframeRef.current.contentDocument;
+        if (!iframeDoc?.head) return;
+        let styleEl = iframeDoc.querySelector('style[data-selection-colors]');
+        if (!styleEl) {
+            styleEl = iframeDoc.createElement('style');
+            styleEl.setAttribute('data-selection-colors', '1');
+            iframeDoc.head.appendChild(styleEl);
+        }
+        const colors = INSERTION_HIGHLIGHT_COLORS[(insertedSelectionsCount ?? 0) % INSERTION_HIGHLIGHT_COLORS.length];
+        styleEl.textContent = `*::selection { background-color: ${colors.bg} !important; color: ${colors.text} !important; }`;
+    }, [content, isOpen, insertedSelectionsCount]);
+
+    // Apply highlights when insertedSelections or content changes – do NOT rewrite iframe (same as DocumentViewer)
+    // Run always (even when empty) to clear highlights on deletion. Delay only when content changed (pagination).
+    const prevContentForHighlightsRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (!iframeRef.current || !content || !isOpen) return;
+        const doc = iframeRef.current.contentDocument;
+        if (!doc?.body) return;
+        const root = doc.body.querySelector('.a4-pages') || doc.body.querySelector('.a4-page') || doc.body;
+        if (!root) return;
+        const rangesForEditor = (insertedSelections || [])
+            .map((s, i) => ({ start: s.start, end: s.end, colorIndex: i }))
+            .filter((_, i) => (insertedSelections?.[i]?.documentId ?? '') === 'editor');
+        const contentChanged = prevContentForHighlightsRef.current !== content;
+        prevContentForHighlightsRef.current = content;
+        const apply = () => {
+            const bodyEl = root as HTMLElement;
+            const segments = buildHighlightSegments((bodyEl.textContent || '').length, rangesForEditor);
+            injectHighlightsInBody(bodyEl, segments, doc);
+        };
+        const delay = contentChanged ? 100 : 0;
+        const id = setTimeout(() => requestAnimationFrame(apply), delay);
+        return () => clearTimeout(id);
+    }, [insertedSelections, content, isOpen]);
 
     const loadDocument = async () => {
         setIsLoading(true);
@@ -832,7 +944,7 @@ export default function DocumentEditor({
                 )}
                 aria-hidden={!isOpen}
             >
-                <div className="flex h-full w-full">
+                <div className="flex h-full w-full min-w-0">
                     {/* Workflow panel (left side) - only shown if steps exist */}
                     {hasWorkflow && (
                         <div className="flex w-[36%] min-w-[280px] flex-col border-r border-gray-200 bg-white">
@@ -880,8 +992,8 @@ export default function DocumentEditor({
                         </div>
                     )}
 
-                    {/* Main content panel (right side) */}
-                    <div className={cn("flex flex-1 flex-col bg-[#F9FAFB]", !hasWorkflow && "rounded-l-2xl")}>
+                    {/* Main content panel (right side) - same dimensions as DocumentViewer */}
+                    <div className={cn("flex flex-1 flex-col min-w-0 w-0 bg-[#F9FAFB] overflow-hidden", !hasWorkflow ? "rounded-2xl" : "rounded-r-2xl")}>
                         {/* Header: icon, filename (black) + path (gray), status, buttons */}
                         <div className="flex h-12 items-center justify-between border-b border-gray-200 bg-white px-4 gap-2 min-w-0">
                             <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -924,8 +1036,8 @@ export default function DocumentEditor({
                             </div>
                         </div>
 
-                        {/* Content area – no padding, inner editor fills all space */}
-                        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+                        {/* Content area – same structure as DocumentViewer */}
+                        <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
                             {isBinaryDocument ? (
                                 <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center bg-white">
                                     <FileText size={48} className="text-gray-300" />
@@ -963,12 +1075,22 @@ export default function DocumentEditor({
                             ) : (
                                 <>
                                     {toolbar}
-                                    <iframe
-                                        ref={iframeRef}
-                                        className="flex-1 w-full min-h-0 border-0 bg-white block"
-                                        title="Document Editor"
-                                        sandbox="allow-same-origin allow-scripts allow-modals"
-                                    />
+                                    <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+                                        <div className="flex-1 min-h-0 min-w-0 overflow-auto bg-[#e5e7eb] w-full scrollbar-hide">
+                                            <div className="min-h-full flex flex-col items-center py-4 px-2 gap-6">
+                                                <div className="w-[210mm] max-w-full flex justify-center">
+                                                    <div className="w-[210mm] max-w-full min-h-[297mm] bg-white shadow-sm box-border rounded-sm flex flex-col overflow-hidden">
+                                                        <iframe
+                                                            ref={iframeRef}
+                                                            className="flex-1 min-h-0 w-full border-0 block"
+                                                            title="Document Editor"
+                                                            sandbox="allow-same-origin allow-scripts allow-modals"
+                                                        />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </>
                             )}
                         </div>
@@ -981,7 +1103,7 @@ export default function DocumentEditor({
     // Overlay mode - same layout as SubAgentWindow overlay mode
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 sm:p-8">
-            <div className="relative flex h-[90vh] w-full max-w-[1400px] overflow-hidden rounded-2xl bg-[#F3F4F6] shadow-2xl">
+            <div className="relative flex h-[90vh] w-full max-w-[1400px] overflow-hidden rounded-2xl bg-[#F3F4F6] shadow-2xl min-w-0">
                 {/* Workflow panel (left side) - only shown if steps exist */}
                 {hasWorkflow && (
                     <div className="flex w-[35%] min-w-[320px] flex-col border-r border-gray-200 bg-white">
@@ -1029,8 +1151,8 @@ export default function DocumentEditor({
                     </div>
                 )}
 
-                {/* Main content panel (right side) */}
-                <div className="flex flex-1 flex-col bg-[#F9FAFB]">
+                {/* Main content panel (right side) - same as DocumentViewer overlay */}
+                <div className="flex flex-1 flex-col min-w-0 w-0 bg-[#F9FAFB] overflow-hidden">
                     {/* Header */}
                     <div className="flex h-16 items-center justify-between border-b border-gray-200 bg-white px-6 gap-2 min-w-0">
                         <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -1112,12 +1234,22 @@ export default function DocumentEditor({
                         ) : (
                             <>
                                 {toolbar}
-                                <iframe
-                                    ref={iframeRef}
-                                    className="flex-1 w-full min-h-0 border-0 bg-white block"
-                                    title="Document Editor"
-                                    sandbox="allow-same-origin allow-scripts allow-modals"
-                                />
+                                <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+                                    <div className="flex-1 min-h-0 min-w-0 overflow-auto bg-[#e5e7eb] w-full scrollbar-hide">
+                                        <div className="min-h-full flex flex-col items-center py-6 px-4 gap-6">
+                                            <div className="w-[210mm] max-w-full flex justify-center">
+                                                <div className="w-[210mm] max-w-full min-h-[297mm] bg-white shadow-sm box-border rounded-sm flex flex-col overflow-hidden">
+                                                    <iframe
+                                                        ref={iframeRef}
+                                                        className="flex-1 min-h-0 w-full border-0 block"
+                                                        title="Document Editor"
+                                                        sandbox="allow-same-origin allow-scripts allow-modals"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </>
                         )}
                     </div>

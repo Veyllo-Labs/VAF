@@ -231,11 +231,15 @@ class WorkflowEngine:
                 # CONTEXT MANAGEMENT: Truncate large inputs before passing to tools
                 # ═══════════════════════════════════════════════════════════════
                 # For tools that accept large text inputs (like coding_agent),
-                # truncate very large variable values to prevent context overflow
+                # truncate very large variable values to prevent context overflow.
+                # Exceptions: write_file "content" must NOT be truncated (full documents).
                 MAX_INPUT_SIZE = 5000  # Max chars per input parameter
+                NO_TRUNCATE = (("write_file", "content"),)  # Full content required
                 args_snapshot = {k: v for k, v in args.items()}  # Snapshot for retry
                 
                 for key, value in args.items():
+                    if (step.tool, key) in NO_TRUNCATE:
+                        continue
                     if isinstance(value, str) and len(value) > MAX_INPUT_SIZE:
                         truncated = value[:MAX_INPUT_SIZE] + f"\n\n[... {len(value) - MAX_INPUT_SIZE} more characters truncated to prevent context overflow ...]"
                         UI.event("Workflow", f"  [INFO] Truncated {key} input: {len(value)} → {MAX_INPUT_SIZE} chars", style="dim")

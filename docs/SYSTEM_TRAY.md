@@ -58,3 +58,31 @@ The system uses a shared `TrayContext` to manage state between the Uvicorn web s
 - **macOS**: Uses `rumps` for a native Cocoa menu bar experience.
 - **Windows/Linux**: Uses `pystray` for cross-platform system tray support.
 - **HTTP Backend**: The tray starts and unloads the local backend; health checks reuse an existing backend to avoid multiple processes.
+
+## Platform Implementation Notes
+
+When modifying the tray or adding platform-specific logic, observe these differences:
+
+### Windows
+
+| Aspect | Requirement |
+|--------|-------------|
+| **Icon display** | Do not set `icon.visible = True` before `icon.run()`. Use `icon.run(setup=lambda i: setattr(i, "visible", True))` so the icon is shown only after the event loop is ready. |
+| **Icon size** | Taskbar expects 16×16 or 32×32; larger icons may render poorly or not appear. |
+| **Subprocesses** | Use `getattr(subprocess, "CREATE_NO_WINDOW", 0)` for background processes (pythonw has no console). |
+| **Open URL** | Prefer `os.startfile(url)`; fall back to `cmd /c start`. |
+| **Singleton** | Do not use `SO_REUSEADDR` for the singleton socket; bind must fail if another instance runs. |
+
+### macOS
+
+| Aspect | Requirement |
+|--------|-------------|
+| **Tray library** | `rumps` (not pystray). Requires Cocoa RunLoop on main thread. |
+| **Initialization** | Start backend/frontend threads only after rumps RunLoop is active (e.g. via `threading.Timer` delayed init). |
+| **Signals** | Handle `SIGTERM`, `SIGINT`, `SIGHUP` for clean shutdown (Dock Quit, Cmd+Q). |
+| **Icon** | 44×44 recommended for Retina; macOS downscales as needed. |
+
+### Cross-platform
+
+- Use `platform.system() == "Darwin"` for macOS, `== "Windows"` for Windows.
+- Callbacks (e.g. pystray `checked`): accept `(icon, item)`; Rumps passes `(sender)`—handle both.

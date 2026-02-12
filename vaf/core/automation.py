@@ -830,8 +830,10 @@ vaf automation delete <id>   # Delete task
                     from vaf.core.config import Config
                     if Config.get("memory_enabled", True):
                         from vaf.memory.rag import run_memory_search_sync
+                        k = int(Config.get("memory_rag_k", 5))
+                        k = max(1, min(20, k))
                         memory_context = run_memory_search_sync(
-                            query=prompt, k=5, user_scope_id=None, caller="automation"
+                            query=prompt, k=k, user_scope_id=None, caller="automation"
                         )
                 except Exception:
                     memory_context = ""

@@ -192,8 +192,10 @@ def run_agent_step(agent: Agent, text: str, context: dict):
                     user_scope_id = UUID(str(raw))
                 except (ValueError, TypeError):
                     pass
+            k = int(Config.get("memory_rag_k", 5))
+            k = max(1, min(20, k))
             memory_context = run_memory_search_sync(
-                query=text, k=5, user_scope_id=user_scope_id, caller="gateway"
+                query=text, k=k, user_scope_id=user_scope_id, caller="gateway"
             )
     except Exception:
         memory_context = ""

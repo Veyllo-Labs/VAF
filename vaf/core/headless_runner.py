@@ -488,8 +488,10 @@ def run_headless_agent():
                                         f.write(f"{_dt.now().isoformat()} RAG_START session_id={task.session_id} query_len={len(task.input_text or '')}\n")
                             except Exception:
                                 _rag_t0 = time.time()
+                            k = int(Config.get("memory_rag_k", 5))
+                            k = max(1, min(20, k))
                             memory_context = run_memory_search_sync(
-                                task.input_text, k=5, user_scope_id=user_scope_id, caller="headless"
+                                task.input_text, k=k, user_scope_id=user_scope_id, caller="headless"
                             )
                             try:
                                 _rag_dur = time.time() - _rag_t0

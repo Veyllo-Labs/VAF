@@ -108,6 +108,7 @@ class Config:
         # Memory System Settings (RAG + Vector Search)
         "memory_enabled": True,                                    # Enable memory system
         "memory_rag_refine_query": True,                           # Refine vague queries (e.g. "who am I") for better RAG hits
+        "memory_rag_k": 5,                                        # Max RAG snippets per query (1-20); applies to chat, gateway, automation
         "memory_auto_capture": False,                               # DISABLED: Auto-capture causes memory spikes (investigating)
         "memory_compaction_enabled": True,                          # Session compaction: prompt to store durable memories every N turns
         "memory_compaction_interval": 15,                           # Run compaction every N user/assistant turns

@@ -1170,7 +1170,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </Section>
 
                                         <Section title="Long-term Memory (RAG Source)">
-                                            <div className="flex flex-wrap gap-2">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <span className="text-sm font-medium text-gray-700">Max RAG Snippets per Query</span>
+                                                <input
+                                                    type="number"
+                                                    min={1}
+                                                    max={20}
+                                                    value={localConfig.memory_rag_k ?? 5}
+                                                    onChange={(e) => handleChange('memory_rag_k', Math.max(1, Math.min(20, parseInt(e.target.value) || 5)))}
+                                                    className="w-14 px-2 h-9 bg-white border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
+                                                />
+                                            </div>
+                                            <p className="text-xs text-gray-400 mt-1">Number of memory snippets injected per chat turn (1–20). Default: 5. Higher = more context, more tokens.</p>
+                                            <div className="flex flex-wrap gap-2 mt-3">
                                                 <button
                                                     onClick={() => setShowMemoryModal(true)}
                                                     disabled={!localConfig.memory_enabled}

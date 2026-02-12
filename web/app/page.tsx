@@ -3012,11 +3012,32 @@ export default function VAFDashboard() {
                                     </div>
                                 )}
 
-                                {/* Token Stats (Clickable) */}
-                                <div className={cn(chatWidthClass, "mx-auto mb-1 flex justify-end min-h-[16px]")}>
+                                {/* Token Stats (Clickable) + RAG Badge */}
+                                <div className={cn(chatWidthClass, "mx-auto mb-1 flex justify-end items-baseline gap-2 min-h-[16px]")}>
+                                    {ragResults?.sources?.length > 0 && (
+                                        <div className="group relative inline-flex items-center pt-3">
+                                            <span
+                                                className="text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-help border border-gray-200 bg-transparent leading-none group-hover:text-violet-600 group-hover:opacity-100 group-hover:bg-violet-50 group-hover:border-violet-200 transition-all"
+                                                title="RAG snippets passed to model this turn"
+                                            >
+                                                RAG: {ragResults.sources.length} hit{(ragResults.sources.length !== 1) ? 's' : ''}
+                                            </span>
+                                            <div className="hidden group-hover:block absolute right-0 bottom-full mb-0 pb-2 z-[80] w-80 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-xl p-3 text-left">
+                                                <div className="text-xs font-semibold text-gray-700 mb-2">RAG snippets (this turn)</div>
+                                                <div className="space-y-2">
+                                                    {ragResults.sources.slice(0, 10).map((s: { text?: string; full_text?: string; score?: number }, i: number) => (
+                                                        <div key={i} className="text-xs text-gray-600 bg-gray-50 p-2 rounded border border-gray-100">
+                                                            {s.score !== undefined && <span className="text-violet-600 font-mono">{(s.score * 100).toFixed(0)}%</span>}
+                                                            <div className="mt-1 line-clamp-3">{(s.full_text ?? s.text ?? '').slice(0, 300)}{((s.full_text ?? s.text ?? '').length > 300 ? '…' : '')}</div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
                                     {contextStats && (
                                         <span
-                                            className="text-[10px] sm:text-xs font-mono text-gray-400 opacity-80 select-none cursor-pointer hover:text-black hover:opacity-100 transition-all"
+                                            className="text-[10px] sm:text-xs font-mono text-gray-400 opacity-80 select-none cursor-pointer hover:text-black hover:opacity-100 transition-all leading-none"
                                             onClick={() => setIsContextModalOpen(true)}
                                         >
                                             Tokens:
@@ -3300,6 +3321,23 @@ export default function VAFDashboard() {
                                                 <div className="text-xs text-violet-600 font-mono mt-1">
                                                     Next save in {(contextStats.compaction_interval || 15) - (contextStats.user_turn_count % (contextStats.compaction_interval || 15))} messages
                                                 </div>
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+                                {/* RAG Sources (this turn) */}
+                                {ragResults?.sources?.length > 0 && (
+                                    <>
+                                        <div className="border-t border-gray-200 my-2"></div>
+                                        <div className="flex flex-col gap-2">
+                                            <div className="font-semibold text-gray-700">RAG Sources (this turn)</div>
+                                            <div className="text-xs text-gray-500 max-h-48 overflow-y-auto space-y-2">
+                                                {ragResults.sources.map((s: { text?: string; full_text?: string; score?: number }, i: number) => (
+                                                    <div key={i} className="bg-gray-50 p-2 rounded border border-gray-100 text-gray-600">
+                                                        {s.score !== undefined && <span className="text-violet-600 font-mono mr-2">{(s.score * 100).toFixed(0)}%</span>}
+                                                        {(s.full_text ?? s.text ?? '').slice(0, 400)}{((s.full_text ?? s.text ?? '').length > 400 ? '…' : '')}
+                                                    </div>
+                                                ))}
                                             </div>
                                         </div>
                                     </>

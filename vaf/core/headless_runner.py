@@ -305,6 +305,7 @@ def run_headless_agent():
                         meta.get("user_scope_id") is not None
                         or meta.get("username") is not None
                         or meta.get("telegram_chat_id") is not None
+                        or meta.get("discord_channel_id") is not None
                     ):
                         try:
                             session = session_mgr.load(task.session_id)
@@ -314,10 +315,14 @@ def run_headless_agent():
                                 session.metadata["username"] = meta.get("username")
                             if meta.get("telegram_chat_id") is not None:
                                 session.metadata["telegram_chat_id"] = meta["telegram_chat_id"]
+                            if meta.get("discord_channel_id") is not None:
+                                session.metadata["discord_channel_id"] = meta["discord_channel_id"]
                             if meta.get("voice_lang"):
                                 session.metadata["voice_lang"] = meta["voice_lang"]
                             if getattr(task, "source", None) == "telegram":
                                 session.metadata["source"] = "telegram"
+                            if getattr(task, "source", None) == "discord":
+                                session.metadata["source"] = "discord"
                             session_mgr.save(session)
                         except Exception:
                             pass
@@ -692,6 +697,23 @@ def run_headless_agent():
                                     pass
                                 out = "[No reply text]"
                             send_telegram_reply(str(chat_id), out)
+                        elif task_source == "discord":
+                            discord_channel_id = meta.get("discord_channel_id")
+                            if discord_channel_id:
+                                from vaf.core.discord_reply import send_discord_reply
+                                try:
+                                    from vaf.core.log_helper import log_discord_reply
+                                    log_discord_reply(
+                                        f"HEADLESS task_source=discord channel_id={discord_channel_id!r} final_len={len(str(final_text))}"
+                                    )
+                                except Exception:
+                                    pass
+                                out = str(final_text)
+                                out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
+                                out = re.sub(r'\n{3,}', '\n\n', out).strip()
+                                if not out:
+                                    out = "[No reply text]"
+                                send_discord_reply(str(discord_channel_id), out)
                     except Exception:
                         pass
 
@@ -929,7 +951,7 @@ def run_headless_agent():
                         )
                     except Exception:
                         pass
-                    # If task came from Telegram, send error reply so user sees something
+                    # If task came from Telegram or Discord, send error reply so user sees something
                     try:
                         task_source = getattr(task, "source", None)
                         meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
@@ -937,6 +959,10 @@ def run_headless_agent():
                             from vaf.core.telegram_reply import send_telegram_reply
                             err_msg = str(e).replace("\n", " ")[:400]
                             send_telegram_reply(str(meta["telegram_chat_id"]), f"Sorry, something went wrong: {err_msg}")
+                        elif task_source == "discord" and meta.get("discord_channel_id"):
+                            from vaf.core.discord_reply import send_discord_reply
+                            err_msg = str(e).replace("\n", " ")[:400]
+                            send_discord_reply(str(meta["discord_channel_id"]), f"Sorry, something went wrong: {err_msg}")
                     except Exception:
                         pass
                 try:
@@ -1116,24 +1142,28 @@ def run_headless_agent():
                                     disable_tools=False
                                 )
 
-                                # Send subagent summary to Telegram if this session originated from Telegram
+                                # Send subagent summary to Telegram/Discord if this session originated from there
                                 try:
                                     sid = getattr(agent, "current_session_id", None)
                                     if sid and response_parts:
                                         session = session_mgr.load(sid)
+                                        out = "".join(response_parts)
+                                        out = re.sub(r"<think>.*?</think>", "", out, flags=re.DOTALL)
+                                        out = re.sub(r"\n{3,}", "\n\n", out).strip()
+                                        if not out:
+                                            out = "[No summary generated]"
                                         chat_id = session.metadata.get("telegram_chat_id")
                                         if chat_id:
                                             from vaf.core.telegram_reply import send_telegram_reply
-
-                                            out = "".join(response_parts)
-                                            out = re.sub(r"<think>.*?</think>", "", out, flags=re.DOTALL)
-                                            out = re.sub(r"\n{3,}", "\n\n", out).strip()
-                                            if not out:
-                                                out = "[No summary generated]"
                                             send_telegram_reply(str(chat_id), out)
+                                        else:
+                                            discord_channel_id = session.metadata.get("discord_channel_id")
+                                            if discord_channel_id:
+                                                from vaf.core.discord_reply import send_discord_reply
+                                                send_discord_reply(str(discord_channel_id), out)
                                 except Exception as e:
                                     logging.getLogger(__name__).warning(
-                                        "Failed to send subagent summary to Telegram: %s", e
+                                        "Failed to send subagent summary to Telegram/Discord: %s", e
                                     )
                     except Exception as e:
                         print(f"[Headless] Sub-agent result processing error: {e}")

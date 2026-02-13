@@ -117,6 +117,22 @@ def get_telegram_chat_id(
     return chat_id
 
 
+def get_discord_user_id(
+    user_scope_id: Optional[Any],
+    username: Optional[str],
+) -> Optional[str]:
+    """
+    Return Discord user ID for proactive DM sends.
+    Currently single-admin: uses discord_config.admin_user_id when Discord is configured.
+    """
+    discord_config = Config.get("discord_config") or {}
+    if not isinstance(discord_config, dict):
+        return None
+    if not discord_config.get("enabled") or not discord_config.get("verified"):
+        return None
+    return (discord_config.get("admin_user_id") or "").strip() or None
+
+
 def get_messaging_connections(
     username: Optional[str] = None,
     user_scope_id: Optional[Any] = None,

@@ -175,13 +175,14 @@ async def get_discord_status():
     Get the current Discord bridge status.
     """
     from vaf.core.config import Config
-    
+    from vaf.api.discord_bridge import is_bridge_running
+
     discord_config = Config.get("discord_config", {})
-    
+
     return {
         "configured": discord_config.get("verified", False),
         "enabled": discord_config.get("enabled", False),
-        "running": _verification_state.get("bot_running", False),
+        "running": is_bridge_running(),
         "admin_username": discord_config.get("admin_username"),
     }
 
@@ -192,20 +193,25 @@ async def start_discord_bridge():
     Start the Discord bridge with saved configuration.
     """
     from vaf.core.config import Config
-    
+    from vaf.api.discord_bridge import start_bridge, is_bridge_running
+
     discord_config = Config.get("discord_config", {})
-    
+
     if not discord_config.get("verified"):
         raise HTTPException(status_code=400, detail="Discord not configured. Please complete setup first.")
-    
+
     if not discord_config.get("bot_token"):
         raise HTTPException(status_code=400, detail="Bot token missing.")
-    
-    # TODO: Implement persistent Discord bridge
-    # For now, just mark as running
-    _verification_state["bot_running"] = True
-    
-    return {"status": "started", "message": "Discord bridge started."}
+
+    if not discord_config.get("admin_user_id"):
+        raise HTTPException(status_code=400, detail="Admin user ID missing. Complete verification first.")
+
+    if is_bridge_running():
+        return {"status": "started", "message": "Discord bridge already running."}
+
+    if start_bridge():
+        return {"status": "started", "message": "Discord bridge started."}
+    raise HTTPException(status_code=500, detail="Failed to start Discord bridge.")
 
 
 @router.post("/stop")
@@ -213,10 +219,8 @@ async def stop_discord_bridge():
     """
     Stop the Discord bridge.
     """
-    global _verification_state
-    
-    _verification_state["bot_running"] = False
-    
-    # TODO: Actually stop the bridge thread
-    
+    from vaf.api.discord_bridge import stop_bridge, is_bridge_running
+
+    if is_bridge_running():
+        stop_bridge()
     return {"status": "stopped", "message": "Discord bridge stopped."}

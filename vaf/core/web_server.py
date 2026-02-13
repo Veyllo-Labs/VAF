@@ -466,6 +466,18 @@ async def startup_event():
     except Exception as e:
         log("WebServer", f"Telegram bridge auto-start skipped or failed: {e}")
 
+    # Auto-start Discord bridge when configured and enabled
+    try:
+        discord_config = Config.get("discord_config") or {}
+        if isinstance(discord_config, dict) and discord_config.get("verified") and discord_config.get("bot_token") and discord_config.get("admin_user_id") and discord_config.get("enabled"):
+            from vaf.api.discord_bridge import start_bridge, is_bridge_running
+            if not is_bridge_running() and start_bridge():
+                log("WebServer", "Discord bridge auto-started (configured and enabled)")
+            elif is_bridge_running():
+                log("WebServer", "Discord bridge already running")
+    except Exception as e:
+        log("WebServer", f"Discord bridge auto-start skipped or failed: {e}")
+
 
 async def _auto_capture_worker():
     """

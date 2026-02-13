@@ -37,8 +37,10 @@ Connect external apps and services to interact with your VAF agent.
 
 ### Features
 
-- **Real-time chat**: Send messages to your VAF agent via Discord
+- **Real-time chat**: Send messages to your VAF agent via Discord DMs
+- **Proactive messaging**: The agent can send you messages via Discord (e.g. "send me the result via Discord") using the `send_discord` tool
 - **Admin verification**: Only verified admins can control the bot
+- **Persistent bridge**: Messages are routed through the headless agent; replies are sent back to Discord automatically
 - **Secure**: Token stored locally, never sent to external servers
 
 ### Setup
@@ -108,9 +110,9 @@ The Discord configuration is stored locally in your VAF config:
 - Try resetting the token in Discord Developer Portal
 
 **"Bot not responding"**
-- Ensure Message Content Intent is enabled
-- Check that the bot has been invited to your server
-- Verify the bot is online (green status in Discord)
+- Ensure Message Content Intent is enabled in Discord Developer Portal
+- Verify the Discord bridge is running (Settings → Connections → Discord toggle)
+- Send your message as a **Direct Message** to the bot (DMs are supported; server channels require additional setup)
 
 **"Verification failed"**
 - Send the code via **Direct Message**, not in a server channel

@@ -693,7 +693,7 @@ class WriteFileTool(BaseTool):
 
 class MoveFileTool(BaseTool):
     name = "move_file"
-    description = "Moves or renames a file."
+    description = "Moves or renames a file. Use for renaming: src=current_path, dst=same_folder/new_name.ext"
 
     parameters = {
         "type": "object",

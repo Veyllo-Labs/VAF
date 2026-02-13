@@ -247,7 +247,7 @@ Telegram uses the same pipeline as the Web UI:
 | `find_mail` | Search the synced mailbox by subject or sender (`query`, optional `folder`, `limit`). Returns matches with `account_id`, `message_id`, `provider_message_id`; if exactly one match, returns the full body. | User asks "what does the X mail say?" or "details about the Postman/Twitch/… email" → use find_mail(query="X"); if result includes full body use it, else call read_mail with first match's IDs. |
 | `read_mail` | Return the full body of one message as plain text. Parameters: `account_id`, `message_id`, `folder` (default INBOX), optional `provider_message_id`. Use IDs from find_mail or mail_inbox. | When you have account_id and message_id (e.g. from find_mail); do not ask the user for these. |
 | `mark_mail_answered` | Mark a message as answered by the agent (`account_id`, `message_id`, `folder`). Sets a timestamp so the Mail UI shows "Benatwortet am …" and the message is not handled twice. | After the agent has processed or replied to an email. |
-| `send_mail` | Send an email (`account_id`, `to`, `subject`, `body`; optional `attachment_paths` for documents). | User asks to send or reply to an email; for documents pass `attachment_paths`. |
+| `send_mail` | Send an email (`account_id`, `to`, `subject`, `body`; optional `attachment_paths` for documents). Paths support folder aliases (Downloads, Desktop, Documents). | User asks to send or reply to an email; for documents pass `attachment_paths`. |
 
 Message bodies are always returned as plain text: HTML and MIME structure are stripped, and the same cleaned text is used in the Mail dashboard and for the agent. This keeps context size low and avoids raw markup.
 

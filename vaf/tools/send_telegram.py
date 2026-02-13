@@ -7,16 +7,21 @@ Supports optional file attachments (e.g. documents, PDFs) when the user asks for
 from pathlib import Path
 
 from vaf.tools.base import BaseTool
+from vaf.tools.filesystem import is_safe_path
 
 
-def _resolve_path(path_str: str) -> Path | None:
-    """Resolve file path (supports file:// URLs and absolute/relative paths). Returns None if invalid."""
+def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
+    """Resolve file path (supports file:// URLs, absolute/relative paths, folder aliases like Downloads).
+    Returns (resolved_path, error_message). Exactly one is None."""
     s = (path_str or "").strip()
     if not s:
-        return None
+        return None, None
     if s.lower().startswith("file://"):
         s = s[7:]
-    return Path(s).resolve()
+    safe, result = is_safe_path(s)
+    if not safe:
+        return None, result  # result = error message
+    return Path(result), None
 
 
 class SendTelegramTool(BaseTool):
@@ -53,7 +58,12 @@ class SendTelegramTool(BaseTool):
             return "No message provided. Pass the message text to send."
 
         file_path_str = (kwargs.get("file_path") or "").strip()
-        file_path: Path | None = _resolve_path(file_path_str) if file_path_str else None
+        file_path: Path | None = None
+        if file_path_str:
+            resolved, path_error = _resolve_path(file_path_str)
+            if path_error:
+                return path_error
+            file_path = resolved
 
         username = kwargs.get("username") or "admin"
         user_scope_id = kwargs.get("user_scope_id")

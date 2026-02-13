@@ -9,6 +9,7 @@ from pathlib import Path
 from vaf.core.email_transport import send_mail, get_account
 from vaf.core.config import Config
 from vaf.tools.base import BaseTool
+from vaf.tools.filesystem import is_safe_path
 
 
 def _list_accounts():
@@ -17,14 +18,18 @@ def _list_accounts():
     return [a.get("email") or a.get("account_id") for a in accounts if a.get("email") or a.get("account_id")]
 
 
-def _resolve_path(path_str: str) -> Path | None:
-    """Resolve file path (supports file:// URLs). Returns None if invalid."""
+def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
+    """Resolve file path (supports file:// URLs, folder aliases like Downloads).
+    Returns (resolved_path, error_message). Exactly one is None."""
     s = (path_str or "").strip()
     if not s:
-        return None
+        return None, None
     if s.lower().startswith("file://"):
         s = s[7:]
-    return Path(s).resolve()
+    safe, result = is_safe_path(s)
+    if not safe:
+        return None, result  # result = error message
+    return Path(result), None
 
 
 class SendMailTool(BaseTool):
@@ -90,9 +95,13 @@ class SendMailTool(BaseTool):
 
         attachments = []
         for p in attachment_paths:
-            path = _resolve_path(str(p)) if p else None
-            if path and path.is_file():
-                attachments.append({"path": str(path), "filename": path.name})
+            if not p:
+                continue
+            resolved, path_error = _resolve_path(str(p))
+            if path_error:
+                return path_error
+            if resolved and resolved.is_file():
+                attachments.append({"path": str(resolved), "filename": resolved.name})
 
         try:
             ok = send_mail(

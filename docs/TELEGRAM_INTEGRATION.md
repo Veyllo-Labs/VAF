@@ -277,7 +277,7 @@ async def _sender_loop():
 | `chat_id` | string | Telegram chat ID |
 | `text` | string | Response text (or caption for documents) |
 | `voice_lang` | string | Language code for TTS (optional) |
-| `file_path` | string | Full path to file for send_document (optional) |
+| `file_path` | string | Full path or folder alias (e.g. `Downloads\file.pdf`) for send_document (optional) |
 | `user_scope_id` | string | VAF user scope UUID |
 
 ### Proactive Document Delivery
@@ -289,6 +289,11 @@ send_telegram(message="Hier deine Rechnung", file_path="/path/to/invoice.pdf")
 ```
 
 The Telegram bridge sends the file via `sendDocument` API with the message as caption. Supports PDF, DOCX, and other document types.
+
+**Path resolution:** The `file_path` argument supports:
+- Absolute paths (e.g. `C:\Users\...\Downloads\file.pdf`)
+- Folder aliases: `Downloads`, `Desktop`, `Documents` (and German variants like `Herunterladen`) resolve to the user's home directory
+- Relative paths with aliases (e.g. `Downloads\file.pdf`) are resolved correctly regardless of the agent's working directory
 
 ### Incoming Documents (User → Agent)
 

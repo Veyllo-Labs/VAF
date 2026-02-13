@@ -23,6 +23,7 @@ from vaf.tools.filesystem import (
     TreeTool,
     FinderTool,
     WriteFileTool,
+    MoveFileTool,
     FolderSizeTool,
     is_safe_path,
 )
@@ -137,8 +138,9 @@ You have access to this filesystem map for fast navigation:
 {self.fs_map.format_summary()}
 
 **IMPORTANT RULES:**
+- When the user explicitly names a folder (e.g. "in Downloads", "im Downloads Ordner"), use THAT folder. Do NOT default to Documents.
 - When asked "how many documents/images/files?", check the map FIRST.
-- Default to standard locations (Documents for docs, Pictures for images).
+- Default to standard locations (Documents for docs, Pictures for images) only when NO folder is mentioned.
 - Only use file_search/find_files tool if the map doesn't have the answer.
 - If user asks about a specific file type, check the 'Common' types in the map first.
 """
@@ -385,14 +387,15 @@ Remove duplicates and ensure smooth flow.
         # ─────────────────────────────────────────────────────────────────────
         # SMART FILESYSTEM MAP QUERY (Ultra-Fast Path)
         # ─────────────────────────────────────────────────────────────────────
-        # Check if we can answer from the cached map directly
-        if self.should_refresh_map():
-             self.fs_map.build_map(depth=1)
-             self.last_scan = time.time()
-             
-        map_answer = self.fs_map.query_fast(task)
-        if map_answer:
-             return f"### Filesystem Map Answer\n\n{map_answer}"
+        # Skip map for find/send requests - user needs actual file path, not folder stats
+        if not any(kw in task_lower for kw in ["send", "schick", "find", "search", "suche", "finde", "locate"]):
+            if self.should_refresh_map():
+                 self.fs_map.build_map(depth=1)
+                 self.last_scan = time.time()
+
+            map_answer = self.fs_map.query_fast(task)
+            if map_answer:
+                 return f"### Filesystem Map Answer\n\n{map_answer}"
 
         # Normalize common mojibake sequences seen in some Windows consoles (e.g., "groÃŸ" instead of "groß")
         task_norm = (
@@ -520,18 +523,20 @@ Remove duplicates and ensure smooth flow.
                 return self._list_files(path)
         
         # ─────────────────────────────────────────────────────────────────────
-        # PATTERN: Find files ("find", "search", "locate", "suche")
+        # PATTERN: Find files ("find", "search", "send", "locate", "suche", "schick")
         # ─────────────────────────────────────────────────────────────────────
         find_patterns = [
             r"find (file|files)?",
             r"search (for)?",
+            r"send (me )?(the )?file",
+            r"schick (mir )?(die )?datei",
             r"locate",
             r"suche",
             r"finde",
             r"where is",
             r"wo ist",
         ]
-        
+
         # Extract search pattern
         search_term = self._extract_search_term(task)
         
@@ -724,12 +729,20 @@ Remove duplicates and ensure smooth flow.
         quoted = re.search(r'["\']([^"\']+)["\']', task)
         if quoted:
             return quoted.group(1)
-        
+
+        # Look for filename after "file" or "datei" (e.g. "file 26-B001-105272426-97758570.PDF")
+        file_match = re.search(r'(?:file|datei)\s+([\w.-]+(?:\.\w+)?)', task, re.IGNORECASE)
+        if file_match:
+            term = file_match.group(1).strip()
+            if '*' not in term:
+                return f"*{term}*"
+            return term
+
         # Look for file extensions
         ext_match = re.search(r'\.([\w]+)\b', task)
         if ext_match:
             return f"*.{ext_match.group(1)}"
-        
+
         # Look for specific file patterns
         patterns = [
             r'named?\s+(\S+)',
@@ -737,7 +750,7 @@ Remove duplicates and ensure smooth flow.
             r'for\s+(\S+)',
             r'suche\s+(?:nach\s+)?(\S+)',
         ]
-        
+
         for pattern in patterns:
             match = re.search(pattern, task.lower())
             if match:
@@ -746,7 +759,7 @@ Remove duplicates and ensure smooth flow.
                 if '*' not in term:
                     return f"*{term}*"
                 return term
-        
+
         return None
     
     def _extract_file_path(self, task: str) -> Optional[Path]:
@@ -925,22 +938,26 @@ Remove duplicates and ensure smooth flow.
             
             if not matches:
                 return f"No files found matching '{pattern}' in {path}"
-            
+
             result = [f"### Search: '{pattern}'\n"]
             result.append(f"Found {len(matches)} matches:\n")
-            
+
+            file_matches = []
             for f in matches[:30]:
-                try:
-                    rel_path = f.relative_to(path)
-                except ValueError:
-                    rel_path = f
-                
-                icon = "[DIR]" if f.is_dir() else "[FILE]"
-                result.append(f"{icon} {rel_path}")
-            
+                if f.is_file():
+                    full_path = str(f.resolve())
+                    file_matches.append(f)
+                    result.append(f"[FILE] {f.name}\n  Full path: {full_path}")
+                else:
+                    result.append(f"[DIR] {f.name}")
+
             if len(matches) > 30:
                 result.append(f"\n... and {len(matches) - 30} more")
-            
+
+            # If exactly one file found, add send hint for main agent
+            if len(file_matches) == 1:
+                result.append(f"\n**To send via Telegram:** Use send_telegram(message=\"...\", file_path=\"{str(file_matches[0].resolve())}\")")
+
             return "\n".join(result)
             
         except Exception as e:

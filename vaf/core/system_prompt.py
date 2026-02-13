@@ -214,6 +214,10 @@ User: "Kannst du die Datei ansehen?"
 ```
 
 **Best Practice:** Look for the "🔗 EXTRACTED FILE PATHS" section in sub-agent results for ready-to-use paths!
+
+### 📁 Umbenennen von Dateien
+Du kannst Dateien umbenennen mit `move_file(src="alter_pfad", dst="neuer_pfad")`.
+Beispiel: Datei in Downloads umbenennen → `move_file(src="Downloads\\alte_rechnung.pdf", dst="Downloads\\Bundesanzeiger_Rechnung.pdf")`
 """,
             
             "git": """
@@ -315,7 +319,8 @@ Sub-agents run asynchronously - results arrive later
             ],
             "filesystem": [
                 "file", "read", "write", "create", "delete", "move", "copy",
-                "folder", "directory", "path", "save", "load", "open", "list"
+                "folder", "directory", "path", "save", "load", "open", "list",
+                "rename", "umbenennen"
             ],
             "git": [
                 "git", "commit", "push", "pull", "branch", "merge", "clone",
@@ -607,14 +612,20 @@ Then use the results to answer. Do NOT guess from your training data!
                 "Er kann keine Dokumente, Anhänge-Listen oder Seiten im Browser ansehen. "
                 "Gib alle relevanten Informationen direkt in deiner Antwort an – extrahiere und zitiere Inhalte, "
                 "anstatt ihn auf etwas \"anzuschauen\" zu verweisen (z.B. nicht \"Schau dir die Seiten an\" oder \"Das Dokument ist in den Anhängen\"). "
-                "Wenn der Nutzer nach einem Dokument fragt (Rechnung, Vertrag, PDF) oder du eines erstellt hast: sende es mit `send_telegram(message=\"...\", file_path=\"vollständiger Pfad zur Datei\")`."
+                "**Datei senden (KRITISCH):** Wenn der Nutzer bittet, eine Datei zu senden (z.B. \"Schick mir die Datei X\", \"sende die Rechnung\"): "
+                "rufe zuerst `find_files(path=\"Downloads\" oder genannter Ordner, pattern=\"*dateiname*\")` auf, dann `send_telegram(message=\"...\", file_path=<vollständiger Pfad aus find_files>)`. "
+                "Delegiere NICHT an librarian_agent für \"Datei senden\" – du hast find_files und send_telegram direkt. "
+                "Wenn der Nutzer den Ordner nennt (z.B. \"im Downloads Ordner\"), nutze genau diesen Pfad in find_files."
             )
             caps_en = (
                 f"**Important:** The user is chatting via {chan} – they do NOT have access to the Web UI. "
                 "They cannot view documents, attachment lists, or pages in a browser. "
                 "Provide all relevant information directly in your answer – extract and quote content, "
                 "instead of telling them to \"look at\" something (e.g. do not say \"Look at the pages\" or \"The document is in the attachments\"). "
-                "When the user asks for a document (invoice, contract, PDF) or you created one: send it with `send_telegram(message=\"...\", file_path=\"full path to file\")`."
+                "**Sending a file (CRITICAL):** When the user asks to send a file (e.g. \"Send me the file X\", \"send the invoice\"): "
+                "first call `find_files(path=\"Downloads\" or stated folder, pattern=\"*filename*\")`, then `send_telegram(message=\"...\", file_path=<full path from find_files>)`. "
+                "Do NOT delegate to librarian_agent for \"send file\" – you have find_files and send_telegram directly. "
+                "If the user names the folder (e.g. \"in the Downloads folder\"), use exactly that path in find_files."
             )
             caps = caps_de if self.user_language == "de" else caps_en
             parts.append(f"\n## Channel capabilities\n{caps}\n")
@@ -756,7 +767,7 @@ You are talking to the following user.
                         "if preferred channel is not set, ask once: e.g. \"Soll ich es dir per Discord, Telegram oder Slack schicken?\" / \"Should I send it via Discord, Telegram or Slack?\". "
                         "Store their answer with `update_user_identity(main_messenger=\"telegram\")` (or discord/slack). "
                         "Then use the matching tool: `send_telegram`, `send_discord`, or `send_slack` depending on the preferred channel or user request (e.g. use send_telegram when main_messenger is Telegram or they said \"via Telegram\"). "
-                        "**For documents** (invoice, contract, PDF): use `send_telegram(message=\"Caption\", file_path=\"/full/path/to/file.pdf\")` to send the file directly.\n"
+                        "**For sending a file** (invoice, contract, PDF): First call `find_files(path=\"Downloads\" or folder user named, pattern=\"*filename*\")`, then `send_telegram(message=\"Caption\", file_path=<path from find_files>)`. Do NOT delegate to librarian_agent – use find_files + send_telegram directly.\n"
                     )
                     identity_block += (
                         "**Telegram / Sprachnachricht:** When the user asks you to write something (e.g. email, contact names, list of people) or when their last message was a voice message (Sprachnachricht): "

@@ -1170,18 +1170,34 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </Section>
 
                                         <Section title="Long-term Memory (RAG Source)">
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <span className="text-sm font-medium text-gray-700">Max RAG Snippets per Query</span>
-                                                <input
-                                                    type="number"
-                                                    min={1}
-                                                    max={20}
-                                                    value={localConfig.memory_rag_k ?? 5}
-                                                    onChange={(e) => handleChange('memory_rag_k', Math.max(1, Math.min(20, parseInt(e.target.value) || 5)))}
-                                                    className="w-14 px-2 h-9 bg-white border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
-                                                />
+                                            <div className="flex flex-wrap items-center gap-4">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-sm font-medium text-gray-700">Max RAG Snippets per Query</span>
+                                                    <input
+                                                        type="number"
+                                                        min={1}
+                                                        max={20}
+                                                        value={localConfig.memory_rag_k ?? 5}
+                                                        onChange={(e) => handleChange('memory_rag_k', Math.max(1, Math.min(20, parseInt(e.target.value) || 5)))}
+                                                        className="w-14 px-2 h-9 bg-white border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
+                                                    />
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-sm font-medium text-gray-700">Min Relevance %</span>
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        max={100}
+                                                        value={Math.round((localConfig.memory_rag_threshold ?? 0.3) * 100)}
+                                                        onChange={(e) => {
+                                                            const pct = Math.max(0, Math.min(100, parseInt(e.target.value) || 0));
+                                                            handleChange('memory_rag_threshold', pct / 100);
+                                                        }}
+                                                        className="w-14 px-2 h-9 bg-white border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
+                                                    />
+                                                </div>
                                             </div>
-                                            <p className="text-xs text-gray-400 mt-1">Number of memory snippets injected per chat turn (1–20). Default: 5. Higher = more context, more tokens.</p>
+                                            <p className="text-xs text-gray-400 mt-1">Max snippets (1–20). Min Relevance: only snippets with relevance ≥ this % are included; e.g. 30% = exclude everything below 30%.</p>
                                             <div className="flex flex-wrap gap-2 mt-3">
                                                 <button
                                                     onClick={() => setShowMemoryModal(true)}

@@ -114,6 +114,8 @@ Additional settings in `~/.vaf/config.json`:
 
 | Key | Default | Description |
 |-----|---------|-------------|
+| `memory_rag_k` | `5` | Max RAG snippets per query (1–20). Configured in Settings → Persona & Memory. |
+| `memory_rag_threshold` | `0.3` | Min relevance score (0.0–1.0). Only snippets with relevance ≥ this value are included (e.g. 0.3 = 30%). Configured as "Min Relevance %" in Settings → Persona & Memory. |
 | `memory_rag_refine_query` | `true` | Expand short user-profile-style queries (e.g. "who am I", "preferences") before search to improve recall. Set to `false` to use the raw user message only. |
 | `memory_compaction_interval` | `15` | Run session compaction every N user turns (cumulative per session). |
 | `memory_compaction_max_tokens` | `4000` | Max tokens for the compaction LLM reply (API, local LLM, and server mode). Allows more `MEMORY:` lines per run. |

@@ -1215,11 +1215,15 @@ def run_memory_search_sync(
     will_truncate = qlen >= MAX_EMBED_INPUT_CHARS
     append_domain_log("rag", f"run_memory_search_sync caller={caller or 'unknown'} query_len={qlen} will_truncate={will_truncate}")
 
+    # Min relevance score (0.0-1.0): only snippets >= this threshold are in RAG results
+    threshold = float(Config.get("memory_rag_threshold", 0.3))
+    threshold = max(0.0, min(1.0, threshold))
+
     async def _search() -> str:
         async with get_db() as db:
             pipeline = RagPipeline(db)
             sources = await pipeline.search(
-                query, k=k, metadata_filter=metadata_filter, user_scope_id=user_scope_id
+                query, k=k, threshold=threshold, metadata_filter=metadata_filter, user_scope_id=user_scope_id
             )
             
             # PUSH TO WEB UI (for Hover/Info)

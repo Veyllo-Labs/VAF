@@ -6,6 +6,7 @@ Started/stopped from discord_routes (POST /api/discord/start, /stop).
 import logging
 import queue
 import threading
+import time
 from typing import Any, Dict, Optional
 
 from vaf.core.config import Config
@@ -63,8 +64,28 @@ def _sender_loop(bot_token: str) -> None:
             logger.exception("Discord sender loop error: %s", e)
 
 
+def _append_discord_activity(channel_id: str, direction: str = "in") -> None:
+    """Append one activity entry for the dashboard timeline (keeps last 20, older are dropped)."""
+    try:
+        config = Config.load()
+        dc = config.get("discord_config") or {}
+        if not isinstance(dc, dict):
+            return
+        activity = list(dc.get("chat_activity") or [])
+        activity.append({"channel_id": str(channel_id), "ts": time.time(), "direction": direction})
+        dc["chat_activity"] = activity[-20:]
+        config["discord_config"] = dc
+        Config.save(config)
+    except Exception:
+        pass
+
+
 def _enqueue_reply(channel_id: str, text: str) -> None:
     """Enqueue a reply for the sender thread to post to Discord."""
+    try:
+        _append_discord_activity(channel_id, "out")
+    except Exception:
+        pass
     try:
         from vaf.core.log_helper import log_discord_reply
         log_discord_reply(f"BRIDGE enqueue channel_id={channel_id} len={len(text)} queue={_outgoing_queue is not None}")
@@ -131,6 +152,10 @@ def _run_bot() -> None:
             "discord_author_id": str(message.author.id),
         }
 
+        try:
+            _append_discord_activity(channel_id, "in")
+        except Exception:
+            pass
         tq = TaskQueue()
         tq.add(
             session_id=session_id,

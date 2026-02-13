@@ -173,6 +173,8 @@ class Config:
 
         # Connections: Telegram (bot token, whitelist per user_scope_id)
         "telegram_config": None,                                   # { bot_token, enabled, verified?, whitelist: [...] }
+        # Connections: WhatsApp (Baileys via Node, per-user auth, whitelist with phone_number)
+        "whatsapp_config": None,                                   # { enabled, whitelist: [{ phone_number, user_scope_id, vaf_username }] }
 
         # Email connections: accounts only (no passwords/tokens in config).
         # Credentials stored in OS keyring or encrypted file (see vaf.core.credential_store).

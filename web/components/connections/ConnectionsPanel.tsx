@@ -11,8 +11,14 @@ import { cn } from '@/lib/utils';
 interface ConnectionsPanelProps {
     config: any;
     onConfigChange: (key: string, value: any) => void;
+    /** Current user for per-user cloud config (admin uses cloud_config, others use cloud_config_by_user) */
+    currentUser?: { username?: string } | null;
+    /** Bump to refetch cloud accounts (e.g. when cloud wizard completes) */
+    refreshTrigger?: number;
     onOpenDiscordWizard: () => void;
+    onOpenDiscordDashboard?: () => void;
     onOpenTelegramWizard: () => void;
+    onOpenWhatsAppWizard?: () => void;
     onOpenTelegramDashboard?: () => void;
     onOpenEmailDashboard?: () => void;
     onOpenEmailWizard?: () => void;
@@ -72,8 +78,8 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         category: 'communication',
         description: 'Chat with your agent on WhatsApp',
         configKey: 'whatsapp_config',
-        available: false,
-        comingSoon: true,
+        available: true,
+        comingSoon: false,
         iconColor: 'bg-green-600',
     },
     {
@@ -203,12 +209,46 @@ export const CATEGORIES = [
 /** Use relative /api/ so Next.js rewrites to backend. */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard, onOpenTelegramWizard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudDashboard, onOpenCloudWizard }: ConnectionsPanelProps) {
+export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudDashboard, onOpenCloudWizard }: ConnectionsPanelProps) {
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'disconnected' | 'checking'>>({});
+    /** Cloud accounts from API (source of truth; config can be stale after OAuth) */
+    const [cloudAccountsFromApi, setCloudAccountsFromApi] = useState<any[]>([]);
+    /** Email accounts from API (source of truth; config only has legacy email_config, not email_config_by_user) */
+    const [emailAccountsFromApi, setEmailAccountsFromApi] = useState<any[]>([]);
 
     useEffect(() => {
         checkConnectionStatus();
-    }, [config]);
+    }, [config, refreshTrigger]);
+
+    const fetchEmailAccounts = async () => {
+        try {
+            const res = await fetch(api('api/email/accounts'), { credentials: 'include' });
+            const data = await res.json();
+            const accounts = data?.accounts ?? [];
+            setEmailAccountsFromApi(Array.isArray(accounts) ? accounts : []);
+            setConnectionStatus(prev => ({
+                ...prev,
+                email: (Array.isArray(accounts) && accounts.length > 0) ? 'connected' : 'disconnected'
+            }));
+        } catch {
+            setEmailAccountsFromApi([]);
+            setConnectionStatus(prev => ({ ...prev, email: 'disconnected' }));
+        }
+    };
+
+    const fetchCloudAccounts = async () => {
+        try {
+            const res = await fetch(api('api/cloud/accounts'), { credentials: 'include' });
+            if (res.ok) {
+                const data = await res.json();
+                setCloudAccountsFromApi(data.accounts || []);
+            } else {
+                setCloudAccountsFromApi([]);
+            }
+        } catch {
+            setCloudAccountsFromApi([]);
+        }
+    };
 
     const checkConnectionStatus = async () => {
         if (config.discord_config?.verified) {
@@ -235,6 +275,20 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
         } else {
             setConnectionStatus(prev => ({ ...prev, telegram: 'disconnected' }));
         }
+        if (config.whatsapp_config?.enabled) {
+            setConnectionStatus(prev => ({ ...prev, whatsapp: 'checking' }));
+            try {
+                const res = await fetch(api('api/whatsapp/status'), { credentials: 'include' });
+                const status = await res.json();
+                setConnectionStatus(prev => ({ ...prev, whatsapp: status.linked && status.running ? 'connected' : 'disconnected' }));
+            } catch {
+                setConnectionStatus(prev => ({ ...prev, whatsapp: 'disconnected' }));
+            }
+        } else {
+            setConnectionStatus(prev => ({ ...prev, whatsapp: 'disconnected' }));
+        }
+        await fetchEmailAccounts();
+        await fetchCloudAccounts();
     };
 
     const handleToggleConnection = async (appId: string, enabled: boolean) => {
@@ -266,6 +320,20 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                 console.error('Failed to toggle Telegram:', e);
             }
         }
+        if (appId === 'whatsapp') {
+            const currentConfig = config.whatsapp_config || {};
+            onConfigChange('whatsapp_config', { ...currentConfig, enabled });
+            try {
+                if (enabled) {
+                    await fetch(api('api/whatsapp/start'), { method: 'POST', credentials: 'include' });
+                } else {
+                    await fetch(api('api/whatsapp/stop'), { method: 'POST', credentials: 'include' });
+                }
+                setConnectionStatus(prev => ({ ...prev, whatsapp: enabled ? 'connected' : 'disconnected' }));
+            } catch (e) {
+                console.error('Failed to toggle WhatsApp:', e);
+            }
+        }
     };
 
     const handleDisconnect = async (appId: string) => {
@@ -279,6 +347,16 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
         if (appId === 'telegram') {
             onConfigChange('telegram_config', null);
             setConnectionStatus(prev => ({ ...prev, telegram: 'disconnected' }));
+        }
+        if (appId === 'whatsapp') {
+            try {
+                await fetch(api('api/whatsapp/stop'), { method: 'POST', credentials: 'include' });
+                await fetch(api('api/whatsapp/qr/reset'), { method: 'POST', credentials: 'include' });
+            } catch (e) {
+                console.error('Failed to disconnect WhatsApp:', e);
+            }
+            onConfigChange('whatsapp_config', null);
+            setConnectionStatus(prev => ({ ...prev, whatsapp: 'disconnected' }));
         }
         if (appId === 'email') {
             try {
@@ -310,12 +388,20 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                             }
                         }
                     }
-                    // Refresh accounts and update config so UI reflects the change
+                    // Refresh accounts and update config so UI reflects the change (match user scope)
                     const refreshRes = await fetch(api('api/cloud/accounts'), { credentials: 'include' });
                     if (refreshRes.ok) {
                         const refreshed = await refreshRes.json();
                         const remaining = refreshed.accounts || [];
-                        onConfigChange('cloud_config', { ...(config?.cloud_config || {}), accounts: remaining });
+                        const localAdmin = ((config?.local_admin_username || 'admin') as string).trim().toLowerCase();
+                        const username = (currentUser?.username || '').trim().toLowerCase();
+                        if (!username || username === localAdmin) {
+                            onConfigChange('cloud_config', { ...(config?.cloud_config || {}), accounts: remaining });
+                        } else {
+                            const byUser = { ...(config?.cloud_config_by_user || {}) };
+                            byUser[username] = { ...(byUser[username] || {}), accounts: remaining };
+                            onConfigChange('cloud_config_by_user', byUser);
+                        }
                     }
                 }
                 setConnectionStatus(prev => ({ ...prev, [appId]: 'disconnected' }));
@@ -334,12 +420,18 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
 
     const isConfigured = (app: ConnectionApp) => {
         if (app.id === 'email') {
-            const accounts = config?.email_config?.accounts;
-            return Array.isArray(accounts) && accounts.length > 0;
+            const fromApi = emailAccountsFromApi.length > 0;
+            const fromConfig = Array.isArray(config?.email_config?.accounts) && config.email_config.accounts.length > 0;
+            return fromApi || fromConfig;
+        }
+        if (app.id === 'whatsapp') {
+            const wc = config?.whatsapp_config;
+            if (!wc) return false;
+            const whitelist = wc.whitelist || [];
+            return whitelist.some((e: any) => e?.phone_number);
         }
         if (isCloudApp(app.id)) {
-            const cloudAccounts = config?.cloud_config?.accounts || [];
-            return cloudAccounts.some((a: any) => a.provider === app.id);
+            return cloudAccountsFromApi.some((a: any) => a.provider === app.id);
         }
         const appConfig = config[app.configKey];
         return appConfig?.verified === true;
@@ -347,12 +439,14 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
 
     const isEnabled = (app: ConnectionApp) => {
         if (app.id === 'email') {
-            const accounts = config?.email_config?.accounts;
-            return Array.isArray(accounts) && (accounts as any[]).some((a: any) => a.enabled !== false);
+            const accounts = emailAccountsFromApi.length > 0 ? emailAccountsFromApi : (config?.email_config?.accounts ?? []);
+            return Array.isArray(accounts) && accounts.length > 0 && (accounts as any[]).some((a: any) => a.enabled !== false);
+        }
+        if (app.id === 'whatsapp') {
+            return config?.whatsapp_config?.enabled === true;
         }
         if (isCloudApp(app.id)) {
-            const cloudAccounts = config?.cloud_config?.accounts || [];
-            return cloudAccounts.some((a: any) => a.provider === app.id && a.sync_enabled !== false);
+            return cloudAccountsFromApi.some((a: any) => a.provider === app.id && a.sync_enabled !== false);
         }
         const appConfig = config[app.configKey];
         return appConfig?.enabled === true;
@@ -376,7 +470,7 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                             const configured = isConfigured(app);
                             const enabled = isEnabled(app);
                             const status = app.id === 'email'
-                                ? ((config?.email_config?.accounts?.length ?? 0) > 0 ? 'connected' : 'disconnected')
+                                ? (connectionStatus.email ?? ((config?.email_config?.accounts?.length ?? 0) > 0 ? 'connected' : 'disconnected'))
                                 : isCloudApp(app.id)
                                     ? (configured ? 'connected' : 'disconnected')
                                     : connectionStatus[app.id];
@@ -437,9 +531,14 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                             : 'Add your Telegram in Settings to message and be reached.'}
                                                     </p>
                                                 )}
+                                                {configured && app.id === 'whatsapp' && (
+                                                    <p className="text-xs text-gray-600 mt-1">
+                                                        You can message from WhatsApp; VAF can reach you there.
+                                                    </p>
+                                                )}
                                                 {configured && app.id === 'email' && (
                                                     <p className="text-xs text-gray-600 mt-1">
-                                                        {(config?.email_config?.accounts?.length ?? 0)} account(s) connected. Open Settings to add or remove.
+                                                        {(emailAccountsFromApi.length || (config?.email_config?.accounts?.length ?? 0))} account(s) connected. Open Settings to add or remove.
                                                     </p>
                                                 )}
                                             </div>
@@ -465,11 +564,15 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                     {/* Settings */}
                                                     <button
                                                         onClick={() => {
-                                                            if (app.id === 'discord') onOpenDiscordWizard();
+                                                            if (app.id === 'discord') {
+                                                                if (onOpenDiscordDashboard && configured) onOpenDiscordDashboard();
+                                                                else onOpenDiscordWizard();
+                                                            }
                                                             if (app.id === 'telegram') {
                                                                 if (onOpenTelegramDashboard && configured) onOpenTelegramDashboard();
                                                                 else onOpenTelegramWizard();
                                                             }
+                                                            if (app.id === 'whatsapp') onOpenWhatsAppWizard?.();
                                                             if (app.id === 'email') {
                                                                 if (onOpenEmailDashboard) onOpenEmailDashboard();
                                                                 else if (onOpenEmailWizard) onOpenEmailWizard();
@@ -499,6 +602,7 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                     onClick={() => {
                                                         if (app.id === 'discord') onOpenDiscordWizard();
                                                         if (app.id === 'telegram') onOpenTelegramWizard();
+                                                        if (app.id === 'whatsapp') onOpenWhatsAppWizard?.();
                                                         if (app.id === 'email') {
                                                             if (onOpenEmailDashboard) onOpenEmailDashboard();
                                                             else if (onOpenEmailWizard) onOpenEmailWizard();

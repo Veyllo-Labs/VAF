@@ -146,6 +146,16 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount Telegram routes: {e}")
 
+# Mount WhatsApp Integration routes
+try:
+    from vaf.api.whatsapp_routes import router as whatsapp_router
+    app.include_router(whatsapp_router)
+    log("WebServer", "WhatsApp integration routes mounted at /api/whatsapp")
+except ImportError as e:
+    log("WebServer", f"WhatsApp integration not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount WhatsApp routes: {e}")
+
 # Mount Auth routes (Local Network Authentication)
 try:
     from vaf.api.auth_routes import router as auth_router
@@ -477,6 +487,20 @@ async def startup_event():
                 log("WebServer", "Discord bridge already running")
     except Exception as e:
         log("WebServer", f"Discord bridge auto-start skipped or failed: {e}")
+
+    # Auto-start WhatsApp bridge when configured and enabled
+    try:
+        whatsapp_config = Config.get("whatsapp_config") or {}
+        if isinstance(whatsapp_config, dict) and whatsapp_config.get("enabled"):
+            whitelist = whatsapp_config.get("whitelist") or []
+            if any(isinstance(e, dict) and e.get("phone_number") for e in whitelist):
+                from vaf.api.whatsapp_bridge import start_bridge, is_bridge_running
+                if not is_bridge_running() and start_bridge():
+                    log("WebServer", "WhatsApp bridge auto-started (configured and enabled)")
+                elif is_bridge_running():
+                    log("WebServer", "WhatsApp bridge already running")
+    except Exception as e:
+        log("WebServer", f"WhatsApp bridge auto-start skipped or failed: {e}")
 
 
 async def _auto_capture_worker():

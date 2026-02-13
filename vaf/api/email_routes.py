@@ -175,7 +175,7 @@ def _oauth_callback_base_url() -> str:
     if explicit:
         return explicit
     port = Config.get("local_network_port", 8001)
-    return f"http://127.0.0.1:{port}"
+    return f"http://localhost:{port}"
 
 
 @router.get("/oauth/start")
@@ -230,13 +230,13 @@ def _redirect_success(account_id: str, provider: str) -> RedirectResponse:
     # Frontend origin from env or default 3000
     import os
     port = os.environ.get("VAF_WEB_UI_PORT", "3000")
-    url = f"http://127.0.0.1:{port}/settings?connections=1&email_oauth=success&account={account_id}&provider={provider}"
+    url = f"http://localhost:{port}/settings?connections=1&email_oauth=success&account={account_id}&provider={provider}"
     return RedirectResponse(url=url, status_code=302)
 
 
 def _redirect_error(message: str) -> HTMLResponse:
     port = __import__("os").environ.get("VAF_WEB_UI_PORT", "3000")
-    url = f"http://127.0.0.1:{port}/settings?connections=1&email_oauth=error"
+    url = f"http://localhost:{port}/settings?connections=1&email_oauth=error"
     html_content = f"""
     <!DOCTYPE html>
     <html><head><meta charset="utf-8"><title>Email connection failed</title></head>

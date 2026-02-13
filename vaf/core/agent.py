@@ -1064,6 +1064,7 @@ class Agent:
             from vaf.tools.send_telegram import SendTelegramTool
             from vaf.tools.send_discord import SendDiscordTool
             from vaf.tools.send_slack import SendSlackTool
+            from vaf.tools.send_whatsapp import SendWhatsAppTool
             from vaf.tools.mail_inbox import MailInboxTool
             from vaf.tools.read_mail import ReadMailTool
             from vaf.tools.find_mail import FindMailTool
@@ -1080,6 +1081,7 @@ class Agent:
             self.tools["send_telegram"] = SendTelegramTool()
             self.tools["send_discord"] = SendDiscordTool()
             self.tools["send_slack"] = SendSlackTool()
+            self.tools["send_whatsapp"] = SendWhatsAppTool()
             self.tools["mail_inbox"] = MailInboxTool()
             self.tools["read_mail"] = ReadMailTool()
             self.tools["find_mail"] = FindMailTool()
@@ -4166,7 +4168,7 @@ class Agent:
                         user_scope_id=getattr(self, "_current_user_scope_id", None),
                     )
                     for ch in conn.get("available") or []:
-                        tool_name = {"telegram": "send_telegram", "discord": "send_discord", "slack": "send_slack"}.get(ch)
+                        tool_name = {"telegram": "send_telegram", "discord": "send_discord", "slack": "send_slack", "whatsapp": "send_whatsapp"}.get(ch)
                         if tool_name and tool_name in self.tools and tool_name not in selected_tools:
                             selected_tools = list(selected_tools) + [tool_name]
                 except Exception:
@@ -6078,7 +6080,7 @@ class Agent:
                     append_domain_log("rag", f"[Agent] {name} called with user_scope_id={scope_id}")
                 if name == "update_user_identity":
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                if name in ("send_telegram", "send_discord", "send_slack"):
+                if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "list_email_accounts", "send_mail"):

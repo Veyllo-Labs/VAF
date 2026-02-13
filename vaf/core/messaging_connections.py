@@ -29,15 +29,17 @@ def _endpoints_path() -> Path:
 def _load_endpoints() -> Dict[str, Any]:
     path = _endpoints_path()
     if not path.exists():
-        return {"by_scope": {}, "by_username": {}}
+        return {"by_scope": {}, "by_username": {}, "whatsapp_by_scope": {}, "whatsapp_by_username": {}}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return {
             "by_scope": data.get("by_scope") or {},
             "by_username": data.get("by_username") or {},
+            "whatsapp_by_scope": data.get("whatsapp_by_scope") or {},
+            "whatsapp_by_username": data.get("whatsapp_by_username") or {},
         }
     except Exception:
-        return {"by_scope": {}, "by_username": {}}
+        return {"by_scope": {}, "by_username": {}, "whatsapp_by_scope": {}, "whatsapp_by_username": {}}
 
 
 def _save_endpoints(data: Dict[str, Any]) -> None:
@@ -117,6 +119,85 @@ def get_telegram_chat_id(
     return chat_id
 
 
+def save_whatsapp_chat_jid(
+    user_scope_id: Optional[Any],
+    username: Optional[str],
+    chat_jid: str,
+) -> None:
+    """Persist WhatsApp chat JID for this user. Called from WhatsApp bridge when a message is received."""
+    if not chat_jid:
+        return
+    with _ENDPOINTS_LOCK:
+        data = _load_endpoints()
+        if user_scope_id is not None:
+            data["whatsapp_by_scope"][str(user_scope_id)] = chat_jid
+        uname = (username or "").strip() or "admin"
+        data["whatsapp_by_username"][uname] = chat_jid
+        _save_endpoints(data)
+
+
+def get_whatsapp_chat_jid_from_whitelist(
+    user_scope_id: Optional[Any],
+    username: Optional[str],
+) -> Optional[str]:
+    """
+    Resolve WhatsApp JID from the whitelist (phone_number in E.164 maps to user).
+    For proactive sends we need the user's WhatsApp JID - typically obtained when they first message us.
+    Returns JID string if whitelist has phone_number for this user (we construct JID from it), or None.
+    Note: We prefer persisted endpoints from actual message; this is fallback when user hasn't messaged yet.
+    """
+    whatsapp_config = Config.get("whatsapp_config") or {}
+    if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("whitelist"):
+        return None
+    whitelist = whatsapp_config.get("whitelist") or []
+    scope_str = str(user_scope_id) if user_scope_id is not None else None
+    vaf_username = (username or "").strip() or "admin"
+    for entry in whitelist:
+        if not isinstance(entry, dict):
+            continue
+        if scope_str and str(entry.get("user_scope_id")) == scope_str:
+            phone = entry.get("phone_number")
+            if phone:
+                return _e164_to_jid(str(phone))
+        if entry.get("vaf_username") == vaf_username:
+            phone = entry.get("phone_number")
+            if phone:
+                return _e164_to_jid(str(phone))
+    return None
+
+
+def _e164_to_jid(phone: str) -> str:
+    """Convert E.164 phone number to WhatsApp JID (e.g. 49123456789@s.whatsapp.net)."""
+    digits = "".join(c for c in phone if c.isdigit())
+    if digits.startswith("0"):
+        digits = digits[1:]
+    return f"{digits}@s.whatsapp.net"
+
+
+def get_whatsapp_chat_jid(
+    user_scope_id: Optional[Any],
+    username: Optional[str],
+) -> Optional[str]:
+    """
+    Return WhatsApp chat JID for this user. Used by send_whatsapp tool.
+    Lookup order: 1) persisted endpoints, 2) whitelist (phone_number -> JID).
+    """
+    with _ENDPOINTS_LOCK:
+        data = _load_endpoints()
+        if user_scope_id is not None:
+            jid = data["whatsapp_by_scope"].get(str(user_scope_id))
+            if jid:
+                return jid
+        uname = (username or "").strip() or "admin"
+        jid = data["whatsapp_by_username"].get(uname)
+        if jid:
+            return jid
+    jid = get_whatsapp_chat_jid_from_whitelist(user_scope_id, username)
+    if jid:
+        save_whatsapp_chat_jid(user_scope_id, username, jid)
+    return jid
+
+
 def get_discord_user_id(
     user_scope_id: Optional[Any],
     username: Optional[str],
@@ -176,6 +257,27 @@ def get_messaging_connections(
         if discord_config.get("enabled") and discord_config.get("verified"):
             available.append("discord")
 
+    # WhatsApp: enabled + user has linked auth (creds exist) + whitelist entry
+    whatsapp_config = Config.get("whatsapp_config") or {}
+    if isinstance(whatsapp_config, dict) and whatsapp_config.get("enabled"):
+        try:
+            from vaf.core.whatsapp_auth import whatsapp_auth_exists
+            vaf_username = (username or "").strip() or "admin"
+            if whatsapp_auth_exists(vaf_username):
+                whitelist = whatsapp_config.get("whitelist") or []
+                scope_str = str(user_scope_id) if user_scope_id is not None else None
+                for entry in whitelist:
+                    if not isinstance(entry, dict):
+                        continue
+                    if scope_str and str(entry.get("user_scope_id")) == scope_str:
+                        available.append("whatsapp")
+                        break
+                    if entry.get("vaf_username") == vaf_username:
+                        available.append("whatsapp")
+                        break
+        except Exception:
+            pass
+
     # Slack: not yet configured in config; placeholder for future
     # if Config.get("slack_config", {}).get("enabled"): available.append("slack")
 
@@ -195,7 +297,7 @@ def get_messaging_connections(
             ws = get_user_workspace(username)
             ui = ws.get_user_identity()
             val = (ui.get("main_messenger") or "").strip().lower()
-            if val in ("telegram", "discord", "slack"):
+            if val in ("telegram", "discord", "slack", "whatsapp"):
                 main_messenger = val
         except Exception:
             pass

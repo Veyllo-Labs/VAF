@@ -169,6 +169,39 @@ async def get_verification_status():
     }
 
 
+@router.get("/dashboard")
+async def get_discord_dashboard():
+    """
+    Data for the Discord settings dashboard: status, admin info, activity. No sensitive data (no tokens).
+    """
+    from vaf.core.config import Config
+    from vaf.api.discord_bridge import is_bridge_running
+
+    discord_config = Config.get("discord_config") or {}
+    if not isinstance(discord_config, dict):
+        discord_config = {}
+
+    # Activity: max 20 events, newest first
+    raw_activity = list(discord_config.get("chat_activity") or [])[-20:]
+    activity = [
+        {
+            "chat_id": str(a.get("channel_id", a.get("chat_id", ""))),
+            "ts": a.get("ts", 0),
+            "direction": a.get("direction", "in"),
+        }
+        for a in raw_activity
+    ]
+
+    return {
+        "configured": bool(discord_config.get("verified") and discord_config.get("admin_user_id")),
+        "running": is_bridge_running(),
+        "admin_username": discord_config.get("admin_username"),
+        "admin_user_id": discord_config.get("admin_user_id"),
+        "enabled": discord_config.get("enabled", False),
+        "activity": activity,
+    }
+
+
 @router.get("/status")
 async def get_discord_status():
     """
@@ -212,6 +245,48 @@ async def start_discord_bridge():
     if start_bridge():
         return {"status": "started", "message": "Discord bridge started."}
     raise HTTPException(status_code=500, detail="Failed to start Discord bridge.")
+
+
+@router.get("/session/{session_id}/history")
+async def get_discord_session_history(session_id: str):
+    """Return message history for a Discord session (session_id must start with 'discord_')."""
+    if not session_id.startswith("discord_"):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+    try:
+        from vaf.core.config import Config
+        from vaf.core.session import SessionManager
+        session_mgr = SessionManager()
+        session = session_mgr.load(session_id)
+        messages = [
+            {"role": m.role, "content": (m.content or "")[:2000], "timestamp": getattr(m, "timestamp", None)}
+            for m in (session.messages or [])
+        ]
+        runtime_state = getattr(session, "runtime_state", None) or {}
+        user_turn_count = runtime_state.get("user_turn_count", 0)
+        if user_turn_count == 0 and session.messages:
+            user_turn_count = sum(1 for m in (session.messages or []) if getattr(m, "role", None) == "user")
+        interval = int(Config.get("memory_compaction_interval", 15))
+        last_compaction = int(runtime_state.get("last_compaction_at_turn", 0))
+        return {
+            "session_id": session_id,
+            "messages": messages,
+            "user_turn_count": user_turn_count,
+            "compaction_interval": interval,
+            "last_compaction_at_turn": last_compaction,
+        }
+    except FileNotFoundError:
+        from vaf.core.config import Config
+        interval = int(Config.get("memory_compaction_interval", 15))
+        return {
+            "session_id": session_id,
+            "messages": [],
+            "user_turn_count": 0,
+            "compaction_interval": interval,
+            "last_compaction_at_turn": 0,
+        }
+    except Exception as e:
+        logger.exception("Discord session history error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/stop")

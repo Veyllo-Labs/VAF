@@ -22,9 +22,12 @@ export interface DiscordConfig {
     enabled: boolean;
 }
 
+const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
+
 const STEPS = [
     { id: 'intro', title: 'Discord Bot Setup', subtitle: 'Connect VAF to Discord' },
     { id: 'create', title: 'Create Bot', subtitle: 'Get your bot token' },
+    { id: 'invite', title: 'Invite Bot', subtitle: 'Add bot to your server (required)' },
     { id: 'token', title: 'Enter Token', subtitle: 'Paste your bot token' },
     { id: 'verify', title: 'Verify Admin', subtitle: 'Confirm your identity' },
     { id: 'complete', title: 'Complete', subtitle: 'Setup finished!' },
@@ -43,7 +46,7 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
 
     // Generate random 6-digit code
     useEffect(() => {
-        if (currentStep === 3 && !verificationCode) {
+        if (currentStep === 4 && !verificationCode) {
             const code = Math.floor(100000 + Math.random() * 900000).toString();
             setVerificationCode(code);
         }
@@ -62,9 +65,10 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
 
         try {
             // Start the bot and wait for verification message
-            const response = await fetch('http://localhost:8001/api/discord/start-verification', {
+            const response = await fetch(api('api/discord/start-verification'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
                 body: JSON.stringify({
                     bot_token: botToken,
                     verification_code: verificationCode
@@ -79,7 +83,7 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
             // Poll for verification status
             const pollInterval = setInterval(async () => {
                 try {
-                    const statusRes = await fetch('http://localhost:8001/api/discord/verification-status');
+                    const statusRes = await fetch(api('api/discord/verification-status'), { credentials: 'include' });
                     const status = await statusRes.json();
 
                     if (status.verified) {
@@ -132,9 +136,10 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
         switch (currentStep) {
             case 0: return true;
             case 1: return true;
-            case 2: return botToken.length > 50; // Discord tokens are long
-            case 3: return verificationStatus === 'success';
-            case 4: return true;
+            case 2: return true; // Invite step
+            case 3: return botToken.length > 50; // Discord tokens are long
+            case 4: return verificationStatus === 'success';
+            case 5: return true;
             default: return false;
         }
     };
@@ -275,17 +280,70 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                                     </div>
                                 </li>
                             </ol>
-                            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
-                                <p className="text-sm text-amber-800">
-                                    <strong>Important:</strong> Also go to OAuth2 → URL Generator, select "bot" scope with
-                                    "Send Messages" and "Read Message History" permissions, then use the generated URL to invite the bot to your server.
-                                </p>
-                            </div>
                         </div>
                     )}
 
-                    {/* Step 2: Enter Token */}
+                    {/* Step 2: Invite Bot */}
                     {currentStep === 2 && (
+                        <div className="space-y-6">
+                            <h3 className="text-lg font-semibold text-gray-900">Invite Bot to Your Server</h3>
+                            <p className="text-gray-500">
+                                You must invite the bot to a Discord server. Otherwise you cannot send it a Direct Message (DM), and verification will fail.
+                            </p>
+                            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
+                                <p className="text-sm text-amber-800 font-medium mb-2">Why is this required?</p>
+                                <p className="text-sm text-amber-700">
+                                    Discord only allows DMs to bots when you share at least one server with the bot. Without an invite you cannot find or message it.
+                                </p>
+                            </div>
+                            <ol className="space-y-4">
+                                <li className="flex gap-3">
+                                    <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-sm flex items-center justify-center flex-shrink-0">1</span>
+                                    <div>
+                                        <p className="text-gray-900">Open the Discord Developer Portal – your application</p>
+                                        <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-700 text-sm flex items-center gap-1 underline">
+                                            discord.com/developers/applications <ExternalLink className="w-3 h-3" />
+                                        </a>
+                                    </div>
+                                </li>
+                                <li className="flex gap-3">
+                                    <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-sm flex items-center justify-center flex-shrink-0">2</span>
+                                    <div>
+                                        <p className="text-gray-900">Go to <strong>OAuth2 → URL Generator</strong></p>
+                                    </div>
+                                </li>
+                                <li className="flex gap-3">
+                                    <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-sm flex items-center justify-center flex-shrink-0">3</span>
+                                    <div>
+                                        <p className="text-gray-900">Select scope: <strong>bot</strong></p>
+                                    </div>
+                                </li>
+                                <li className="flex gap-3">
+                                    <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-sm flex items-center justify-center flex-shrink-0">4</span>
+                                    <div>
+                                        <p className="text-gray-900">Select permissions:</p>
+                                        <ul className="text-sm text-gray-500 mt-1 space-y-1">
+                                            <li>• Send Messages</li>
+                                            <li>• Read Message History</li>
+                                            <li>• View Channels</li>
+                                        </ul>
+                                    </div>
+                                </li>
+                                <li className="flex gap-3">
+                                    <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-sm flex items-center justify-center flex-shrink-0">5</span>
+                                    <div>
+                                        <p className="text-gray-900">Copy the generated URL, open it in your browser, and add the bot to your server</p>
+                                    </div>
+                                </li>
+                            </ol>
+                            <p className="text-sm text-gray-500">
+                                After that the bot will appear on your server. In the next steps you can open a DM by right-clicking the bot → Message.
+                            </p>
+                        </div>
+                    )}
+
+                    {/* Step 3: Enter Token */}
+                    {currentStep === 3 && (
                         <div className="space-y-6">
                             <h3 className="text-lg font-semibold text-gray-900">Enter Your Bot Token</h3>
                             <p className="text-gray-500">
@@ -319,8 +377,8 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                         </div>
                     )}
 
-                    {/* Step 3: Verify Admin */}
-                    {currentStep === 3 && (
+                    {/* Step 4: Verify Admin */}
+                    {currentStep === 4 && (
                         <div className="space-y-6">
                             <h3 className="text-lg font-semibold text-gray-900">Verify Your Identity</h3>
                             <p className="text-gray-500">
@@ -344,13 +402,16 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                                         </div>
                                     </div>
                                     <div className="space-y-3">
-                                        <p className="text-gray-900 font-medium">Instructions:</p>
+                                        <p className="text-gray-900 font-medium">Instructions (in this order):</p>
                                         <ol className="space-y-2 text-sm text-gray-500">
-                                            <li>1. Open Discord and find your bot in your server</li>
-                                            <li>2. Send a Direct Message (DM) to the bot</li>
-                                            <li>3. Type the verification code: <code className="text-gray-900 bg-gray-100 px-1 rounded">{verificationCode}</code></li>
-                                            <li>4. Click "Start Verification" below</li>
+                                            <li>1. Click <strong>&quot;Start Verification&quot;</strong> below – the bot will start</li>
+                                            <li>2. Open Discord and find your bot in your server</li>
+                                            <li>3. Right-click the bot → <strong>Message</strong> (opens the DM)</li>
+                                            <li>4. Send the verification code as a message: <code className="text-gray-900 bg-gray-100 px-1 rounded">{verificationCode}</code></li>
                                         </ol>
+                                        <p className="text-xs text-amber-600 mt-1">
+                                            Can&apos;t find the bot? Invite it first (step 1). Without a shared server you cannot DM it.
+                                        </p>
                                     </div>
                                     <button
                                         onClick={handleStartVerification}
@@ -366,8 +427,9 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                                     <Loader2 className="w-12 h-12 text-gray-600 animate-spin mx-auto mb-4" />
                                     <p className="text-gray-900 font-medium">Waiting for verification...</p>
                                     <p className="text-sm text-gray-500 mt-2">
-                                        Send the code <span className="text-gray-900 font-mono bg-gray-100 px-1 rounded">{verificationCode}</span> as a DM to your bot
+                                        Right-click your bot in Discord → Message, then send: <span className="text-gray-900 font-mono bg-gray-100 px-1 rounded">{verificationCode}</span>
                                     </p>
+                                    <p className="text-xs text-gray-400 mt-2">If the bot is not on any server, invite it first (OAuth2 URL from step 1).</p>
                                 </div>
                             )}
 
@@ -401,8 +463,8 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                         </div>
                     )}
 
-                    {/* Step 4: Complete */}
-                    {currentStep === 4 && (
+                    {/* Step 5: Complete */}
+                    {currentStep === 5 && (
                         <div className="text-center py-8">
                             <div className="w-20 h-20 mx-auto rounded-2xl bg-green-500 flex items-center justify-center mb-4">
                                 <Check className="w-10 h-10 text-white" />

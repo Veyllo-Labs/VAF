@@ -785,15 +785,18 @@ export default function LoginPage() {
             <DiscordSetupWizard
                 isOpen={showDiscordWizard}
                 onClose={() => setShowDiscordWizard(false)}
-                onComplete={(config: DiscordConfig) => {
+                onComplete={async (config: DiscordConfig) => {
                     setOnboardingConfig((prev) => ({ ...prev, discord_config: config }));
-                    fetch(`${getApiBase()}/api/config`, {
+                    const base = getApiBase();
+                    await fetch(`${base}/api/config`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         credentials: 'include',
                         body: JSON.stringify({ discord_config: config }),
                     }).catch(() => { });
                     setShowDiscordWizard(false);
+                    await new Promise(r => setTimeout(r, 400));
+                    fetch(`${base}/api/discord/start`, { method: 'POST', credentials: 'include' }).catch(() => { });
                 }}
                 existingConfig={onboardingConfig.discord_config as DiscordConfig | undefined}
             />

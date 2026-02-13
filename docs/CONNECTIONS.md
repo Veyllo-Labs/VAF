@@ -12,7 +12,7 @@ Connect external apps and services to interact with your VAF agent.
 | **Telegram** | ✅ Available | Use VAF from Telegram; VAF can reach you there (whitelist, per-user) |
 | **Email** | ✅ Available | OAuth2 (Google, Microsoft, Apple) or IMAP/SMTP; read and send email via agent |
 | Slack | 🔜 Coming Soon | Integrate VAF into your Slack workspace |
-| WhatsApp | 🔜 Coming Soon | Chat with your agent on WhatsApp |
+| **WhatsApp** | ✅ Available | Chat with your agent on WhatsApp (QR link, per-user isolation) |
 
 ### Calendar
 
@@ -114,9 +114,15 @@ The Discord configuration is stored locally in your VAF config:
 - Verify the Discord bridge is running (Settings → Connections → Discord toggle)
 - Send your message as a **Direct Message** to the bot (DMs are supported; server channels require additional setup)
 
+**"Can't find the bot" / "Bot not found"**
+- You **must invite the bot to a server first**. Discord does not let you DM a bot unless you share a server with it.
+- Use OAuth2 → URL Generator (scope: bot, permissions: Send Messages, Read Message History, View Channels), open the URL, and add the bot to your server.
+- Then: Right-click the bot in your server → Message → send the verification code.
+
 **"Verification failed"**
-- Send the code via **Direct Message**, not in a server channel
-- Make sure you're sending the exact code (no extra spaces)
+- Click **Start Verification** first, then go to Discord and send the code.
+- Send the code via **Direct Message** (right-click bot → Message), not in a server channel.
+- Make sure you're sending the exact code (no extra spaces).
 
 ## Telegram Integration
 
@@ -192,6 +198,58 @@ Global options (top-level in config):
 
 - **"Not authorized"**: Add your Telegram in the wizard whitelist step (your own account only).
 - **No reply**: Ensure the bridge is running (Settings → Connections, Telegram toggle on). After a VAF restart, the bridge auto-starts if Telegram is enabled.
+
+## WhatsApp Integration
+
+### Features
+
+- **Per-user isolation**: Each VAF user has their own WhatsApp session. Credentials are stored in `~/.vaf/users/<username>/whatsapp/`. Other users cannot see or use your WhatsApp.
+- **QR link**: Scan a QR code with WhatsApp (Linked Devices) to link your phone.
+- **Whitelist**: Only configured phone numbers (E.164) can send messages **and** receive replies. Each whitelist entry maps a phone number to a VAF user.
+- **Read-only for everyone else**: Der Bot antwortet **ausschließlich** an Nummern in deiner Whitelist. Er schreibt keine anderen Kontakte an und reagiert nicht auf Nachrichten von Nicht-Whitelist-Nummern.
+- **Node.js required**: Uses Baileys via a Node subprocess. Run `npm install` in `vaf/whatsapp_node/` before first use.
+
+### Setup
+
+1. Install Node.js (>= 18) and run `npm install` in `vaf/whatsapp_node/`.
+2. Go to **Settings → Connections**
+3. Click **Connect** on WhatsApp
+4. Scan the QR code with WhatsApp on your phone (Linked Devices)
+5. Add your phone number to the whitelist (E.164 format, e.g. +49123456789)
+6. Turn the connection **on**; the bridge starts automatically when enabled.
+
+### Configuration
+
+```json
+{
+  "whatsapp_config": {
+    "enabled": true,
+    "whitelist": [
+      {
+        "phone_number": "+49123456789",
+        "user_scope_id": "uuid-from-auth",
+        "vaf_username": "your_vaf_username"
+      }
+    ]
+  }
+}
+```
+
+### Troubleshooting
+
+- **QR/Link-Debugging**: Stderr des wa-bridge-Prozesses (inkl. aller `connection.update`-Events) wird in `logs/whatsapp_qr.log` geschrieben. Typische Sequenz nach QR-Scan: `close`+515/516 (normal) → Reconnect → `open`. Wenn `open` nie erscheint, liegt es an Netzwerk/Reconnect.
+- **"Node.js not found"**: Install Node.js 18+ and ensure it is in your PATH.
+- **"wa-bridge.js not found"**: Run `npm install` in `vaf/whatsapp_node/`.
+- **Black terminal / kein QR-Code**: Ein schwarzes Terminal-Fenster sollte nicht mehr erscheinen (Windows-Fix). Wenn der QR-Code nicht erscheint: Node.js 18+ installieren, `npm install` in `vaf/whatsapp_node/` ausführen, VAF neu starten.
+- **No reply**: Ensure the bridge is running (Settings → Connections, WhatsApp toggle on) and your phone number is in the whitelist.
+- **Code 515 ("restart required")**: Tritt oft kurz nach dem QR-Scan auf. Baileys startet die Verbindung automatisch neu – **einfach 10–20 Sekunden warten**, kein Reset nötig. Die Meldung wird nicht mehr angezeigt.
+- **"Lädt" ~30 Sekunden, dann Fehler**: Das Problem liegt am **VAF-Rechner** (nicht am Handy). Der Rechner, auf dem VAF läuft, kann keine stabile Verbindung zu den WhatsApp-Servern aufbauen. Test: Öffne [web.whatsapp.com](https://web.whatsapp.com) im Browser auf demselben PC. Wenn das auch fehlschlägt, liegt es am Netzwerk/Firewall.
+- **"Anmeldung fehlgeschlagen" / 401 / device_removed**: WhatsApp zeigt manchmal "Prüfe die Internetverbindung deines Telefons", obwohl die Handy-Verbindung stimmt. Die Ursache liegt oft beim **Rechner, auf dem VAF läuft**:
+  - **VPN**: VPN am PC deaktivieren und erneut versuchen.
+  - **Netzwerk**: VPS/Server-IPs können von WhatsApp blockiert werden. Auf einem Heim-/Firmen-PC mit normalem Internet funktioniert es meist besser.
+  - **Warten**: Nach mehreren Fehlversuchen 24 Stunden warten, dann erneut scannen.
+  - **Anderes Netz**: VAF auf einem anderen Rechner/Netzwerk testen (z.B. zu Hause statt im Büro).
+  - Nach jedem Fehlversuch: "Reset & neuen QR-Code holen" klicken, bevor du erneut scannst.
 - **Verification timeout**: Send the exact 6-digit code to the bot in a **private chat** (DM).
 
 ## Proactive messaging

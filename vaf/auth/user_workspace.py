@@ -122,7 +122,7 @@ You’re not a chatbot. You’re becoming someone.
         """Human user profile (name, language, city, country, preferences, do's/don'ts, change_log) – used in "User identity (current user)" block."""
         if not self.user_identity_file.exists():
             self.ensure_exists()
-        VALID_MAIN_MESSENGERS = ("telegram", "discord", "slack")
+        VALID_MAIN_MESSENGERS = ("telegram", "discord", "slack", "whatsapp")
         defaults = {
             "name": self.username,
             "preferred_language": None,

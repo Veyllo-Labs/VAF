@@ -1,0 +1,13 @@
+{
+  "name": "vaf-whatsapp-bridge",
+  "version": "1.0.0",
+  "description": "Baileys-based WhatsApp bridge for VAF (stdin/stdout JSON IPC)",
+  "main": "wa-bridge.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.19"
+  }
+}

@@ -106,7 +106,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 
@@ -214,7 +214,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showUserIdentityModal, setShowUserIdentityModal] = useState(false);
     const [showDiscordWizard, setShowDiscordWizard] = useState(false);
     const [showTelegramWizard, setShowTelegramWizard] = useState(false);
+    const [showWhatsAppWizard, setShowWhatsAppWizard] = useState(false);
     const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
+    const [showDiscordDashboard, setShowDiscordDashboard] = useState(false);
     const [showMailDashboard, setShowMailDashboard] = useState(false);
     const [showEmailWizard, setShowEmailWizard] = useState(false);
     const [showCloudWizard, setShowCloudWizard] = useState(false);
@@ -737,9 +739,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setChanged(true);
     };
 
-    const handleDiscordComplete = (discordConfig: DiscordConfig) => {
+    const handleDiscordComplete = async (discordConfig: DiscordConfig) => {
         handleChange('discord_config', discordConfig);
         setShowDiscordWizard(false);
+        // Persist immediately and start the bridge so it shows as connected
+        const merged = { ...config, discord_config: discordConfig };
+        onSave(merged);
+        // Brief delay so save_config is processed before we start the bridge
+        await new Promise(r => setTimeout(r, 400));
+        try {
+            const base = apiBase || '';
+            await fetch(`${base}/api/discord/start`, { method: 'POST', credentials: 'include' });
+        } catch (e) {
+            console.error('Discord bridge start failed:', e);
+        }
     };
 
     const handleTelegramComplete = (telegramConfig: TelegramConfig) => {
@@ -1648,8 +1661,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <ConnectionsPanel
                                 config={localConfig}
                                 onConfigChange={handleChange}
+                                currentUser={currentUser}
+                                refreshTrigger={cloudDashboardRefresh}
                                 onOpenDiscordWizard={() => setShowDiscordWizard(true)}
+                                onOpenDiscordDashboard={() => setShowDiscordDashboard(true)}
                                 onOpenTelegramWizard={() => setShowTelegramWizard(true)}
+                                onOpenWhatsAppWizard={() => setShowWhatsAppWizard(true)}
                                 onOpenTelegramDashboard={() => setShowTelegramDashboard(true)}
                                 onOpenEmailDashboard={() => setShowMailDashboard(true)}
                                 onOpenEmailWizard={() => setShowEmailWizard(true)}
@@ -3790,10 +3807,28 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 existingConfig={localConfig.telegram_config}
             />
 
+            {/* WhatsApp Setup Wizard */}
+            <WhatsAppSetupWizard
+                isOpen={showWhatsAppWizard}
+                onClose={() => setShowWhatsAppWizard(false)}
+                onComplete={() => {
+                    setShowWhatsAppWizard(false);
+                    onRefreshConfig?.();
+                }}
+            />
+
             {/* Telegram Dashboard (when configured, Settings opens this) */}
             <TelegramDashboard
                 isOpen={showTelegramDashboard}
                 onClose={() => setShowTelegramDashboard(false)}
+                config={localConfig}
+                onConfigChange={handleChange}
+            />
+
+            {/* Discord Dashboard (when configured, Settings opens this) */}
+            <DiscordDashboard
+                isOpen={showDiscordDashboard}
+                onClose={() => setShowDiscordDashboard(false)}
                 config={localConfig}
                 onConfigChange={handleChange}
             />

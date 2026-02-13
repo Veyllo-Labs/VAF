@@ -714,6 +714,24 @@ def run_headless_agent():
                                 if not out:
                                     out = "[No reply text]"
                                 send_discord_reply(str(discord_channel_id), out)
+                        elif task_source == "whatsapp":
+                            chat_jid = meta.get("whatsapp_chat_jid")
+                            username = meta.get("username") or "admin"
+                            if chat_jid:
+                                from vaf.core.whatsapp_reply import send_whatsapp_reply
+                                try:
+                                    from vaf.core.log_helper import log_whatsapp_reply
+                                    log_whatsapp_reply(
+                                        f"HEADLESS task_source=whatsapp jid={chat_jid!r} final_len={len(str(final_text))}"
+                                    )
+                                except Exception:
+                                    pass
+                                out = str(final_text)
+                                out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
+                                out = re.sub(r'\n{3,}', '\n\n', out).strip()
+                                if not out:
+                                    out = "[No reply text]"
+                                send_whatsapp_reply(username, str(chat_jid), out)
                     except Exception:
                         pass
 
@@ -761,11 +779,17 @@ def run_headless_agent():
                         try:
                             session = session_mgr.load(task.session_id)
                         except FileNotFoundError:
-                            # New Telegram (or other) session: create so first exchange is persisted
-                            session = Session(
-                                id=task.session_id,
-                                name=f"Telegram {task.session_id.replace('telegram_', '', 1)}",
-                            )
+                            # New session from Telegram, Discord, WhatsApp, etc.: create so first exchange is persisted
+                            _sid = task.session_id
+                            if _sid.startswith("telegram_"):
+                                _label = f"Telegram {_sid.replace('telegram_', '', 1)}"
+                            elif _sid.startswith("discord_"):
+                                _label = f"Discord {_sid.replace('discord_', '', 1)}"
+                            elif _sid.startswith("whatsapp_"):
+                                _label = f"WhatsApp {_sid.replace('whatsapp_', '', 1)}"
+                            else:
+                                _label = _sid
+                            session = Session(id=task.session_id, name=_label)
                         _user_input = input_text or ""
                         _assistant_response = "".join(response_parts) if response_parts else str(response_text or "")
 
@@ -963,6 +987,10 @@ def run_headless_agent():
                             from vaf.core.discord_reply import send_discord_reply
                             err_msg = str(e).replace("\n", " ")[:400]
                             send_discord_reply(str(meta["discord_channel_id"]), f"Sorry, something went wrong: {err_msg}")
+                        elif task_source == "whatsapp" and meta.get("whatsapp_chat_jid"):
+                            from vaf.core.whatsapp_reply import send_whatsapp_reply
+                            err_msg = str(e).replace("\n", " ")[:400]
+                            send_whatsapp_reply(meta.get("username") or "admin", str(meta["whatsapp_chat_jid"]), f"Sorry, something went wrong: {err_msg}")
                     except Exception:
                         pass
                 try:
@@ -1161,6 +1189,11 @@ def run_headless_agent():
                                             if discord_channel_id:
                                                 from vaf.core.discord_reply import send_discord_reply
                                                 send_discord_reply(str(discord_channel_id), out)
+                                            else:
+                                                whatsapp_chat_jid = session.metadata.get("whatsapp_chat_jid")
+                                                if whatsapp_chat_jid:
+                                                    from vaf.core.whatsapp_reply import send_whatsapp_reply
+                                                    send_whatsapp_reply(session.metadata.get("username") or "admin", str(whatsapp_chat_jid), out)
                                 except Exception as e:
                                     logging.getLogger(__name__).warning(
                                         "Failed to send subagent summary to Telegram/Discord: %s", e

@@ -59,8 +59,9 @@ def _user_for_query(username: Optional[str]) -> str:
 
 def _get_conn(username: Optional[str] = None) -> sqlite3.Connection:
     path = _db_path(username)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 

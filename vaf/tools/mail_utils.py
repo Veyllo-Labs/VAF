@@ -23,10 +23,23 @@ def cred_username_from_kwargs(kwargs: dict) -> Optional[str]:
 
 def list_accounts_for_user(cred_username: Optional[str] = None) -> List[str]:
     """Connected email accounts for this user (multi-user safe)."""
+    items = list_accounts_with_labels_for_user(cred_username)
+    return [x["email"] for x in items]
+
+
+def list_accounts_with_labels_for_user(cred_username: Optional[str] = None) -> List[dict]:
+    """Connected email accounts with optional labels (multi-user safe). Returns [{"email": str, "label": str}]."""
     if cred_username is None:
         ec = Config.get("email_config") or {}
     else:
         by_user = Config.get("email_config_by_user") or {}
         ec = by_user.get(cred_username, {}) if isinstance(by_user, dict) else {}
     accounts = ec.get("accounts") or []
-    return [a.get("email") or a.get("account_id") for a in accounts if a.get("email") or a.get("account_id")]
+    return [
+        {
+            "email": a.get("email") or a.get("account_id"),
+            "label": (a.get("label") or "").strip(),
+        }
+        for a in accounts
+        if a.get("email") or a.get("account_id")
+    ]

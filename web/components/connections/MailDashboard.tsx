@@ -2,9 +2,13 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Mail, Loader2, UserPlus, RefreshCw, Inbox } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, getApiBase } from '@/lib/utils';
 
-const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
+/** Use direct backend (port 8001) to bypass Next.js proxy which can return 500 on sync/body. */
+const api = (path: string) => {
+    const p = path.startsWith('/') ? path : `/${path}`;
+    return `${getApiBase()}${p}`;
+};
 
 const AUTO_SYNC_INTERVAL_MS = 30 * 60 * 1000; // 30 min
 
@@ -24,6 +28,8 @@ interface EmailAccount {
     enabled?: boolean;
     last_verified_at?: string;
     auto_sync_enabled?: boolean;
+    /** Optional label/purpose (e.g. support, outreach, sending) - visible to agent in list_email_accounts */
+    label?: string;
 }
 
 interface SyncedMessage {
@@ -138,6 +144,8 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
         }
     };
 
+    const autoSyncOnEmptyRef = useRef(false);
+
     const fetchMessages = async (accountId: string | null, offset: number, append: boolean, category: string = 'all') => {
         setMessagesLoading(true);
         try {
@@ -149,6 +157,12 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                 const data = await res.json();
                 const list = data.messages || [];
                 setMessages(prev => append ? [...prev, ...list] : list);
+                // Auto-sync when store is empty on first load (e.g. after VAF restart) - sync repopulates the store
+                if (!append && offset === 0 && category === 'all' && list.length === 0 && accounts.length > 0 && !autoSyncOnEmptyRef.current && syncLoading === null) {
+                    autoSyncOnEmptyRef.current = true;
+                    const toSync = accountId || accounts[0]?.account_id || accounts[0]?.email;
+                    if (toSync) handleSyncAccount(toSync);
+                }
             }
         } catch {
             if (!append) setMessages([]);
@@ -246,16 +260,27 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                 method: 'POST',
                 credentials: 'include',
             });
-            const data = await res.json();
+            const text = await res.text();
+            let data: { ok?: boolean; error?: string; detail?: string };
+            try {
+                data = JSON.parse(text);
+            } catch {
+                // 500 may return HTML or plain text; extract "error"/"detail" if present
+                const errMatch = text.match(/"error":\s*"((?:[^"\\]|\\.)*)"/) || text.match(/"detail":\s*"((?:[^"\\]|\\.)*)"/);
+                const err = errMatch ? errMatch[1].replace(/\\"/g, '"') : (res.ok ? 'Invalid response' : `Sync failed (${res.status}). Response: ${text.slice(0, 150)}`);
+                if (!res.ok) console.error('[MailDashboard] Sync 500 body:', text.slice(0, 800));
+                setError(err);
+                return;
+            }
             if (data.ok) {
                 await fetchAccounts();
                 setMessagesOffset(0);
                 fetchMessages(selectedAccountId, 0, false, selectedCategory);
             } else {
-                setError(data.error || 'Sync failed');
+                setError((data as any).error || (data as any).detail || 'Sync failed');
             }
-        } catch {
-            setError('Sync request failed');
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Sync request failed');
         } finally {
             setSyncLoading(null);
         }
@@ -291,6 +316,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
         if (!isOpen) {
             Object.values(autoSyncTimersRef.current).forEach(clearInterval);
             autoSyncTimersRef.current = {};
+            autoSyncOnEmptyRef.current = false;
         }
         return () => {
             Object.values(autoSyncTimersRef.current).forEach(clearInterval);
@@ -318,6 +344,20 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
             await fetchAccounts();
         } catch {
             setError('Failed to remove account');
+        }
+    };
+
+    const handleAccountLabelChange = async (accountId: string, label: string) => {
+        try {
+            await fetch(api(`api/email/accounts/${encodeURIComponent(accountId)}`), {
+                method: 'PATCH',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ label: label.trim().slice(0, 64) }),
+            });
+            await fetchAccounts();
+        } catch {
+            setError('Failed to update label');
         }
     };
 
@@ -465,6 +505,20 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                                             <div className="min-w-0 flex-1">
                                                                 <span className="font-medium text-gray-900 text-sm truncate block">{a.email || a.account_id}</span>
                                                                 <span className="text-xs text-gray-500">{a.provider}</span>
+                                                                <input
+                                                                    type="text"
+                                                                    placeholder="Label (e.g. support, outreach)"
+                                                                    className="mt-1 w-full text-xs text-gray-600 border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-gray-400 focus:border-gray-400"
+                                                                    defaultValue={a.label ?? ''}
+                                                                    onBlur={(e) => {
+                                                                        const v = e.target.value.trim();
+                                                                        if (v !== (a.label ?? '')) handleAccountLabelChange(id, v);
+                                                                    }}
+                                                                    onKeyDown={(e) => {
+                                                                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                                                                    }}
+                                                                    onClick={(e) => e.stopPropagation()}
+                                                                />
                                                             </div>
                                                             <div className="flex items-center gap-1 shrink-0">
                                                                 {(a.provider === 'imap' || a.provider === 'gmail' || a.provider === 'microsoft') && (
@@ -628,9 +682,9 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                         </div>
                                     ) : (
                                         <ul className="divide-y divide-gray-100">
-                                            {messages.map((m) => (
+                                            {messages.map((m, i) => (
                                                 <li
-                                                    key={m.message_id || `${m.account_id}-${m.date}-${m.subject}`}
+                                                    key={`${m.account_id}-${m.folder || 'INBOX'}-${m.provider_message_id || m.message_id || i}-${i}`}
                                                     onClick={() => setSelectedMessage(m)}
                                                     className="px-4 py-3 hover:bg-gray-50/80 transition-colors cursor-pointer"
                                                 >

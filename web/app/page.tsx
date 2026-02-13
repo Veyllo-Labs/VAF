@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState, useRef, Fragment } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useRef, Fragment, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
@@ -602,7 +602,7 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
     );
 };
 
-export default function VAFDashboard() {
+function VAFDashboardContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const [authChecking, setAuthChecking] = useState(true);
@@ -3577,5 +3577,13 @@ export default function VAFDashboard() {
                 currentUser={currentUser}
             />
         </main>
+    );
+}
+
+export default function VAFDashboard() {
+    return (
+        <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-gray-50"><Loader2 className="w-8 h-8 animate-spin text-gray-400" /></div>}>
+            <VAFDashboardContent />
+        </Suspense>
     );
 }

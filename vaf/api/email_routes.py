@@ -7,6 +7,7 @@ config holds only account metadata.
 import asyncio
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -158,6 +159,7 @@ def _add_account(account_id: str, provider: str, email: str, enabled: bool = Tru
         "provider": provider,
         "email": email or account_id,
         "enabled": enabled,
+        "label": "",
     })
     ec["accounts"] = accounts
     _save_email_config(ec, username)
@@ -337,6 +339,7 @@ async def add_account(request: Request, body: AddImapAccountRequest, _username: 
         "smtp_host": smtp_host,
         "smtp_port": smtp_port,
         "last_verified_at": None,
+        "label": "",
     })
     ec["accounts"] = accounts
     _save_email_config(ec, _username)
@@ -440,24 +443,32 @@ async def sync_account(request: Request, account_id: str, folder: str = "INBOX",
     ec = _get_email_config(_username)
     accounts = ec.get("accounts") or []
     acc = None
+    aid_lower = (account_id or "").strip().lower()
     for a in accounts:
-        if (a.get("account_id") or a.get("email")) == account_id:
+        cand = (a.get("account_id") or a.get("email") or "").strip().lower()
+        if cand == aid_lower:
             acc = a
             break
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     max_messages = min(max(1, max_messages), 200)
-    try:
-        messages = fetch_mail(account_id, folder=folder, max_messages=max_messages, username=cred_username)
-    except Exception as e:
-        logger.warning("Sync fetch failed for %s: %s", account_id[:8] + "***", e)
-        return {"ok": False, "count": 0, "error": str(e)}
     store_username = "" if cred_username is None else cred_username
-    count = upsert_messages(account_id, folder, messages, username=store_username)
-    deleted = delete_messages_older_than(username=store_username, days=90)
-    acc["last_verified_at"] = datetime.now(timezone.utc).isoformat()
-    _save_email_config(ec, _username)
-    return {"ok": True, "count": count, "deleted": deleted}
+    for attempt in range(3):
+        try:
+            messages = fetch_mail(account_id, folder=folder, max_messages=max_messages, username=cred_username)
+            count = upsert_messages(account_id, folder, messages, username=store_username)
+            deleted = delete_messages_older_than(username=store_username, days=90)
+            acc["last_verified_at"] = datetime.now(timezone.utc).isoformat()
+            _save_email_config(ec, _username)
+            return {"ok": True, "count": count, "deleted": deleted}
+        except Exception as e:
+            err_str = str(e)
+            is_locked = "locked" in err_str.lower() or "database is locked" in err_str.lower() or "sqlite_busy" in err_str.lower()
+            if is_locked and attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            logger.warning("Sync failed for %s: %s", account_id[:8] + "***", e)
+            return {"ok": False, "count": 0, "error": err_str}
 
 
 @router.get("/messages/body")
@@ -473,17 +484,23 @@ async def get_message_body(
     Fetch full message body as plain text only (no HTML). Used when opening a message in the UI.
     provider_message_id is required for Gmail/Microsoft for efficient fetch; optional for IMAP.
     """
-    store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
-    body = get_message_body_plain(
-        account_id=account_id,
-        message_id=message_id,
-        folder=folder,
-        username=store_username,
-        provider_message_id=provider_message_id or None,
-    )
-    if body is None:
-        raise HTTPException(status_code=404, detail="Message or body not found")
-    return {"body": body}
+    try:
+        store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
+        body = get_message_body_plain(
+            account_id=account_id,
+            message_id=message_id,
+            folder=folder,
+            username=store_username,
+            provider_message_id=provider_message_id or None,
+        )
+        if body is None:
+            raise HTTPException(status_code=404, detail="Message or body not found")
+        return {"body": body}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("get_message_body failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/messages")
@@ -629,19 +646,24 @@ async def apply_sender_rules(
 
 class PatchAccountBody(BaseModel):
     auto_sync_enabled: Optional[bool] = None
+    label: Optional[str] = None
 
 
 @router.patch("/accounts/{account_id}")
 async def patch_account(request: Request, account_id: str, body: PatchAccountBody, _username: str = Depends(_get_current_username)):
-    """Update account settings (e.g. auto_sync_enabled). Scoped to current user."""
+    """Update account settings (e.g. auto_sync_enabled, label). Scoped to current user."""
     ec = _get_email_config(_username)
     accounts = ec.get("accounts") or []
+    aid_lower = (account_id or "").strip().lower()
     for a in accounts:
-        if (a.get("account_id") or a.get("email")) == account_id:
+        cand = (a.get("account_id") or a.get("email") or "").strip().lower()
+        if cand == aid_lower:
             if body.auto_sync_enabled is not None:
                 a["auto_sync_enabled"] = bool(body.auto_sync_enabled)
+            if body.label is not None:
+                a["label"] = (body.label or "").strip()[:64]
             _save_email_config(ec, _username)
-            return {"ok": True, "account_id": account_id}
+            return {"ok": True, "account_id": a.get("account_id") or a.get("email")}
     raise HTTPException(status_code=404, detail="Account not found")
 
 

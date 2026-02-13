@@ -1069,6 +1069,7 @@ class Agent:
             from vaf.tools.find_mail import FindMailTool
             from vaf.tools.mark_mail_answered import MarkMailAnsweredTool
             from vaf.tools.send_mail import SendMailTool
+            from vaf.tools.list_email_accounts import ListEmailAccountsTool
 
             # UpdateIntent and UpdateWorkingMemory are for Main Agent
             self.tools["update_intent"] = UpdateIntentTool()
@@ -1083,6 +1084,7 @@ class Agent:
             self.tools["read_mail"] = ReadMailTool()
             self.tools["find_mail"] = FindMailTool()
             self.tools["mark_mail_answered"] = MarkMailAnsweredTool()
+            self.tools["list_email_accounts"] = ListEmailAccountsTool()
             self.tools["send_mail"] = SendMailTool()
             
             # RequestClarification is strictly for Sub-Agents (via coder_only flag),
@@ -6074,7 +6076,7 @@ class Agent:
                 if name in ("send_telegram", "send_discord", "send_slack"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered"):
+                if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "list_email_accounts", "send_mail"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 # Pre-write intent/goal before sub-agent invocation for validation/retry
                 SUBAGENT_TOOLS = ("librarian_agent", "coding_agent", "research_agent", "document_agent")

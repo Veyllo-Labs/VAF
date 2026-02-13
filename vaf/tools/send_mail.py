@@ -7,15 +7,9 @@ Supports optional file attachments (e.g. invoices, documents).
 from pathlib import Path
 
 from vaf.core.email_transport import send_mail, get_account
-from vaf.core.config import Config
 from vaf.tools.base import BaseTool
 from vaf.tools.filesystem import is_safe_path
-
-
-def _list_accounts():
-    ec = Config.get("email_config") or {}
-    accounts = ec.get("accounts") or []
-    return [a.get("email") or a.get("account_id") for a in accounts if a.get("email") or a.get("account_id")]
+from vaf.tools.mail_utils import cred_username_from_kwargs, list_accounts_for_user
 
 
 def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
@@ -35,12 +29,14 @@ def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
 class SendMailTool(BaseTool):
     """
     Send an email from a connected account. Use when the user asks to send an email.
+    When account_id is omitted and only one account is connected, uses that account automatically.
     When sending a document (invoice, contract, PDF), pass attachment_paths with full paths.
     """
     name = "send_mail"
     description = (
         "Send an email from a connected email account. "
-        "Use when the user asks to send an email. Pass account_id, to, subject, body. "
+        "Use when the user asks to send an email. Pass to, subject, body; account_id is optional. "
+        "When account_id is omitted, uses the first connected account. Use list_email_accounts to see connected accounts. "
         "For documents (invoice, contract, PDF), pass attachment_paths with full file paths."
     )
     parameters = {
@@ -48,7 +44,7 @@ class SendMailTool(BaseTool):
         "properties": {
             "account_id": {
                 "type": "string",
-                "description": "Email address of the connected account to send from (e.g. user@gmail.com).",
+                "description": "Optional. Email of the connected account to send from. When omitted, uses the first connected account. Use list_email_accounts to see options.",
             },
             "to": {
                 "type": "string",
@@ -68,10 +64,11 @@ class SendMailTool(BaseTool):
                 "description": "Optional. Full paths to files to attach (e.g. invoice PDF, contract).",
             },
         },
-        "required": ["account_id", "to", "subject", "body"],
+        "required": ["to", "subject", "body"],
     }
 
     def run(self, **kwargs) -> str:
+        cred_username = cred_username_from_kwargs(kwargs)
         account_id = (kwargs.get("account_id") or "").strip()
         to = (kwargs.get("to") or "").strip()
         subject = (kwargs.get("subject") or "").strip()
@@ -80,16 +77,23 @@ class SendMailTool(BaseTool):
         if not isinstance(attachment_paths, list):
             attachment_paths = []
 
-        if not account_id or not to:
-            accounts = _list_accounts()
+        if not to:
+            accounts = list_accounts_for_user(cred_username)
             if not accounts:
                 return (
                     "No email accounts connected. The user must add an account in Settings → Connections → Email."
                 )
-            return f"Pass account_id (e.g. {accounts[0]}), to, subject, and body. Connected accounts: {', '.join(accounts)}."
-        acc = get_account(account_id)
+            return f"Pass to, subject, and body. Optionally account_id. Connected accounts: {', '.join(accounts)}."
+        if not account_id:
+            accounts = list_accounts_for_user(cred_username)
+            if not accounts:
+                return (
+                    "No email accounts connected. The user must add an account in Settings → Connections → Email."
+                )
+            account_id = accounts[0]
+        acc = get_account(account_id, username=cred_username)
         if not acc:
-            return f"Account '{account_id}' not found. Connected: {', '.join(_list_accounts())}."
+            return f"Account '{account_id}' not found. Connected: {', '.join(list_accounts_for_user(cred_username))}."
         if not subject:
             subject = "(No subject)"
 
@@ -110,6 +114,7 @@ class SendMailTool(BaseTool):
                 subject=subject,
                 body=body or "",
                 attachments=attachments if attachments else None,
+                username=cred_username,
             )
         except Exception as e:
             return f"Failed to send email: {e}"

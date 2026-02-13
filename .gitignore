@@ -33,6 +33,11 @@ console.log
 config.json
 **/config.json
 
+# Database files (email sync, cloud sync – contain user data)
+*.db
+*.db-wal
+*.db-shm
+
 # Dump-Dateien
 payload_dump.json
 

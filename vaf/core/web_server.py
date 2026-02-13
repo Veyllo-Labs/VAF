@@ -29,6 +29,18 @@ log_uvicorn = logging.getLogger("uvicorn")
 
 app = FastAPI(title="VAF Local Server")
 
+
+@app.exception_handler(Exception)
+async def json_exception_handler(request, exc):
+    """Ensure unhandled exceptions return JSON (for API clients) instead of HTML."""
+    from fastapi.responses import JSONResponse
+    # HTTPException: return JSON; other exceptions: 500 with error message
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "error": str(exc.detail)})
+    log_uvicorn.exception("Unhandled exception: %s", exc)
+    return JSONResponse(status_code=500, content={"ok": False, "error": str(exc), "detail": str(exc)})
+
+
 # CORS: explicit origins required when frontend sends credentials (cookies).
 # Regex + credentials can fail in some browsers; list is reliable.
 _CORS_ORIGINS = [

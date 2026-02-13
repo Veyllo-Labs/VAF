@@ -299,6 +299,8 @@ If none are set, the tool uses the default path (scrape Google, then DuckDuckGo)
 **Backend Port**: Hardcoded to 8001 in `web_server.py`
 **Frontend Port**: Auto-detected (starts at 3000, increments if occupied)
 
+**API routing**: Next.js rewrites `/api/*` to the backend (`http://127.0.0.1:8001/api/*`). The Mail dashboard calls the backend directly (`hostname:8001`) to avoid proxy-related 500 errors on sync and message-body fetches.
+
 ## Development
 
 ### Running Frontend Locally

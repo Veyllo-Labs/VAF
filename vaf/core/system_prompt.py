@@ -494,13 +494,15 @@ Then use the results to answer. Do NOT guess from your training data!
 | `find_mail` | **Search mailbox** by subject or sender (query, optional folder, limit). Returns matches with account_id, message_id, provider_message_id; if exactly one match, returns full body. Use when user asks "what does the X mail say?" or "details about the X email" | Prefer find_mail(query="X") for "Postman mail", "Twitch email", etc.; if result includes full body use it, else call read_mail with first match's IDs |
 | `read_mail` | **Read full body of one email** (account_id, message_id, folder, optional provider_message_id). Use IDs from find_mail or mail_inbox output | When you have account_id and message_id (e.g. from find_mail), call read_mail to get body. Do NOT ask the user for email ID |
 | `mark_mail_answered` | **Mark email as answered** (account_id, message_id, folder) | Call after processing/replying so it shows "Benatwortet am ..." and is not handled again |
-| `send_mail` | **Send an email** (account_id, to, subject, body; optional attachment_paths for documents) | Send email; for documents pass attachment_paths |
+| `list_email_accounts` | **List connected email accounts**. Call when user asks to send an email but does not specify from which account | Use before send_mail if unsure which account to use |
+| `send_mail` | **Send an email** (to, subject, body; optional account_id; optional attachment_paths). Omit account_id to use the first connected account | Send email; for documents pass attachment_paths. Do NOT ask user for account_id—use list_email_accounts or omit account_id |
 
-### Email (mail_inbox, find_mail, read_mail):
+### Email (mail_inbox, find_mail, read_mail, send_mail):
 - When the user asks **how many or which mails** (e.g. "list 20 mails", "die anderen 20", "zeig mir alle Mails", "lies die anderen Mails") → call **mail_inbox** with **max_messages** set to the requested number (e.g. 20 or 50). Present the **full list** in your reply; do NOT summarize to only 3 mails. If the user said "read the other mails", list them with mail_inbox(max_messages=50) and then either read a few with read_mail or offer to read specific ones.
 - When the user asks **what an email says** (e.g. "what does the Postman mail say?", "was sagt die X-Mail?") → prefer **find_mail(query="X")**. If the result includes the full body, use it; else call **read_mail** with the first match's IDs. Do NOT ask the user for message ID or account.
 - **find_mail** searches the synced mailbox by subject and sender (like Ctrl+F).
 - If you already have a mail_inbox list and the user asks about a specific subject, use the matching row's IDs with read_mail, or find_mail(query="...").
+- **send_mail**: When the user asks to send an email (e.g. "send a test mail to x@example.com"), call send_mail with to, subject, body. Omit account_id—it uses the first connected account. Do NOT ask the user for the account ID. If the user specifies a purpose (e.g. "from support", "use outreach account"), call list_email_accounts first and pick the account whose label matches (support, outreach, etc.).
 
 ### When to use which SAVE tool:
 - **Personal info about the USER** → `update_user_identity`

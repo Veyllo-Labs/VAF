@@ -57,10 +57,20 @@ def _keyring_available() -> bool:
 
 def _credential_key(account_id: str, provider: str, username: Optional[str] = None) -> str:
     safe_id = (account_id or "").strip().lower().replace(" ", "_")
-    if username and (username or "").strip():
-        safe_user = (username or "").strip().lower().replace(" ", "_")
+    if username and str(username).strip():
+        safe_user = str(username).strip().lower().replace(" ", "_")
         return f"cloud:{provider}:{safe_user}:{safe_id}"
     return f"cloud:{provider}:{safe_id}"
+
+
+def _cred_key_username(username: Optional[str]) -> Optional[str]:
+    """Normalize username for credential key lookup: None for local admin (matches storage)."""
+    if not username or not str(username).strip():
+        return None
+    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    if str(username).strip().lower() == local_admin:
+        return None
+    return str(username).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +132,8 @@ def _save_fallback_data(data: Dict[str, str]) -> None:
 
 def get_cloud_credentials(account_id: str, provider: str, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Retrieve stored credentials for a cloud account."""
-    key = _credential_key(account_id, provider, username)
+    key_username = _cred_key_username(username)
+    key = _credential_key(account_id, provider, key_username)
     if _keyring_available():
         try:
             import keyring

@@ -40,7 +40,7 @@ _ENV_OAUTH_KEYS: Dict[str, Dict[str, str]] = {
 
 # Shipped default: one OAuth app for the VAF project. Users get "Sign in with Google" with one click.
 # Override via Settings → Email OAuth or env VAF_EMAIL_OAUTH_GOOGLE_CLIENT_ID if you use your own app.
-_SHIPPED_GOOGLE_CLIENT_ID = "827949283932-dud9ms3m1krbv7pbanuc5j8c2dfc4jnb.apps.googleusercontent.com"
+_SHIPPED_GOOGLE_CLIENT_ID = "827949283932-0l83lmf1ip671vqta9d6m9k2fa4gii42.apps.googleusercontent.com"
 
 # Buffer in seconds before expiry to consider token expired (refresh early)
 TOKEN_EXPIRY_BUFFER = 60

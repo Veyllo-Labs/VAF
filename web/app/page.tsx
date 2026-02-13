@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState, useRef, Fragment } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
@@ -604,6 +604,7 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
 
 export default function VAFDashboard() {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const [authChecking, setAuthChecking] = useState(true);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [currentUser, setCurrentUser] = useState<any>(null);
@@ -621,6 +622,18 @@ export default function VAFDashboard() {
             })
             .catch(() => router.replace('/login'))
             .finally(() => setAuthChecking(false));
+    }, [router]);
+
+    // OAuth callback redirect: open Settings with Connections tab when URL has connections=1 or cloud_oauth/email_oauth
+    const openedFromOAuthRef = useRef(false);
+
+    const handleSettingsClose = useCallback(() => {
+        setSettingsInitialTab(null);
+        setIsSettingsOpen(false);
+        if (openedFromOAuthRef.current) {
+            openedFromOAuthRef.current = false;
+            router.replace('/', { scroll: false });
+        }
     }, [router]);
 
     const [input, setInput] = useState('');
@@ -1872,6 +1885,22 @@ export default function VAFDashboard() {
             socket.close();
         };
     }, [reconnectAttempt]);
+
+    // Open Settings with Connections tab when returning from OAuth callback; refresh config to show new account
+    useEffect(() => {
+        if (!isAuthenticated || authChecking) return;
+        const conn = searchParams.get('connections');
+        const cloudOauth = searchParams.get('cloud_oauth');
+        const emailOauth = searchParams.get('email_oauth');
+        if (conn === '1' || cloudOauth || emailOauth) {
+            openedFromOAuthRef.current = true;
+            setIsSettingsOpen(true);
+            setSettingsInitialTab('connections');
+            if (ws?.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'get_config' }));
+            }
+        }
+    }, [isAuthenticated, authChecking, searchParams, ws]);
 
     useEffect(() => {
         if (ws && status === 'connected' && input.length >= 2) {
@@ -3511,7 +3540,7 @@ export default function VAFDashboard() {
 
             <SettingsModal
                 isOpen={isSettingsOpen}
-                onClose={() => { setSettingsInitialTab(null); setIsSettingsOpen(false); }}
+                onClose={handleSettingsClose}
                 config={config}
                 onSave={handleSaveConfig}
                 availableModels={availableModels}
@@ -3536,6 +3565,7 @@ export default function VAFDashboard() {
                 }}
                 apiBase={getApiBase()}
                 initialTab={settingsInitialTab ?? undefined}
+                onRefreshConfig={() => ws?.send(JSON.stringify({ type: 'get_config' }))}
                 connectionLabel={connectionLabel}
                 isConnected={isConnected}
                 showIdleState={showIdleState}

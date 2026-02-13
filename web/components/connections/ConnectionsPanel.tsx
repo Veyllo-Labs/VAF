@@ -303,8 +303,18 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                     for (const a of providerAccounts) {
                         const id = a.account_id;
                         if (id) {
-                            await fetch(api(`api/cloud/accounts/${encodeURIComponent(id)}`), { method: 'DELETE', credentials: 'include' });
+                            const delRes = await fetch(api(`api/cloud/accounts/${encodeURIComponent(id)}`), { method: 'DELETE', credentials: 'include' });
+                            if (!delRes.ok) {
+                                console.error(`Failed to delete cloud account ${id}:`, delRes.status);
+                            }
                         }
+                    }
+                    // Refresh accounts and update config so UI reflects the change
+                    const refreshRes = await fetch(api('api/cloud/accounts'), { credentials: 'include' });
+                    if (refreshRes.ok) {
+                        const refreshed = await refreshRes.json();
+                        const remaining = refreshed.accounts || [];
+                        onConfigChange('cloud_config', { ...(config?.cloud_config || {}), accounts: remaining });
                     }
                 }
                 setConnectionStatus(prev => ({ ...prev, [appId]: 'disconnected' }));

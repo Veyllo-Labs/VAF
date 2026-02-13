@@ -115,8 +115,8 @@ class Config:
         "cloud_sync_interval_minutes": 15,                         # Background sync interval
         "cloud_sync_max_file_size_mb": 100,                        # Max file size to sync (MB)
         "cloud_sync_conflict_resolution": "last_write_wins",       # "last_write_wins" or "keep_both"
-        "cloud_oauth_google_client_id": "",                        # Google Drive OAuth client ID
-        "cloud_oauth_google_client_secret": "",                    # Google Drive OAuth client secret
+        "cloud_oauth_google_client_id": "827949283932-0l83lmf1ip671vqta9d6m9k2fa4gii42.apps.googleusercontent.com",  # Built-in Desktop App client ID
+        "cloud_oauth_google_client_secret": "",                    # Optional — Desktop apps don't require a secret
         "cloud_oauth_microsoft_client_id": "",                     # OneDrive OAuth client ID
         "cloud_oauth_microsoft_client_secret": "",                 # OneDrive OAuth client secret
         "cloud_oauth_dropbox_client_id": "",                       # Dropbox OAuth app key

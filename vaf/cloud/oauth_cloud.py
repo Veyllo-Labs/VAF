@@ -109,14 +109,20 @@ _ENV_CLOUD_KEYS: Dict[str, Dict[str, str]] = {
 
 
 def _get_client_credential(provider: str, key_kind: str) -> str:
-    """Return client_id or client_secret: config → env → empty."""
+    """Return client_id or client_secret: config → defaults → env → empty."""
     if provider not in CLOUD_PROVIDERS:
         return ""
     conf = CLOUD_PROVIDERS[provider]
     config_key = conf["client_id_key"] if key_kind == "client_id" else conf["client_secret_key"]
+    # Check saved config first
     value = (Config.get(config_key) or "").strip()
     if value:
         return value
+    # Fall back to built-in defaults (e.g. bundled Desktop App client IDs)
+    default_value = (Config.DEFAULTS.get(config_key) or "").strip()
+    if default_value:
+        return default_value
+    # Check environment variables
     env_map = _ENV_CLOUD_KEYS.get(provider, {})
     env_key = env_map.get(key_kind)
     if env_key:
@@ -290,10 +296,21 @@ def exchange_code_for_tokens(
     return {**data, "account_id": account_id, "provider": provider}
 
 
+def _cred_username_for_store(username: Optional[str]) -> Optional[str]:
+    """Return credential-store username: None for local admin, else the username."""
+    if not username or not str(username).strip():
+        return None
+    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    if username.strip().lower() == local_admin:
+        return None
+    return username.strip()
+
+
 def get_valid_access_token(account_id: str, provider: str, username: Optional[str] = None) -> Optional[str]:
     """Return a valid access token, refreshing if expired. Returns None on failure."""
     from vaf.cloud.credential_cloud import get_cloud_credentials
 
+    cred_user = _cred_username_for_store(username)
     creds = get_cloud_credentials(account_id, provider, username)
     if not creds or creds.get("type") != "oauth":
         return None
@@ -333,7 +350,7 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
             return access
         expires_in = data.get("expires_in")
         new_expires_at = time.time() + int(expires_in) if expires_in else None
-        set_cloud_oauth_tokens(account_id, provider, new_access, refresh, new_expires_at, username)
+        set_cloud_oauth_tokens(account_id, provider, new_access, refresh, new_expires_at, cred_user)
         return new_access
     except Exception as e:
         logger.warning("Cloud token refresh error for %s: %s", provider, e)

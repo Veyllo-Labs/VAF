@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import {
     X, ChevronRight, ChevronLeft, Cloud, Loader2, AlertCircle,
     ExternalLink, CheckCircle2, Shield, FolderSync, HardDrive,
-    RefreshCw, Trash2, ChevronDown, ChevronUp, Settings2
+    RefreshCw, Trash2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -20,7 +20,6 @@ interface CloudSetupWizardProps {
 
 const STEPS = [
     { id: 'intro', title: 'Cloud Storage', subtitle: 'Sync files with your cloud' },
-    { id: 'choose', title: 'Choose Provider', subtitle: 'Where to sync your files' },
     { id: 'connect', title: 'Connect', subtitle: 'Sign in or enter credentials' },
     { id: 'complete', title: 'Complete', subtitle: 'Manage your accounts' },
 ];
@@ -67,8 +66,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
     // OAuth status
     const [oauthStatus, setOauthStatus] = useState<Record<string, boolean>>({});
 
-    // Admin OAuth config (expandable)
-    const [adminOpen, setAdminOpen] = useState(false);
+    // Admin OAuth config
     const [oauthGoogleId, setOauthGoogleId] = useState('');
     const [oauthGoogleSecret, setOauthGoogleSecret] = useState('');
     const [oauthMicrosoftId, setOauthMicrosoftId] = useState('');
@@ -116,30 +114,44 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
         } catch { /* ignore */ }
     };
 
+    const initialProviderHandled = React.useRef(false);
+
     useEffect(() => {
         if (isOpen) {
+            // Reset state on open
+            setAuthUrl('');
+            setError('');
+            setLoading(false);
+            initialProviderHandled.current = false;
+
             fetchOAuthStatus();
             fetchAccounts().then(() => {
                 const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
-                if (params.get('cloud_oauth') === 'success') setCurrentStep(3);
+                if (params.get('cloud_oauth') === 'success') setCurrentStep(2);
             });
             if (currentUser?.role === 'admin') loadAdminConfig();
             if (initialProvider) {
                 setProvider(initialProvider);
+                // Skip intro; go straight to Connect step when opening with a specific provider
+                setCurrentStep(1);
+            } else {
+                setProvider('');
+                setCurrentStep(0);
             }
         }
     }, [isOpen, currentUser?.role, initialProvider]);
 
+    // When opened with a specific provider, skip intro + choose steps and go straight to connect
     useEffect(() => {
-        if (isOpen && accounts.length > 0 && currentStep === 0) setCurrentStep(3);
-    }, [isOpen, accounts.length, currentStep]);
+        if (isOpen && initialProvider && !initialProviderHandled.current) {
+            initialProviderHandled.current = true;
+            handleChooseProvider(initialProvider);
+        }
+    }, [isOpen, initialProvider]);
 
-    const visibleProviders = React.useMemo(() => {
-        return PROVIDER_OPTIONS.filter((p) => {
-            if (p.authType === 'oauth') return oauthStatus[p.id] ?? false;
-            return true; // webdav and local always visible
-        });
-    }, [oauthStatus]);
+    useEffect(() => {
+        if (isOpen && accounts.length > 0 && currentStep === 0) setCurrentStep(2);
+    }, [isOpen, accounts.length, currentStep]);
 
     const handleChooseProvider = (id: string) => {
         setProvider(id);
@@ -148,7 +160,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
         if (!opt) return;
 
         if (opt.authType === 'webdav' || opt.authType === 'local') {
-            setCurrentStep(2);
+            setCurrentStep(1);
             return;
         }
 
@@ -162,14 +174,17 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
             .then(data => {
                 const url = data.authorization_url || '';
                 setAuthUrl(url);
-                setCurrentStep(2);
+                setCurrentStep(1);
                 if (url && typeof window !== 'undefined') {
                     window.open(url, '_blank', 'noopener,noreferrer');
                 } else if (!url) {
                     setError('No sign-in URL returned. Check OAuth client ID in Settings.');
                 }
             })
-            .catch(e => setError(e?.message || 'Failed to start sign-in'))
+            .catch(e => {
+                setError(e?.message || 'Failed to start sign-in');
+                setCurrentStep(1);
+            })
             .finally(() => setLoading(false));
     };
 
@@ -199,7 +214,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
             setWebdavUrl('');
             setWebdavUser('');
             setWebdavPass('');
-            setCurrentStep(3);
+            setCurrentStep(2);
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Connection failed');
         } finally { setLoading(false); }
@@ -220,7 +235,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                 throw new Error(err.detail || 'iCloud Drive not available. Are you on macOS with iCloud Drive enabled?');
             }
             await fetchAccounts();
-            setCurrentStep(3);
+            setCurrentStep(2);
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Failed to connect iCloud');
         } finally { setLoading(false); }
@@ -228,11 +243,17 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
 
     const handleRemoveAccount = async (accountId: string) => {
         try {
-            await fetch(api(`api/cloud/accounts/${encodeURIComponent(accountId)}`), {
+            const res = await fetch(api(`api/cloud/accounts/${encodeURIComponent(accountId)}`), {
                 method: 'DELETE', credentials: 'include',
             });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || `Failed to remove account (${res.status})`);
+            }
             await fetchAccounts();
-        } catch { setError('Failed to remove account'); }
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Failed to remove account');
+        }
     };
 
     const handleTriggerSync = async (accountId: string) => {
@@ -281,14 +302,14 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
     };
 
     const prevStep = () => {
-        if (currentStep === 3) { setCurrentStep(1); setProvider(''); return; }
-        if (currentStep > 0) { if (currentStep === 2) setProvider(''); setCurrentStep(currentStep - 1); }
+        if (currentStep === 2) { setCurrentStep(1); setProvider(''); return; }
+        if (currentStep > 0) { if (currentStep === 1) setProvider(''); setCurrentStep(currentStep - 1); }
     };
 
     const handleNextClick = () => {
         if (currentStep === 0) { setCurrentStep(1); return; }
-        if (currentStep === 2 && provider === 'nextcloud') { handleConnectWebdav(); return; }
-        if (currentStep === 2 && provider === 'icloud') { handleConnectICloud(); return; }
+        if (currentStep === 1 && provider === 'nextcloud') { handleConnectWebdav(); return; }
+        if (currentStep === 1 && provider === 'icloud') { handleConnectICloud(); return; }
         if (currentStep < STEPS.length - 1) setCurrentStep(currentStep + 1);
     };
 
@@ -306,7 +327,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
     const providerOpt = PROVIDER_OPTIONS.find(p => p.id === provider);
     const isNextDisabled =
         (currentStep === 1 && !provider) ||
-        (currentStep === 2 && provider === 'nextcloud' && (!webdavUrl.trim() || !webdavUser.trim() || !webdavPass.trim())) ||
+        (currentStep === 1 && provider === 'nextcloud' && (!webdavUrl.trim() || !webdavUser.trim() || !webdavPass.trim())) ||
         loading;
 
     return (
@@ -389,132 +410,138 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                         </div>
                     )}
 
-                    {/* Step 1: Choose Provider */}
-                    {currentStep === 1 && (
+                    {/* Step 1: Connect */}
+                    {currentStep === 1 && providerOpt?.authType === 'oauth' && (
                         <div className="space-y-6">
-                            <p className="text-sm text-gray-600">Select a cloud provider to connect.</p>
-                            <div className="space-y-2">
-                                {visibleProviders.map((p) => {
-                                    const Icon = p.icon;
-                                    return (
-                                        <button
-                                            key={p.id}
-                                            onClick={() => handleChooseProvider(p.id)}
-                                            disabled={loading}
-                                            className={cn(
-                                                "w-full p-4 rounded-xl border text-left flex items-center gap-3 transition-colors",
-                                                "border-gray-200 hover:border-gray-300 hover:bg-gray-50",
-                                                provider === p.id && "border-gray-900 bg-gray-50",
-                                                loading && "opacity-60 cursor-not-allowed"
-                                            )}
-                                        >
-                                            <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center text-white", p.iconColor)}>
-                                                <Icon className="w-5 h-5" />
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <div className="font-medium text-gray-900">{p.name}</div>
-                                                <div className="text-sm text-gray-500">{p.desc}</div>
-                                            </div>
-                                            {loading && provider === p.id ? <Loader2 className="w-5 h-5 animate-spin text-gray-400" /> : <ChevronRight className="w-5 h-5 text-gray-400" />}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-
-                            {/* Admin OAuth config */}
-                            {currentUser?.role === 'admin' && (
-                                <div className="border border-gray-200 rounded-xl overflow-hidden">
-                                    <button
-                                        type="button"
-                                        onClick={() => setAdminOpen(!adminOpen)}
-                                        className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 transition-colors"
-                                    >
-                                        <span className="flex items-center gap-2">
-                                            <Settings2 className="w-4 h-4 text-gray-500" />
-                                            For admins: OAuth client IDs (one-click sign-in for all users)
-                                        </span>
-                                        {adminOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                            <h3 className="text-lg font-semibold text-gray-900">Sign in with {providerOpt.name}</h3>
+                            {authUrl ? (
+                                <>
+                                    <p className="text-sm text-gray-600">
+                                        A browser window was opened. Sign in and authorize VAF to access your files.
+                                        When done, click the button below to refresh.
+                                    </p>
+                                    <a href={authUrl} target="_blank" rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800">
+                                        <ExternalLink className="w-4 h-4" />
+                                        Open sign-in page
+                                    </a>
+                                    <button onClick={() => fetchAccounts()}
+                                        className="block w-full py-2 text-sm text-gray-600 hover:text-gray-900 border border-gray-200 rounded-lg">
+                                        I&apos;ve completed sign-in — refresh list
                                     </button>
-                                    {adminOpen && (
-                                        <div className="p-4 bg-white border-t border-gray-200 space-y-4">
-                                            <p className="text-xs text-gray-600">
-                                                Set these once so everyone on this VAF instance can connect cloud storage with one click. Nextcloud and iCloud do not require OAuth.
-                                            </p>
-                                            <div className="grid grid-cols-1 gap-3">
+                                </>
+                            ) : currentUser?.role === 'admin' ? (
+                                <>
+                                    <p className="text-sm text-gray-600">
+                                        OAuth is not configured for {providerOpt.name}. Enter Client ID and Client Secret below, then save and retry.
+                                    </p>
+                                    {provider === 'google_drive' && (
+                                        <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800">
+                                            <ExternalLink className="w-4 h-4" />
+                                            Where to get Google OAuth credentials
+                                        </a>
+                                    )}
+                                    {provider === 'onedrive' && (
+                                        <a href="https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800">
+                                            <ExternalLink className="w-4 h-4" />
+                                            Where to get Microsoft OAuth credentials
+                                        </a>
+                                    )}
+                                    {provider === 'dropbox' && (
+                                        <a href="https://www.dropbox.com/developers/apps" target="_blank" rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800">
+                                            <ExternalLink className="w-4 h-4" />
+                                            Where to get Dropbox App credentials
+                                        </a>
+                                    )}
+                                    <div className="space-y-3">
+                                        {provider === 'google_drive' && (
+                                            <>
                                                 <div>
-                                                    <label className="block text-xs font-medium text-gray-500 mb-1">Google Client ID</label>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Google Client ID</label>
                                                     <input type="text" value={oauthGoogleId} onChange={e => { setOauthGoogleId(e.target.value); setAdminSaveStatus('idle'); }}
                                                         placeholder="xxx.apps.googleusercontent.com"
-                                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400" />
+                                                        className="w-full px-4 py-3 rounded-xl border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400" />
                                                 </div>
                                                 <div>
-                                                    <label className="block text-xs font-medium text-gray-500 mb-1">Google Client Secret</label>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Google Client Secret</label>
                                                     <input type="password" value={oauthGoogleSecret} onChange={e => { setOauthGoogleSecret(e.target.value); setAdminSaveStatus('idle'); }}
-                                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400" />
+                                                        className="w-full px-4 py-3 rounded-xl border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400" />
                                                 </div>
+                                            </>
+                                        )}
+                                        {provider === 'onedrive' && (
+                                            <>
                                                 <div>
-                                                    <label className="block text-xs font-medium text-gray-500 mb-1">Microsoft Client ID</label>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Microsoft Client ID</label>
                                                     <input type="text" value={oauthMicrosoftId} onChange={e => { setOauthMicrosoftId(e.target.value); setAdminSaveStatus('idle'); }}
-                                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400" />
+                                                        className="w-full px-4 py-3 rounded-xl border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400" />
                                                 </div>
                                                 <div>
-                                                    <label className="block text-xs font-medium text-gray-500 mb-1">Microsoft Client Secret</label>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Microsoft Client Secret</label>
                                                     <input type="password" value={oauthMicrosoftSecret} onChange={e => { setOauthMicrosoftSecret(e.target.value); setAdminSaveStatus('idle'); }}
-                                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400" />
+                                                        className="w-full px-4 py-3 rounded-xl border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400" />
                                                 </div>
+                                            </>
+                                        )}
+                                        {provider === 'dropbox' && (
+                                            <>
                                                 <div>
-                                                    <label className="block text-xs font-medium text-gray-500 mb-1">Dropbox App Key</label>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Dropbox App Key</label>
                                                     <input type="text" value={oauthDropboxId} onChange={e => { setOauthDropboxId(e.target.value); setAdminSaveStatus('idle'); }}
-                                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400" />
+                                                        className="w-full px-4 py-3 rounded-xl border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400" />
                                                 </div>
                                                 <div>
-                                                    <label className="block text-xs font-medium text-gray-500 mb-1">Dropbox App Secret</label>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Dropbox App Secret</label>
                                                     <input type="password" value={oauthDropboxSecret} onChange={e => { setOauthDropboxSecret(e.target.value); setAdminSaveStatus('idle'); }}
-                                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400" />
+                                                        className="w-full px-4 py-3 rounded-xl border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400" />
                                                 </div>
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <button onClick={handleSaveAdminOAuth} disabled={adminSaveStatus === 'saving'}
-                                                    className="px-3 py-2 rounded-lg text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50">
-                                                    {adminSaveStatus === 'saving' ? <Loader2 className="w-4 h-4 animate-spin inline" /> : 'Save'}
-                                                </button>
-                                                {adminSaveStatus === 'ok' && <span className="text-sm text-green-600">Saved.</span>}
-                                                {adminSaveStatus === 'fail' && <span className="text-sm text-red-600">Failed to save.</span>}
-                                            </div>
-                                        </div>
-                                    )}
+                                            </>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <button onClick={handleSaveAdminOAuth} disabled={adminSaveStatus === 'saving'}
+                                            className="px-4 py-2 rounded-xl text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50">
+                                            {adminSaveStatus === 'saving' ? <Loader2 className="w-4 h-4 animate-spin inline" /> : 'Save'}
+                                        </button>
+                                        {adminSaveStatus === 'ok' && (
+                                            <button onClick={() => { setError(''); handleChooseProvider(provider); }}
+                                                className="px-4 py-2 rounded-xl text-sm font-medium border border-gray-300 text-gray-700 hover:bg-gray-50">
+                                                Retry sign-in
+                                            </button>
+                                        )}
+                                        {adminSaveStatus === 'ok' && <span className="text-sm text-green-600">Saved.</span>}
+                                        {adminSaveStatus === 'fail' && <span className="text-sm text-red-600">Failed to save.</span>}
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="flex flex-col gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-4">
+                                    <div className="flex items-center gap-2">
+                                        <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                                        <span className="font-medium">OAuth not configured</span>
+                                    </div>
+                                    <p>
+                                        Please ask your administrator to configure OAuth for {providerOpt.name}.
+                                    </p>
                                 </div>
                             )}
                         </div>
                     )}
 
-                    {/* Step 2: Connect */}
-                    {currentStep === 2 && providerOpt?.authType === 'oauth' && (
-                        <div className="space-y-6">
-                            <h3 className="text-lg font-semibold text-gray-900">Sign in with {providerOpt.name}</h3>
-                            <p className="text-sm text-gray-600">
-                                A browser window was opened. Sign in and authorize VAF to access your files.
-                                When done, click the button below to refresh.
-                            </p>
-                            <a href={authUrl} target="_blank" rel="noopener noreferrer"
-                                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800">
-                                <ExternalLink className="w-4 h-4" />
-                                Open sign-in page
-                            </a>
-                            <button onClick={() => fetchAccounts()}
-                                className="block w-full py-2 text-sm text-gray-600 hover:text-gray-900 border border-gray-200 rounded-lg">
-                                I&apos;ve completed sign-in — refresh list
-                            </button>
-                        </div>
-                    )}
-
-                    {currentStep === 2 && provider === 'nextcloud' && (
+                    {currentStep === 1 && provider === 'nextcloud' && (
                         <div className="space-y-6">
                             <h3 className="text-lg font-semibold text-gray-900">Connect Nextcloud</h3>
                             <p className="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg border border-gray-200">
                                 Enter your Nextcloud server URL and an <strong>app password</strong>.
                                 Create one in Nextcloud under Settings &rarr; Security &rarr; Devices &amp; sessions.
                             </p>
+                            <a href="https://docs.nextcloud.com/server/stable/user_manual/en/user_2fa.html#device-tokens" target="_blank" rel="noopener noreferrer"
+                                className="inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800">
+                                <ExternalLink className="w-4 h-4" />
+                                Where to create an app password
+                            </a>
                             <div className="space-y-3">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Server URL</label>
@@ -538,7 +565,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                         </div>
                     )}
 
-                    {currentStep === 2 && provider === 'icloud' && (
+                    {currentStep === 1 && provider === 'icloud' && (
                         <div className="space-y-6">
                             <h3 className="text-lg font-semibold text-gray-900">Apple iCloud Drive</h3>
                             <p className="text-sm text-gray-600 bg-amber-50 p-4 rounded-xl border border-amber-200">
@@ -551,8 +578,37 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                         </div>
                     )}
 
-                    {/* Step 3: Complete / Manage */}
-                    {currentStep === 3 && (
+                    {currentStep === 1 && !provider && (
+                        <div className="space-y-4">
+                            <p className="text-sm text-gray-600">Choose a provider to connect.</p>
+                            <div className="flex flex-wrap gap-2">
+                                {PROVIDER_OPTIONS.map((p) => {
+                                    const Icon = p.icon;
+                                    return (
+                                        <button
+                                            key={p.id}
+                                            onClick={() => handleChooseProvider(p.id)}
+                                            disabled={loading}
+                                            className={cn(
+                                                "flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-medium transition-colors",
+                                                "border-gray-200 hover:border-gray-300 hover:bg-gray-50",
+                                                loading && "opacity-60 cursor-not-allowed"
+                                            )}
+                                        >
+                                            <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center text-white", p.iconColor)}>
+                                                <Icon className="w-4 h-4" />
+                                            </div>
+                                            {p.name}
+                                            {loading && provider === p.id && <Loader2 className="w-4 h-4 animate-spin" />}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Step 2: Complete / Manage */}
+                    {currentStep === 2 && (
                         <div className="space-y-6">
                             {accounts.length === 0 ? (
                                 <p className="text-gray-500 text-sm">No cloud accounts connected yet. Use Back to add one.</p>
@@ -626,8 +682,8 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                                 !isNextDisabled ? "bg-gray-900 hover:bg-gray-800 text-white" : "bg-gray-200 text-gray-400 cursor-not-allowed"
                             )}>
                             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-                            {currentStep === 2 && provider === 'nextcloud' ? 'Connect' :
-                             currentStep === 2 && provider === 'icloud' ? 'Enable' : 'Next'}
+                            {currentStep === 1 && provider === 'nextcloud' ? 'Connect' :
+                             currentStep === 1 && provider === 'icloud' ? 'Enable' : 'Next'}
                             <ChevronRight className="w-4 h-4" />
                         </button>
                     ) : (

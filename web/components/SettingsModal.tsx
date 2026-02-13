@@ -133,6 +133,8 @@ export interface SettingsModalProps {
     apiBase?: string;
     /** When set, open the modal with this tab active (e.g. 'automations'). */
     initialTab?: string;
+    /** Callback to refresh config (e.g. after OAuth/cloud connection) */
+    onRefreshConfig?: () => void;
     /** Connection status for indicator above Logout in sidebar */
     connectionLabel?: string;
     isConnected?: boolean;
@@ -195,7 +197,7 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 ];
 
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect }: SettingsModalProps) {
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [activeTab, setActiveTab] = useState('general');
     const [changed, setChanged] = useState(false);
@@ -398,6 +400,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             setActiveTab(initialTabProp);
         }
     }, [isOpen, initialTabProp]);
+
+    // OAuth callback: auto-open Cloud or Email wizard when returning from OAuth with success
+    useEffect(() => {
+        if (!isOpen || activeTab !== 'connections') return;
+        const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+        if (!params) return;
+        if (params.get('cloud_oauth') === 'success') {
+            setCloudWizardProvider(params.get('provider') || 'google_drive');
+            setShowCloudWizard(true);
+        } else if (params.get('email_oauth') === 'success') {
+            setShowEmailWizard(true);
+        }
+    }, [isOpen, activeTab]);
 
     // Reset user identity editing state when modal closes
     useEffect(() => {
@@ -1109,6 +1124,95 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         placeholder="From Programmable Search Engine control panel"
                                     />
                                 </Section>
+
+                                {currentUser?.role === 'admin' && (
+                                    <Section title="Central Credentials (Mail, Calendar, Cloud)">
+                                        <p className="text-xs text-gray-500 mb-4">
+                                            One OAuth client per provider is used for Mail, Calendar, and Cloud. Configure once and all users can connect with one click. Add both redirect URIs in your app registration: /api/email/oauth/callback and /api/cloud/oauth/callback.
+                                        </p>
+                                        <div className="space-y-6">
+                                            <div>
+                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Google (Gmail, Drive, Calendar)</h4>
+                                                <div className="grid grid-cols-1 gap-3">
+                                                    <Input
+                                                        label="Google Client ID"
+                                                        value={localConfig.email_oauth_google_client_id || localConfig.cloud_oauth_google_client_id || ''}
+                                                        onChange={(v: string) => {
+                                                            setLocalConfig((prev: any) => ({
+                                                                ...prev,
+                                                                email_oauth_google_client_id: v,
+                                                                cloud_oauth_google_client_id: v,
+                                                            }));
+                                                            setChanged(true);
+                                                        }}
+                                                        type="text"
+                                                        placeholder="xxx.apps.googleusercontent.com"
+                                                    />
+                                                    <Input
+                                                        label="Google Client Secret"
+                                                        value={localConfig.email_oauth_google_client_secret || localConfig.cloud_oauth_google_client_secret || ''}
+                                                        onChange={(v: string) => {
+                                                            setLocalConfig((prev: any) => ({
+                                                                ...prev,
+                                                                email_oauth_google_client_secret: v,
+                                                                cloud_oauth_google_client_secret: v,
+                                                            }));
+                                                            setChanged(true);
+                                                        }}
+                                                        type="password"
+                                                        placeholder="Optional for desktop apps"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Microsoft (Outlook, OneDrive, Calendar)</h4>
+                                                <div className="grid grid-cols-1 gap-3">
+                                                    <Input
+                                                        label="Microsoft Client ID"
+                                                        value={localConfig.email_oauth_microsoft_client_id || localConfig.cloud_oauth_microsoft_client_id || ''}
+                                                        onChange={(v: string) => {
+                                                            setLocalConfig((prev: any) => ({
+                                                                ...prev,
+                                                                email_oauth_microsoft_client_id: v,
+                                                                cloud_oauth_microsoft_client_id: v,
+                                                            }));
+                                                            setChanged(true);
+                                                        }}
+                                                        type="text"
+                                                        placeholder="Azure App Registration"
+                                                    />
+                                                    <Input
+                                                        label="Microsoft Client Secret"
+                                                        value={localConfig.email_oauth_microsoft_client_secret || localConfig.cloud_oauth_microsoft_client_secret || ''}
+                                                        onChange={(v: string) => {
+                                                            setLocalConfig((prev: any) => ({
+                                                                ...prev,
+                                                                email_oauth_microsoft_client_secret: v,
+                                                                cloud_oauth_microsoft_client_secret: v,
+                                                            }));
+                                                            setChanged(true);
+                                                        }}
+                                                        type="password"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Apple (Mail only)</h4>
+                                                <div className="grid grid-cols-1 gap-3">
+                                                    <Input label="Apple Client ID" value={localConfig.email_oauth_apple_client_id || ''} onChange={(v: string) => handleChange('email_oauth_apple_client_id', v)} type="text" placeholder="iCloud Mail OAuth (if available)" />
+                                                    <Input label="Apple Client Secret" value={localConfig.email_oauth_apple_client_secret || ''} onChange={(v: string) => handleChange('email_oauth_apple_client_secret', v)} type="password" />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Dropbox (Cloud only)</h4>
+                                                <div className="grid grid-cols-1 gap-3">
+                                                    <Input label="Dropbox App Key" value={localConfig.cloud_oauth_dropbox_client_id || ''} onChange={(v: string) => handleChange('cloud_oauth_dropbox_client_id', v)} type="text" placeholder="Dropbox App Console" />
+                                                    <Input label="Dropbox App Secret" value={localConfig.cloud_oauth_dropbox_client_secret || ''} onChange={(v: string) => handleChange('cloud_oauth_dropbox_client_secret', v)} type="password" />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </Section>
+                                )}
                             </div>
                         )}
 
@@ -3718,6 +3822,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onComplete={() => {
                     setShowCloudWizard(false);
                     setCloudWizardProvider(undefined);
+                    onRefreshConfig?.();
                 }}
                 initialProvider={cloudWizardProvider}
                 currentUser={currentUser}

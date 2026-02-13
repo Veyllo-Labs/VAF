@@ -4148,13 +4148,8 @@ class Agent:
             # Decay AFTER merge so tools stay for the full N turns
             self._decay_recent_tools()
 
-            # If router returned only one tool, include list_tools as a fallback helper.
-            if (
-                selected_tools
-                and len(selected_tools) == 1
-                and "list_tools" in self.tools
-                and "list_tools" not in selected_tools
-            ):
+            # list_tools is ALWAYS included when we have a restricted set (agent can discover other tools).
+            if selected_tools and "list_tools" in self.tools and "list_tools" not in selected_tools:
                 selected_tools = list(selected_tools) + ["list_tools"]
 
             # Memory/identity tools are ALWAYS included when we have a restricted set (no duplicates).

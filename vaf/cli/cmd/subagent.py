@@ -164,7 +164,13 @@ def run_subagent(
         elif agent_type == "document_agent":
             from vaf.tools.document_agent import DocumentAgentTool
             tool = DocumentAgentTool()
-            result = tool.run(task=task)
+            # Long tasks are passed via IPC to avoid Windows command-line limit (~8191 chars)
+            effective_task = task
+            if (not effective_task or len(effective_task) < 50) and task_id and ipc:
+                payload = ipc.get_task_payload(task_id)
+                if payload:
+                    effective_task = payload
+            result = tool.run(task=effective_task)
             
             # Show result in terminal
             print()

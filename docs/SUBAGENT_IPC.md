@@ -281,8 +281,12 @@ Sub-Agents can now request help instead of failing blindly:
     ├── pending_tasks.json           # Waiting tasks
     ├── active_tasks.json            # Running tasks
     ├── completed_results.json       # Completed results
-    └── paused_workflows.json        # Paused workflows waiting for sub-agents
+    ├── paused_workflows.json        # Paused workflows waiting for sub-agents
+    └── task_payloads/               # Full task content for long tasks
+        └── {task_id}.txt            # Used when task exceeds command-line limit (~3K chars)
 ```
+
+**Task Payloads:** When a task description exceeds ~3000 characters (e.g., detailed document requests), the full text is stored in `task_payloads/{task_id}.txt`. The sub-agent is spawned with `--task-id` only and retrieves the task via `ipc.get_task_payload(task_id)`. This avoids Windows command-line limits (~8191 chars).
 
 ---
 
@@ -331,7 +335,7 @@ from vaf.core.subagent_ipc import get_ipc
 
 ipc = get_ipc()
 
-# Create a task
+# Create a task (full description is stored in task_payloads for long tasks)
 task_id = ipc.create_task("librarian_agent", "Show files...")
 
 # Mark task as running
@@ -354,6 +358,9 @@ status = ipc.get_task_status(task_id)    # "pending", "running", "completed", et
 from vaf.core.subagent_ipc import get_ipc
 
 ipc = get_ipc()
+
+# Retrieve full task payload when launched with --task-id only (long tasks)
+task_text = ipc.get_task_payload(task_id)  # Returns None if not found
 
 # Report success
 ipc.complete_task(task_id, result="### Report\n...")

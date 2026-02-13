@@ -133,8 +133,14 @@ class BaseTool(ABC):
                     stream=True, 
                     model=target_model
                 ):
-                     if not chunk.strip().startswith("{"): 
-                         response_text += chunk
+                    # Only skip metadata chunks (tool_calls, finish_reason), NOT actual content.
+                    # Document agent and other tools often request JSON - that content must be kept.
+                    strip_chunk = chunk.strip()
+                    if strip_chunk.startswith("{") and (
+                        "tool_calls" in chunk or "tool_use" in chunk or "finish_reason" in chunk
+                    ):
+                        continue
+                    response_text += chunk
                 return response_text.strip()
 
             try:

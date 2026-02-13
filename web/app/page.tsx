@@ -680,6 +680,7 @@ function VAFDashboardContent() {
     // const [activeTools, setActiveTools] = useState<ToolState[]>([]); // REPLACED BY INLINE MESSAGES
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [isDragOver, setIsDragOver] = useState(false);
 
     // Stats state
     type TokenStats = {
@@ -943,6 +944,7 @@ function VAFDashboardContent() {
     const subAgentLogSetRef = useRef<Set<string>>(new Set());
     const subAgentAutoCloseRef = useRef<NodeJS.Timeout | null>(null);
     const subAgentManualOpenRef = useRef(false);
+    const subAgentUserClosedRef = useRef(false);  // User explicitly closed panel - don't auto-reopen
     const subAgentOutputSetRef = useRef<Set<string>>(new Set());
     const [showSubAgentPanel, setShowSubAgentPanel] = useState(true);
     const subAgentUnmountRef = useRef<NodeJS.Timeout | null>(null);
@@ -1001,6 +1003,7 @@ function VAFDashboardContent() {
         }
         if (manual) {
             subAgentManualOpenRef.current = true;
+            subAgentUserClosedRef.current = false;  // User opened - clear "user closed" flag
             if (subAgentAutoCloseRef.current) {
                 clearTimeout(subAgentAutoCloseRef.current);
                 subAgentAutoCloseRef.current = null;
@@ -1016,6 +1019,7 @@ function VAFDashboardContent() {
     const closeSubAgentWindow = (manual: boolean) => {
         if (manual) {
             subAgentManualOpenRef.current = false;
+            subAgentUserClosedRef.current = true;  // User explicitly closed - don't auto-reopen
         }
         preserveChatScroll(() => {
             setSubAgentState(prev => ({ ...prev, isOpen: false }));
@@ -1083,6 +1087,7 @@ function VAFDashboardContent() {
         }
 
         // 2. Close Sub-Agent panel – it belongs to the previous session. Viewer/Editor state is per-session and will show correctly for the new session.
+        subAgentUserClosedRef.current = false;  // Reset for new session
         setSubAgentState(prev => ({ ...prev, isOpen: false }));
 
         // 3. Optimistic Switch (viewer state is derived from sessionViewerState[id] automatically)
@@ -1164,7 +1169,10 @@ function VAFDashboardContent() {
                     if (isSubAgentLog) {
                         const timeStamp = new Date().toISOString().slice(11, 19);
                         appendSubAgentLine(`[${timeStamp}] ${rawMsg}`);
-                        openSubAgentWindow(false);
+                        // Only open if not already open - avoids duplicate open from tool_update + domain_log
+                        if (!subAgentStateRef.current.isOpen) {
+                            openSubAgentWindow(false);
+                        }
                     } else if (subAgentState.isOpen && (src === 'System' || src === 'Info') && rawMsg) {
                         const timeStamp = new Date().toISOString().slice(11, 19);
                         appendSubAgentLine(`[${timeStamp}] ${src}: ${rawMsg}`);
@@ -1210,6 +1218,7 @@ function VAFDashboardContent() {
                     const toolName = String(name || '').toLowerCase();
                     const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding)_agent(?:$|[^a-z])/.test(toolName);
                     if (subType === 'start' && isSubAgentTool) {
+                        subAgentUserClosedRef.current = false;  // New task - user wants to see it
                         openSubAgentWindow(false);
                         const title = String(name || 'Sub-Agent').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
                         setSubAgentState(prev => ({
@@ -1592,12 +1601,17 @@ function VAFDashboardContent() {
                     }
 
                     subAgentStepsRef.current = newSteps;
+                    const presence = data.presence || subAgentState.presence;
+                    const statusLower = String(data.status || '').toLowerCase();
+                    const isRunning = presence === 'online' || statusLower.includes('running') || statusLower.includes('pending');
+                    // Don't force-reopen if user explicitly closed the panel
+                    const shouldOpen = isRunning && !subAgentUserClosedRef.current;
                     setSubAgentState(prev => ({
                         ...prev,
-                        isOpen: true,
+                        isOpen: shouldOpen ? true : prev.isOpen,
                         agentName: data.agentName || prev.agentName,
                         status: statusLine || prev.status,
-                        presence: data.presence || prev.presence,
+                        presence: presence,
                         currentFile: data.file || prev.currentFile,
                         codeContent: data.code || prev.codeContent,
                         steps: data.steps || prev.steps,
@@ -1639,7 +1653,6 @@ function VAFDashboardContent() {
                             appendWorkflowLine(`${prefix}\n${data.output}`);
                         } else {
                             appendSubAgentBlock(`${prefix}\n${data.output}`, data.taskId);
-                            setSubAgentState(prev => ({ ...prev, isOpen: true }));
                         }
                     }
                 }
@@ -2043,12 +2056,17 @@ function VAFDashboardContent() {
         });
     };
 
-    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const newFiles = e.target.files ? Array.from(e.target.files) : [];
-        e.target.value = '';
-        if (newFiles.length === 0) return;
-        const base64List = await Promise.all(newFiles.map(f => fileToBase64(f)));
-        const newDocs = newFiles.map((f, i) => ({
+    const ACCEPT_ATTACHMENTS = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv';
+    const acceptedExtensions = useMemo(() => new Set(ACCEPT_ATTACHMENTS.split(',').map(ext => ext.trim().toLowerCase())), []);
+
+    const addFilesAsAttachments = useCallback(async (newFiles: File[]) => {
+        const filtered = newFiles.filter(f => {
+            const ext = '.' + (f.name.split('.').pop() ?? '').toLowerCase();
+            return acceptedExtensions.has(ext);
+        });
+        if (filtered.length === 0) return;
+        const base64List = await Promise.all(filtered.map(f => fileToBase64(f)));
+        const newDocs = filtered.map((f, i) => ({
             id: crypto.randomUUID(),
             name: f.name,
             mimeType: f.type,
@@ -2067,7 +2085,33 @@ function VAFDashboardContent() {
             return { ...prev, documents: newList, isOpen: true };
         });
         setShowSubAgentPanel(true);
+    }, [ws, currentSessionId, acceptedExtensions]);
+
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newFiles = e.target.files ? Array.from(e.target.files) : [];
+        e.target.value = '';
+        if (newFiles.length === 0) return;
+        await addFilesAsAttachments(newFiles);
     };
+
+    const handleDrop = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(false);
+        const files = e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
+        if (files.length > 0) addFilesAsAttachments(files);
+    }, [addFilesAsAttachments]);
+
+    const handleDragOver = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer.types.includes('Files')) setIsDragOver(true);
+    }, []);
+
+    const handleDragLeave = useCallback((e: React.DragEvent) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragOver(false);
+    }, []);
+
 
     const handleDocumentViewerAddFiles = async (files: File[]) => {
         if (!ws || !currentSessionId) return;
@@ -2568,8 +2612,17 @@ function VAFDashboardContent() {
     }
 
     return (
-        <main className="h-screen flex flex-col bg-gray-50 text-gray-900 font-sans overflow-hidden">
-
+        <main
+            className="h-screen flex flex-col bg-gray-50 text-gray-900 font-sans overflow-hidden relative"
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+        >
+            {isDragOver && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-blue-100/95 pointer-events-none">
+                    <span className="text-lg font-medium text-blue-700">Drop files here</span>
+                </div>
+            )}
             <div className="flex-1 flex min-h-0 overflow-hidden">
                 <aside className="group flex flex-col min-h-0 h-full bg-white border-r border-gray-200 w-16 hover:w-72 transition-all duration-300 z-20 shadow-lg overflow-hidden">
 
@@ -3103,14 +3156,17 @@ function VAFDashboardContent() {
                                             </button>
                                         )}
                                     </div>
-                                    <form onSubmit={sendMessage} className="flex-1 min-w-0 flex items-end bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden">
+                                    <form
+                                        onSubmit={sendMessage}
+                                        className="flex-1 min-w-0 flex items-end bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden"
+                                    >
                                         <input
                                             type="file"
                                             ref={fileInputRef}
                                             onChange={handleFileSelect}
                                             className="hidden"
                                             multiple
-                                            accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv"
+                                            accept={ACCEPT_ATTACHMENTS}
                                         />
                                         <button
                                             type="button"
@@ -3360,23 +3416,6 @@ function VAFDashboardContent() {
                                                 <div className="text-xs text-violet-600 font-mono mt-1">
                                                     Next save in {(contextStats.compaction_interval || 15) - (contextStats.user_turn_count % (contextStats.compaction_interval || 15))} messages
                                                 </div>
-                                            </div>
-                                        </div>
-                                    </>
-                                )}
-                                {/* RAG Sources (this turn) */}
-                                {ragResults?.sources?.length > 0 && (
-                                    <>
-                                        <div className="border-t border-gray-200 my-2"></div>
-                                        <div className="flex flex-col gap-2">
-                                            <div className="font-semibold text-gray-700">RAG Sources (this turn)</div>
-                                            <div className="text-xs text-gray-500 max-h-48 overflow-y-auto space-y-2">
-                                                {ragResults.sources.map((s: { text?: string; full_text?: string; score?: number }, i: number) => (
-                                                    <div key={i} className="bg-gray-50 p-2 rounded border border-gray-100 text-gray-600">
-                                                        {s.score !== undefined && <span className="text-violet-600 font-mono mr-2">{(s.score * 100).toFixed(0)}%</span>}
-                                                        {(s.full_text ?? s.text ?? '').slice(0, 400)}{((s.full_text ?? s.text ?? '').length > 400 ? '…' : '')}
-                                                    </div>
-                                                ))}
                                             </div>
                                         </div>
                                     </>

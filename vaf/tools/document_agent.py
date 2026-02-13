@@ -93,7 +93,12 @@ Handles documents of any size using section-by-section generation (no context ov
                 if subagent_provider != "inherit":
                     os.environ["VAF_PROVIDER"] = subagent_provider
             
-            cmd_parts = ['vaf', 'subagent', 'run', 'document_agent', '--task', task, '--task-id', task_id]
+            # Windows cmd.exe limit ~8191 chars; pass long tasks via IPC only
+            max_task_len = 3000
+            if len(task) > max_task_len:
+                cmd_parts = ['vaf', 'subagent', 'run', 'document_agent', '--task-id', task_id]
+            else:
+                cmd_parts = ['vaf', 'subagent', 'run', 'document_agent', '--task', task, '--task-id', task_id]
             
             if Platform.is_windows():
                 escaped_parts = []
@@ -211,44 +216,118 @@ Handles documents of any size using section-by-section generation (no context ov
             
         return self._format_success_message(file_path, plan, len(final_content))
     
+    def _extract_json_from_response(self, content: str) -> Optional[Dict]:
+        """
+        Extract and parse JSON from LLM response.
+        Handles markdown code blocks, text before/after JSON, and common variants.
+        """
+        if not content or not content.strip():
+            return None
+
+        # 1. Try markdown code block first: ```json ... ``` or ``` ... ```
+        code_block = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', content)
+        if code_block:
+            try:
+                return json.loads(code_block.group(1).strip())
+            except json.JSONDecodeError:
+                pass
+
+        # 2. Try to find JSON object (non-greedy to get innermost complete object)
+        # Match from first { to matching }
+        depth = 0
+        start = -1
+        for i, c in enumerate(content):
+            if c == '{':
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    try:
+                        return json.loads(content[start:i + 1])
+                    except json.JSONDecodeError:
+                        start = -1
+                        continue
+        return None
+
+    def _validate_and_repair_plan(self, plan: Dict) -> Optional[Dict]:
+        """
+        Validate plan structure and repair missing fields.
+        Returns repaired plan or None if beyond repair.
+        """
+        if not isinstance(plan, dict):
+            return None
+        sections = plan.get('sections')
+        if not isinstance(sections, list) or len(sections) == 0:
+            return None
+        # Repair sections
+        for i, s in enumerate(sections):
+            if not isinstance(s, dict):
+                sections[i] = {"title": f"Section {i+1}", "description": "Content"}
+            else:
+                s.setdefault('title', f"Section {i+1}")
+                s.setdefault('description', s.get('title', 'Content'))
+        plan.setdefault('document_type', 'report')
+        plan.setdefault('title', 'Document')
+        plan.setdefault('format', 'docx')
+        plan.setdefault('filename', self._generate_filename(plan['title'], plan['format']))
+        return plan
+
     def _create_document_plan(self, task: str) -> Optional[Dict]:
         """
         Create a structured plan for the document.
         Uses LLM to analyze task and break it into sections.
         """
-        
-        
         prompt = f"""You are a document planning expert. Analyze this task and create a structured plan.
 
 Task: {task}
 
-Create a JSON plan with:
-1. document_type: (contract/report/letter/template/article/manual)
-2. title: Document title
-3. format: Output format (docx/pdf/md/txt)
-4. filename: Suggested filename
-5. sections: Array of sections, each with:
-   - title: Section title
-   - description: What this section should contain
+Create a JSON object with these exact keys:
+- document_type: one of contract, report, letter, template, article, manual
+- title: Document title (string)
+- format: docx, pdf, md, or txt
+- filename: Suggested filename (string)
+- sections: Array of objects, each with "title" and "description"
 
-IMPORTANT: Break complex documents into 5-15 sections for optimal generation.
+Example structure:
+{{"document_type":"report","title":"My Report","format":"docx","filename":"My_Report.docx","sections":[{{"title":"Introduction","description":"Overview and context"}},{{"title":"Main Content","description":"Detailed analysis"}}]}}
 
-Output ONLY valid JSON, no explanations."""
+IMPORTANT: Use 5-15 sections for complex documents. Output ONLY the JSON object, no other text."""
 
         try:
             content = self.query_llm(
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=1024,
-                temperature=0.3
+                max_tokens=2048,
+                temperature=0.2
             )
             
             if content:
-                # Extract JSON from response
-                json_match = re.search(r'\{.*\}', content, re.DOTALL)
-                if json_match:
-                    plan = json.loads(json_match.group(0))
-                    return plan
+                plan = self._extract_json_from_response(content)
+                if plan:
+                    repaired = self._validate_and_repair_plan(plan)
+                    if repaired:
+                        return repaired
             
+            # Retry with simpler prompt if first attempt failed
+            fallback_prompt = f"""Create a document plan as JSON. Task: {task}
+
+Output exactly: {{"document_type":"report","title":"TITLE_HERE","format":"docx","filename":"document.docx","sections":[{{"title":"Section 1","description":"Content for section 1"}},{{"title":"Section 2","description":"Content for section 2"}}]}}
+
+Replace TITLE_HERE and add more sections (5-15 total) based on the task. Output ONLY valid JSON."""
+            content2 = self.query_llm(
+                messages=[{"role": "user", "content": fallback_prompt}],
+                max_tokens=1024,
+                temperature=0.1
+            )
+            if content2:
+                plan = self._extract_json_from_response(content2)
+                if plan:
+                    repaired = self._validate_and_repair_plan(plan)
+                    if repaired:
+                        return repaired
+            
+            UI.warning("LLM did not return valid document plan structure.")
             return None
             
         except Exception as e:
@@ -316,9 +395,15 @@ Language: Match the document type (German for German contracts, etc.)."""
         return "".join(parts)
     
     def _save_document(self, content: str, filename: str, format: str, doc_type: str) -> Path:
-        """Save document in requested format."""
+        """Save document in requested format. Uses Documents/VAF_Documents (never project root)."""
+        from vaf.core.platform import Platform
         
-        file_path = Path(filename)
+        # Always use Documents/VAF_Documents - never CWD/project root
+        docs_dir = Platform.documents_dir() / "VAF_Documents"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        # Use only the filename (no path) to avoid injection or wrong-directory saves
+        safe_name = Path(filename).name if filename else "document"
+        file_path = docs_dir / safe_name
         
         try:
             if format == 'docx':
@@ -366,15 +451,28 @@ Language: Match the document type (German for German contracts, etc.)."""
                     else:
                         doc.add_paragraph(paragraph.strip())
             
-            parent = file_path.parent
+            parent = file_path.parent.resolve()
             parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(prefix="vaf_", suffix=".docx", dir=str(parent) if str(parent) != "." else None)
+            fd, tmp_path = tempfile.mkstemp(prefix="vaf_", suffix=".docx", dir=str(parent))
             try:
                 os.close(fd)
                 doc.save(tmp_path)
                 if file_path.exists():
                     file_path.unlink()
                 shutil.move(tmp_path, str(file_path))
+                # Verify the saved file is a valid DOCX (ZIP format) before returning
+                try:
+                    Document(str(file_path))
+                except Exception as verify_err:
+                    if "zip" in str(verify_err).lower() or "not a zip" in str(verify_err).lower():
+                        UI.warning(f"DOCX verification failed ({verify_err}), falling back to text format")
+                        if file_path.exists():
+                            try:
+                                file_path.unlink()
+                            except OSError:
+                                pass
+                        return self._save_as_text(content, file_path.with_suffix('.txt'))
+                    raise
             finally:
                 if os.path.exists(tmp_path):
                     try:

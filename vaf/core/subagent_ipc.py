@@ -115,12 +115,14 @@ class SubAgentIPC:
         self.results_file = self.queue_dir / "completed_results.json"
         self.active_file = self.queue_dir / "active_tasks.json"
         self.paused_workflows_file = self.queue_dir / "paused_workflows.json"
+        self.task_payloads_dir = self.queue_dir / "task_payloads"
         
         # Initialize files if they don't exist
         self._init_queue_files()
     
     def _init_queue_files(self):
         """Initialize queue files with empty arrays if they don't exist."""
+        self.task_payloads_dir.mkdir(parents=True, exist_ok=True)
         for file in [self.pending_file, self.results_file, self.active_file, self.paused_workflows_file]:
             if not file.exists():
                 self._write_json(file, [])
@@ -246,8 +248,33 @@ class SubAgentIPC:
         pending = self._read_json(self.pending_file)
         pending.append(task.to_dict())
         self._write_json(self.pending_file, pending)
+
+        # Store full task payload for sub-agents that need it (e.g. document_agent with long tasks)
+        # Enables retrieval via get_task_payload() when command-line would exceed OS limits
+        self.store_task_payload(task_id, task_description)
         
         return task_id
+
+    def store_task_payload(self, task_id: str, payload: str):
+        """Store full task payload in a sidecar file. Used for long tasks exceeding command-line limits."""
+        try:
+            self.task_payloads_dir.mkdir(parents=True, exist_ok=True)
+            path = self.task_payloads_dir / f"{task_id}.txt"
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(payload)
+        except (IOError, OSError):
+            pass
+
+    def get_task_payload(self, task_id: str) -> Optional[str]:
+        """Retrieve full task payload. Returns None if not found."""
+        try:
+            path = self.task_payloads_dir / f"{task_id}.txt"
+            if path.exists():
+                with open(path, 'r', encoding='utf-8') as f:
+                    return f.read()
+        except (IOError, OSError):
+            pass
+        return None
     
     def mark_task_running(self, task_id: str):
         """Mark a task as running (sub-agent started)."""

@@ -127,7 +127,7 @@ Agent: [Uses document_writer]
 Output:
 ### Letter created!
 **File:** resignation_letter.docx
-**Path:** D:\VAF\resignation_letter.docx
+**Path:** ~/Documents/VAF_Documents/resignation_letter.docx
 **Format:** Microsoft Word (.docx)
 **Size:** 450 characters
 
@@ -159,7 +159,7 @@ Output:
 **Format:** DOCX
 
 **File:** Arbeitsvertrag_20260113_143022.docx
-**Location:** D:\VAF\Arbeitsvertrag_20260113_143022.docx
+**Location:** ~/Documents/VAF_Documents/Arbeitsvertrag_20260113_143022.docx
 
 **Sections Generated:**
   1. Vertragsparteien
@@ -352,6 +352,21 @@ Result: ✅ Complete 50-page contract
 
 ## Troubleshooting
 
+### Problem: "Could not create document plan"
+
+**Cause:** The LLM did not return valid JSON structure, or the response was corrupted during streaming.
+
+**Solution:** The document agent now uses robust JSON extraction (handles markdown code blocks, nested braces) and a fallback retry with a simpler prompt. If it still fails:
+- Include explicit structure in your request (e.g., "with sections: introduction, methodology, conclusion")
+- Ensure your API provider (DeepSeek, OpenAI, etc.) is configured correctly
+- Check that streaming does not corrupt JSON responses (see `vaf/tools/base.py` – only metadata chunks are filtered, not content)
+
+### Problem: Long document requests fail or truncate
+
+**Cause:** On Windows, command-line length is limited (~8191 chars). Very detailed requests may be cut off.
+
+**Solution:** Tasks over 3000 characters are automatically passed via IPC. The sub-agent fetches the full task from `subagent_queue/task_payloads/{task_id}.txt`. No configuration needed.
+
 ### Problem: Document too small
 
 **Solution:** Request more sections or provide more details
@@ -382,6 +397,16 @@ Try: "Create employment contract with compensation, benefits, termination clause
 pip install python-docx  # For Word documents
 ```
 
+### Problem: "File is not a zip file" when opening DOCX
+
+**Cause:** DOCX files are ZIP archives. This error means the file was corrupted during save or is not a valid DOCX.
+
+**Solution:** The document agent now (1) saves to `~/Documents/VAF_Documents` (never project root), (2) verifies each saved DOCX. If verification fails, it falls back to `.txt`. Ensure python-docx is up to date: `pip install --upgrade python-docx`.
+
+### Problem: Documents saved in wrong location (e.g. project root)
+
+**Solution:** Both `document_writer` and `document_agent` save to `~/Documents/VAF_Documents` (or `%USERPROFILE%\Documents\VAF_Documents` on Windows). This directory is created automatically.
+
 ## Related Documentation
 
 - [Document Reading](DOCUMENT_READING.md) - Read existing documents
@@ -403,7 +428,11 @@ def _create_document_plan(task: str):
     Output: JSON with document_type, title, sections[]
     Break into 5-15 sections for optimal generation."""
     
-    return llm_call(prompt)  # ~500 tokens
+    content = llm_call(prompt)  # ~500-2K tokens
+    # Robust extraction: handles markdown ```json blocks, text before/after JSON
+    plan = _extract_json_from_response(content)
+    # Validate and repair missing fields (title, description, format)
+    return _validate_and_repair_plan(plan)  # Fallback retry if first attempt fails
 ```
 
 ### Section Generation

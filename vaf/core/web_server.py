@@ -560,6 +560,9 @@ class WorkflowUpdate(BaseModel):
     status: Optional[str] = None
     progress: Optional[int] = None
     result: Optional[str] = None
+    # document_ready payload (from notify_document_created)
+    filePath: Optional[str] = None
+    title: Optional[str] = None
 
 class Heartbeat(BaseModel):
     client_id: str

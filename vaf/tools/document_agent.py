@@ -368,7 +368,7 @@ Language: Match the document type (German for German contracts, etc.)."""
             
             parent = file_path.parent
             parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(suffix=".docx", dir=str(parent) if str(parent) != "." else None)
+            fd, tmp_path = tempfile.mkstemp(prefix="vaf_", suffix=".docx", dir=str(parent) if str(parent) != "." else None)
             try:
                 os.close(fd)
                 doc.save(tmp_path)

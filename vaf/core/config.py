@@ -104,7 +104,28 @@ class Config:
         "server_idle_timeout": 15,             # Unload local model after idle seconds (Web UI / CLI)
         "telegram_idle_timeout": 120,          # Keep model loaded this long after last Telegram prompt when no Web connections (seconds)
         "telegram_debounce_seconds": 5,        # Wait this long for follow-up messages; combine into one prompt per chat
-        
+
+        # Garbage Collector Settings
+        "gc_enabled": True,                    # Enable automatic temp file / log cleanup
+        "gc_interval_hours": 12,               # Run GC every N hours
+        "gc_max_age_hours": 48,                # Delete files older than N hours
+
+        # Cloud Storage Sync Settings
+        "cloud_sync_enabled": False,                               # Enable cloud storage sync feature
+        "cloud_sync_interval_minutes": 15,                         # Background sync interval
+        "cloud_sync_max_file_size_mb": 100,                        # Max file size to sync (MB)
+        "cloud_sync_conflict_resolution": "last_write_wins",       # "last_write_wins" or "keep_both"
+        "cloud_oauth_google_client_id": "",                        # Google Drive OAuth client ID
+        "cloud_oauth_google_client_secret": "",                    # Google Drive OAuth client secret
+        "cloud_oauth_microsoft_client_id": "",                     # OneDrive OAuth client ID
+        "cloud_oauth_microsoft_client_secret": "",                 # OneDrive OAuth client secret
+        "cloud_oauth_dropbox_client_id": "",                       # Dropbox OAuth app key
+        "cloud_oauth_dropbox_client_secret": "",                   # Dropbox OAuth app secret
+        "cloud_credentials_key": "",                               # AES-256 key for cloud credential fallback (auto-generated)
+        "cloud_oauth_callback_base_url": "",                       # Override redirect_uri base (e.g. for proxy)
+        "cloud_config": None,                                      # Cloud account list (local admin)
+        "cloud_config_by_user": {},                                # Per-user cloud account lists
+
         # Memory System Settings (RAG + Vector Search)
         "memory_enabled": True,                                    # Enable memory system
         "memory_rag_refine_query": True,                           # Refine vague queries (e.g. "who am I") for better RAG hits
@@ -189,6 +210,7 @@ class Config:
     PROTECTED_KEYS = [
         "local_network_jwt_secret",
         "email_credentials_key",
+        "cloud_credentials_key",
     ]
 
     @classmethod

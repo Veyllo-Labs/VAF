@@ -155,7 +155,7 @@ For large/complex documents, use document_agent instead."""
             
             parent = file_path.parent
             parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(suffix=".docx", dir=str(parent))
+            fd, tmp_path = tempfile.mkstemp(prefix="vaf_", suffix=".docx", dir=str(parent))
             try:
                 os.close(fd)
                 doc.save(tmp_path)

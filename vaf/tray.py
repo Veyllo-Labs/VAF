@@ -958,7 +958,11 @@ if platform.system() == "Darwin":
             # Start Memory stack
             import threading
             threading.Thread(target=ensure_memory_stack_up, daemon=True).start()
-            
+
+            # Start Garbage Collector
+            from vaf.core.garbage_collector import GarbageCollector
+            GarbageCollector.get_instance().start()
+
             # Start Web Server
             logger.info("[Tray] Starting Web Server thread...")
             t = threading.Thread(target=start_uvicorn, daemon=True)
@@ -1117,7 +1121,11 @@ def run_headless():
     
     # Start Memory stack
     threading.Thread(target=ensure_memory_stack_up, daemon=True).start()
-    
+
+    # Start Garbage Collector
+    from vaf.core.garbage_collector import GarbageCollector
+    GarbageCollector.get_instance().start()
+
     # Start Web Server
     print("[VAF] Starting Web Server thread...")
     t = threading.Thread(target=start_uvicorn, daemon=True)
@@ -1174,6 +1182,10 @@ def run_app():
 
     # Start Memory stack (Postgres, Redis, Sandbox) automatically if Docker is available
     threading.Thread(target=ensure_memory_stack_up, daemon=True).start()
+
+    # Start Garbage Collector
+    from vaf.core.garbage_collector import GarbageCollector
+    GarbageCollector.get_instance().start()
 
     # Initialize SpeechManager on Main Thread to avoid COM issues
     try:

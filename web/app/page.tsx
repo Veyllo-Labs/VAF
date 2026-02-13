@@ -2742,12 +2742,18 @@ function VAFDashboardContent() {
                                                         );
                                                     }
 
-                                                    // Render Tool Messages
+                                                    // Render Tool Messages (same width as ThinkingDetails / assistant bubble content)
                                                     if (msg.role === 'tool') {
                                                         const toolLower = (msg.toolName || '').toLowerCase();
                                                         const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding)_agent(?:$|[^a-z])/.test(toolLower);
+                                                        const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
                                                         return (
-                                                            <ToolMessage
+                                                            <div className={cn("flex justify-center", prevWasSystem ? "pt-0" : "pt-4")}>
+                                                                <div className="w-full max-w-[85%] flex gap-4">
+                                                                    <div className="w-9 shrink-0" aria-hidden />
+                                                                    <div className="flex-1 min-w-0">
+                                                                        <div className="max-w-[95%]">
+                                                                            <ToolMessage
                                                                 key={`tool-${trueIndex}`}
                                                                 id={msg.toolId || `tool-${trueIndex}`}
                                                                 name={msg.toolName || 'Unknown Tool'}
@@ -2764,7 +2770,11 @@ function VAFDashboardContent() {
                                                                         closeSubAgentWindow(true);
                                                                     }
                                                                 } : undefined}
-                                                            />
+                                                                            />
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
                                                         );
                                                     }
 

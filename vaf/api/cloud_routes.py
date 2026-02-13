@@ -24,11 +24,13 @@ from vaf.cloud.oauth_cloud import (
     get_authorization_url,
     exchange_code_for_tokens,
     get_state_provider,
+    get_state_redirect_base,
     is_cloud_oauth_configured,
     get_cloud_callback_redirect_uri,
 )
 from vaf.cloud.credential_cloud import (
     delete_cloud_credentials,
+    get_cloud_credentials,
     set_cloud_webdav_credentials,
 )
 from vaf.cloud.sync_manifest import SyncManifest
@@ -153,6 +155,7 @@ async def list_providers():
     providers = []
     for name in ALL_PROVIDERS:
         entry: Dict[str, Any] = {
+            "id": name,
             "provider": name,
             "auth_method": "webdav" if name in WEBDAV_PROVIDERS else "oauth2",
         }
@@ -171,8 +174,13 @@ async def list_accounts(_username: str = Depends(_get_current_username)):
 
 
 @router.get("/oauth/start")
-async def oauth_start(request: Request, provider: str = "google_drive"):
-    """Start OAuth2 flow for a cloud storage provider. Returns authorization URL and state."""
+async def oauth_start(
+    request: Request,
+    provider: str = "google_drive",
+    redirect_base: Optional[str] = None,
+):
+    """Start OAuth2 flow for a cloud storage provider. Returns authorization URL and state.
+    redirect_base: frontend origin (e.g. http://localhost:3000) so post-OAuth redirect matches the host the user used."""
     if provider not in OAUTH_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Provider must be one of: {', '.join(OAUTH_PROVIDERS)}")
 
@@ -186,7 +194,7 @@ async def oauth_start(request: Request, provider: str = "google_drive"):
     redirect_uri = get_cloud_callback_redirect_uri(base_url)
 
     try:
-        auth_url, state = get_authorization_url(provider, redirect_uri)
+        auth_url, state = get_authorization_url(provider, redirect_uri, redirect_base=redirect_base)
         return {"authorization_url": auth_url, "state": state, "redirect_uri": redirect_uri}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -200,10 +208,12 @@ async def oauth_callback(
     error: str = "",
 ):
     """OAuth callback. Exchanges code for tokens, stores credentials, redirects to frontend."""
+    redirect_base = get_state_redirect_base(state) if state else None
+
     if error:
-        return _redirect_error(f"Provider returned error: {error}")
+        return _redirect_error(f"Provider returned error: {error}", redirect_base)
     if not code or not state:
-        return _redirect_error("Missing code or state")
+        return _redirect_error("Missing code or state", redirect_base)
 
     base_url = str(request.base_url).rstrip("/")
     redirect_uri = get_cloud_callback_redirect_uri(base_url)
@@ -211,7 +221,7 @@ async def oauth_callback(
     try:
         provider = get_state_provider(state)
         if not provider:
-            return _redirect_error("Invalid or expired state. Please start the login again.")
+            return _redirect_error("Invalid or expired state. Please start the login again.", redirect_base)
 
         # Get the username from the request (if authenticated) or use admin
         username = _get_current_username(request)
@@ -246,10 +256,10 @@ async def oauth_callback(
         cc["accounts"] = accounts
         _save_cloud_config(cc, username)
 
-        return _redirect_success(account_id, provider)
+        return _redirect_success(account_id, provider, redirect_base)
     except ValueError as exc:
         logger.warning("Cloud OAuth callback error: %s", exc)
-        return _redirect_error(str(exc))
+        return _redirect_error(str(exc), redirect_base)
 
 
 @router.post("/accounts/webdav")
@@ -358,13 +368,31 @@ async def trigger_sync(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    # Check credentials exist before attempting auth (uses same username as provider)
+    creds = get_cloud_credentials(account_id, provider_name, _username)
+    if not creds or creds.get("type") != "oauth":
+        logger.warning(
+            "Cloud sync: no OAuth credentials for account_id=%s provider=%s user=%s",
+            account_id, provider_name, _username,
+        )
+        raise HTTPException(
+            status_code=401,
+            detail="Credentials not found. Remove the account in Settings → Connections → Cloud, then add Google Drive again.",
+        )
+
     # Authenticate
     try:
         authed = await asyncio.to_thread(provider.authenticate)
         if not authed:
-            raise HTTPException(status_code=401, detail="Authentication failed. Please reconnect the account.")
+            raise HTTPException(
+                status_code=401,
+                detail="Token expired or invalid. Remove the account and connect Google Drive again. In Google Cloud Console: enable Drive API, add redirect URIs for /api/email/oauth/callback and /api/cloud/oauth/callback.",
+            )
     except HTTPException:
         raise
+    except ValueError as exc:
+        logger.warning("Cloud auth failed for %s: %s", account_id, exc)
+        raise HTTPException(status_code=401, detail=str(exc))
     except Exception as exc:
         logger.error("Auth failed for cloud account %s: %s", account_id, exc)
         raise HTTPException(status_code=401, detail=f"Authentication error: {exc}")
@@ -443,6 +471,69 @@ async def sync_status(
         "conflicts": len(conflicts),
         "pending_uploads": len(pending_uploads),
         "pending_downloads": len(pending_downloads),
+    }
+
+
+@router.get("/accounts/{account_id}/browse")
+async def browse_cloud(
+    request: Request,
+    account_id: str,
+    folder_id: str = "root",
+    _username: str = Depends(_get_current_username),
+):
+    """List cloud contents at a folder (cloud-only, no local sync). Use folder_id=root for Drive root."""
+    cc = _get_cloud_config(_username)
+    acc = _find_account(cc, account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    provider_name = acc.get("provider", "")
+    cred_username = _get_cred_username(_username)
+    creds = get_cloud_credentials(account_id, provider_name, _username)
+    if not creds or creds.get("type") != "oauth":
+        raise HTTPException(
+            status_code=401,
+            detail="Credentials not found. Remove and reconnect the account.",
+        )
+
+    try:
+        provider = _create_provider(provider_name, _username, account_id)
+        authed = await asyncio.to_thread(provider.authenticate)
+        if not authed:
+            raise HTTPException(status_code=401, detail="Authentication failed")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    try:
+        items = await asyncio.to_thread(
+            provider.list_folder_by_id, folder_id, parent_path="/"
+        )
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{provider_name} does not support cloud browsing yet",
+        )
+    except Exception as exc:
+        logger.warning("Browse failed for %s folder %s: %s", account_id, folder_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "account_id": account_id,
+        "folder_id": folder_id,
+        "items": [
+            {
+                "file_id": f.file_id,
+                "name": f.name,
+                "path": f.path,
+                "size": f.size,
+                "modified_time": f.modified_time,
+                "is_folder": f.is_folder,
+                "mime_type": f.mime_type,
+            }
+            for f in items
+        ],
     }
 
 
@@ -632,23 +723,32 @@ async def resolve_conflict(
 
 # ── Redirect helpers ──────────────────────────────────────────────────────
 
-def _redirect_success(account_id: str, provider: str) -> RedirectResponse:
-    """Redirect to frontend after successful OAuth."""
+def _redirect_success(account_id: str, provider: str, redirect_base: Optional[str] = None) -> RedirectResponse:
+    """Redirect to frontend after successful OAuth. Use redirect_base to match the host the user used (localhost vs 127.0.0.1)."""
     port = os.environ.get("VAF_WEB_UI_PORT", "3000")
-    url = f"http://127.0.0.1:{port}/settings?connections=1&cloud_oauth=success&account={account_id}&provider={provider}"
+    base = (redirect_base or "").rstrip("/")
+    if base and base.startswith("http"):
+        url = f"{base}/settings?connections=1&cloud_oauth=success&account={account_id}&provider={provider}"
+    else:
+        url = f"http://localhost:{port}/settings?connections=1&cloud_oauth=success&account={account_id}&provider={provider}"
     return RedirectResponse(url=url, status_code=302)
 
 
-def _redirect_error(message: str) -> HTMLResponse:
+def _redirect_error(message: str, redirect_base: Optional[str] = None) -> HTMLResponse:
     """Return an error page with a link back to settings."""
     port = os.environ.get("VAF_WEB_UI_PORT", "3000")
-    url = f"http://127.0.0.1:{port}/settings?connections=1&cloud_oauth=error"
+    base = (redirect_base or "").rstrip("/")
+    if base and base.startswith("http"):
+        url = f"{base}/settings?connections=1&cloud_oauth=error"
+    else:
+        url = f"http://localhost:{port}/settings?connections=1&cloud_oauth=error"
+    msg_escaped = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     html_content = f"""
     <!DOCTYPE html>
     <html><head><meta charset="utf-8"><title>Cloud connection failed</title></head>
     <body style="font-family:sans-serif;max-width:480px;margin:2rem auto;padding:1rem;">
     <h2>Cloud connection failed</h2>
-    <p>{message}</p>
+    <p>{msg_escaped}</p>
     <p><a href="{url}">Back to Settings</a></p>
     </body></html>
     """

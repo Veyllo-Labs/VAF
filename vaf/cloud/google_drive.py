@@ -149,6 +149,15 @@ class GoogleDriveProvider(CloudProvider):
         except requests.RequestException as exc:
             logger.error("Google Drive auth validation failed: %s", exc)
             self._access_token = None
+            err_resp = getattr(exc, "response", None)
+            hint = ""
+            if err_resp is not None and hasattr(err_resp, "status_code"):
+                if err_resp.status_code == 401:
+                    hint = " Token invalid/expired. Remove account and reconnect. In Google Cloud Console: enable Drive API, add redirect URIs for both /api/email/oauth/callback and /api/cloud/oauth/callback."
+                elif err_resp.status_code == 403:
+                    hint = " Drive API not enabled. Go to Google Cloud Console → APIs & Services → Library → enable 'Google Drive API'."
+            if hint:
+                raise ValueError(f"Google Drive Auth failed:{hint}") from exc
             return False
 
     def ensure_sync_folder(self) -> str:
@@ -223,6 +232,37 @@ class GoogleDriveProvider(CloudProvider):
                 break
 
         logger.debug("Listed %d items in %s", len(results), folder_path)
+        return results
+
+    def list_folder_by_id(self, folder_id: str, parent_path: str = "/") -> List[CloudFileMetadata]:
+        """List contents of any folder by Drive ID. Use for cloud-only browsing (full Drive, no sync)."""
+        results: List[CloudFileMetadata] = []
+        page_token: Optional[str] = None
+        q = f"'{folder_id}' in parents and trashed = false"
+
+        while True:
+            params = {
+                "q": q,
+                "fields": FILE_LIST_FIELDS,
+                "pageSize": 500,
+            }
+            if page_token:
+                params["pageToken"] = page_token
+
+            try:
+                resp = self._get(f"{API_BASE}/files", params=params)
+                data = resp.json()
+            except requests.RequestException as exc:
+                logger.error("Failed to list folder %s: %s", folder_id, exc)
+                raise
+
+            for item in data.get("files", []):
+                results.append(self._parse_file(item, parent_path))
+
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+
         return results
 
     def upload_file(self, local_path: Path, remote_path: str) -> CloudFileMetadata:

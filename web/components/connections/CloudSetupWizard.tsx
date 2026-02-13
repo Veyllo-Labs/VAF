@@ -125,29 +125,33 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
             setLoading(false);
             initialProviderHandled.current = false;
 
+            const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+            const fromOAuthSuccess = params?.get('cloud_oauth') === 'success';
+
             fetchOAuthStatus();
             fetchAccounts().then(() => {
-                const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
-                if (params.get('cloud_oauth') === 'success') setCurrentStep(2);
+                if (fromOAuthSuccess) setCurrentStep(2);
             });
             if (currentUser?.role === 'admin') loadAdminConfig();
             if (initialProvider) {
                 setProvider(initialProvider);
-                // Skip intro; go straight to Connect step when opening with a specific provider
-                setCurrentStep(1);
+                // If returning from OAuth success, show completion step (2); else show Connect step (1)
+                setCurrentStep(fromOAuthSuccess ? 2 : 1);
             } else {
                 setProvider('');
-                setCurrentStep(0);
+                setCurrentStep(fromOAuthSuccess ? 2 : 0);
             }
         }
     }, [isOpen, currentUser?.role, initialProvider]);
 
     // When opened with a specific provider, skip intro + choose steps and go straight to connect
+    // EXCEPT when returning from OAuth success – then we must NOT start OAuth again (would cause a loop)
     useEffect(() => {
-        if (isOpen && initialProvider && !initialProviderHandled.current) {
-            initialProviderHandled.current = true;
-            handleChooseProvider(initialProvider);
-        }
+        if (!isOpen || !initialProvider || initialProviderHandled.current) return;
+        const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+        if (params?.get('cloud_oauth') === 'success') return; // Coming back from callback: show completion, don't re-trigger OAuth
+        initialProviderHandled.current = true;
+        handleChooseProvider(initialProvider);
     }, [isOpen, initialProvider]);
 
     useEffect(() => {
@@ -165,9 +169,13 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
             return;
         }
 
-        // OAuth flow
+        // OAuth flow – pass redirect_base so post-OAuth redirect matches the host (localhost vs 127.0.0.1)
         setLoading(true);
-        fetch(api(`api/cloud/oauth/start?provider=${id}`), { credentials: 'include' })
+        const redirectBase = typeof window !== 'undefined' ? encodeURIComponent(window.location.origin) : '';
+        const startUrl = redirectBase
+            ? api(`api/cloud/oauth/start?provider=${id}&redirect_base=${redirectBase}`)
+            : api(`api/cloud/oauth/start?provider=${id}`);
+        fetch(startUrl, { credentials: 'include' })
             .then(r => {
                 if (!r.ok) throw new Error('Could not start sign-in. Check OAuth settings.');
                 return r.json();
@@ -177,7 +185,8 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                 setAuthUrl(url);
                 setCurrentStep(1);
                 if (url && typeof window !== 'undefined') {
-                    window.open(url, '_blank', 'noopener,noreferrer');
+                    // Navigate in same tab so redirect back shares session/cookies (new tab can lose session)
+                    window.location.href = url;
                 } else if (!url) {
                     setError('No sign-in URL returned. Check OAuth client ID in Settings.');
                 }

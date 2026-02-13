@@ -35,6 +35,7 @@ CLOUD_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
         "token_url": "https://oauth2.googleapis.com/token",
         "scopes": [
+            "https://www.googleapis.com/auth/drive.readonly",
             "https://www.googleapis.com/auth/drive.file",
             "https://www.googleapis.com/auth/userinfo.email",
         ],
@@ -109,21 +110,31 @@ _ENV_CLOUD_KEYS: Dict[str, Dict[str, str]] = {
 
 
 def _get_client_credential(provider: str, key_kind: str) -> str:
-    """Return client_id or client_secret: config → defaults → env → empty."""
+    """Return client_id or client_secret. For Google Drive, prefer email OAuth config (shared app for Gmail+Drive)."""
     if provider not in CLOUD_PROVIDERS:
         return ""
     conf = CLOUD_PROVIDERS[provider]
     config_key = conf["client_id_key"] if key_kind == "client_id" else conf["client_secret_key"]
-    # Check saved config first
+    env_map = _ENV_CLOUD_KEYS.get(provider, {})
+
+    # Google Drive: prefer email OAuth client (same app for Gmail+Drive in UI; Mail works with user's app)
+    if provider == "google_drive":
+        email_key = "email_oauth_google_client_id" if key_kind == "client_id" else "email_oauth_google_client_secret"
+        email_val = (Config.get(email_key) or "").strip()
+        if email_val:
+            return email_val
+        env_email = {"client_id": "VAF_EMAIL_OAUTH_GOOGLE_CLIENT_ID", "client_secret": "VAF_EMAIL_OAUTH_GOOGLE_CLIENT_SECRET"}
+        env_val = (os.environ.get(env_email.get(key_kind, "")) or "").strip()
+        if env_val:
+            return env_val
+
+    # Cloud-specific config
     value = (Config.get(config_key) or "").strip()
     if value:
         return value
-    # Fall back to built-in defaults (e.g. bundled Desktop App client IDs)
     default_value = (Config.DEFAULTS.get(config_key) or "").strip()
     if default_value:
         return default_value
-    # Check environment variables
-    env_map = _ENV_CLOUD_KEYS.get(provider, {})
     env_key = env_map.get(key_kind)
     if env_key:
         value = (os.environ.get(env_key) or "").strip()
@@ -199,8 +210,17 @@ def get_state_provider(state: str) -> Optional[str]:
     return entry.get("provider")
 
 
-def get_authorization_url(provider: str, redirect_uri: str) -> Tuple[str, str]:
-    """Build OAuth URL with PKCE. Returns (auth_url, state). Raises ValueError on error."""
+def get_state_redirect_base(state: str) -> Optional[str]:
+    """Return redirect_base from state (frontend origin for post-OAuth redirect). Call before exchange_code_for_tokens."""
+    states = _load_states()
+    entry = states.get(state)
+    if not entry:
+        return None
+    return entry.get("redirect_base")
+
+
+def get_authorization_url(provider: str, redirect_uri: str, redirect_base: Optional[str] = None) -> Tuple[str, str]:
+    """Build OAuth URL with PKCE. Returns (auth_url, state). redirect_base = frontend origin (e.g. http://localhost:3000) for post-OAuth redirect."""
     if provider not in CLOUD_PROVIDERS:
         raise ValueError(f"Unknown cloud provider: {provider}")
     conf = CLOUD_PROVIDERS[provider]
@@ -221,7 +241,8 @@ def get_authorization_url(provider: str, redirect_uri: str) -> Tuple[str, str]:
         params["scope"] = " ".join(conf["scopes"])
     if provider in ("google_drive",):
         params["access_type"] = "offline"
-        params["prompt"] = "consent"
+        # Do NOT use prompt=consent – it forces the consent screen every time, causing a login loop.
+        # Google shows consent on first auth automatically; we get refresh_token with access_type=offline.
     if provider == "onedrive":
         params["response_mode"] = "query"
     if provider == "dropbox":
@@ -232,6 +253,7 @@ def get_authorization_url(provider: str, redirect_uri: str) -> Tuple[str, str]:
         "provider": provider,
         "code_verifier": verifier,
         "redirect_uri": redirect_uri,
+        "redirect_base": (redirect_base or "").strip() or None,
         "created_at": time.time(),
     }
     _save_states(states)
@@ -312,7 +334,17 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
 
     cred_user = _cred_username_for_store(username)
     creds = get_cloud_credentials(account_id, provider, username)
-    if not creds or creds.get("type") != "oauth":
+    if not creds:
+        logger.warning(
+            "Cloud OAuth: no credentials for account_id=%s provider=%s username=%s cred_user=%s",
+            account_id[:20] + "..." if len(account_id) > 20 else account_id,
+            provider,
+            username,
+            cred_user,
+        )
+        return None
+    if creds.get("type") != "oauth":
+        logger.warning("Cloud OAuth: wrong cred type %s for account_id=%s", creds.get("type"), account_id[:20])
         return None
     access = creds.get("access_token")
     refresh = creds.get("refresh_token")

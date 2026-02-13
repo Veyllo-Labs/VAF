@@ -191,6 +191,31 @@ class OneDriveProvider(CloudProvider):
         logger.debug("Listed %d items in %s", len(results), folder_path)
         return results
 
+    def list_folder_by_id(self, folder_id: str, parent_path: str = "/") -> List[CloudFileMetadata]:
+        """List contents of any folder by item ID. Use for cloud-only browsing (full OneDrive)."""
+        if folder_id == "root":
+            url = f"{GRAPH_BASE}/root/children"
+        else:
+            url = f"{GRAPH_BASE}/items/{folder_id}/children"
+
+        results: List[CloudFileMetadata] = []
+        next_link: Optional[str] = url
+
+        while next_link:
+            try:
+                resp = self._get(next_link)
+                data = resp.json()
+            except requests.RequestException as exc:
+                logger.error("Failed to list folder %s: %s", folder_id, exc)
+                raise
+
+            for item in data.get("value", []):
+                results.append(self._parse_item(item))
+
+            next_link = data.get("@odata.nextLink")
+
+        return results
+
     def upload_file(self, local_path: Path, remote_path: str) -> CloudFileMetadata:
         """Upload a file. Uses simple PUT for <4MB, upload session for larger."""
         file_size = local_path.stat().st_size

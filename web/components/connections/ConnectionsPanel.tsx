@@ -16,6 +16,7 @@ interface ConnectionsPanelProps {
     onOpenTelegramDashboard?: () => void;
     onOpenEmailDashboard?: () => void;
     onOpenEmailWizard?: () => void;
+    onOpenCloudDashboard?: () => void;
     onOpenCloudWizard?: (provider?: string) => void;
 }
 
@@ -202,7 +203,7 @@ export const CATEGORIES = [
 /** Use relative /api/ so Next.js rewrites to backend. */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard, onOpenTelegramWizard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudWizard }: ConnectionsPanelProps) {
+export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard, onOpenTelegramWizard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudDashboard, onOpenCloudWizard }: ConnectionsPanelProps) {
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'disconnected' | 'checking'>>({});
 
     useEffect(() => {
@@ -376,7 +377,9 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                             const enabled = isEnabled(app);
                             const status = app.id === 'email'
                                 ? ((config?.email_config?.accounts?.length ?? 0) > 0 ? 'connected' : 'disconnected')
-                                : connectionStatus[app.id];
+                                : isCloudApp(app.id)
+                                    ? (configured ? 'connected' : 'disconnected')
+                                    : connectionStatus[app.id];
                             const Icon = app.icon;
 
                             return (
@@ -471,10 +474,13 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                                 if (onOpenEmailDashboard) onOpenEmailDashboard();
                                                                 else if (onOpenEmailWizard) onOpenEmailWizard();
                                                             }
-                                                            if (isCloudApp(app.id) && onOpenCloudWizard) onOpenCloudWizard(app.id);
+                                                            if (isCloudApp(app.id)) {
+                                                                if (onOpenCloudDashboard && configured) onOpenCloudDashboard();
+                                                                else if (onOpenCloudWizard) onOpenCloudWizard(app.id);
+                                                            }
                                                         }}
                                                         className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                                                        title="Settings"
+                                                        title={isCloudApp(app.id) && configured ? 'Open cloud dashboard' : 'Add account'}
                                                     >
                                                         <Settings className="w-4 h-4 text-gray-500" />
                                                     </button>

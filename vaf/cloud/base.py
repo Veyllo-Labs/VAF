@@ -138,3 +138,7 @@ class CloudProvider(ABC):
     def ensure_sync_folder(self) -> str:
         """Create the sync folder in cloud root if it doesn't exist. Return its ID/path."""
         ...
+
+    def list_folder_by_id(self, folder_id: str, parent_path: str = "/") -> List[CloudFileMetadata]:
+        """List contents of any folder by provider ID. For cloud-only browsing (full drive). Override to support."""
+        raise NotImplementedError(f"{self.provider_name} does not support full-drive browsing")

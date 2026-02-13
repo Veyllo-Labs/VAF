@@ -33,7 +33,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     // useEffect(() => { if (status === 'running') setIsExpanded(true); }, [status]);
 
     return (
-        <div className="w-full max-w-[85%] mx-auto my-2">
+        <div className="w-full my-2">
             <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}

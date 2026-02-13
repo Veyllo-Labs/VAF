@@ -130,28 +130,56 @@ def _save_fallback_data(data: Dict[str, str]) -> None:
 #  Public API
 # ---------------------------------------------------------------------------
 
+def _normalize_google_email(email: str) -> list:
+    """Return [email, alt] for lookup: @googlemail.com <-> @gmail.com are equivalent."""
+    e = (email or "").strip().lower()
+    if not e or "@" not in e:
+        return [e]
+    if e.endswith("@googlemail.com"):
+        return [e, e.replace("@googlemail.com", "@gmail.com")]
+    if e.endswith("@gmail.com"):
+        return [e, e.replace("@gmail.com", "@googlemail.com")]
+    return [e]
+
+
 def get_cloud_credentials(account_id: str, provider: str, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Retrieve stored credentials for a cloud account."""
     key_username = _cred_key_username(username)
-    key = _credential_key(account_id, provider, key_username)
+    account_ids_to_try = _normalize_google_email(account_id) if provider == "google_drive" else [account_id]
+    for aid in account_ids_to_try:
+        key = _credential_key(aid, provider, key_username)
+        raw = _get_credential_raw(key)
+        if raw:
+            try:
+                return json.loads(raw)
+            except Exception:
+                continue
+    # Fallback: OAuth callback often runs without session (redirect from provider)
+    # and stores with username=None. Sync requests may have a session returning "admin".
+    if key_username is not None:
+        for aid in account_ids_to_try:
+            fallback_key = _credential_key(aid, provider, None)
+            raw = _get_credential_raw(fallback_key)
+            if raw:
+                try:
+                    return json.loads(raw)
+                except Exception:
+                    pass
+    return None
+
+
+def _get_credential_raw(key: str) -> Optional[str]:
+    """Get raw credential JSON string by key from keyring or fallback file."""
     if _keyring_available():
         try:
             import keyring
             value = keyring.get_password(SERVICE_NAME, key)
-            if not value:
-                return None
-            return json.loads(value)
+            if value:
+                return value
         except Exception as e:
             logger.debug("Keyring get failed for cloud %s: %s", _mask(key), e)
-            return None
     data = _load_fallback_data()
-    raw = data.get(key)
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except Exception:
-        return None
+    return data.get(key)
 
 
 def set_cloud_oauth_tokens(
@@ -163,23 +191,28 @@ def set_cloud_oauth_tokens(
     username: Optional[str] = None,
 ) -> None:
     """Store OAuth tokens for a cloud account."""
-    key = _credential_key(account_id, provider, username)
+    # Use canonical @gmail.com for Google (googlemail.com equivalent)
+    store_id = account_id
+    if provider == "google_drive" and isinstance(account_id, str):
+        store_id = (account_id or "").strip().lower().replace("@googlemail.com", "@gmail.com")
+    key = _credential_key(store_id, provider, username)
     value = json.dumps({
         "access_token": access_token,
         "refresh_token": refresh_token,
         "expires_at": expires_at,
         "type": "oauth",
     })
+    # Always write to fallback file (reliable across processes/Keyring backends on Windows)
+    data = _load_fallback_data()
+    data[key] = value
+    _save_fallback_data(data)
+    # Also try keyring for systems where it works
     if _keyring_available():
         try:
             import keyring
             keyring.set_password(SERVICE_NAME, key, value)
-            return
         except Exception as e:
-            logger.warning("Keyring set failed for cloud, using fallback: %s", e)
-    data = _load_fallback_data()
-    data[key] = value
-    _save_fallback_data(data)
+            logger.debug("Keyring set failed for cloud (fallback file used): %s", e)
 
 
 def set_cloud_webdav_credentials(

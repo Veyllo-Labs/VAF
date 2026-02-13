@@ -106,7 +106,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, EmailSetupWizard, MailDashboard, CloudSetupWizard } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 
@@ -218,6 +218,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showMailDashboard, setShowMailDashboard] = useState(false);
     const [showEmailWizard, setShowEmailWizard] = useState(false);
     const [showCloudWizard, setShowCloudWizard] = useState(false);
+    const [showCloudDashboard, setShowCloudDashboard] = useState(false);
+    const [cloudDashboardRefresh, setCloudDashboardRefresh] = useState(0);
     const [cloudWizardProvider, setCloudWizardProvider] = useState<string | undefined>(undefined);
     const [mailDashboardRefresh, setMailDashboardRefresh] = useState(0);
     const [showCreateAutomationModal, setShowCreateAutomationModal] = useState(false);
@@ -1646,6 +1648,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 onOpenTelegramDashboard={() => setShowTelegramDashboard(true)}
                                 onOpenEmailDashboard={() => setShowMailDashboard(true)}
                                 onOpenEmailWizard={() => setShowEmailWizard(true)}
+                                onOpenCloudDashboard={() => setShowCloudDashboard(true)}
                                 onOpenCloudWizard={(provider?: string) => {
                                     setCloudWizardProvider(provider);
                                     setShowCloudWizard(true);
@@ -3813,6 +3816,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 currentUser={currentUser}
             />
 
+            {/* Cloud Storage Dashboard (Mail-style: accounts left, files middle) */}
+            <CloudDashboard
+                isOpen={showCloudDashboard}
+                onClose={() => setShowCloudDashboard(false)}
+                onOpenAddWizard={(provider?: string) => {
+                    setShowCloudDashboard(false);
+                    setCloudWizardProvider(provider);
+                    setShowCloudWizard(true);
+                }}
+                refreshTrigger={cloudDashboardRefresh}
+            />
+
             {/* Cloud Storage Setup Wizard */}
             <CloudSetupWizard
                 isOpen={showCloudWizard}
@@ -3823,6 +3838,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onComplete={() => {
                     setShowCloudWizard(false);
                     setCloudWizardProvider(undefined);
+                    setCloudDashboardRefresh(r => r + 1);
                     onRefreshConfig?.();
                 }}
                 initialProvider={cloudWizardProvider}

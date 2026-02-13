@@ -7,4 +7,5 @@ export type { TelegramConfig } from './TelegramSetupWizard';
 export { default as TelegramDashboard } from './TelegramDashboard';
 export { default as EmailSetupWizard } from './EmailSetupWizard';
 export { default as MailDashboard } from './MailDashboard';
+export { default as CloudDashboard } from './CloudDashboard';
 export { default as CloudSetupWizard } from './CloudSetupWizard';

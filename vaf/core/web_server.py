@@ -196,6 +196,14 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount Email routes: {e}")
 
+# Mount Cloud Storage routes (OAuth2 PKCE + sync + accounts CRUD)
+try:
+    from vaf.api.cloud_routes import router as cloud_router
+    app.include_router(cloud_router)
+    log("WebServer", "Cloud storage routes mounted at /api/cloud")
+except Exception as e:
+    log("WebServer", f"Failed to mount Cloud routes: {e}")
+
 # Add authentication middleware if local network is enabled
 if Config.get("local_network_enabled", False):
     try:
@@ -400,6 +408,15 @@ async def startup_event():
             await asyncio.sleep(EMAIL_AUTO_SYNC_INTERVAL_SEC)
 
     asyncio.create_task(_email_auto_sync_loop())
+
+    # Cloud storage background sync
+    if Config.get("cloud_sync_enabled", False):
+        try:
+            from vaf.cloud.sync_worker import cloud_sync_loop
+            asyncio.create_task(cloud_sync_loop())
+            log("WebServer", "Cloud storage background sync started")
+        except Exception as e:
+            log("WebServer", f"Cloud sync loop start error: {e}")
     log("WebServer", "Email auto-sync background task started (every 30 min)")
 
     # In Docker mode, start the headless agent runner
@@ -2222,7 +2239,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         suffix = ".wav" if audio_format == "wav" else ".webm"
                         mime_type = "audio/wav" if audio_format == "wav" else "audio/webm"
 
-                        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_audio:
+                        with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=suffix, delete=False) as temp_audio:
                             temp_audio.write(audio_data)
                             temp_path = temp_audio.name
 
@@ -2463,10 +2480,10 @@ async def process_uploaded_files(files: list) -> str:
             
             # Save to temporary file
             file_ext = Path(filename).suffix or ".txt"
-            with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as temp_file:
+            with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=file_ext, delete=False) as temp_file:
                 temp_file.write(decoded_data)
                 temp_path = temp_file.name
-            
+
             try:
                 # Use Librarian to read file contents
                 from vaf.tools.librarian import LibrarianTool
@@ -2523,7 +2540,7 @@ async def process_files_to_sidebar_list(files: list) -> list:
 
             decoded_data = base64.b64decode(base64_part)
             file_ext = Path(filename).suffix or ".txt"
-            with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as temp_file:
+            with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=file_ext, delete=False) as temp_file:
                 temp_file.write(decoded_data)
                 temp_path = temp_file.name
 

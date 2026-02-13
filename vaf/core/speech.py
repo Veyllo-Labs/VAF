@@ -574,7 +574,7 @@ $player.Close()
             model_path = self._ensure_voice_model(lang)
             if model_path:
                 import tempfile
-                fd, wav_path = tempfile.mkstemp(suffix=".wav")
+                fd, wav_path = tempfile.mkstemp(prefix="vaf_", suffix=".wav")
                 os.close(fd)
                 try:
                     binary = self._get_piper_binary()
@@ -683,7 +683,7 @@ $player.Close()
                     if audio_bytes:
                         try:
                             import tempfile
-                            fd, wav_path = tempfile.mkstemp(suffix=".wav")
+                            fd, wav_path = tempfile.mkstemp(prefix="vaf_", suffix=".wav")
                             os.close(fd)
                             with open(wav_path, "wb") as f:
                                 f.write(audio_bytes)
@@ -715,9 +715,9 @@ $player.Close()
                     if model_path:
                         try:
                             import tempfile
-                            fd, wav_path = tempfile.mkstemp(suffix=".wav")
+                            fd, wav_path = tempfile.mkstemp(prefix="vaf_", suffix=".wav")
                             os.close(fd)
-                            
+
                             binary = self._get_piper_binary()
                             
                             # Prepare flags for no window

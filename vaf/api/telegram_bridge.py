@@ -104,7 +104,7 @@ async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str]
 
         # 3. Save to temp file
         suffix = ".ogg" if file_path.endswith(".oga") or file_path.endswith(".ogg") else ".oga"
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=suffix, delete=False) as temp_file:
             temp_file.write(audio_resp.content)
             temp_path = temp_file.name
 
@@ -180,7 +180,7 @@ async def _send_voice_reply(bot_token: str, chat_id: str, text: str, language: s
             ogg_data = await _convert_wav_to_ogg_local(audio_data)
             if not ogg_data:
                 # Fallback: send as document
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
+                with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=".wav", delete=False) as wav_file:
                     wav_file.write(audio_data)
                     wav_path = wav_file.name
                 try:
@@ -198,7 +198,7 @@ async def _send_voice_reply(bot_token: str, chat_id: str, text: str, language: s
         send_url = f"https://api.telegram.org/bot{bot_token}/sendVoice"
 
         # Create temp file for upload
-        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as ogg_file:
+        with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=".ogg", delete=False) as ogg_file:
             ogg_file.write(ogg_data)
             ogg_path = ogg_file.name
 
@@ -234,7 +234,7 @@ async def _convert_wav_to_ogg_local(wav_data: bytes) -> Optional[bytes]:
     import subprocess
 
     try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
+        with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=".wav", delete=False) as wav_file:
             wav_file.write(wav_data)
             wav_path = wav_file.name
 
@@ -292,7 +292,7 @@ async def _download_telegram_file(bot_token: str, file_id: str, suffix: str = ""
         ext = suffix or os.path.splitext(tg_path)[1] or ".bin"
         if not ext.startswith("."):
             ext = "." + ext
-        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
+        with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=ext, delete=False) as f:
             f.write(dl_resp.content)
             return f.name
     except Exception as e:

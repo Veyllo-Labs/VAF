@@ -16,6 +16,7 @@ interface ConnectionsPanelProps {
     onOpenTelegramDashboard?: () => void;
     onOpenEmailDashboard?: () => void;
     onOpenEmailWizard?: () => void;
+    onOpenCloudWizard?: (provider?: string) => void;
 }
 
 export interface ConnectionApp {
@@ -138,10 +139,10 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         name: 'Google Drive',
         icon: Cloud,
         category: 'cloud',
-        description: 'Access and manage files on Google Drive',
-        configKey: 'google_drive_config',
-        available: false,
-        comingSoon: true,
+        description: 'Sync files with Google Drive via VAF Sync folder',
+        configKey: 'cloud_config',
+        available: true,
+        comingSoon: false,
         iconColor: 'bg-yellow-500',
     },
     {
@@ -149,10 +150,10 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         name: 'Microsoft OneDrive',
         icon: Cloud,
         category: 'cloud',
-        description: 'Sync files with OneDrive / SharePoint',
-        configKey: 'onedrive_config',
-        available: false,
-        comingSoon: true,
+        description: 'Sync files with OneDrive via VAF Sync folder',
+        configKey: 'cloud_config',
+        available: true,
+        comingSoon: false,
         iconColor: 'bg-blue-500',
     },
     {
@@ -160,10 +161,10 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         name: 'Apple iCloud',
         icon: Cloud,
         category: 'cloud',
-        description: 'Access iCloud Drive files on macOS',
-        configKey: 'icloud_config',
-        available: false,
-        comingSoon: true,
+        description: 'Sync files via iCloud Drive (macOS only)',
+        configKey: 'cloud_config',
+        available: true,
+        comingSoon: false,
         iconColor: 'bg-sky-400',
     },
     {
@@ -171,10 +172,10 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         name: 'Dropbox',
         icon: FolderSync,
         category: 'cloud',
-        description: 'Sync and access Dropbox files',
-        configKey: 'dropbox_config',
-        available: false,
-        comingSoon: true,
+        description: 'Sync files with Dropbox via VAF Sync folder',
+        configKey: 'cloud_config',
+        available: true,
+        comingSoon: false,
         iconColor: 'bg-blue-600',
     },
     {
@@ -182,10 +183,10 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         name: 'Nextcloud',
         icon: HardDrive,
         category: 'cloud',
-        description: 'Connect to self-hosted Nextcloud instance',
-        configKey: 'nextcloud_config',
-        available: false,
-        comingSoon: true,
+        description: 'Sync files with self-hosted Nextcloud via WebDAV',
+        configKey: 'cloud_config',
+        available: true,
+        comingSoon: false,
         iconColor: 'bg-cyan-600',
     },
 ];
@@ -201,7 +202,7 @@ export const CATEGORIES = [
 /** Use relative /api/ so Next.js rewrites to backend. */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard, onOpenTelegramWizard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard }: ConnectionsPanelProps) {
+export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscordWizard, onOpenTelegramWizard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudWizard }: ConnectionsPanelProps) {
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'disconnected' | 'checking'>>({});
 
     useEffect(() => {
@@ -292,16 +293,42 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                 console.error('Failed to disconnect email accounts', e);
             }
         }
+        if (isCloudApp(appId)) {
+            try {
+                const res = await fetch(api('api/cloud/accounts'), { credentials: 'include' });
+                if (res.ok) {
+                    const data = await res.json();
+                    const accounts = data.accounts || [];
+                    const providerAccounts = accounts.filter((a: any) => a.provider === appId);
+                    for (const a of providerAccounts) {
+                        const id = a.account_id;
+                        if (id) {
+                            await fetch(api(`api/cloud/accounts/${encodeURIComponent(id)}`), { method: 'DELETE', credentials: 'include' });
+                        }
+                    }
+                }
+                setConnectionStatus(prev => ({ ...prev, [appId]: 'disconnected' }));
+            } catch (e) {
+                console.error(`Failed to disconnect ${appId}`, e);
+            }
+        }
     };
 
     const getAppsByCategory = (category: string) => {
         return CONNECTION_APPS.filter(app => app.category === category);
     };
 
+    const CLOUD_IDS = ['google_drive', 'onedrive', 'icloud', 'dropbox', 'nextcloud'];
+    const isCloudApp = (id: string) => CLOUD_IDS.includes(id);
+
     const isConfigured = (app: ConnectionApp) => {
         if (app.id === 'email') {
             const accounts = config?.email_config?.accounts;
             return Array.isArray(accounts) && accounts.length > 0;
+        }
+        if (isCloudApp(app.id)) {
+            const cloudAccounts = config?.cloud_config?.accounts || [];
+            return cloudAccounts.some((a: any) => a.provider === app.id);
         }
         const appConfig = config[app.configKey];
         return appConfig?.verified === true;
@@ -311,6 +338,10 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
         if (app.id === 'email') {
             const accounts = config?.email_config?.accounts;
             return Array.isArray(accounts) && (accounts as any[]).some((a: any) => a.enabled !== false);
+        }
+        if (isCloudApp(app.id)) {
+            const cloudAccounts = config?.cloud_config?.accounts || [];
+            return cloudAccounts.some((a: any) => a.provider === app.id && a.sync_enabled !== false);
         }
         const appConfig = config[app.configKey];
         return appConfig?.enabled === true;
@@ -430,6 +461,7 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                                 if (onOpenEmailDashboard) onOpenEmailDashboard();
                                                                 else if (onOpenEmailWizard) onOpenEmailWizard();
                                                             }
+                                                            if (isCloudApp(app.id) && onOpenCloudWizard) onOpenCloudWizard(app.id);
                                                         }}
                                                         className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                                                         title="Settings"
@@ -452,9 +484,10 @@ export default function ConnectionsPanel({ config, onConfigChange, onOpenDiscord
                                                         if (app.id === 'discord') onOpenDiscordWizard();
                                                         if (app.id === 'telegram') onOpenTelegramWizard();
                                                         if (app.id === 'email') {
-                                                                if (onOpenEmailDashboard) onOpenEmailDashboard();
-                                                                else if (onOpenEmailWizard) onOpenEmailWizard();
-                                                            }
+                                                            if (onOpenEmailDashboard) onOpenEmailDashboard();
+                                                            else if (onOpenEmailWizard) onOpenEmailWizard();
+                                                        }
+                                                        if (isCloudApp(app.id) && onOpenCloudWizard) onOpenCloudWizard(app.id);
                                                     }}
                                                     disabled={app.comingSoon || !app.available}
                                                     className={cn(

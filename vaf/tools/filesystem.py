@@ -544,6 +544,7 @@ class WriteFileTool(BaseTool):
                 # Create temp file in same directory (for atomic rename)
                 temp_dir = os.path.dirname(res) or '.'
                 temp_fd, temp_path = tempfile.mkstemp(
+                    prefix='vaf_',
                     suffix='.tmp',
                     dir=temp_dir
                 )

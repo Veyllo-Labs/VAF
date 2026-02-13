@@ -115,11 +115,11 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
 
     const visibleProviders = React.useMemo(() => {
         return PROVIDER_OPTIONS.filter((p) => {
-            if (p.id === 'gmail') return oauthStatus.oauth_google_configured;
+            if (p.id === 'gmail') return true;  // Built-in client ID, always available
             if (p.id === 'microsoft') return oauthStatus.oauth_microsoft_configured;
             return true;
         });
-    }, [oauthStatus.oauth_google_configured, oauthStatus.oauth_microsoft_configured]);
+    }, [oauthStatus.oauth_microsoft_configured]);
 
     useEffect(() => {
         if (isOpen && accounts.length > 0 && currentStep === 0) setCurrentStep(3);

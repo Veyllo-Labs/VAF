@@ -7,6 +7,7 @@ import {
     RefreshCw, Trash2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
@@ -104,7 +105,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
             const res = await fetch(api('api/config'), { credentials: 'include' });
             if (res.ok) {
                 const c = await res.json();
-                setOauthGoogleId((c.cloud_oauth_google_client_id ?? '').trim());
+                setOauthGoogleId(displayOAuthValue(c.cloud_oauth_google_client_id, BUILTIN_GOOGLE_CLIENT_ID));
                 setOauthGoogleSecret((c.cloud_oauth_google_client_secret ?? '').trim());
                 setOauthMicrosoftId((c.cloud_oauth_microsoft_client_id ?? '').trim());
                 setOauthMicrosoftSecret((c.cloud_oauth_microsoft_client_secret ?? '').trim());

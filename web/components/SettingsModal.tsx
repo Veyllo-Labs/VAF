@@ -105,6 +105,7 @@ import {
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
 import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, EmailSetupWizard, MailDashboard, CloudSetupWizard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
@@ -1136,7 +1137,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <div className="grid grid-cols-1 gap-3">
                                                     <Input
                                                         label="Google Client ID"
-                                                        value={localConfig.email_oauth_google_client_id || localConfig.cloud_oauth_google_client_id || ''}
+                                                        value={displayOAuthValue(localConfig.email_oauth_google_client_id || localConfig.cloud_oauth_google_client_id, BUILTIN_GOOGLE_CLIENT_ID)}
                                                         onChange={(v: string) => {
                                                             setLocalConfig((prev: any) => ({
                                                                 ...prev,

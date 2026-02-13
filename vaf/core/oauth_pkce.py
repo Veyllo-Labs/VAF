@@ -179,8 +179,10 @@ def _get_oauth_client_credential(provider: str, key_kind: str) -> str:
 
 def is_oauth_provider_configured(provider: str) -> bool:
     """
-    Return True if the provider has client_id and client_secret set so one-click sign-in works.
+    Return True if the provider has client_id set so one-click sign-in works.
     Used by GET /api/email/oauth-status to decide whether to show Gmail/Microsoft in the UI.
+    Gmail: client_secret optional (Desktop app flow works without it).
+    Microsoft: requires client_secret.
     """
     if provider not in ("gmail", "microsoft"):
         return False
@@ -189,6 +191,8 @@ def is_oauth_provider_configured(provider: str) -> bool:
         client_id = _SHIPPED_GOOGLE_CLIENT_ID
     if not client_id:
         return False
+    if provider == "gmail":
+        return True  # Built-in or user client_id is enough; secret optional for Desktop app
     client_secret = _get_oauth_client_credential(provider, "client_secret")
     return bool(client_secret)
 

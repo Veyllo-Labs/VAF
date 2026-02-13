@@ -11,17 +11,20 @@ from typing import Any, Dict, Optional
 
 from vaf.core.config import Config
 from vaf.core.platform import Platform
+from vaf.tools.base import BaseTool
 
 logger = logging.getLogger("vaf.tools.cloud_storage")
 
 TOOL_NAME = "cloud_storage"
 TOOL_DESCRIPTION = (
-    "Save, list, retrieve, or browse files in the user's connected cloud storage "
+    "Save, list, retrieve, browse, download, or read files in the user's connected cloud storage "
     "(Google Drive, OneDrive, Dropbox, Nextcloud, iCloud). "
-    "Use 'browse' to navigate the full cloud (Drive root and folders) without syncing. "
-    "Use 'list' to see files in the local VAF Sync folder. "
+    "Use 'browse' to navigate the full cloud (Drive root and folders). "
+    "Use 'download' to download a file by file_id to Downloads. "
+    "Use 'read' to read a document's content without keeping it locally (PDF, Word, Google Docs, etc.). "
     "Use 'save' to upload a local file to the cloud sync folder. "
-    "Use 'retrieve' to download a file from cloud to local. "
+    "Use 'list' for files in the local VAF Sync folder. "
+    "Use 'retrieve' for files already synced locally. "
     "Use 'status' to check sync status."
 )
 
@@ -30,12 +33,16 @@ TOOL_PARAMETERS = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["save", "list", "retrieve", "status", "browse"],
+            "enum": ["save", "list", "retrieve", "status", "browse", "download", "read"],
             "description": "Action to perform",
         },
         "provider": {
             "type": "string",
             "description": "Cloud provider: google_drive, onedrive, dropbox, nextcloud, icloud. Omit to use the first connected provider.",
+        },
+        "file_id": {
+            "type": "string",
+            "description": "For 'download' and 'read': the cloud file ID (from browse output).",
         },
         "folder_id": {
             "type": "string",
@@ -43,7 +50,7 @@ TOOL_PARAMETERS = {
         },
         "file_path": {
             "type": "string",
-            "description": "For 'save': local file path to upload. For 'retrieve': remote filename to download.",
+            "description": "For 'save': local file path to upload. For 'retrieve': remote filename in sync folder.",
         },
         "remote_path": {
             "type": "string",
@@ -109,7 +116,8 @@ def _create_provider(provider_name: str, username: str, account_id: str):
 
 def run_cloud_storage(action: str, provider: Optional[str] = None,
                       folder_id: Optional[str] = None, file_path: Optional[str] = None,
-                      remote_path: Optional[str] = None, **kwargs: Any) -> str:
+                      remote_path: Optional[str] = None, file_id: Optional[str] = None,
+                      **kwargs: Any) -> str:
     """Execute the cloud_storage tool action."""
     username = _get_username()
     first = _get_first_connected_account(username)
@@ -125,6 +133,7 @@ def run_cloud_storage(action: str, provider: Optional[str] = None,
         account_id = acct.get("account_id", default_account_id)
 
     effective_provider = provider or default_provider
+    file_id = file_id or kwargs.get("file_id")
     if action == "save":
         return _action_save(username, account_id, effective_provider, file_path, remote_path)
     elif action == "list":
@@ -135,8 +144,12 @@ def run_cloud_storage(action: str, provider: Optional[str] = None,
         return _action_status(username, effective_provider)
     elif action == "browse":
         return _action_browse(username, account_id, effective_provider, folder_id or "root")
+    elif action == "download":
+        return _action_download(username, account_id, effective_provider, file_id)
+    elif action == "read":
+        return _action_read(username, account_id, effective_provider, file_id)
     else:
-        return f"Unknown action: {action}. Use: save, list, retrieve, status, browse."
+        return f"Unknown action: {action}. Use: save, list, retrieve, status, browse, download, read."
 
 
 def _get_account_by_provider(username: str, provider: str) -> Optional[dict]:
@@ -236,6 +249,74 @@ def _action_list(username: str, account_id: str, provider: str) -> str:
     return f"Files in {provider} sync folder ({len(files)}):\n" + "\n".join(files)
 
 
+def _action_download(username: str, account_id: str, provider: str, file_id: Optional[str]) -> str:
+    """Download a file from cloud by file_id to user's Downloads folder."""
+    if not file_id:
+        return "file_id is required for 'download' action. Get it from browse (e.g. id=xxx)."
+
+    try:
+        prov = _create_provider(provider, username, account_id)
+        if not prov.authenticate():
+            return f"Authentication failed for {provider}. Reconnect the account in Settings."
+
+        meta = prov.get_file_metadata(file_id)
+        if not meta:
+            return f"File not found: {file_id}"
+        if meta.is_folder:
+            return "Cannot download a folder. Use browse to list folder contents."
+
+        downloads = Platform.downloads_dir()
+        dest = downloads / meta.name
+        prov.download_file(file_id, dest)
+        return f"Downloaded '{meta.name}' to {dest}"
+    except NotImplementedError:
+        return f"{provider} does not support download by file_id."
+    except Exception as e:
+        logger.error("[CloudStorage] Download failed: %s", e)
+        return f"Download failed: {e}"
+
+
+def _action_read(username: str, account_id: str, provider: str, file_id: Optional[str]) -> str:
+    """Download to temp, extract text with Librarian, return content, then delete temp (no local copy)."""
+    if not file_id:
+        return "file_id is required for 'read' action. Get it from browse (e.g. id=xxx)."
+
+    import tempfile
+
+    try:
+        prov = _create_provider(provider, username, account_id)
+        if not prov.authenticate():
+            return f"Authentication failed for {provider}. Reconnect the account in Settings."
+
+        meta = prov.get_file_metadata(file_id)
+        if not meta:
+            return f"File not found: {file_id}"
+        if meta.is_folder:
+            return "Cannot read a folder. Use browse to list folder contents."
+
+        suffix = Path(meta.name).suffix or ".bin"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            prov.download_file(file_id, tmp_path)
+            from vaf.tools.librarian import LibrarianTool
+            librarian = LibrarianTool()
+            content = librarian._read_file(tmp_path, enable_chunking=True)
+            if not content or not content.strip():
+                return f"Could not extract text from '{meta.name}'. File may be binary or empty."
+            return f"### Content of {meta.name}\n\n{content}"
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except NotImplementedError:
+        return f"{provider} does not support read by file_id."
+    except Exception as e:
+        logger.error("[CloudStorage] Read failed: %s", e)
+        return f"Read failed: {e}"
+
+
 def _action_retrieve(username: str, account_id: str, file_path: Optional[str]) -> str:
     """Download a file from cloud to the user's Downloads folder."""
     if not file_path:
@@ -284,3 +365,22 @@ def _action_status(username: str, provider: str) -> str:
             return f"{provider}: {enabled}, last sync: {ago_str}, account: {acct.get('display_name', acct.get('account_id', '?'))}"
 
     return f"No {provider} account connected."
+
+
+class CloudStorageTool(BaseTool):
+    """Tool for browsing and managing connected cloud storage (Google Drive, OneDrive, etc.)."""
+
+    name = TOOL_NAME
+    description = TOOL_DESCRIPTION
+    parameters = TOOL_PARAMETERS
+
+    def run(self, **kwargs) -> str:
+        return run_cloud_storage(
+            action=kwargs.get("action", "browse"),
+            provider=kwargs.get("provider"),
+            folder_id=kwargs.get("folder_id"),
+            file_path=kwargs.get("file_path"),
+            remote_path=kwargs.get("remote_path"),
+            file_id=kwargs.get("file_id"),
+            **{k: v for k, v in kwargs.items() if k not in ("action", "provider", "folder_id", "file_path", "remote_path", "file_id")},
+        )

@@ -7,6 +7,7 @@ The VAF Librarian Agent now supports reading multiple document formats including
 ### Key Features
 
 ✅ **Multiple Formats** - PDF, Word, Excel, PowerPoint, and text files
+✅ **Cloud Documents** - Read from Google Drive, OneDrive via `cloud_storage` (action `read`, `file_id`); no local copy kept
 ✅ **Auto-Chunking** - Automatically handles large files without context overflow
 ✅ **Configurable Limits** - Adjust size limits per file type
 ✅ **Smart Navigation** - Jump to specific pages or sections
@@ -121,7 +122,6 @@ The librarian will:
 
 [Paragraph 1 content]
 [Paragraph 2 content]
-...
 
 --- Tables ---
 Table 1:
@@ -129,6 +129,17 @@ Header1 | Header2 | Header3
 Value1  | Value2  | Value3
 ...
 ```
+
+#### Reading Documents from Cloud (Google Drive, OneDrive)
+
+When a cloud provider (Google Drive, OneDrive) is connected, you can read documents without downloading them locally:
+
+```
+User: "Read the document X from my Google Drive"
+User: "Lies das Dokument Y aus meiner Cloud"
+```
+
+The agent uses the `cloud_storage` tool: first `browse` to locate the file and get its `file_id`, then `read` with that `file_id`. The file is downloaded to a temporary path, text is extracted with the Librarian, and the temp file is deleted. Supported: PDF, Word, Excel, PowerPoint, and native Google Docs/Sheets/Slides (exported to text or CSV). See [CONNECTIONS.md](CONNECTIONS.md#cloud-storage-integration) for setup.
 
 #### Reading an Excel File
 

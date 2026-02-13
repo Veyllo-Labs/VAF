@@ -29,6 +29,7 @@ from vaf.tools.filesystem import (
 )
 from vaf.tools.python_sandbox import PythonSandboxTool
 from vaf.tools.document_viewer import DocumentViewerTool, DocumentEditorTool, ReplaceEditorSelectionTool
+from vaf.tools.cloud_storage import CloudStorageTool
 from vaf.core.fs_map import CachedFilesystemMap
 
 # Try to import psutil for better disk info (optional)
@@ -53,9 +54,10 @@ class LibrarianTool(BaseTool):
     - **Folder Sizes:** "How big is Downloads?", "Check folder size", "Disk usage analysis"
     - **Storage Info:** "Disk space", "Free space", "List drives", "Storage capacity"
     - **File Ops:** "List files", "Find file", "Read file", "Count files"
+    - **Cloud Storage:** "What's in my Google Drive?", "Browse cloud", "List Drive folders"
     - **System Info:** "How many drives", "Hardware info"
     
-    Use this agent for ANY file system or storage query. Do not say "I can't access files" - delegate to this agent!"""
+    Use this agent for ANY file system, cloud storage, or storage query. Do not say "I can't access files" - delegate to this agent!"""
     
     parameters = {
         "type": "object",
@@ -83,6 +85,7 @@ class LibrarianTool(BaseTool):
             "document_editor": DocumentEditorTool(),
             "replace_editor_selection": ReplaceEditorSelectionTool(),
             "move_file": MoveFileTool(),
+            "cloud_storage": CloudStorageTool(),
         }
         
         # Cross-platform home directory
@@ -1858,6 +1861,7 @@ Available Tools:
 - tree(path, depth): Shows directory tree structure. Use this to explore folder structure on a drive.
 - find_files(path, pattern): Finds files by name pattern (glob) recursively
 - folder_size(path, top_n=10): Calculates total size of a folder recursively and shows largest files
+- cloud_storage(action, folder_id?, file_id?, provider?): Browse, download, or read cloud files. action='browse' + folder_id for navigation. action='download' + file_id to save to Downloads. action='read' + file_id to extract document content without keeping locally (PDF, Word, Google Docs). action='list' for synced VAF Sync. action='status' for connection.
 - python_sandbox(code): Execute Python code safely for mathematical calculations, data processing, and algorithms
 
 RULES:
@@ -1884,6 +1888,9 @@ TOOL SELECTION GUIDE:
 - "Multiple files analysis" / "Mehrere Dateien analysieren" -> Use list_files with sort_by='size' or find_files, then analyze results
 - "Calculate" / "Math" / "Compute" / "Algorithm" -> Use python_sandbox(code) for mathematical calculations and data processing
 - "Folder size" / "Ordnergröße" -> Use folder_size(path)
+- "Google Drive" / "Cloud" / "Drive durchsuchen" -> cloud_storage(action='browse', folder_id='root'), then folder_id=<id> to enter
+- "Read document from cloud" / "Dokument in Cloud lesen" -> First browse to find file_id, then cloud_storage(action='read', file_id=<id>)
+- "Download from cloud" -> cloud_storage(action='download', file_id=<id>)
 
 Common paths:
 - Downloads: {self.folder_aliases.get('downloads', 'N/A')}
@@ -2090,7 +2097,7 @@ Common paths:
                         # Get available tool names dynamically
                         available_tool_names = list(self.tools.keys()) if hasattr(self, 'tools') and self.tools else []
                         # Also check for common tool names used by librarian
-                        common_tool_names = ["read_file", "write_file", "list_files", "find_files", "tree", "folder_size", "python_sandbox", "document_viewer", "document_editor", "replace_editor_selection"]
+                        common_tool_names = ["read_file", "write_file", "list_files", "find_files", "tree", "folder_size", "cloud_storage", "python_sandbox", "document_viewer", "document_editor", "replace_editor_selection"]
                         all_tool_names = list(set(available_tool_names + common_tool_names))
                         
                         # Check if any tool name appears in the last assistant message (case-insensitive)

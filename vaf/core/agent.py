@@ -3695,6 +3695,14 @@ class Agent:
                 forced_tools.add("git_status")
                 forced_tools.add("git_add_commit")
                 forced_tools.add("git_log")
+
+        # Cloud Storage Heuristics (before generic "google" in web search)
+        if any(kw in u_lower for kw in [
+            "google drive", "onedrive", "drive durchsuchen", "cloud storage",
+            "in my drive", "auf meinem drive", "cloud datei", "cloud document"
+        ]):
+            if "librarian_agent" in self.tools:
+                forced_tools.add("librarian_agent")
         
         # Research Heuristics
         if any(kw in u_lower for kw in ["research", "recherche", "analyse", "report", "comprehensive", "umfassend", "deep"]):

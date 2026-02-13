@@ -393,9 +393,42 @@ class GoogleDriveProvider(CloudProvider):
         raise RuntimeError(f"Resumable upload finished loop without completion for {file_name}")
 
     def download_file(self, file_id: str, local_path: Path) -> Path:
-        """Download a file by its Drive ID."""
-        local_path.parent.mkdir(parents=True, exist_ok=True)
+        """Download a file by its Drive ID. Handles native Google formats via export."""
+        meta = self.get_file_metadata(file_id)
+        if not meta:
+            raise FileNotFoundError(f"File {file_id} not found")
 
+        mime = meta.mime_type or ""
+        # Native Google formats must be exported, not downloaded
+        GOOGLE_NATIVE = {
+            "application/vnd.google-apps.document": "text/plain",
+            "application/vnd.google-apps.spreadsheet": "text/csv",
+            "application/vnd.google-apps.presentation": "text/plain",
+            "application/vnd.google-apps.drawing": "application/pdf",
+        }
+        if mime in GOOGLE_NATIVE:
+            export_mime = GOOGLE_NATIVE[mime]
+            try:
+                resp = requests.get(
+                    f"{API_BASE}/files/{file_id}/export",
+                    headers=self._headers(),
+                    params={"mimeType": export_mime},
+                    stream=True,
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(local_path, "wb") as fh:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        fh.write(chunk)
+                logger.info("Exported %s to %s (mime=%s)", file_id, local_path, export_mime)
+                return local_path
+            except requests.RequestException as exc:
+                logger.error("Export failed for %s: %s", file_id, exc)
+                raise
+
+        # Regular file: download
+        local_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             resp = requests.get(
                 f"{API_BASE}/files/{file_id}",

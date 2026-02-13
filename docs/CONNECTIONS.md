@@ -27,11 +27,11 @@ Connect external apps and services to interact with your VAF agent.
 
 | Platform | Status | Description |
 |----------|--------|-------------|
-| Google Drive | 🔜 Coming Soon | Access and manage files on Google Drive |
-| Microsoft OneDrive | 🔜 Coming Soon | Sync files with OneDrive / SharePoint |
+| Google Drive | ✅ Available | Browse, read, download, and sync files; OAuth2; full Drive access |
+| Microsoft OneDrive | ✅ Available | Browse and sync files via Microsoft Graph; OAuth2 |
 | Apple iCloud | 🔜 Coming Soon | Access iCloud Drive files on macOS |
 | Dropbox | 🔜 Coming Soon | Sync and access Dropbox files |
-| Nextcloud | 🔜 Coming Soon | Connect to self-hosted Nextcloud instance |
+| Nextcloud | 🔜 Coming Soon | Connect to self-hosted Nextcloud via WebDAV |
 
 ## Discord Integration
 
@@ -365,6 +365,61 @@ When **local network** is enabled and users log in (e.g. Max and Susan), email d
 - **Synced messages**: The email sync store (SQLite) has a `username` column. List/sync only reads and writes rows for the current user. **Susan cannot see Max’s synced emails, and Max cannot see Susan’s.**
 
 Single-user (no login or local admin) continues to use the legacy `email_config` and unscoped credentials/sync store.
+
+## Cloud Storage Integration
+
+### Features
+
+- **Browse full cloud**: Navigate entire Google Drive or OneDrive (not limited to a single folder). OAuth scopes include `drive.readonly` for Google.
+- **Read without local copy**: Extract document content (PDF, Word, Google Docs, etc.) via API; no permanent download required.
+- **Download**: Save files from cloud to the user's Downloads folder by `file_id`.
+- **Upload (VAF Sync)**: Copy local files into the VAF Sync folder; they are uploaded on the next sync.
+- **Sync**: Optional bi-directional sync of the "VAF Sync" folder between local storage and cloud.
+- **Agent tools**: The `cloud_storage` tool is available to the main agent and to the Librarian sub-agent. Use for browse, download, read, save, list, and status.
+
+### Setup
+
+1. Go to **Settings → Connections** and open the Cloud section.
+2. Click **Add account** and choose **Google Drive** or **OneDrive**.
+3. **Google Drive**: Sign in with Google. If OAuth is not configured, an admin must set Client ID and Secret first (see below).
+4. **OneDrive**: Sign in with Microsoft.
+5. After connection, open the **Cloud Dashboard** (gear icon) to browse your drive and trigger sync.
+
+### OAuth setup (admin, once per instance)
+
+For **Google Drive**, create an OAuth 2.0 Client (Web application) in [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
+
+1. Enable **Google Drive API** for the project.
+2. Add redirect URIs: `http://127.0.0.1:8001/api/cloud/oauth/callback` and `http://localhost:8001/api/cloud/oauth/callback` (adjust port if needed).
+3. Set `cloud_oauth_google_client_id` and `cloud_oauth_google_client_secret` in config or env: `VAF_CLOUD_OAUTH_GOOGLE_CLIENT_ID`, `VAF_CLOUD_OAUTH_GOOGLE_CLIENT_SECRET`.
+
+**Scopes**: `drive.readonly` (browse full Drive), `drive.file` (read/write app-created files, e.g. VAF Sync), `userinfo.email`.
+
+**OneDrive** uses Microsoft Graph; scopes: `Files.ReadWrite`, `User.Read`, `offline_access`. Configure `cloud_oauth_microsoft_client_id` and `cloud_oauth_microsoft_client_secret`.
+
+### Agent cloud_storage tool
+
+| Action | Parameters | Purpose |
+|--------|------------|---------|
+| `browse` | `folder_id` (default `root`) | List folders and files in cloud; returns `file_id` for navigation |
+| `read` | `file_id` | Download to temp, extract text with Librarian, return content, delete temp |
+| `download` | `file_id` | Download file to user's Downloads folder |
+| `save` | `file_path`, `remote_path` | Copy local file into VAF Sync folder for next sync |
+| `list` | — | List files in local VAF Sync folder |
+| `retrieve` | `file_path` | Copy file from local sync folder to Downloads |
+| `status` | — | Check connection and last sync time |
+
+**Typical flow for "read document from cloud"**: `browse` to find the file → `read` with its `file_id`.
+
+### VAF Sync folder
+
+- A "VAF Sync" folder is created in the cloud root (Google Drive, OneDrive, etc.).
+- Optional bi-directional sync keeps this folder in sync with a local directory.
+- The agent can browse the **entire** drive; sync is optional for specific use cases.
+
+### Credential storage
+
+OAuth tokens are stored in the OS keyring (or encrypted fallback file), same pattern as Email. Config holds only account metadata (`cloud_config.accounts`: `account_id`, `provider`, `display_name`, `sync_enabled`).
 
 ## Future Integrations
 

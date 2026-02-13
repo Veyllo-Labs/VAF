@@ -245,7 +245,7 @@ User: "Kannst du die Datei ansehen?"
 ### When to Use Sub-Agents:
 ✅ **research_agent** - ONLY for comprehensive research (10+ sources, detailed analysis)
 ✅ **coding_agent** - Code generation, analysis, review
-✅ **librarian_agent** - File reading, document parsing
+✅ **librarian_agent** - File reading, document parsing, cloud storage browsing (Google Drive, OneDrive)
 ✅ **document_agent** - Complex document creation (contracts, reports)
 
 ### When NOT to Use Sub-Agents:

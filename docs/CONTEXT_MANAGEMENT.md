@@ -198,9 +198,10 @@ In addition to the RAM-based context above, VAF now employs a **Persistent Hybri
 ┌─────────────────────────────────────────────────────────────┐
 │              PERSISTENT LAYER (.vaf/main/)                  │
 ├─────────────────────────────────────────────────────────────┤
-│  ├─ user_intent.md       (The "North Star")                 │
-│  ├─ team_state.json      (Orchestration Status)             │
-│  └─ working_memory.json  (Scratchpad / Plans)               │
+│  ├─ user_intent.md           (The "North Star")             │
+│  ├─ team_state.json          (Orchestration Status)         │
+│  ├─ working_memory.json      (Scratchpad / Plans)           │
+│  └─ subagent_validation.json (Result retry counter)         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -208,6 +209,7 @@ In addition to the RAM-based context above, VAF now employs a **Persistent Hybri
 - **`user_intent.md`**: Stores the original user request. Read-only for sub-agents, updated only by user input. Acts as an "Intent Lock".
 - **`team_state.json`**: Tracks the status of all sub-agents (`running`, `completed`, `needs_clarification`).
 - **`working_memory.json`**: Persists notes and plans across sessions.
+- **`subagent_validation.json`**: Stores the retry count for sub-agent result validation (resets on new user message; see Sub-Agent Result Validation).
 
 ### Workspace Awareness
 
@@ -223,8 +225,9 @@ VAF is now **CWD-Aware** (Current Working Directory). It understands the differe
 To prevent "Context Drift" (where the agent gets distracted by sub-agent status reports), VAF implements an **Intent Lock**:
 
 1. **Snapshot**: User intent is saved immediately to `user_intent.md`.
-2. **Background Intel**: Sub-agent results are injected as "Background Intelligence", explicitly marked as *supporting data*, not new commands.
-3. **Final Answer Validator**: Before answering, VAF checks:
+2. **Sub-Agent Result Validation**: Before injecting a sub-agent result as Background Intel, an LLM judges whether it fulfills the user's intent. The LLM must output `</true>` or `</false>`. If `</false>`, a retry instruction is injected so the Main Agent calls the sub-agent again with an explicit task. After 20 consecutive `</false>` results, the system instructs the Main Agent to stop retrying and inform the user of the actual status. The retry count is stored in `subagent_validation.json` and reset when the user sends a new message.
+3. **Background Intel**: Valid sub-agent results are injected as "Background Intelligence", explicitly marked as *supporting data*, not new commands.
+4. **Final Answer Validator**: Before answering, VAF checks:
    - Is this a "Meta-Response" (e.g., "I have processed the files")?
    - Does it answer the original question?
    - **Action**: If it's just meta-talk, the system blocks the output and forces the agent to provide the actual answer.

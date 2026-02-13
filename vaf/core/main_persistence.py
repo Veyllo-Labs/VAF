@@ -11,6 +11,7 @@ USER_INTENT_FILE = "user_intent.md"
 TEAM_STATE_FILE = "team_state.json"
 WORKING_MEMORY_FILE = "working_memory.json"
 RESULTS_DIR = "results"
+SUBAGENT_VALIDATION_FILE = "subagent_validation.json"
 
 # Team state: entries older than this are pruned (per session / recent-only in prompt)
 TEAM_STATE_TTL_SECONDS = 3 * 3600  # 3 hours
@@ -104,6 +105,60 @@ class MainPersistenceManager:
 
     def update_user_intent(self, content: str):
         (self.context_dir / USER_INTENT_FILE).write_text(content, encoding="utf-8")
+
+    # --- SUBAGENT VALIDATION RETRY COUNT ---
+    def _get_validation_data(self) -> dict:
+        """Load full subagent_validation.json. Merges with defaults."""
+        data = self._load_json(self.context_dir / SUBAGENT_VALIDATION_FILE, {})
+        if not isinstance(data, dict):
+            data = {}
+        return data
+
+    def get_validation_retry_count(self) -> int:
+        """Get the current validation retry count (consecutive </false> results)."""
+        data = self._get_validation_data()
+        return int(data.get("retry_count", 0))
+
+    def increment_validation_retry_count(self) -> int:
+        """Increment and save the retry count. Returns the new value. Preserves intent/goal."""
+        data = self._get_validation_data()
+        count = int(data.get("retry_count", 0)) + 1
+        data["retry_count"] = count
+        self._save_json(self.context_dir / SUBAGENT_VALIDATION_FILE, data)
+        return count
+
+    def reset_validation_retry_count(self) -> None:
+        """Reset the retry count to 0 (e.g. when user sends new message). Preserves intent/goal."""
+        data = self._get_validation_data()
+        data["retry_count"] = 0
+        self._save_json(self.context_dir / SUBAGENT_VALIDATION_FILE, data)
+
+    def write_subagent_delegation_intent(self, intent: str, goal: str, agent_type: str) -> None:
+        """
+        Write user intent and delegation goal BEFORE sub-agent invocation.
+        Resets retry_count to 0 (fresh delegation). Called from execute_tool.
+        """
+        from datetime import datetime
+        data = self._get_validation_data()
+        data["intent"] = (intent or "").strip()
+        data["goal"] = (goal or "").strip()
+        data["agent_type"] = (agent_type or "").strip()
+        data["retry_count"] = 0
+        data["updated_at"] = datetime.now().isoformat()
+        self._save_json(self.context_dir / SUBAGENT_VALIDATION_FILE, data)
+
+    def get_subagent_delegation_intent(self) -> Optional[Dict[str, Any]]:
+        """
+        Return the intent/goal we wrote before the last sub-agent call.
+        Used during validation. Returns None if no delegation intent stored.
+        """
+        data = self._get_validation_data()
+        intent = (data.get("intent") or "").strip()
+        goal = (data.get("goal") or "").strip()
+        agent_type = (data.get("agent_type") or "").strip()
+        if not intent and not goal:
+            return None
+        return {"intent": intent, "goal": goal, "agent_type": agent_type}
 
     # --- TEAM STATE ---
     def get_team_state(self) -> TeamState:

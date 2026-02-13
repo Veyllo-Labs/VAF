@@ -82,6 +82,7 @@ class LibrarianTool(BaseTool):
             "document_viewer": DocumentViewerTool(),
             "document_editor": DocumentEditorTool(),
             "replace_editor_selection": ReplaceEditorSelectionTool(),
+            "move_file": MoveFileTool(),
         }
         
         # Cross-platform home directory
@@ -387,8 +388,8 @@ Remove duplicates and ensure smooth flow.
         # ─────────────────────────────────────────────────────────────────────
         # SMART FILESYSTEM MAP QUERY (Ultra-Fast Path)
         # ─────────────────────────────────────────────────────────────────────
-        # Skip map for find/send requests - user needs actual file path, not folder stats
-        if not any(kw in task_lower for kw in ["send", "schick", "find", "search", "suche", "finde", "locate"]):
+        # Skip map for find/send/rename - user needs actual file op or path, not folder stats
+        if not any(kw in task_lower for kw in ["send", "schick", "find", "search", "suche", "finde", "locate", "rename", "umbenennen", "umbenenn"]):
             if self.should_refresh_map():
                  self.fs_map.build_map(depth=1)
                  self.last_scan = time.time()
@@ -606,6 +607,60 @@ Remove duplicates and ensure smooth flow.
                 return self._list_files(drive_path)
         
         # ─────────────────────────────────────────────────────────────────────
+        # PATTERN: Rename file ("rename", "umbenennen")
+        # ─────────────────────────────────────────────────────────────────────
+        rename_patterns = [
+            r"umbenennen",
+            r"umbenenn",
+            r"rename",
+        ]
+        for pattern in rename_patterns:
+            if re.search(pattern, task_lower):
+                # Try full-path extraction first (e.g. "rename file D:\path\a.pdf to D:\path\b.pdf")
+                src_path, dst_path = self._extract_rename_full_paths(task)
+                if src_path is not None and dst_path is not None:
+                    safe_src, res_src = is_safe_path(str(src_path))
+                    safe_dst, res_dst = is_safe_path(str(dst_path))
+                    if not safe_src:
+                        return f"[ERROR] {res_src}"
+                    if not safe_dst:
+                        return f"[ERROR] {res_dst}"
+                    if not Path(res_src).exists():
+                        return (
+                            f"The file you want to rename does not exist:\n`{res_src}`\n\n"
+                            f"It may have been moved, deleted, or is in a different folder (e.g. user Downloads vs. project folder)."
+                        )
+                    try:
+                        return self.tools["move_file"].run(src=str(res_src), dst=str(res_dst))
+                    except Exception as e:
+                        return f"[ERROR] Rename failed: {e}"
+                # Fallback: folder + filename (e.g. "rename file X in Downloads to Y")
+                old_name, new_name = self._extract_rename_parts(task)
+                if old_name and new_name:
+                    src_path = path / old_name
+                    if Path(new_name).suffix:
+                        dst_path = path / new_name
+                    else:
+                        ext = Path(old_name).suffix
+                        dst_path = path / (new_name + ext if ext else new_name)
+                    safe_src, res_src = is_safe_path(str(src_path))
+                    safe_dst, res_dst = is_safe_path(str(dst_path))
+                    if not safe_src:
+                        return f"[ERROR] {res_src}"
+                    if not safe_dst:
+                        return f"[ERROR] {res_dst}"
+                    if not Path(res_src).exists():
+                        return (
+                            f"The file you want to rename does not exist:\n`{res_src}`\n\n"
+                            f"It may have been moved, deleted, or is in a different folder (e.g. user Downloads vs. project folder)."
+                        )
+                    try:
+                        return self.tools["move_file"].run(src=str(res_src), dst=str(res_dst))
+                    except Exception as e:
+                        return f"[ERROR] Rename failed: {e}"
+                break  # Matched rename but couldn't extract - let LLM handle
+
+        # ─────────────────────────────────────────────────────────────────────
         # PATTERN: Tree/Structure ("tree", "structure", "struktur")
         # ─────────────────────────────────────────────────────────────────────
         tree_patterns = [
@@ -615,11 +670,11 @@ Remove duplicates and ensure smooth flow.
             r"directory structure",
             r"folder structure",
         ]
-        
+
         for pattern in tree_patterns:
             if re.search(pattern, task_lower):
                 return self._show_tree(path)
-        
+
         # No direct pattern matched - needs LLM
         return None
     
@@ -780,6 +835,47 @@ Remove duplicates and ensure smooth flow.
             return Path(rel_match.group(1))
         
         return None
+
+    def _extract_rename_full_paths(self, task: str) -> Tuple[Optional[Path], Optional[Path]]:
+        """Extract (src_path, dst_path) when task contains full Windows/Unix paths.
+        Returns (None, None) if extraction fails."""
+        # Windows: C:\path\file.ext or D:\path\file.ext
+        win_path = r'[A-Za-z]:\\[^\s"\'<>|]+'
+        # Unix: /path/file.ext or ~/path/file.ext
+        unix_path = r'(?:/[^\s"\'<>|]+|~[^\s"\'<>|]*)'
+        path_pat = f'({win_path}|{unix_path})'
+        paths = re.findall(path_pat, task)
+        if len(paths) >= 2:
+            try:
+                p1 = Path(paths[0]).expanduser() if paths[0].startswith('~') else Path(paths[0])
+                p2 = Path(paths[1]).expanduser() if paths[1].startswith('~') else Path(paths[1])
+                return (p1, p2)
+            except Exception:
+                pass
+        return (None, None)
+
+    def _extract_rename_parts(self, task: str) -> Tuple[Optional[str], Optional[str]]:
+        """Extract (old_filename, new_name) for rename operations.
+        Returns (None, None) if extraction fails."""
+        # Old filename: after "Datei"/"file" or a filename pattern with extension
+        old_name = None
+        file_match = re.search(r'(?:file|datei)\s+([\w.-]+\.\w+)', task, re.IGNORECASE)
+        if file_match:
+            old_name = file_match.group(1).strip()
+        if not old_name:
+            # Fallback: any filename-like token (word.word) before "umbenennen"/"rename"
+            before_rename = re.split(r'umbenennen|rename', task, flags=re.IGNORECASE)[0]
+            ext_match = re.search(r'([\w.-]+\.(?:pdf|docx?|txt|xlsx?|png|jpg|jpeg))\b', before_rename, re.IGNORECASE)
+            if ext_match:
+                old_name = ext_match.group(1).strip()
+
+        # New name: after "zu"/"to"
+        new_name = None
+        to_match = re.search(r'(?:zu|to)\s+([\w.-]+)', task, re.IGNORECASE)
+        if to_match:
+            new_name = to_match.group(1).strip()
+
+        return (old_name, new_name) if (old_name and new_name) else (None, None)
     
     # ═══════════════════════════════════════════════════════════════════════════
     # DIRECT TASK IMPLEMENTATIONS

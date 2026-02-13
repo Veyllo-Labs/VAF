@@ -956,13 +956,15 @@ def run_headless_agent():
                         pending_results = agent._check_subagent_results()
                         if pending_results:
                             found_results_text = []
+                            any_needs_retry = False
                             for result_task in pending_results:
                                 # Ensure agent context is aligned with result session
                                 session_id = result_task.session_id or getattr(agent, "current_session_id", None)
                                 if session_id:
                                     agent.load_session_context(session_id)
                                     subagent_last_activity[session_id] = now
-                                agent._process_subagent_result(result_task)
+                                if agent._process_subagent_result(result_task):
+                                    any_needs_retry = True
                                 
                                 # Ensure WebUI opens the Sub-Agent window even if no active task was seen
                                 sid = session_id
@@ -1050,7 +1052,7 @@ def run_headless_agent():
                                         f"Sub-Agent '{result_task.agent_type}' TIMEOUT."
                                     )
 
-                            if found_results_text:
+                            if found_results_text or any_needs_retry:
                                 user_lang = "auto"
                                 for msg in reversed(agent.history):
                                     if msg.get("role") == "user":
@@ -1058,8 +1060,22 @@ def run_headless_agent():
                                         break
 
                                 native_lang = agent.LANGUAGE_NAMES_NATIVE.get(user_lang, user_lang)
-                                combined_results = "\n\n---\n\n".join(r[:1000] for r in found_results_text)
-                                if user_lang == "de":
+                                combined_results = "\n\n---\n\n".join(r[:1000] for r in found_results_text) if found_results_text else ""
+
+                                if any_needs_retry:
+                                    if user_lang == "de":
+                                        instruction_prompt = (
+                                            "Der Sub-Agent-Ergebnis erfüllt die Anfrage des Benutzers NICHT.\n"
+                                            "Du MUSST den Sub-Agent SOFORT erneut mit der genauen Aufgabe aufrufen, die in der Background Intelligence oben steht.\n"
+                                            "Fasse NICHT zusammen. Rufe das Tool JETZT auf."
+                                        )
+                                    else:
+                                        instruction_prompt = (
+                                            "The sub-agent result did NOT fulfill the user's request.\n"
+                                            "You MUST retry immediately by calling the sub-agent again with the exact task specified in the Background Intelligence above.\n"
+                                            "Do NOT summarize. Call the tool now."
+                                        )
+                                elif user_lang == "de":
                                     instruction_prompt = (
                                         "Hier sind die Ergebnisse der Sub-Agenten:\n\n"
                                         f"{combined_results}\n\n"

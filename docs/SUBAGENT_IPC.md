@@ -168,14 +168,15 @@ The **Inter-Process Communication (IPC)** system enables communication between t
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Team State Synchronization (New in Agatic vNext)
+### Team State Synchronization
 
-In addition to the IPC queue, Sub-Agents now synchronize their status with the **Main Persistence Layer** (`.vaf/main/team_state.json`). This ensures the Main Agent's "brain" (System Prompt) is always aware of the team's status, even if the IPC message hasn't been processed yet.
+In addition to the IPC queue, Sub-Agents synchronize their status with the **Main Persistence Layer** (`.vaf/main/team_state.json`). This ensures the Main Agent's "brain" (System Prompt) is always aware of the team's status, even if the IPC message hasn't been processed yet.
 
 **Synchronization Bridge:**
 1. IPC receives result.
 2. Main Agent's `_process_subagent_result` reads result.
-3. Automatically updates `team_state.json`:
+3. **Result validation** (see [Context Management](CONTEXT_MANAGEMENT.md)): An LLM judges whether the result fulfills the user's intent. If not (`</false>`), a retry instruction is injected and the Main Agent calls the sub-agent again. Max 20 retries; then the agent is instructed to inform the user of the actual status.
+4. Automatically updates `team_state.json`:
    - `status`: `completed`
    - `result_summary`: First 500 chars of result
 

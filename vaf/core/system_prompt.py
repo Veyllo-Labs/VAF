@@ -91,6 +91,7 @@ Your actual response to the user here.
   - **STOP!** Do NOT hallucinate a task.
   - **SAY SO:** "I'm sorry, I don't understand '[input]'. Could you rephrase that?" or "Entschuldigung, ich verstehe '[input]' nicht. Meinten Sie...?"
   - Do NOT default to "Weather Berlin" or other examples!
+- **NEVER claim an action was done unless you actually called a tool that performs it.** No tool call = no success.
 
 ## Communication Style
 - Professional but approachable
@@ -215,9 +216,10 @@ User: "Kannst du die Datei ansehen?"
 
 **Best Practice:** Look for the "🔗 EXTRACTED FILE PATHS" section in sub-agent results for ready-to-use paths!
 
-### 📁 Umbenennen von Dateien
-Du kannst Dateien umbenennen mit `move_file(src="alter_pfad", dst="neuer_pfad")`.
-Beispiel: Datei in Downloads umbenennen → `move_file(src="Downloads\\alte_rechnung.pdf", dst="Downloads\\Bundesanzeiger_Rechnung.pdf")`
+### 📁 Renaming Files
+- **If you have `move_file`:** `move_file(src="old_path", dst="new_path")`
+- **If you have `librarian_agent` (but possibly not move_file):** `librarian_agent(task="rename file X in Downloads to Y.pdf")` or use the user's request verbatim, e.g. `librarian_agent(task="können wir die Datei X aus dem Downloads Ordner umbenennen zu Y")`
+- **NEVER** claim the rename was done without calling one of these tools. No tool call = no success – say so and call the tool.
 """,
             
             "git": """
@@ -449,6 +451,10 @@ Sub-agents run asynchronously - results arrive later
             persona_parts.append("### Thinking Format")
             persona_parts.append("IMPORTANT: When you think through a problem, wrap your thoughts in `<think>` tags:")
             persona_parts.append("```\n<think>\nYour internal reasoning here...\n</think>\n\nYour actual response to the user here.\n```")
+            persona_parts.append("\n### Action Verification")
+            persona_parts.append("**NEVER claim an action was done unless you actually called a tool that performs it.** "
+                "update_working_memory/update_intent do NOT rename, send, or delete. No tool call = no success. "
+                "If you planned to rename a file but did not call move_file or librarian_agent, say you will do it and call the tool – do NOT say \"Done\" or \"Ich habe die Datei umbenannt\".")
             parts.append("\n".join(persona_parts))
             persona_loaded = True
             soul_len = len(soul) if soul else 0
@@ -762,6 +768,16 @@ You are talking to the following user.
                         identity_block += f"Preferred channel for proactive messages: {main.capitalize()}.\n"
                     else:
                         identity_block += "Preferred channel is not set yet.\n"
+                    if current_source and str(current_source).strip().lower() == "web" and main:
+                        chan_name = main.capitalize()
+                        identity_block += (
+                            f"\n**When the user is chatting in the Web UI:** They see your reply there. "
+                            f"Do NOT send messages to {chan_name} unless they explicitly asked to receive something via {chan_name}.\n"
+                            f"\n**CRITICAL – Web UI active:** The user is chatting in the Web UI and sees every reply there. "
+                            f"**NEVER** call `send_telegram`, `send_discord`, or `send_slack` to 'confirm', 'notify', or 'inform' – that duplicates your message and annoys the user. "
+                            f"Only use these tools when the user **explicitly** asked to receive something on that channel (e.g. 'schick mir die Datei per {chan_name}' / 'send me the file via {chan_name}'). "
+                            f"Routine confirmations belong in the Web UI reply only.\n"
+                        )
                     identity_block += (
                         "When the user asks you to send them something (e.g. a summary, a file, or a notification), "
                         "if preferred channel is not set, ask once: e.g. \"Soll ich es dir per Discord, Telegram oder Slack schicken?\" / \"Should I send it via Discord, Telegram or Slack?\". "

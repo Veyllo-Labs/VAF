@@ -10,7 +10,7 @@ import warnings
 import atexit
 from datetime import datetime
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 from rich import print
 from rich.markup import escape
 from pathlib import Path
@@ -1174,14 +1174,187 @@ class Agent:
             return results
         except Exception:
             return []
-    
-    def _process_subagent_result(self, task):
+
+    def _validate_subagent_result_heuristic(
+        self, user_intent: str, task_description: str, result: str, agent_type: str
+    ) -> Tuple[bool, Optional[str]]:
+        """Fallback heuristic when LLM validation fails."""
+        if not user_intent or not result:
+            return True, None
+
+        intent_lower = user_intent.lower()
+        result_lower = result.lower()
+
+        user_folder = None
+        if "downloads" in intent_lower or "im downloads" in intent_lower:
+            user_folder = "downloads"
+        elif "documents" in intent_lower or "dokumente" in intent_lower:
+            user_folder = "documents"
+        elif "desktop" in intent_lower:
+            user_folder = "desktop"
+
+        if user_folder == "downloads":
+            if "documents" in result_lower and "downloads" not in result_lower:
+                return False, f"Rename the file in Downloads (as requested), not in Documents. {task_description}"
+        if user_folder == "documents":
+            if "downloads" in result_lower and "documents" not in result_lower:
+                return False, f"Rename the file in Documents (as requested), not in Downloads. {task_description}"
+
+        rename_intent = any(x in intent_lower for x in ["umbenennen", "umbenenn", "rename"])
+        if rename_intent:
+            rename_success = any(x in result_lower for x in ["moved", "umbenannt", "renamed", "→"])
+            listing_indicator = any(x in result_lower for x in [
+                "contains", "enthält", "files", "dateien", "ordner enthält",
+                "folder contains", "dateien im ordner"
+            ])
+            if listing_indicator and not rename_success:
+                return False, f"Rename the file as requested. Do NOT list the folder. {task_description}"
+
+        send_intent = any(x in intent_lower for x in ["send", "schick", "schicken"])
+        if send_intent:
+            send_success = any(x in result_lower for x in ["sent", "gesendet", "telegram", "mail"])
+            if not send_success and len(result_lower) > 50:
+                return False, f"Send the file as requested. {task_description}"
+
+        return True, None
+
+    def _extract_subagent_goal(self, name: str, args: dict) -> str:
+        """Extract the delegation goal from sub-agent tool args."""
+        args = args or {}
+        if name == "librarian_agent":
+            return (args.get("task") or "").strip()
+        if name == "research_agent":
+            return (args.get("topic") or "").strip()
+        if name == "document_agent":
+            return (args.get("task") or "").strip()
+        if name == "coding_agent":
+            task = (args.get("task") or "").strip()
+            proj = (args.get("project_path") or "").strip()
+            if task and proj:
+                return f"{proj}: {task}"
+            return task or proj
+        return ""
+
+    def _validate_subagent_result_with_llm(
+        self, user_intent: str, task_description: str, result: str, agent_type: str
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        LLM-based validation: does the sub-agent result fulfill the user's intent?
+        LLM must output </true> or </false> to exit. Max 5 retries if no tag.
+        Returns (fulfilled, retry_instruction). Falls back to heuristic if LLM fails.
+        """
+        if not user_intent or not result:
+            return True, None
+
+        # Fast path: clear success indicators – avoid LLM false negatives
+        result_lower = result.lower()
+        if any(x in user_intent.lower() for x in ["umbenennen", "umbenenn", "rename"]):
+            if any(x in result_lower for x in ["moved", "renamed", "umbenannt", "→"]):
+                return True, None
+
+        if not (getattr(self, "use_server", False) or getattr(self, "api_backend", None) or getattr(self, "llm", None)):
+            return self._validate_subagent_result_heuristic(
+                user_intent, task_description, result, agent_type
+            )
+
+        prompt = (
+            "You are a validator. Does this sub-agent result fulfill the USER's intent?\n\n"
+            f"USER INTENT: {user_intent[:500]}\n"
+            f"TASK SENT TO SUB-AGENT: {(task_description or '')[:300]}\n"
+            f"SUB-AGENT RESULT: {result[:800]}\n\n"
+            "Reply with EXACTLY one of:\n"
+            "- </true> if the result fulfills the user's intent\n"
+            "- </false> if it does NOT (wrong folder, wrong action, incomplete, etc.)\n\n"
+            "If </false>, add on the next line: RETRY: [explicit task for retry]\n"
+            "Example: RETRY: Rename file 26-B001-105272426-97758570.PDF in Downloads to Bundesanzeiger_Rechnung.pdf"
+        )
+
+        stricter_prompt = (
+            "You MUST reply with exactly </true> or </false>. Nothing else. No explanation.\n"
+            f"USER INTENT: {user_intent[:300]}\n"
+            f"RESULT: {result[:400]}\n"
+            "Does the result fulfill the intent? </true> or </false>"
+        )
+
+        max_llm_retries = 5
+        for attempt in range(max_llm_retries):
+            content = ""
+            try:
+                temp_history = [{"role": "user", "content": stricter_prompt if attempt > 0 else prompt}]
+                if self.use_server:
+                    payload = {
+                        "messages": temp_history,
+                        "max_tokens": 150,
+                        "temperature": 0,
+                        "stream": False,
+                    }
+                    res = requests.post(
+                        "http://127.0.0.1:8080/v1/chat/completions",
+                        json=payload,
+                        timeout=30,
+                    ).json()
+                    content = (res.get("choices") or [{}])[0].get("message", {}).get("content", "")
+                elif self.api_backend:
+                    chunks = list(
+                        self.api_backend.chat_completion(
+                            messages=temp_history,
+                            max_tokens=150,
+                            temperature=0,
+                            stream=False,
+                        )
+                    )
+                    content = "".join(c if isinstance(c, str) else str(c) for c in chunks if c)
+                elif self.llm:
+                    output = self.llm.create_chat_completion(
+                        messages=temp_history,
+                        max_tokens=150,
+                        temperature=0,
+                    )
+                    content = (output.get("choices") or [{}])[0].get("message", {}).get("content", "")
+            except Exception as e:
+                from vaf.cli.ui import UI
+                UI.event("Debug", f"Sub-agent validation LLM call failed: {e}", style="dim")
+                return self._validate_subagent_result_heuristic(
+                    user_intent, task_description, result, agent_type
+                )
+
+            resp = (content or "").strip().lower()
+            if "</true>" in resp:
+                return True, None
+            if "</false>" in resp:
+                retry_instruction = None
+                for line in (content or "").splitlines():
+                    if "retry:" in line.lower():
+                        retry_instruction = line.split(":", 1)[-1].strip()
+                        break
+                if not retry_instruction:
+                    # Use intent from delegation file, not task_description
+                    if hasattr(self, "main_persistence") and self.main_persistence:
+                        try:
+                            delegation = self.main_persistence.get_subagent_delegation_intent()
+                            if delegation and delegation.get("intent"):
+                                retry_instruction = delegation["intent"]
+                        except Exception:
+                            pass
+                if not retry_instruction:
+                    retry_instruction = task_description or "Retry the task"
+                return False, retry_instruction
+
+        return self._validate_subagent_result_heuristic(
+            user_intent, task_description, result, agent_type
+        )
+
+    def _process_subagent_result(self, task) -> bool:
         """
         Process a completed sub-agent result and add it to the conversation.
         
         Args:
             task: SubAgentTask object with the result
+        
+        Returns:
+            True if validation failed and a retry was instructed (caller should prompt agent to retry).
         """
+        needs_retry = False
         from vaf.cli.ui import UI
         from vaf.core.subagent_ipc import get_ipc
         import re
@@ -1208,6 +1381,81 @@ class Agent:
                 )
             else:
                 task_result_msg = f"**FINAL RESULT (Task is DONE):**\n{task.result}"
+
+                # Validate: does the result fulfill the user's intent? (LLM-based, heuristic fallback)
+                # Prefer intent from delegation file (written before sub-agent call)
+                user_intent = ""
+                try:
+                    if hasattr(self, "main_persistence") and self.main_persistence:
+                        delegation = self.main_persistence.get_subagent_delegation_intent()
+                        if delegation and delegation.get("intent"):
+                            user_intent = delegation["intent"]
+                except Exception:
+                    pass
+                if not user_intent:
+                    try:
+                        if hasattr(self, "main_persistence") and self.main_persistence:
+                            user_intent = self.main_persistence.get_user_intent() or ""
+                    except Exception:
+                        pass
+                if not user_intent and self.history:
+                    for msg in reversed(self.history):
+                        if isinstance(msg, dict) and msg.get("role") == "user":
+                            user_intent = msg.get("content", "") or ""
+                            break
+
+                fulfilled, retry_instruction = self._validate_subagent_result_with_llm(
+                    user_intent, task.task_description, task.result, task.agent_type
+                )
+
+                if fulfilled:
+                    if hasattr(self, 'main_persistence') and self.main_persistence:
+                        try:
+                            self.main_persistence.reset_validation_retry_count()
+                        except Exception:
+                            pass
+                elif retry_instruction:
+                    count = 0
+                    if hasattr(self, 'main_persistence') and self.main_persistence:
+                        try:
+                            count = self.main_persistence.increment_validation_retry_count()
+                        except Exception:
+                            pass
+
+                    if count >= 20:
+                        UI.event("Warning", "Sub-agent validation: 20 retries reached. Informing user.", style="yellow")
+                        task_result_msg = (
+                            f"**FINAL RESULT (Task is DONE):**\n{task.result}\n\n"
+                            f"**You have tried 20 times.** The sub-agent result still does not fulfill the user's request.\n"
+                            f"**Action:** Tell the user the actual status. Do NOT retry again. Summarize what was attempted and what the current state is."
+                        )
+                        if hasattr(self, 'main_persistence') and self.main_persistence:
+                            try:
+                                self.main_persistence.reset_validation_retry_count()
+                            except Exception:
+                                pass
+                    else:
+                        needs_retry = True
+                        UI.event("Warning", f"Sub-agent result does not fulfill user intent. Retry {count}/20.", style="yellow")
+                        # Get intent/goal from delegation (source of truth)
+                        dlg_intent = user_intent or ""
+                        dlg_goal = (task.task_description or "").strip()
+                        if hasattr(self, "main_persistence") and self.main_persistence:
+                            try:
+                                d = self.main_persistence.get_subagent_delegation_intent()
+                                if d:
+                                    dlg_intent = d.get("intent", dlg_intent) or dlg_intent
+                                    dlg_goal = d.get("goal", dlg_goal) or dlg_goal
+                            except Exception:
+                                pass
+                        task_result_msg = (
+                            f"**Sub-agent did NOT fulfill the user's request.** (attempt {count}/20)\n\n"
+                            f"**Sub-agent returned:**\n{task.result}\n\n"
+                            f"**User intent (from delegation):** {dlg_intent}\n"
+                            f"**Delegation goal (what we sent):** {dlg_goal}\n\n"
+                            f"**Your task:** Resolve this. Do NOT blindly retry the same call. "
+                            f"Use the information above, choose appropriate tools (e.g. librarian_agent with a different/more explicit task, move_file, find_files), and actually fulfill the user's intent."
+                        )
 
             # Extract file paths from result (research reports, generated documents, etc.)
             file_paths = re.findall(
@@ -1285,7 +1533,8 @@ class Agent:
             del self._async_subagent_tasks[task.task_id]
         
         ipc.consume_result(task.task_id)
-    
+        return needs_retry
+
     def _handle_async_subagent_marker(self, result: str) -> bool:
         """
         Check if a tool result contains an async sub-agent marker.
@@ -2866,6 +3115,7 @@ class Agent:
             if hasattr(self, 'main_persistence') and self.main_persistence:
                 try:
                     self.main_persistence.update_user_intent(user_input)
+                    self.main_persistence.reset_validation_retry_count()
                 except Exception:
                     pass
 
@@ -3668,18 +3918,30 @@ class Agent:
         # Sub-Agent Results: Check for completed async tasks
         # ------------------------------------------------------------------
         pending_results = self._check_subagent_results()
+        any_needs_retry = False
         if pending_results:
             for task in pending_results:
-                self._process_subagent_result(task)
+                if self._process_subagent_result(task):
+                    any_needs_retry = True
             
             # If we processed results and no new user input, let model respond to results
             if not user_input and not skip_input:
                  # Only auto-inject generic prompt if we DON'T have a specific input
                  # and we're not in a skip_input mode (which usually implies internal control)
-                 self.history.append({
-                    "role": "user",
-                    "content": "[System: Sub-Agent results have arrived. Please inform me about the results.]"
-                })
+                 if any_needs_retry:
+                    self.history.append({
+                        "role": "user",
+                        "content": (
+                            "[System: The sub-agent result did NOT fulfill the user's request. "
+                            "You MUST retry immediately by calling the sub-agent again with the exact task specified in the Background Intelligence above. "
+                            "Do NOT summarize. Call the tool now.]"
+                        )
+                    })
+                 else:
+                    self.history.append({
+                        "role": "user",
+                        "content": "[System: Sub-Agent results have arrived. Please inform me about the results.]"
+                    })
 
         # ------------------------------------------------------------------
         # Dynamic Context: Update System Prompt
@@ -3846,6 +4108,7 @@ class Agent:
                 try:
                     # Update the "North Star" for the session
                     self.main_persistence.update_user_intent(user_input)
+                    self.main_persistence.reset_validation_retry_count()
                 except Exception:
                     pass
             
@@ -5813,6 +6076,22 @@ class Agent:
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                # Pre-write intent/goal before sub-agent invocation for validation/retry
+                SUBAGENT_TOOLS = ("librarian_agent", "coding_agent", "research_agent", "document_agent")
+                if name in SUBAGENT_TOOLS and hasattr(self, "main_persistence") and self.main_persistence:
+                    intent = ""
+                    try:
+                        intent = self.main_persistence.get_user_intent() or ""
+                    except Exception:
+                        pass
+                    if not intent and self.history:
+                        for msg in reversed(self.history):
+                            if isinstance(msg, dict) and msg.get("role") == "user":
+                                intent = msg.get("content", "") or ""
+                                break
+                    goal = self._extract_subagent_goal(name, tool_args)
+                    if intent or goal:
+                        self.main_persistence.write_subagent_delegation_intent(intent, goal, name)
                 result = self.tools[name].run(**tool_args)
             else:
                 result = f"Error: Unknown tool '{name}'"

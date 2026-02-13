@@ -265,6 +265,50 @@ class GoogleDriveProvider(CloudProvider):
 
         return results
 
+    def search_files(self, query: str, mime_type: Optional[str] = None, limit: int = 100) -> List[CloudFileMetadata]:
+        """Search entire Drive by filename. Query supports * as wildcard (converted to contains)."""
+        if not query or not query.strip():
+            return []
+        q_esc = query.strip().replace("\\", "\\\\").replace("'", "\\'")
+        # Support * wildcard: "report*.pdf" -> name contains "report"
+        q_part = q_esc.replace("*", "%")
+        if "%" in q_part:
+            parts = [p for p in q_part.split("%") if p]
+            if not parts:
+                return []
+            q_esc = parts[0]
+        q_parts = [f"name contains '{q_esc}'", "trashed = false"]
+        if mime_type:
+            q_parts.append(f"mimeType = '{mime_type}'")
+        q = " and ".join(q_parts)
+
+        results: List[CloudFileMetadata] = []
+        page_token: Optional[str] = None
+        while len(results) < limit:
+            params = {
+                "q": q,
+                "fields": FILE_LIST_FIELDS,
+                "pageSize": min(limit - len(results), 100),
+                "spaces": "drive",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            try:
+                resp = self._get(f"{API_BASE}/files", params=params)
+                data = resp.json()
+            except requests.RequestException as exc:
+                logger.error("Search failed for %r: %s", query, exc)
+                raise
+            for item in data.get("files", []):
+                results.append(self._parse_file(item, "/"))
+                if len(results) >= limit:
+                    break
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        logger.debug("Search %r found %d items", query, len(results))
+        return results
+
     def upload_file(self, local_path: Path, remote_path: str) -> CloudFileMetadata:
         """Upload a file to the sync folder. Uses multipart for small files, resumable for large."""
         file_size = local_path.stat().st_size

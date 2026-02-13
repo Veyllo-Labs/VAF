@@ -680,6 +680,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     e.stopPropagation();
                     return;
                 }
+                if (showCloudDashboard) {
+                    setShowCloudDashboard(false);
+                    e.stopPropagation();
+                    return;
+                }
                 // Finally close settings
                 if (isOpen) {
                     onClose();
@@ -691,7 +696,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             window.addEventListener('keydown', handleKeyDown);
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, codeModal, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, onClose]);
+    }, [isOpen, codeModal, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, showCloudDashboard, onClose]);
 
     const handleLogoutYes = useCallback(() => {
         setShowLogoutConfirm(false);

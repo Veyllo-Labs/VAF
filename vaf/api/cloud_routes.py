@@ -312,6 +312,31 @@ async def connect_webdav(
     }
 
 
+class AccountPatchBody(BaseModel):
+    """Fields allowed for PATCH on cloud account."""
+    label: Optional[str] = None
+
+
+@router.patch("/accounts/{account_id}")
+async def patch_account(
+    request: Request,
+    account_id: str,
+    body: AccountPatchBody,
+    _username: str = Depends(_get_current_username),
+):
+    """Update account metadata (e.g. label for private/work distinction)."""
+    cc = _get_cloud_config(_username)
+    acc = _find_account(cc, account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    if body.label is not None:
+        acc["label"] = body.label.strip() if body.label else None
+
+    _save_cloud_config(cc, _username)
+    return {"ok": True, "account_id": account_id, "label": acc.get("label")}
+
+
 @router.delete("/accounts/{account_id}")
 async def disconnect_account(
     request: Request,
@@ -522,6 +547,63 @@ async def browse_cloud(
     return {
         "account_id": account_id,
         "folder_id": folder_id,
+        "items": [
+            {
+                "file_id": f.file_id,
+                "name": f.name,
+                "path": f.path,
+                "size": f.size,
+                "modified_time": f.modified_time,
+                "is_folder": f.is_folder,
+                "mime_type": f.mime_type,
+            }
+            for f in items
+        ],
+    }
+
+
+@router.get("/accounts/{account_id}/search")
+async def search_cloud(
+    request: Request,
+    account_id: str,
+    q: str = "",
+    mime_type: Optional[str] = None,
+    _username: str = Depends(_get_current_username),
+):
+    """Search entire cloud by filename. Use q= for query (e.g. report, Bewilligung, *.pdf)."""
+    if not q or not q.strip():
+        return {"account_id": account_id, "items": []}
+
+    cc = _get_cloud_config(_username)
+    acc = _find_account(cc, account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    creds = get_cloud_credentials(account_id, acc.get("provider", ""), _get_cred_username(_username))
+    if not creds or creds.get("type") != "oauth":
+        raise HTTPException(status_code=401, detail="Credentials not found. Remove and reconnect the account.")
+
+    try:
+        provider = _create_provider(acc["provider"], _username, account_id)
+        authed = await asyncio.to_thread(provider.authenticate)
+        if not authed:
+            raise HTTPException(status_code=401, detail="Authentication failed")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    try:
+        items = await asyncio.to_thread(provider.search_files, q.strip(), mime_type, 50)
+    except NotImplementedError:
+        return {"account_id": account_id, "items": []}
+    except Exception as exc:
+        logger.warning("Search failed for %s q=%s: %s", account_id, q, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "account_id": account_id,
+        "query": q,
         "items": [
             {
                 "file_id": f.file_id,

@@ -3699,7 +3699,9 @@ class Agent:
         # Cloud Storage Heuristics (before generic "google" in web search)
         if any(kw in u_lower for kw in [
             "google drive", "onedrive", "drive durchsuchen", "cloud storage",
-            "in my drive", "auf meinem drive", "cloud datei", "cloud document"
+            "in my drive", "auf meinem drive", "cloud datei", "cloud document",
+            "pdf in drive", "suche pdf", "find pdf", "datei in cloud",
+            "zeig pdf", "show pdf", "dokument anzeigen", "pdf anzeigen", "öffne pdf"
         ]):
             if "librarian_agent" in self.tools:
                 forced_tools.add("librarian_agent")

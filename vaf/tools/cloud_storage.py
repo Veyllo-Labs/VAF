@@ -17,15 +17,10 @@ logger = logging.getLogger("vaf.tools.cloud_storage")
 
 TOOL_NAME = "cloud_storage"
 TOOL_DESCRIPTION = (
-    "Save, list, retrieve, browse, download, or read files in the user's connected cloud storage "
-    "(Google Drive, OneDrive, Dropbox, Nextcloud, iCloud). "
-    "Use 'browse' to navigate the full cloud (Drive root and folders). "
-    "Use 'download' to download a file by file_id to Downloads. "
-    "Use 'read' to read a document's content without keeping it locally (PDF, Word, Google Docs, etc.). "
-    "Use 'save' to upload a local file to the cloud sync folder. "
-    "Use 'list' for files in the local VAF Sync folder. "
-    "Use 'retrieve' for files already synced locally. "
-    "Use 'status' to check sync status."
+    "Cloud storage for Google Drive, OneDrive. PREFER 'search_all' to search ALL connected clouds at once (like the UI). "
+    "search_all: Find files across every cloud in one call. search: Single provider. browse: List folder. read/download: Use file_id (+ provider or account_id from results). "
+    "show_in_viewer: Open a cloud file (e.g. PDF) in the Document Viewer (Anhänge). save/list/retrieve: VAF Sync. status: connection. "
+    "Accounts may have labels (e.g. 'Privat', 'Arbeit'); search_all returns them."
 )
 
 TOOL_PARAMETERS = {
@@ -33,16 +28,28 @@ TOOL_PARAMETERS = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["save", "list", "retrieve", "status", "browse", "download", "read"],
-            "description": "Action to perform",
+            "enum": ["save", "list", "retrieve", "status", "browse", "download", "read", "search", "search_all", "show_in_viewer"],
+            "description": "Action. search_all: Search all clouds at once. search: Single provider. show_in_viewer: Open PDF/doc in Document Viewer (Anhänge). read/download: Use file_id.",
         },
         "provider": {
             "type": "string",
-            "description": "Cloud provider: google_drive, onedrive, dropbox, nextcloud, icloud. Omit to use the first connected provider.",
+            "description": "Cloud provider: google_drive, onedrive, dropbox, nextcloud, icloud. For read/download: use when multiple accounts; omit for first. Ignored for search_all.",
+        },
+        "account_id": {
+            "type": "string",
+            "description": "For read/download: use when multiple accounts for same provider (from search_all results).",
+        },
+        "query": {
+            "type": "string",
+            "description": "For 'search': filename or pattern (e.g. 'report', 'Bewilligung'). Searches entire cloud at once.",
+        },
+        "mime_type": {
+            "type": "string",
+            "description": "For 'search': optional filter, e.g. 'application/pdf' for PDFs only.",
         },
         "file_id": {
             "type": "string",
-            "description": "For 'download' and 'read': the cloud file ID (from browse output).",
+            "description": "For 'download', 'read', 'show_in_viewer': cloud file ID (from search or search_all).",
         },
         "folder_id": {
             "type": "string",
@@ -73,8 +80,8 @@ def _get_sync_dir(username: str, account_id: str) -> Path:
     return base
 
 
-def _get_first_connected_account(username: str) -> Optional[tuple[str, str]]:
-    """Return (provider, account_id) for the first connected account, or None."""
+def _get_cloud_accounts(username: str) -> list:
+    """Return list of connected cloud accounts (dict with provider, account_id, label, etc.)."""
     admin_user = Config.get("local_admin_username", "admin")
     if username == admin_user:
         cloud_config = Config.get("cloud_config") or {}
@@ -83,13 +90,14 @@ def _get_first_connected_account(username: str) -> Optional[tuple[str, str]]:
         by_user = Config.get("cloud_config_by_user") or {}
         user_cfg = by_user.get(username, {})
         accounts = user_cfg.get("accounts", [])
+    return [a for a in accounts if a.get("sync_enabled", True) and a.get("provider") and a.get("account_id")]
 
+
+def _get_first_connected_account(username: str) -> Optional[tuple[str, str]]:
+    """Return (provider, account_id) for the first connected account, or None."""
+    accounts = _get_cloud_accounts(username)
     for acct in accounts:
-        if acct.get("sync_enabled", True):
-            provider = acct.get("provider")
-            account_id = acct.get("account_id")
-            if provider and account_id:
-                return (provider, account_id)
+        return (acct["provider"], acct["account_id"])
     return None
 
 
@@ -117,23 +125,37 @@ def _create_provider(provider_name: str, username: str, account_id: str):
 def run_cloud_storage(action: str, provider: Optional[str] = None,
                       folder_id: Optional[str] = None, file_path: Optional[str] = None,
                       remote_path: Optional[str] = None, file_id: Optional[str] = None,
+                      query: Optional[str] = None, mime_type: Optional[str] = None,
                       **kwargs: Any) -> str:
     """Execute the cloud_storage tool action."""
     username = _get_username()
     first = _get_first_connected_account(username)
-    if not first:
+    if not first and action not in ("search_all", "status"):
         return "No cloud storage connected. Go to Settings → Connections to connect a cloud provider."
-    default_provider, default_account_id = first
+    default_provider, default_account_id = first or ("", "")
 
-    account_id = default_account_id
-    if provider and provider != default_provider:
+    account_id_param = kwargs.get("account_id")
+    if account_id_param:
+        acct = _get_account_by_id(username, account_id_param)
+        if not acct:
+            return f"Account {account_id_param} not found. Use 'status' or 'search_all' to see accounts."
+        account_id = acct["account_id"]
+        effective_provider = acct["provider"]
+    elif provider:
         acct = _get_account_by_provider(username, provider)
         if not acct:
             return f"No {provider} account connected. Use 'status' to see connected providers."
-        account_id = acct.get("account_id", default_account_id)
+        account_id = acct["account_id"]
+        effective_provider = provider
+    else:
+        account_id = default_account_id
+        effective_provider = default_provider
 
-    effective_provider = provider or default_provider
     file_id = file_id or kwargs.get("file_id")
+    if action == "search_all":
+        return _action_search_all(username, query or kwargs.get("query"), kwargs.get("mime_type") or mime_type)
+    if action == "show_in_viewer":
+        return _action_show_in_viewer(username, account_id, effective_provider, file_id)
     if action == "save":
         return _action_save(username, account_id, effective_provider, file_path, remote_path)
     elif action == "list":
@@ -148,20 +170,24 @@ def run_cloud_storage(action: str, provider: Optional[str] = None,
         return _action_download(username, account_id, effective_provider, file_id)
     elif action == "read":
         return _action_read(username, account_id, effective_provider, file_id)
+    elif action == "search":
+        return _action_search(username, account_id, effective_provider, query or kwargs.get("query"), mime_type or kwargs.get("mime_type"))
     else:
-        return f"Unknown action: {action}. Use: save, list, retrieve, status, browse, download, read."
+        return f"Unknown action: {action}. Use: search_all, search, browse, download, read, show_in_viewer, save, list, retrieve, status."
 
 
 def _get_account_by_provider(username: str, provider: str) -> Optional[dict]:
     """Return first account matching provider."""
-    admin_user = Config.get("local_admin_username", "admin")
-    if username == admin_user:
-        accounts = (Config.get("cloud_config") or {}).get("accounts", [])
-    else:
-        user_cfg = (Config.get("cloud_config_by_user") or {}).get(username, {})
-        accounts = user_cfg.get("accounts", [])
-    for acct in accounts:
-        if acct.get("provider") == provider and acct.get("sync_enabled", True):
+    for acct in _get_cloud_accounts(username):
+        if acct.get("provider") == provider:
+            return acct
+    return None
+
+
+def _get_account_by_id(username: str, account_id: str) -> Optional[dict]:
+    """Return account by account_id."""
+    for acct in _get_cloud_accounts(username):
+        if acct.get("account_id") == account_id:
             return acct
     return None
 
@@ -247,6 +273,92 @@ def _action_list(username: str, account_id: str, provider: str) -> str:
         return f"No files in {provider} sync folder."
 
     return f"Files in {provider} sync folder ({len(files)}):\n" + "\n".join(files)
+
+
+def _action_search_all(username: str, query: Optional[str], mime_type: Optional[str] = None) -> str:
+    """Search all connected clouds at once (like the UI). Returns combined results with provider/label."""
+    if not query or not str(query).strip():
+        return "query is required for 'search_all' (e.g. 'report.pdf', 'Bewilligung')."
+
+    accounts = _get_cloud_accounts(username)
+    if not accounts:
+        return "No cloud storage connected. Go to Settings → Connections to connect a cloud provider."
+
+    def _fmt_size(b: int) -> str:
+        if b < 1024:
+            return f"{b} B"
+        if b < 1024 * 1024:
+            return f"{b / 1024:.1f} KB"
+        return f"{b / (1024 * 1024):.1f} MB"
+
+    all_items: list = []  # (account_id, provider, label, file_item)
+    for acct in accounts:
+        prov_name = acct.get("provider", "")
+        acc_id = acct.get("account_id", "")
+        label = acct.get("label") or None
+        try:
+            prov = _create_provider(prov_name, username, acc_id)
+            if not prov.authenticate():
+                continue
+            items = prov.search_files(query.strip(), mime_type=mime_type, limit=30)
+            for f in items:
+                all_items.append((acc_id, prov_name, label, f))
+        except (NotImplementedError, Exception) as e:
+            logger.debug("search_all skipped %s: %s", prov_name, e)
+            continue
+
+    if not all_items:
+        return f"No files matching '{query}' found across any cloud."
+
+    lines = []
+    for acc_id, prov_name, label, f in all_items[:50]:
+        kind = "[F]" if f.is_folder else "[ ]"
+        size = _fmt_size(f.size) if not f.is_folder else "Folder"
+        label_str = f" label={label}" if label else ""
+        lines.append(f"  {kind} {f.name}  id={f.file_id}  provider={prov_name} account_id={acc_id}{label_str}  ({size})")
+    if len(all_items) > 50:
+        lines.append(f"  ... and {len(all_items) - 50} more. Refine query to narrow results.")
+    return (
+        f"Found {len(all_items)} item(s) across all clouds matching '{query}':\n"
+        + "\n".join(lines)
+        + "\n\nUse read(file_id=..., provider=... or account_id=...) or show_in_viewer(file_id=..., provider=... or account_id=...) with id and provider/account_id from above."
+    )
+
+
+def _action_search(username: str, account_id: str, provider: str, query: Optional[str], mime_type: Optional[str] = None) -> str:
+    """Search entire cloud by filename. Returns matching files with file_id for read/download."""
+    if not query or not str(query).strip():
+        return "query is required for 'search' action (e.g. 'report.pdf', 'Bewilligung', '*.pdf')."
+
+    try:
+        prov = _create_provider(provider, username, account_id)
+        if not prov.authenticate():
+            return f"Authentication failed for {provider}. Reconnect the account in Settings."
+        items = prov.search_files(query.strip(), mime_type=mime_type, limit=50)
+    except NotImplementedError:
+        return f"{provider} does not support cloud search. Use browse with folder_id to navigate."
+    except Exception as e:
+        logger.error("[CloudStorage] Search failed: %s", e)
+        return f"Search failed: {e}"
+
+    if not items:
+        return f"No files matching '{query}' found in cloud."
+
+    def _fmt_size(b: int) -> str:
+        if b < 1024:
+            return f"{b} B"
+        if b < 1024 * 1024:
+            return f"{b / 1024:.1f} KB"
+        return f"{b / (1024 * 1024):.1f} MB"
+
+    lines = []
+    for f in items[:30]:
+        kind = "[F]" if f.is_folder else "[ ]"
+        size = _fmt_size(f.size) if not f.is_folder else "Folder"
+        lines.append(f"  {kind} {f.name}  id={f.file_id}  ({size})")
+    if len(items) > 30:
+        lines.append(f"  ... and {len(items) - 30} more. Refine query to narrow results.")
+    return f"Found {len(items)} item(s) matching '{query}':\n" + "\n".join(lines) + "\n\nUse read(file_id=...) or download(file_id=...) with the id above."
 
 
 def _action_download(username: str, account_id: str, provider: str, file_id: Optional[str]) -> str:
@@ -336,6 +448,96 @@ def _action_retrieve(username: str, account_id: str, file_path: Optional[str]) -
         return f"Failed to retrieve file: {e}"
 
 
+def _action_show_in_viewer(username: str, account_id: str, provider: str, file_id: Optional[str]) -> str:
+    """Download a cloud file and open it in the Document Viewer (Anhänge) so the user can see the PDF/doc."""
+    if not file_id:
+        return "file_id is required for 'show_in_viewer'. Get it from search or search_all."
+
+    import tempfile
+
+    try:
+        prov = _create_provider(provider, username, account_id)
+        if not prov.authenticate():
+            return f"Authentication failed for {provider}. Reconnect the account in Settings."
+        meta = prov.get_file_metadata(file_id)
+        if not meta:
+            return f"File not found: {file_id}"
+        if meta.is_folder:
+            return "Cannot open a folder in the viewer. Use a file (PDF, DOCX, etc.)."
+
+        suffix = Path(meta.name).suffix or ".bin"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            prov.download_file(file_id, tmp_path)
+            raw = tmp_path.read_bytes()
+            content = ""
+            try:
+                from vaf.tools.librarian import LibrarianTool
+                librarian = LibrarianTool()
+                content = librarian._read_file(tmp_path, enable_chunking=True) or ""
+            except Exception:
+                pass
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        if not content and not raw:
+            return f"Could not read file {meta.name}."
+
+        import base64
+        import mimetypes
+        mime_type = meta.mime_type or mimetypes.guess_type(meta.name)[0] or "application/octet-stream"
+        new_doc = {
+            "name": meta.name,
+            "content": content,
+            "data": base64.b64encode(raw).decode("ascii"),
+            "mimeType": mime_type,
+        }
+
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id
+            from vaf.core.session import SessionManager
+            from vaf.core.web_interface import get_web_interface
+        except ImportError as e:
+            return f"Error: Could not load dependencies: {e}"
+
+        session_id = get_current_session_id()
+        if not session_id:
+            return "Error: Document Viewer is only available in the Web UI with an active chat session."
+
+        try:
+            session_mgr = SessionManager()
+            session = session_mgr.load(session_id)
+            if not getattr(session, "runtime_state", None):
+                session.runtime_state = {}
+            sidebar = session.runtime_state.get("sidebar_documents") or []
+            sidebar.append(new_doc)
+            session.runtime_state["sidebar_documents"] = sidebar
+            session_mgr.save(session, sync_state=False)
+        except FileNotFoundError:
+            from vaf.core.session import Session
+            new_sess = Session(id=session_id, name=f"Session {session_id}", runtime_state={"sidebar_documents": [new_doc]})
+            SessionManager().save(new_sess, sync_state=False)
+            sidebar = [new_doc]
+        except Exception as e:
+            return f"Error: Could not save to session: {e}"
+
+        try:
+            get_web_interface()._push_session_update(session_id, {"type": "sidebar_documents_set", "contents": sidebar, "sessionId": session_id})
+        except Exception:
+            pass
+
+        return f"Document '{meta.name}' has been opened in the Document Viewer (Anhänge). The user can see it in the right panel."
+    except NotImplementedError:
+        return f"{provider} does not support show_in_viewer."
+    except Exception as e:
+        logger.error("[CloudStorage] show_in_viewer failed: %s", e)
+        return f"Failed to open in viewer: {e}"
+
+
 def _action_status(username: str, provider: str) -> str:
     """Return sync status for the provider."""
     admin_user = Config.get("local_admin_username", "admin")
@@ -362,7 +564,11 @@ def _action_status(username: str, provider: str) -> str:
             else:
                 ago_str = "never"
             enabled = "enabled" if acct.get("sync_enabled", True) else "disabled"
-            return f"{provider}: {enabled}, last sync: {ago_str}, account: {acct.get('display_name', acct.get('account_id', '?'))}"
+            disp = acct.get("display_name", acct.get("account_id", "?"))
+            label = acct.get("label")
+            if label:
+                return f"{provider}: {enabled}, last sync: {ago_str}, account: {disp}, label: {label}"
+            return f"{provider}: {enabled}, last sync: {ago_str}, account: {disp}"
 
     return f"No {provider} account connected."
 
@@ -382,5 +588,7 @@ class CloudStorageTool(BaseTool):
             file_path=kwargs.get("file_path"),
             remote_path=kwargs.get("remote_path"),
             file_id=kwargs.get("file_id"),
-            **{k: v for k, v in kwargs.items() if k not in ("action", "provider", "folder_id", "file_path", "remote_path", "file_id")},
+            query=kwargs.get("query"),
+            mime_type=kwargs.get("mime_type"),
+            **{k: v for k, v in kwargs.items() if k not in ("action", "provider", "folder_id", "file_path", "remote_path", "file_id", "query", "mime_type")},
         )

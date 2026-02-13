@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, CheckCircle, AlertCircle, Terminal, ChevronDown, ChevronUp, X } from 'lucide-react';
+import { Loader2, CheckCircle, AlertCircle, Terminal, ChevronDown, ChevronRight, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface ToolState {
@@ -93,7 +93,7 @@ export const ActiveToolsPanel: React.FC<ActiveToolsPanelProps> = ({ tools, onCle
                                     onClick={(e) => { e.stopPropagation(); toggleExpand(tool.id); }}
                                     className="rounded-md p-1 hover:bg-background text-muted-foreground"
                                 >
-                                    {expandedIds.has(tool.id) ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                                    {expandedIds.has(tool.id) ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                                 </button>
                                 {onClear && tool.status !== 'running' && (
                                     <button

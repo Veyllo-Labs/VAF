@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, CheckCircle, AlertCircle, Terminal, ChevronDown, ChevronUp } from 'lucide-react';
+import { Loader2, CheckCircle, AlertCircle, Terminal, ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface ToolMessageProps {
@@ -81,7 +81,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                     </div>
                     <div className="flex items-center gap-1">
                         <button className="rounded-md p-1 hover:bg-background text-muted-foreground">
-                            {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                            {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                         </button>
                     </div>
                 </div>

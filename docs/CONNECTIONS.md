@@ -401,6 +401,7 @@ For **Google Drive**, create an OAuth 2.0 Client (Web application) in [Google Cl
 
 | Action | Parameters | Purpose |
 |--------|------------|---------|
+| `search` | `query` (required), `mime_type` (optional) | Search entire cloud by filename in one call; returns matches with `file_id` (preferred for finding files) |
 | `browse` | `folder_id` (default `root`) | List folders and files in cloud; returns `file_id` for navigation |
 | `read` | `file_id` | Download to temp, extract text with Librarian, return content, delete temp |
 | `download` | `file_id` | Download file to user's Downloads folder |
@@ -409,7 +410,7 @@ For **Google Drive**, create an OAuth 2.0 Client (Web application) in [Google Cl
 | `retrieve` | `file_path` | Copy file from local sync folder to Downloads |
 | `status` | — | Check connection and last sync time |
 
-**Typical flow for "read document from cloud"**: `browse` to find the file → `read` with its `file_id`.
+**Typical flow for "find and read document"**: `search` with `query` (e.g. "Bewilligung", "report") → `read` or `download` with `file_id` from results. Use `browse` only when listing folder contents.
 
 ### VAF Sync folder
 

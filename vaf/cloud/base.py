@@ -142,3 +142,7 @@ class CloudProvider(ABC):
     def list_folder_by_id(self, folder_id: str, parent_path: str = "/") -> List[CloudFileMetadata]:
         """List contents of any folder by provider ID. For cloud-only browsing (full drive). Override to support."""
         raise NotImplementedError(f"{self.provider_name} does not support full-drive browsing")
+
+    def search_files(self, query: str, mime_type: Optional[str] = None, limit: int = 100) -> List[CloudFileMetadata]:
+        """Search entire cloud by filename. Override to support."""
+        raise NotImplementedError(f"{self.provider_name} does not support cloud search")

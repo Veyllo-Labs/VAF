@@ -1861,7 +1861,7 @@ Available Tools:
 - tree(path, depth): Shows directory tree structure. Use this to explore folder structure on a drive.
 - find_files(path, pattern): Finds files by name pattern (glob) recursively
 - folder_size(path, top_n=10): Calculates total size of a folder recursively and shows largest files
-- cloud_storage(action, folder_id?, file_id?, provider?): Browse, download, or read cloud files. action='browse' + folder_id for navigation. action='download' + file_id to save to Downloads. action='read' + file_id to extract document content without keeping locally (PDF, Word, Google Docs). action='list' for synced VAF Sync. action='status' for connection.
+- cloud_storage(action, query?, file_id?, provider?, account_id?): PREFER action='search_all' + query to search ALL clouds at once (like the UI). search: single provider. Then action='read', 'download', or 'show_in_viewer' with file_id (+ provider or account_id from results). show_in_viewer opens PDF/doc in Document Viewer (Anhänge). action='browse' when user wants folder contents. action='list' for VAF Sync. action='status' for connection.
 - python_sandbox(code): Execute Python code safely for mathematical calculations, data processing, and algorithms
 
 RULES:
@@ -1888,8 +1888,10 @@ TOOL SELECTION GUIDE:
 - "Multiple files analysis" / "Mehrere Dateien analysieren" -> Use list_files with sort_by='size' or find_files, then analyze results
 - "Calculate" / "Math" / "Compute" / "Algorithm" -> Use python_sandbox(code) for mathematical calculations and data processing
 - "Folder size" / "Ordnergröße" -> Use folder_size(path)
-- "Google Drive" / "Cloud" / "Drive durchsuchen" -> cloud_storage(action='browse', folder_id='root'), then folder_id=<id> to enter
-- "Read document from cloud" / "Dokument in Cloud lesen" -> First browse to find file_id, then cloud_storage(action='read', file_id=<id>)
+- "Find PDF X" / "Suche Bewilligung in Drive" / "Where is report.pdf?" -> cloud_storage(action='search_all', query='X') FIRST. Then read/download/show_in_viewer with file_id (+ provider or account_id from results).
+- "Show PDF in viewer" / "Zeig mir das PDF" / "Open document from cloud" -> cloud_storage(action='search_all', query='...') to find, then action='show_in_viewer', file_id=<id>, provider=... or account_id=<id>. This opens the PDF/doc in the Document Viewer (Anhänge).
+- "List cloud folders" / "Drive durchsuchen" -> cloud_storage(action='browse', folder_id='root')
+- "Read document from cloud" -> cloud_storage(action='search_all', query='...') to find, then action='read', file_id=<id>
 - "Download from cloud" -> cloud_storage(action='download', file_id=<id>)
 
 Common paths:

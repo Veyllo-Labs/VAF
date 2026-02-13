@@ -216,6 +216,33 @@ class OneDriveProvider(CloudProvider):
 
         return results
 
+    def search_files(self, query: str, mime_type: Optional[str] = None, limit: int = 100) -> List[CloudFileMetadata]:
+        """Search entire OneDrive by filename."""
+        if not query or not query.strip():
+            return []
+        from urllib.parse import quote
+        q_clean = query.strip().replace("*", "").replace("'", " ").strip() or query
+        if not q_clean:
+            return []
+        url = f"{GRAPH_BASE}/root/search(q='{quote(q_clean, safe='')}')"
+        results: List[CloudFileMetadata] = []
+        next_link: Optional[str] = url
+        while next_link and len(results) < limit:
+            try:
+                resp = self._get(next_link)
+                data = resp.json()
+            except requests.RequestException as exc:
+                logger.error("OneDrive search failed for %r: %s", query, exc)
+                raise
+            for item in data.get("value", []):
+                if mime_type and item.get("file", {}).get("mimeType") != mime_type:
+                    continue
+                results.append(self._parse_item(item))
+                if len(results) >= limit:
+                    break
+            next_link = data.get("@odata.nextLink")
+        return results
+
     def upload_file(self, local_path: Path, remote_path: str) -> CloudFileMetadata:
         """Upload a file. Uses simple PUT for <4MB, upload session for larger."""
         file_size = local_path.stat().st_size

@@ -328,12 +328,20 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             const currentConfig = config.whatsapp_config || {};
             onConfigChange('whatsapp_config', { ...currentConfig, enabled });
             try {
+                // Persist enabled so backend has correct state (start checks it; stop avoids auto-start on restart)
+                await fetch(api('api/config'), {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ whatsapp_config: { ...currentConfig, enabled } }),
+                    credentials: 'include',
+                });
                 if (enabled) {
                     await fetch(api('api/whatsapp/start'), { method: 'POST', credentials: 'include' });
                 } else {
                     await fetch(api('api/whatsapp/stop'), { method: 'POST', credentials: 'include' });
                 }
                 setConnectionStatus(prev => ({ ...prev, whatsapp: enabled ? 'connected' : 'disconnected' }));
+                await checkConnectionStatus();
             } catch (e) {
                 console.error('Failed to toggle WhatsApp:', e);
             }

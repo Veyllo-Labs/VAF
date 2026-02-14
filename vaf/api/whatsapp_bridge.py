@@ -4,11 +4,11 @@ Receives messages via Node stdout, enqueues tasks, sends replies via stdin to No
 User isolation: each user's credentials and session are strictly separate.
 Voice messages from WhatsApp are downloaded by Node, transcribed via Whisper STT, and passed as text.
 """
-import asyncio
 import json
 import logging
 import os
 import time
+import uuid
 import queue
 import shutil
 import subprocess
@@ -38,9 +38,18 @@ _chat_lists: Dict[str, List[Dict[str, Any]]] = {}
 _chat_list_events: Dict[str, threading.Event] = {}
 _chat_lists_lock = threading.Lock()
 
+# Connection check: ping/pong from Node to verify socket is connected
+_connection_status: Dict[str, bool] = {}
+_connection_events: Dict[str, threading.Event] = {}
+_connection_lock = threading.Lock()
+
 # Reply with voice when user sent voice (like Telegram)
 _voice_reply_pending: Dict[str, str] = {}  # "username|chat_jid" -> voice_lang
 _voice_reply_lock = threading.Lock()
+
+# Send confirmation: req_id -> queue that receives (success, error)
+_pending_sends: Dict[str, queue.Queue] = {}
+_pending_sends_lock = threading.Lock()
 
 
 def _wa_bridge_path() -> Path:
@@ -151,6 +160,17 @@ def _transcribe_voice_file(voice_path: str) -> tuple[Optional[str], Optional[str
             pass
 
 
+def _deliver_send_result(req_id: str, success: bool, error: Optional[str] = None) -> None:
+    """Deliver send result to waiting caller."""
+    with _pending_sends_lock:
+        q = _pending_sends.pop(req_id, None)
+    if q is not None:
+        try:
+            q.put((success, error or ""))
+        except Exception:
+            pass
+
+
 def _allow_from_match(sender_jid: str, allowed_phones: List[str]) -> bool:
     """Check if sender JID matches any allowed phone number."""
     sender_digits = _normalize_phone(_jid_to_e164(sender_jid))
@@ -217,13 +237,14 @@ def _run_user_process(username: str, auth_dir: Path) -> Optional[subprocess.Pope
 
 
 def _sender_loop() -> None:
-    """Read (username, chat_jid, text, voice_path?) from queue, write to that user's Node stdin."""
+    """Read (username, chat_jid, text, voice_path?, req_id?) from queue, write to that user's Node stdin."""
     global _outgoing_queue, _processes
     while True:
         try:
             item = _outgoing_queue.get(timeout=1.0)
             if item is None:
                 break
+            req_id = item[4] if len(item) >= 5 else None
             voice_path = item[3] if len(item) >= 4 else None
             username, chat_jid, text = item[0], item[1], (item[2] or "")
             if not username or not chat_jid:
@@ -236,6 +257,8 @@ def _sender_loop() -> None:
                     proc = next(iter(_processes.values()))
             if not proc or proc.poll() is not None:
                 logger.warning("WhatsApp process for %s not running, dropped reply", username)
+                if req_id:
+                    _deliver_send_result(req_id, False, "Process not running (bridge may have restarted)")
                 try:
                     from vaf.core.log_helper import log_whatsapp_reply
                     log_whatsapp_reply(f"DROPPED process_not_running username={username} jid={chat_jid}")
@@ -248,21 +271,32 @@ def _sender_loop() -> None:
                     p = Path(voice_path)
                     if p.is_file():
                         cmd = {"cmd": "send_voice", "to": chat_jid, "path": str(p.resolve())}
+                        if req_id:
+                            cmd["req_id"] = req_id
                         proc.stdin.write(json.dumps(cmd) + "\n")
                         proc.stdin.flush()
                     else:
+                        err = "Voice file not found"
                         logger.warning("WhatsApp voice file not found: %s", voice_path)
+                        if req_id:
+                            _deliver_send_result(req_id, False, err)
                 except Exception as e:
                     logger.warning("WhatsApp voice send failed for %s: %s", username, e)
+                    if req_id:
+                        _deliver_send_result(req_id, False, str(e))
             else:
                 chunks = chunk_whatsapp_text(text)
-                for chunk in chunks:
+                for i, chunk in enumerate(chunks):
                     cmd = {"cmd": "send", "to": chat_jid, "text": chunk}
+                    if req_id and i == len(chunks) - 1:
+                        cmd["req_id"] = req_id
                     try:
                         proc.stdin.write(json.dumps(cmd) + "\n")
                         proc.stdin.flush()
                     except Exception as e:
                         logger.warning("WhatsApp send failed for %s: %s", username, e)
+                        if req_id:
+                            _deliver_send_result(req_id, False, str(e))
                         break
             try:
                 from vaf.core.log_helper import log_whatsapp_reply
@@ -329,6 +363,61 @@ def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional
             pass
 
 
+def send_whatsapp_with_confirmation(
+    username: str,
+    chat_jid: str,
+    text: str,
+    voice_path: Optional[str] = None,
+    timeout: float = 15.0,
+) -> str:
+    """
+    Send a WhatsApp message and wait for delivery confirmation from the Node bridge.
+    Returns a success message or an error string for the agent to report.
+    Use this from the send_whatsapp tool to verify delivery.
+    """
+    if not _is_jid_whitelisted(username, chat_jid):
+        return (
+            "WhatsApp: Cannot send – chat/phone number is not in the whitelist. "
+            "Add your number in Settings → Connections → WhatsApp."
+        )
+    if _outgoing_queue is None:
+        return (
+            "WhatsApp bridge is not running. Start it in Settings → Connections → WhatsApp (click Start)."
+        )
+    with _process_lock:
+        proc = _processes.get(username)
+        if (not proc or proc.poll() is not None) and len(_processes) == 1:
+            proc = next(iter(_processes.values()), None)
+        if not proc or proc.poll() is not None:
+            return (
+                "WhatsApp process for this user is not running. "
+                "Try: Settings → Connections → WhatsApp → Stop, then Start. "
+                "Ensure WhatsApp is linked (QR scanned) and your number is in the whitelist."
+            )
+    req_id = str(uuid.uuid4())
+    result_queue: queue.Queue = queue.Queue()
+    with _pending_sends_lock:
+        _pending_sends[req_id] = result_queue
+    try:
+        _outgoing_queue.put((username, chat_jid, text or "", voice_path, req_id))
+    except Exception as e:
+        with _pending_sends_lock:
+            _pending_sends.pop(req_id, None)
+        return f"Failed to enqueue message: {e}"
+    try:
+        success, error = result_queue.get(timeout=timeout)
+        if success:
+            return "Voice message sent to the user via WhatsApp." if voice_path else "Message sent to the user via WhatsApp."
+        return f"WhatsApp could not deliver the message: {error}"
+    except queue.Empty:
+        with _pending_sends_lock:
+            _pending_sends.pop(req_id, None)
+        return (
+            "WhatsApp send timed out. The message may or may not have been delivered. "
+            "Check Settings → Connections → WhatsApp (bridge running, linked)."
+        )
+
+
 def _read_user_process(
     username: str,
     user_scope_id: str,
@@ -364,8 +453,29 @@ def _read_user_process(
         except json.JSONDecodeError:
             continue
         typ = obj.get("type")
-        if typ == "qr":
-            logger.info("WhatsApp QR for %s (scan in Settings -> Connections)", username)
+        if typ == "pong":
+            with _connection_lock:
+                _connection_status[username] = bool(obj.get("connected", False))
+                ev = _connection_events.get(username)
+                if ev:
+                    ev.set()
+        elif typ == "send_result":
+            req_id = obj.get("req_id")
+            if req_id:
+                _deliver_send_result(req_id, bool(obj.get("success")), obj.get("error", ""))
+        elif typ == "qr":
+            logger.warning("WhatsApp session expired for %s – bridge needs QR but cannot show it. Stopping bridge and disabling.", username)
+            try:
+                cfg = Config.load()
+                wc = cfg.get("whatsapp_config") or {}
+                if isinstance(wc, dict):
+                    wc = dict(wc)
+                    wc["enabled"] = False
+                    cfg["whatsapp_config"] = wc
+                    Config.save(cfg)
+                stop_bridge()
+            except Exception as e:
+                logger.exception("Failed to disable WhatsApp on session expiry: %s", e)
         elif typ == "connected":
             logger.info("WhatsApp connected for user %s", username)
         elif typ == "message":
@@ -455,6 +565,21 @@ def _read_user_process(
                 pass
 
 
+def _forward_bridge_stderr(username: str, proc: subprocess.Popen) -> None:
+    """Read bridge stderr and append to whatsapp_qr.log for debugging connection issues."""
+    try:
+        from vaf.core.log_helper import log_whatsapp_qr
+        for line in (proc.stderr or []):
+            if _bridge_stop.is_set():
+                break
+            s = (line or "").strip()
+            if s:
+                log_whatsapp_qr(f"[bridge/{username}] {s}")
+                logger.debug("[wa-bridge] %s", s)
+    except Exception:
+        pass
+
+
 def _run_bridge() -> None:
     """Main bridge loop: start processes for each user, register callback, wait for stop."""
     global _processes
@@ -470,12 +595,16 @@ def _run_bridge() -> None:
         if proc:
             with _process_lock:
                 _processes[username] = proc
-            t = threading.Thread(
+            threading.Thread(
                 target=_read_user_process,
                 args=(username, user_scope_id, auth_dir, proc),
                 daemon=True,
-            )
-            t.start()
+            ).start()
+            threading.Thread(
+                target=_forward_bridge_stderr,
+                args=(username, proc),
+                daemon=True,
+            ).start()
 
     _bridge_stop.wait()
     set_whatsapp_reply_callback(None)
@@ -529,6 +658,19 @@ def stop_bridge() -> None:
         except Exception:
             pass
     logger.info("WhatsApp bridge stop requested")
+
+
+def restart_bridge() -> bool:
+    """Stop the bridge, wait for full shutdown, then start again. Returns True if restarted."""
+    global _bridge_thread
+    if _bridge_thread is None or not _bridge_thread.is_alive():
+        return start_bridge()
+    stop_bridge()
+    try:
+        _bridge_thread.join(timeout=12)
+    except Exception:
+        pass
+    return start_bridge()
 
 
 def is_bridge_running() -> bool:
@@ -588,3 +730,34 @@ def get_whatsapp_chats(username: str, force_refresh: bool = False, wait_timeout:
     ev.wait(timeout=wait_timeout)
     with _chat_lists_lock:
         return list(_chat_lists.get(used_username, []))
+
+
+def get_connection_status(username: str, wait_timeout: float = 2.0) -> bool:
+    """Check if the WhatsApp socket is connected (Node has currentSock). Runs ping/pong with the bridge."""
+    if not is_bridge_running():
+        return False
+    uname = (username or "").strip() or "admin"
+    with _process_lock:
+        proc = _processes.get(uname)
+        target = uname
+        if not proc or proc.poll() is not None or not proc.stdin:
+            if len(_processes) == 1:
+                target = next(iter(_processes.keys()))
+                proc = _processes.get(target)
+            else:
+                proc = None
+    if not proc or proc.poll() is not None or not proc.stdin:
+        return False
+    with _connection_lock:
+        if target not in _connection_events:
+            _connection_events[target] = threading.Event()
+        ev = _connection_events[target]
+        ev.clear()
+    try:
+        proc.stdin.write(json.dumps({"cmd": "ping"}) + "\n")
+        proc.stdin.flush()
+    except Exception:
+        return False
+    ev.wait(timeout=wait_timeout)
+    with _connection_lock:
+        return _connection_status.get(target, False)

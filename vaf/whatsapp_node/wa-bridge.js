@@ -87,6 +87,8 @@ function getContentType(msg) {
 }
 
 let currentSock = null;
+/** "open" | "connecting" | "close" | null. True connection state from Baileys. */
+let connectionState = null;
 
 /** Chat store: jid -> { jid, name, phone, is_group, last_ts } for all WhatsApp chats. */
 const chatStore = new Map();
@@ -204,6 +206,7 @@ async function connect(authDir) {
       fs.writeSync(2, `${LOG_PREFIX} connection.update: connection=${connection ?? "null"} qr=${!!qr} status=${status ?? "null"}\n`);
     } catch (_) {}
     if (qr) emit({ type: "qr", qr });
+    if (connection != null) connectionState = connection;
     if (connection === "open") {
       const selfJid = sock.user?.id ?? null;
       emit({ type: "connected", selfJid });
@@ -373,30 +376,62 @@ async function main() {
   readline.createInterface({ input: process.stdin }).on("line", (line) => {
     try {
       const obj = JSON.parse(line);
-      if (obj?.cmd === "send" && obj?.to && typeof obj?.text === "string" && currentSock) {
-        const text = obj.text;
-        currentSock.sendMessage(obj.to, { text }).then(() => {
-          rememberSentText(text);
-        }).catch((err) => {
-          emit({ type: "error", message: `Send failed: ${err.message}` });
-        });
-      } else if (obj?.cmd === "send_voice" && obj?.to && obj?.path && currentSock) {
-        const p = obj.path;
-        if (fs.existsSync(p)) {
+      const reqId = obj?.req_id || null;
+      if (obj?.cmd === "send" && obj?.to && typeof obj?.text === "string") {
+        if (connectionState !== "open") {
+          const msg = "WhatsApp not connected";
+          if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
+          else emit({ type: "error", message: msg });
+        } else {
+          const text = obj.text;
+          const sendPromise = currentSock.sendMessage(obj.to, { text });
+          const timeoutMs = 12000;
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error(`Send timeout after ${timeoutMs / 1000}s`)), timeoutMs);
+          });
+          Promise.race([sendPromise, timeoutPromise]).then(() => {
+            rememberSentText(text);
+            if (reqId) emit({ type: "send_result", req_id: reqId, success: true });
+          }).catch((err) => {
+            const msg = `Send failed: ${err?.message ?? err}`;
+            if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
+            else emit({ type: "error", message: msg });
+          });
+        }
+      } else if (obj?.cmd === "send_voice" && obj?.to && obj?.path) {
+        if (connectionState !== "open") {
+          const msg = "WhatsApp not connected";
+          if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
+          else emit({ type: "error", message: msg });
+        } else if (!fs.existsSync(obj.path)) {
+          const msg = `Voice file not found: ${obj.path}`;
+          if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
+          else emit({ type: "error", message: msg });
+        } else {
+          const p = obj.path;
           const buf = fs.readFileSync(p);
           try { fs.unlinkSync(p); } catch (_) {}
           const mimetype = p.toLowerCase().endsWith(".ogg") ? "audio/ogg" : "audio/mpeg";
-          currentSock.sendMessage(obj.to, { audio: buf, mimetype }, { sendAudioAsVoice: true }).catch((err) => {
-            emit({ type: "error", message: `Voice send failed: ${err.message}` });
+          const sendPromise = currentSock.sendMessage(obj.to, { audio: buf, mimetype }, { sendAudioAsVoice: true });
+          const timeoutMs = 12000;
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error(`Send timeout after ${timeoutMs / 1000}s`)), timeoutMs);
           });
-        } else {
-          emit({ type: "error", message: `Voice file not found: ${p}` });
+          Promise.race([sendPromise, timeoutPromise]).then(() => {
+            if (reqId) emit({ type: "send_result", req_id: reqId, success: true });
+          }).catch((err) => {
+            const msg = `Voice send failed: ${err?.message ?? err}`;
+            if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
+            else emit({ type: "error", message: msg });
+          });
         }
       } else if (obj?.cmd === "getChats") {
         try {
           fs.writeSync(2, `${LOG_PREFIX} getChats: emitting ${chatStore.size} chats\n`);
         } catch (_) {}
         emitChats();
+      } else if (obj?.cmd === "ping") {
+        emit({ type: "pong", connected: connectionState === "open", state: connectionState });
       }
     } catch (_) {}
   });

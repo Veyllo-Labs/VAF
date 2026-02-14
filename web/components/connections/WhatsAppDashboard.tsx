@@ -34,11 +34,15 @@ interface Stats4hBucket {
 
 interface DashboardData {
     bot_link: string | null;
+    linked?: boolean;
     sessions: WhatsAppSession[];
     stats_4h: Stats4hBucket[];
     admin_whitelist: Array<{ phone_number: string; vaf_username?: string | null }>;
     relay_whitelist: Array<{ phone_number: string; vaf_username?: string | null }>;
     activity: Array<{ chat_id: string; user_scope_id: string | null; ts: number; direction: string }>;
+    connected?: boolean;
+    running?: boolean;
+    log_path?: string | null;
 }
 
 export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigChange, onOpenSetupWizard }: WhatsAppDashboardProps) {
@@ -51,10 +55,18 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const [historyLoading, setHistoryLoading] = useState(false);
     const [relayAddId, setRelayAddId] = useState('');
     const [relayAddUsername, setRelayAddUsername] = useState('');
+    const [restarting, setRestarting] = useState(false);
+    const [restartError, setRestartError] = useState<string | null>(null);
 
     useEffect(() => {
         if (isOpen) fetchDashboard();
     }, [isOpen, config?.whatsapp_config]);
+
+    const handleRelink = async () => {
+        await fetch(api('api/whatsapp/qr/reset'), { method: 'POST', credentials: 'include' });
+        onClose();
+        onOpenSetupWizard?.();
+    };
 
     useEffect(() => {
         if (!isOpen) return;
@@ -101,6 +113,26 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             .finally(() => setHistoryLoading(false));
     }, [historySessionId, isOpen]);
 
+    const setDataFromJson = (json: any) => {
+        const whitelist = Array.isArray(json?.whitelist) ? json.whitelist : [];
+        const sessions = Array.isArray(json?.sessions) ? json.sessions : [];
+        setData({
+            bot_link: json?.linked ? 'https://web.whatsapp.com' : null,
+            linked: json?.linked === true,
+            sessions,
+            stats_4h: Array.isArray(json?.stats_4h) ? json.stats_4h : [],
+            admin_whitelist: whitelist,
+            relay_whitelist: [],
+            activity: Array.isArray(json?.activity) ? json.activity : [],
+            connected: json?.connected === true,
+            running: json?.running === true,
+            log_path: json?.log_path || null,
+        });
+        if (!selectedChatId && sessions.length > 0) {
+            setSelectedChatId(sessions[0]?.chat_id ?? null);
+        }
+    };
+
     const fetchDashboard = async () => {
         setLoading(true);
         try {
@@ -111,23 +143,62 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 setData(null);
                 return;
             }
-            const whitelist = Array.isArray(json.whitelist) ? json.whitelist : [];
-            const sessions = Array.isArray(json.sessions) ? json.sessions : [];
-            setData({
-                bot_link: json.linked ? 'https://web.whatsapp.com' : null,
-                sessions,
-                stats_4h: Array.isArray(json.stats_4h) ? json.stats_4h : [],
-                admin_whitelist: whitelist,
-                relay_whitelist: [],
-                activity: Array.isArray(json.activity) ? json.activity : [],
-            });
-            if (!selectedChatId && sessions.length > 0) {
-                setSelectedChatId(sessions[0]?.chat_id ?? null);
+            setDataFromJson(json);
+        } catch {
+            setData(null);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleRefresh = async () => {
+        setLoading(true);
+        try {
+            const res = await fetch(api('api/whatsapp/dashboard'), { credentials: 'include' });
+            const json = await res.json();
+            if (!res.ok) {
+                setData(null);
+                return;
+            }
+            setDataFromJson(json);
+            if (!json.running && json.enabled) {
+                await fetch(api('api/whatsapp/start'), { method: 'POST', credentials: 'include' });
+                await new Promise(r => setTimeout(r, 2000));
+                const res2 = await fetch(api('api/whatsapp/dashboard'), { credentials: 'include' });
+                const json2 = await res2.json();
+                if (res2.ok) setDataFromJson(json2);
             }
         } catch {
             setData(null);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleRestartBridge = async () => {
+        setRestarting(true);
+        setRestartError(null);
+        try {
+            const wc = config?.whatsapp_config || {};
+            await fetch(api('api/config'), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ whatsapp_config: { ...wc, enabled: true } }),
+                credentials: 'include',
+            });
+            onConfigChange('whatsapp_config', { ...wc, enabled: true });
+            const res = await fetch(api('api/whatsapp/restart'), { method: 'POST', credentials: 'include' });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setRestartError(json?.detail || json?.message || `Failed (${res.status})`);
+                return;
+            }
+            await new Promise(r => setTimeout(r, 3000));
+            await fetchDashboard();
+        } catch (e) {
+            setRestartError(e instanceof Error ? e.message : 'Failed. Check console.');
+        } finally {
+            setRestarting(false);
         }
     };
 
@@ -195,15 +266,30 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                     {/* Left sidebar: session list (chats for this bot only) */}
                     <div className="w-56 shrink-0 border-r border-gray-200 flex flex-col bg-gray-50/50">
                         <div className="px-3 py-2 border-b border-gray-200 flex items-center justify-between gap-2">
-                            <div>
+                            <div className="flex items-center gap-2 min-w-0">
                                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Chats</p>
+                                {data && (
+                                    <span
+                                        className={cn(
+                                            'shrink-0 w-2 h-2 rounded-full',
+                                            data.connected ? 'bg-green-500' : data.running ? 'bg-amber-500' : 'bg-gray-400'
+                                        )}
+                                        title={
+                                            data.connected
+                                                ? 'WhatsApp connected'
+                                                : data.running
+                                                    ? 'Bridge running, WhatsApp not connected'
+                                                    : 'Bridge not started'
+                                        }
+                                    />
+                                )}
                             </div>
                             <button
                                 type="button"
-                                onClick={(e) => { e.stopPropagation(); fetchDashboard(); }}
+                                onClick={(e) => { e.stopPropagation(); handleRefresh(); }}
                                 disabled={loading}
                                 className="p-1.5 rounded hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors disabled:opacity-50"
-                                title="Chats aktualisieren"
+                                title="Refresh; starts bridge if not running"
                             >
                                 <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
                             </button>
@@ -248,13 +334,40 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                                     ))}
                                 </ul>
                             ) : (
-                                <p className="p-3 text-sm text-gray-500">Keine Chats. Bridge neu starten (Settings → Connections) und 1–2 Min. warten.</p>
+                                <p className="p-3 text-sm text-gray-500">No chats. Restart bridge (Settings → Connections) and wait 1–2 min.</p>
                             )}
                         </div>
                     </div>
 
                     {/* Main content */}
                     <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 min-w-0">
+                    {data && !data.running && !data.linked && (
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
+                            <p className="font-medium mb-1">Bridge not started</p>
+                            <p className="mb-3">Turn the WhatsApp toggle ON (Connections), or Start bridge below.</p>
+                            {restartError && <p className="mb-3 text-red-600 font-medium">{restartError}</p>}
+                            <button
+                                type="button"
+                                onClick={handleRestartBridge}
+                                disabled={restarting || loading}
+                                className="px-4 py-2 rounded-lg bg-green-600 text-white font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
+                            >
+                                {restarting ? 'Starting…' : 'Start bridge'}
+                            </button>
+                        </div>
+                    )}
+                    {data && !data.running && data.linked && (
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
+                            <p className="font-medium mb-3">Session expired.</p>
+                            <button
+                                type="button"
+                                onClick={handleRelink}
+                                className="px-4 py-2 rounded-lg bg-green-600 text-white font-medium hover:bg-green-700"
+                            >
+                                Re-link (opens setup)
+                            </button>
+                        </div>
+                    )}
                     {loading ? (
                         <div className="py-8 text-center text-gray-500">Loading…</div>
                     ) : data ? (

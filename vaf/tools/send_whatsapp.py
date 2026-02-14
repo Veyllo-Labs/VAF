@@ -44,8 +44,11 @@ class SendWhatsAppTool(BaseTool):
 
         try:
             from vaf.core.messaging_connections import get_whatsapp_chat_jid
-            from vaf.core.whatsapp_reply import send_whatsapp_reply
-            from vaf.api.whatsapp_bridge import is_bridge_running, has_process_for_user
+            from vaf.api.whatsapp_bridge import (
+                is_bridge_running,
+                has_process_for_user,
+                send_whatsapp_with_confirmation,
+            )
         except ImportError as e:
             return f"WhatsApp send unavailable: {e}"
 
@@ -80,17 +83,17 @@ class SendWhatsAppTool(BaseTool):
             voice_path = self._synthesize_voice(out, voice_lang[:2].lower())
 
         try:
-            send_whatsapp_reply(username, chat_jid, out, voice_path=voice_path)
+            result = send_whatsapp_with_confirmation(username, chat_jid, out, voice_path=voice_path)
         except Exception as e:
             return f"Failed to send WhatsApp message: {e}"
+        finally:
+            if voice_path:
+                try:
+                    Path(voice_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
 
-        if voice_path:
-            try:
-                Path(voice_path).unlink(missing_ok=True)
-            except Exception:
-                pass
-            return "Voice message sent to the user via WhatsApp."
-        return "Message sent to the user via WhatsApp."
+        return result
 
     def _synthesize_voice(self, text: str, lang: str):
         """Synthesize TTS to OGG file, return path. Returns None on failure."""

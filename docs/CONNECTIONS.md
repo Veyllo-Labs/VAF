@@ -229,6 +229,15 @@ Global options (top-level in config):
 5. Your phone number is automatically added to the whitelist from the linked WhatsApp account.
 6. Turn the connection **on**; the bridge starts automatically when enabled.
 
+### WhatsApp Dashboard
+
+The WhatsApp dashboard (Settings → Connections → Dashboard) shows:
+
+- **Connection status** (indicator next to "Chats"): Green = WhatsApp connected, amber = bridge running but not connected, gray = bridge not started.
+- **Refresh (↻)**: Refreshes chat list and re-checks connection status (ping/pong with the Node bridge).
+- **Restart bridge**: When "Bridge running, WhatsApp not connected" appears, use the "Restart bridge" button to stop and restart the bridge. Wait 20–30 seconds, then refresh.
+- **send_whatsapp** now verifies delivery: The tool waits for confirmation from the Node bridge. If the message fails (e.g. "WhatsApp not connected"), the agent receives an error instead of a fake success.
+
 ### Configuration
 
 ```json
@@ -248,11 +257,18 @@ Global options (top-level in config):
 
 ### Troubleshooting
 
-- **QR/Link-Debugging**: Stderr des wa-bridge-Prozesses (inkl. aller `connection.update`-Events) wird in `logs/whatsapp_qr.log` geschrieben. Nach QR-Scan: WhatsApp trennt mit 515/516 → wa-bridge erstellt einen neuen Socket mit den gespeicherten Credentials → `open`. Wenn „wird angemeldet“ am Handy hängen bleibt, liegt es oft am Rechner (Netzwerk/Firewall).
+- **QR/Link debugging**: Wa-bridge stderr (including all `connection.update` events) is logged to `logs/whatsapp_qr.log`. After QR scan: WhatsApp disconnects with 515/516 → wa-bridge creates a new socket with stored credentials → `open`. If „logging in“ stays stuck on the phone, it's often the computer (network/firewall).
 - **"Node.js not found"**: Install Node.js 18+ and ensure it is in your PATH.
 - **"wa-bridge.js not found"**: Run `npm install` in `vaf/whatsapp_node/`.
-- **Black terminal / kein QR-Code**: Ein schwarzes Terminal-Fenster sollte nicht mehr erscheinen (Windows-Fix). Wenn der QR-Code nicht erscheint: Node.js 18+ installieren, `npm install` in `vaf/whatsapp_node/` ausführen, VAF neu starten.
+- **Black terminal / no QR code**: Install Node.js 18+, run `npm install` in `vaf/whatsapp_node/`, restart VAF.
 - **No reply**: Ensure the bridge is running (Settings → Connections, WhatsApp toggle on) and your phone number is in the whitelist.
+- **Bridge running, WhatsApp not connected**: The Node process is alive but the Baileys socket is not connected. Use "Restart bridge" in the WhatsApp Dashboard, or Settings → Connections → Stop, then Start. Ensure your phone has internet and WhatsApp is open. If it still fails, use Reset and scan a new QR code.
+- **Auto-disconnect on session expiry**: When the bridge needs a new QR (session invalid) but cannot display it, VAF stops the bridge and sets the toggle to OFF. Message: "Session expired. Log in again: Reset, scan QR, turn ON." OpenClaw has the same constraint (Baileys session can expire); they use `clawdbot channels login` to re-pair. We use Reset in the UI.
+- **Restart doesn't help**: If "Restart bridge" keeps showing amber (not connected) after 20–30 seconds:
+  - **1. Reset and new QR**: The session may be invalid. Settings → Connections → WhatsApp → Reset & get new QR code. Scan with your phone; wait for "Linked".
+  - **2. Check logs**: Open `logs/whatsapp_qr.log`. Look for `connection.update: connection=close` and the status code (401, 515, etc.). 401/device_removed → Reset; 515/516 → wait, Baileys auto-reconnects.
+  - **3. Network**: Test [web.whatsapp.com](https://web.whatsapp.com) in a browser on the same PC. If that fails, the issue is network/firewall. Disable VPN; try a different network.
+  - **4. VPS/server**: Some server IPs are blocked by WhatsApp. A home/office PC often works better.
 - **send_whatsapp reports success but no message on phone**:
   - Check `logs/whatsapp_reply.log`: Look for `SENDER ok` (message was sent to Node) or `DROPPED process_not_running` / `ERROR` (send failed).
   - **Phone number format**: Whitelist must use E.164 (e.g. `+491761234567`), not `0176...`. Wrong format → wrong JID → message may not reach you.
@@ -260,15 +276,15 @@ Global options (top-level in config):
 - **Self-chat (messaging yourself): Bot doesn't respond**:
   - Check `logs/whatsapp_inbound.log`: Look for `ACCEPT`, `ENQUEUED`, `HEADLESS processing` (message was received and processed) or `SKIP`, `REJECT` (message was filtered).
   - Bridge must be running; your number in whitelist. If using a newer WhatsApp account with LID format, the bridge resolves it automatically.
-- **Nur ein oder wenige Chats sichtbar** (statt aller WhatsApp-Chats): **Ursache**: VAF nutzt WhatsApp als „Linked Device“ (wie WhatsApp Web). WhatsApp entscheidet selbst, wie viele Chats beim History-Sync mitgeschickt werden – oft nur wenige oder gar keine. Die Chats-Spalte füllt sich automatisch, sobald jemand dir eine Nachricht schickt (`chats.upsert`). **Diagnose**: `GET /api/whatsapp/dashboard/debug` zeigt `raw_chats_count` – wenn 0, hat Baileys keine Chat-Liste erhalten. **Tipps**: Bridge neu starten, 30–60 s warten, dann Dashboard öffnen; Refresh (🔄) klicken; Stderr der wa-bridge prüfen (`messaging-history.set: X chats`).
-- **Code 515 ("restart required")**: Tritt oft kurz nach dem QR-Scan auf. Baileys startet die Verbindung automatisch neu – **einfach 10–20 Sekunden warten**, kein Reset nötig. Die Meldung wird nicht mehr angezeigt.
-- **"Lädt" ~30 Sekunden, dann Fehler**: Das Problem liegt am **VAF-Rechner** (nicht am Handy). Der Rechner, auf dem VAF läuft, kann keine stabile Verbindung zu den WhatsApp-Servern aufbauen. Test: Öffne [web.whatsapp.com](https://web.whatsapp.com) im Browser auf demselben PC. Wenn das auch fehlschlägt, liegt es am Netzwerk/Firewall.
-- **"Anmeldung fehlgeschlagen" / 401 / device_removed**: WhatsApp zeigt manchmal "Prüfe die Internetverbindung deines Telefons", obwohl die Handy-Verbindung stimmt. Die Ursache liegt oft beim **Rechner, auf dem VAF läuft**:
-  - **VPN**: VPN am PC deaktivieren und erneut versuchen.
-  - **Netzwerk**: VPS/Server-IPs können von WhatsApp blockiert werden. Auf einem Heim-/Firmen-PC mit normalem Internet funktioniert es meist besser.
-  - **Warten**: Nach mehreren Fehlversuchen 24 Stunden warten, dann erneut scannen.
-  - **Anderes Netz**: VAF auf einem anderen Rechner/Netzwerk testen (z.B. zu Hause statt im Büro).
-  - Nach jedem Fehlversuch: "Reset & neuen QR-Code holen" klicken, bevor du erneut scannst.
+- **Few or no chats visible**: VAF uses WhatsApp as a linked device (like WhatsApp Web). WhatsApp decides how many chats to sync – often few or none. The chat list fills when someone messages you (`chats.upsert`). **Diagnosis**: `GET /api/whatsapp/dashboard/debug` shows `raw_chats_count`; if 0, Baileys has no chat list. **Tips**: Restart bridge, wait 30–60 s, open dashboard, click Refresh; check wa-bridge stderr for `messaging-history.set: X chats`.
+- **Code 515 ("restart required")**: Common shortly after QR scan. Baileys reconnects automatically – wait 10–20 seconds, no reset needed.
+- **Loading ~30 seconds, then error**: The problem is on the **VAF machine** (not the phone). The machine cannot establish a stable connection to WhatsApp servers. Test: Open [web.whatsapp.com](https://web.whatsapp.com) in a browser on the same PC. If that also fails, the issue is network/firewall.
+- **401 / device_removed**: Often the issue is on the **VAF machine**:
+  - **VPN**: Disable VPN on the PC and try again.
+  - **Network**: VPS/server IPs can be blocked by WhatsApp. A home/office PC with normal internet often works better.
+  - **Wait**: After several failures, wait 24 hours, then try again.
+  - **Other network**: Test VAF on a different machine/network.
+  - After each failure: Click "Reset & get new QR code" before scanning again.
 - **Verification timeout**: Send the exact 6-digit code to the bot in a **private chat** (DM).
 
 ## Proactive messaging
@@ -325,7 +341,7 @@ Telegram uses the same pipeline as the Web UI:
 | `mail_inbox` | List messages in a folder (inbox or other). **Omit `account_id`** to list from **all connected accounts** (e.g. "do we have mails about CVEs?"); returns From, Date, Subject, and per message `account_id`, `message_id`, `provider_message_id`. | User asks to check email, show inbox, or search across all mails (no need to ask for an account). |
 | `find_mail` | Search the synced mailbox by subject or sender (`query`, optional `folder`, `limit`). Returns matches with `account_id`, `message_id`, `provider_message_id`; if exactly one match, returns the full body. | User asks "what does the X mail say?" or "details about the Postman/Twitch/… email" → use find_mail(query="X"); if result includes full body use it, else call read_mail with first match's IDs. |
 | `read_mail` | Return the full body of one message as plain text. Parameters: `account_id`, `message_id`, `folder` (default INBOX), optional `provider_message_id`. Use IDs from find_mail or mail_inbox. | When you have account_id and message_id (e.g. from find_mail); do not ask the user for these. |
-| `mark_mail_answered` | Mark a message as answered by the agent (`account_id`, `message_id`, `folder`). Sets a timestamp so the Mail UI shows "Benatwortet am …" and the message is not handled twice. | After the agent has processed or replied to an email. |
+| `mark_mail_answered` | Mark a message as answered by the agent (`account_id`, `message_id`, `folder`). Sets a timestamp so the Mail UI shows an answered indicator and the message is not handled twice. | After the agent has processed or replied to an email. |
 | `send_mail` | Send an email (`account_id`, `to`, `subject`, `body`; optional `attachment_paths` for documents). Paths support folder aliases (Downloads, Desktop, Documents). | User asks to send or reply to an email; for documents pass `attachment_paths`. |
 
 Message bodies are always returned as plain text: HTML and MIME structure are stripped, and the same cleaned text is used in the Mail dashboard and for the agent. This keeps context size low and avoids raw markup.
@@ -424,7 +440,7 @@ You can optionally add **sender rules** so that messages from certain senders ar
 - **Version control**: Database files (`*.db`, `*.db-wal`, `*.db-shm`) are listed in `.gitignore`; synced mail data is never committed to the repository.
 - **Per-user DB (network mode)**: When multiple users are enabled (network / login), **each user gets their own SQLite file**: `data_dir/users/{username}/email_sync.db`. So User A and User B never share mail data; each user's Mail dashboard and agent tools only see that user's synced mails.
 - **Retention**: Messages older than **90 days** (by message date, or by sync date if the message date cannot be parsed) are **deleted automatically** on each sync. This keeps the store size bounded.
-- **Answered flag**: When the agent has processed or replied to a message, it can call the **`mark_mail_answered`** tool so the message is marked with a timestamp. The Mail UI then shows "Benatwortet am DD.MM.YYYY um HH:MM" and a "Beantwortet" badge in the list, so the same mail is not handled twice.
+- **Answered flag**: When the agent has processed or replied to a message, it can call the **`mark_mail_answered`** tool so the message is marked with a timestamp. The Mail UI then shows an answered timestamp and an "Answered" badge in the list, so the same mail is not handled twice.
 
 OAuth client IDs (optional) at top level: `email_oauth_google_client_id`, `email_oauth_google_client_secret`, and similarly for Microsoft and Apple. Credentials (tokens, passwords) are never stored in config.
 
@@ -489,7 +505,7 @@ For **Google Drive**, create an OAuth 2.0 Client (Web application) in [Google Cl
 | `retrieve` | `file_path` | Copy file from local sync folder to Downloads |
 | `status` | — | Check connection and last sync time |
 
-**Typical flow for "find and read document"**: `search` with `query` (e.g. "Bewilligung", "report") → `read` or `download` with `file_id` from results. Use `browse` only when listing folder contents.
+**Typical flow for "find and read document"**: `search` with `query` (e.g. "approval", "report") → `read` or `download` with `file_id` from results. Use `browse` only when listing folder contents.
 
 ### VAF Sync folder
 

@@ -377,7 +377,7 @@ class APIBackendManager:
         models = {
             "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
             "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
-            "deepseek": ["deepseek-chat", "deepseek-coder"],
+            "deepseek": ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
             "google": ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"],
             "openrouter": ["anthropic/claude-3.5-sonnet", "openai/gpt-4o"],
             "local": ["llama3", "mistral", "codellama"]

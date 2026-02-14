@@ -206,8 +206,19 @@ Global options (top-level in config):
 - **Per-user isolation**: Each VAF user has their own WhatsApp session. Credentials are stored in `~/.vaf/users/<username>/whatsapp/`. Other users cannot see or use your WhatsApp.
 - **QR link**: Scan a QR code with WhatsApp (Linked Devices) to link your phone.
 - **Whitelist**: Only configured phone numbers (E.164) can send messages **and** receive replies. Each whitelist entry maps a phone number to a VAF user.
-- **Read-only for everyone else**: Der Bot antwortet **ausschließlich** an Nummern in deiner Whitelist. Er schreibt keine anderen Kontakte an und reagiert nicht auf Nachrichten von Nicht-Whitelist-Nummern.
+- **Read-only for everyone else**: The bot replies only to numbers in your whitelist. It does not message other contacts or react to messages from non-whitelisted numbers.
 - **Node.js required**: Uses Baileys via a Node subprocess. Run `npm install` in `vaf/whatsapp_node/` before first use.
+- **Agent tools** (like email): `whatsapp_inbox`, `find_whatsapp_messages`, `read_whatsapp_chat` list chats, search messages, and read a chat. Messages are stored as they arrive. `send_whatsapp` supports optional `voice_lang` (e.g. `"de"`, `"en"`) for voice messages. `whatsapp_call` is a placeholder (not implemented).
+- **Voice (TTS/STT)**: Incoming voice messages are downloaded, transcribed via Whisper STT (speech_stt_docker_url, default localhost:5003), and passed as text to the agent. When the user sends a voice message, replies can automatically be sent as voice (TTS) in the detected language. The agent can also explicitly send voice via `send_whatsapp(voice_lang="de")` or `send_telegram(voice_lang="de")`.
+
+#### Agent WhatsApp tools (whatsapp_inbox, find_whatsapp_messages, read_whatsapp_chat, send_whatsapp)
+
+| Tool | Purpose | When to use |
+|------|---------|-------------|
+| `whatsapp_inbox` | List WhatsApp chats. Returns chat_id, name, last_ts. Use `find_whatsapp_messages` to search; `read_whatsapp_chat` to read a chat. | User asks "list WhatsApp chats" or "show my WhatsApp conversations". |
+| `find_whatsapp_messages` | Search messages by query (matches body, chat name, sender). Optional `chat_id` to limit to one chat. | User asks "find messages from Anne" or "what did X say in WhatsApp" → find_whatsapp_messages(query="Anne"). |
+| `read_whatsapp_chat` | Read messages from a chat (`chat_id`, `limit`). Use chat_id from whatsapp_inbox or find_whatsapp_messages. | read_whatsapp_chat(chat_id="+49...") for full thread. |
+| `send_whatsapp` | Send text or voice message. Pass `voice_lang` (e.g. `"de"`) to send as voice message instead of text. | User asks to receive something via WhatsApp; use voice_lang when they prefer voice. |
 
 ### Setup
 
@@ -215,7 +226,7 @@ Global options (top-level in config):
 2. Go to **Settings → Connections**
 3. Click **Connect** on WhatsApp
 4. Scan the QR code with WhatsApp on your phone (Linked Devices)
-5. Add your phone number to the whitelist (E.164 format, e.g. +49123456789)
+5. Your phone number is automatically added to the whitelist from the linked WhatsApp account.
 6. Turn the connection **on**; the bridge starts automatically when enabled.
 
 ### Configuration
@@ -237,11 +248,19 @@ Global options (top-level in config):
 
 ### Troubleshooting
 
-- **QR/Link-Debugging**: Stderr des wa-bridge-Prozesses (inkl. aller `connection.update`-Events) wird in `logs/whatsapp_qr.log` geschrieben. Typische Sequenz nach QR-Scan: `close`+515/516 (normal) → Reconnect → `open`. Wenn `open` nie erscheint, liegt es an Netzwerk/Reconnect.
+- **QR/Link-Debugging**: Stderr des wa-bridge-Prozesses (inkl. aller `connection.update`-Events) wird in `logs/whatsapp_qr.log` geschrieben. Nach QR-Scan: WhatsApp trennt mit 515/516 → wa-bridge erstellt einen neuen Socket mit den gespeicherten Credentials → `open`. Wenn „wird angemeldet“ am Handy hängen bleibt, liegt es oft am Rechner (Netzwerk/Firewall).
 - **"Node.js not found"**: Install Node.js 18+ and ensure it is in your PATH.
 - **"wa-bridge.js not found"**: Run `npm install` in `vaf/whatsapp_node/`.
 - **Black terminal / kein QR-Code**: Ein schwarzes Terminal-Fenster sollte nicht mehr erscheinen (Windows-Fix). Wenn der QR-Code nicht erscheint: Node.js 18+ installieren, `npm install` in `vaf/whatsapp_node/` ausführen, VAF neu starten.
 - **No reply**: Ensure the bridge is running (Settings → Connections, WhatsApp toggle on) and your phone number is in the whitelist.
+- **send_whatsapp reports success but no message on phone**:
+  - Check `logs/whatsapp_reply.log`: Look for `SENDER ok` (message was sent to Node) or `DROPPED process_not_running` / `ERROR` (send failed).
+  - **Phone number format**: Whitelist must use E.164 (e.g. `+491761234567`), not `0176...`. Wrong format → wrong JID → message may not reach you.
+  - **Bridge/Process**: Settings → Connections → WhatsApp → Stop, then Start. Ensure "Linked" and QR was scanned successfully.
+- **Self-chat (messaging yourself): Bot doesn't respond**:
+  - Check `logs/whatsapp_inbound.log`: Look for `ACCEPT`, `ENQUEUED`, `HEADLESS processing` (message was received and processed) or `SKIP`, `REJECT` (message was filtered).
+  - Bridge must be running; your number in whitelist. If using a newer WhatsApp account with LID format, the bridge resolves it automatically.
+- **Nur ein oder wenige Chats sichtbar** (statt aller WhatsApp-Chats): **Ursache**: VAF nutzt WhatsApp als „Linked Device“ (wie WhatsApp Web). WhatsApp entscheidet selbst, wie viele Chats beim History-Sync mitgeschickt werden – oft nur wenige oder gar keine. Die Chats-Spalte füllt sich automatisch, sobald jemand dir eine Nachricht schickt (`chats.upsert`). **Diagnose**: `GET /api/whatsapp/dashboard/debug` zeigt `raw_chats_count` – wenn 0, hat Baileys keine Chat-Liste erhalten. **Tipps**: Bridge neu starten, 30–60 s warten, dann Dashboard öffnen; Refresh (🔄) klicken; Stderr der wa-bridge prüfen (`messaging-history.set: X chats`).
 - **Code 515 ("restart required")**: Tritt oft kurz nach dem QR-Scan auf. Baileys startet die Verbindung automatisch neu – **einfach 10–20 Sekunden warten**, kein Reset nötig. Die Meldung wird nicht mehr angezeigt.
 - **"Lädt" ~30 Sekunden, dann Fehler**: Das Problem liegt am **VAF-Rechner** (nicht am Handy). Der Rechner, auf dem VAF läuft, kann keine stabile Verbindung zu den WhatsApp-Servern aufbauen. Test: Öffne [web.whatsapp.com](https://web.whatsapp.com) im Browser auf demselben PC. Wenn das auch fehlschlägt, liegt es am Netzwerk/Firewall.
 - **"Anmeldung fehlgeschlagen" / 401 / device_removed**: WhatsApp zeigt manchmal "Prüfe die Internetverbindung deines Telefons", obwohl die Handy-Verbindung stimmt. Die Ursache liegt oft beim **Rechner, auf dem VAF läuft**:
@@ -257,9 +276,9 @@ Global options (top-level in config):
 When you have one or more messaging connections (e.g. Telegram, Discord), the agent can **send you proactive messages**—for example when you ask it to "send me the result via Telegram" or "tell me how full my desktop is and send that to me".
 
 - **System prompt**: The agent is informed which channels are available for the current user and whether a preferred channel (`main_messenger`) is set. This is stored in User Identity (see [USER_IDENTITY.md](USER_IDENTITY.md)).
-- **Tool availability**: Only tools for **configured** connections are exposed to the agent: `send_telegram` when Telegram is connected, `send_discord` when Discord is connected, and (when supported) `send_slack` for Slack. So the agent never sees a send tool for a channel you do not have.
+- **Tool availability**: Only tools for **configured** connections are exposed to the agent: `send_telegram` when Telegram is connected, `send_discord` when Discord is connected, `send_slack` for Slack (when supported), and `send_whatsapp` when WhatsApp is linked. The agent never sees a send tool for a channel you do not have.
 - **First time**: If you have not set a preferred channel, the agent will ask once (e.g. "Should I send it via Discord, Telegram or Slack?") and store your answer in User Identity as `main_messenger` (via the `update_user_identity` tool).
-- **Sending**: The agent uses the matching tool (`send_telegram`, `send_discord`, or `send_slack`) to deliver the content. For **Telegram**, the agent can only send to you after you have sent at least one message from Telegram (so VAF can associate your chat ID). Chat IDs are stored in `messaging_endpoints.json` under the platform data directory.
+- **Sending**: The agent uses the matching tool (`send_telegram`, `send_discord`, `send_slack`, or `send_whatsapp`) to deliver the content. For **Telegram**, the agent can only send to you after you have sent at least one message from Telegram (so VAF can associate your chat ID). For **WhatsApp**, the whitelist phone number is used. Chat IDs / endpoints are stored in `messaging_endpoints.json` under the platform data directory.
 - **Discord**: Proactive send to Discord is planned for a later phase; Telegram is supported first.
 
 ## Architecture

@@ -143,31 +143,35 @@ function isSameDay(ts1: number, ts2: number): boolean {
 }
 
 function formatDayLabel(ts: number): string {
-    return new Date(ts).toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
+    return new Date(ts).toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
-/** Kurze Uhrzeit unter Nachrichten (Messenger-Stil): heute nur Uhrzeit, gestern/älter mit Datum. */
-function formatMessageTime(ts: number): string {
+/** Short message time (Messenger-style): today shows only time, yesterday/older shows date.
+ * Uses user's time_format from Settings (24h or 12h) when provided. */
+function formatMessageTime(ts: number, timeFormat?: '24h' | '12h'): string {
     const d = new Date(ts);
     const now = new Date();
     const today = now.getDate() === d.getDate() && now.getMonth() === d.getMonth() && now.getFullYear() === d.getFullYear();
     const yesterday = new Date(now);
     yesterday.setDate(yesterday.getDate() - 1);
     const isYesterday = yesterday.getDate() === d.getDate() && yesterday.getMonth() === d.getMonth() && yesterday.getFullYear() === d.getFullYear();
-    const time = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    const hour12 = timeFormat === '24h' ? false : timeFormat === '12h' ? true : undefined;
+    const timeOpts: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' };
+    if (hour12 !== undefined) timeOpts.hour12 = hour12;
+    const time = d.toLocaleTimeString('en-US', timeOpts);
     if (today) return time;
-    if (isYesterday) return `Gestern ${time}`;
-    if (d.getFullYear() === now.getFullYear()) return `${d.toLocaleDateString('de-DE', { weekday: 'short' })} ${time}`;
-    return d.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' }) + ' ' + time;
+    if (isYesterday) return `Yesterday ${time}`;
+    if (d.getFullYear() === now.getFullYear()) return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${time}`;
+    return d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }) + ' ' + time;
 }
 
-/** Trennlinie im Chatverlauf: Tagwechsel mit Datum oben (Ende) und unten (Fortsetzung). */
+/** Day separator in chat: date at top (end) and bottom (continuation). */
 function DaySeparator({ endDate, startDate }: { endDate: number; startDate: number }) {
     return (
         <div className="flex flex-col items-stretch py-4">
-            <div className="text-right text-xs text-gray-400 pr-1" title="Chat endete an diesem Tag">{formatDayLabel(endDate)}</div>
+            <div className="text-right text-xs text-gray-400 pr-1" title="Chat ended on this day">{formatDayLabel(endDate)}</div>
             <div className="border-t border-gray-200 my-1" aria-hidden />
-            <div className="text-right text-xs text-gray-400 pr-1" title="Fortsetzung an diesem Tag">{formatDayLabel(startDate)}</div>
+            <div className="text-right text-xs text-gray-400 pr-1" title="Continued on this day">{formatDayLabel(startDate)}</div>
         </div>
     );
 }
@@ -627,14 +631,28 @@ function VAFDashboardContent() {
     // OAuth callback redirect: open Settings with Connections tab when URL has connections=1 or cloud_oauth/email_oauth
     const openedFromOAuthRef = useRef(false);
 
+    const fetchUserTimeFormat = useCallback(() => {
+        fetch(getApiBase() + '/api/user/persona')
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+                const tf = (data?.user_identity?.time_format || '').toString().toLowerCase();
+                // "Default (24h)" is stored as empty string; empty and '24h' both mean 24h
+                setUserTimeFormat(tf === '12h' ? '12h' : '24h');
+            })
+            .catch(() => setUserTimeFormat('24h'));
+    }, []);
+
+    useEffect(() => { fetchUserTimeFormat(); }, [fetchUserTimeFormat]);
+
     const handleSettingsClose = useCallback(() => {
         setSettingsInitialTab(null);
         setIsSettingsOpen(false);
+        fetchUserTimeFormat(); // Refresh time format in case user changed it in Interface settings
         if (openedFromOAuthRef.current) {
             openedFromOAuthRef.current = false;
             router.replace('/', { scroll: false });
         }
-    }, [router]);
+    }, [router, fetchUserTimeFormat]);
 
     const [input, setInput] = useState('');
     const [insertedSelections, setInsertedSelections] = useState<InsertedSelectionRange[]>([]);
@@ -670,6 +688,8 @@ function VAFDashboardContent() {
     const [apiModels, setApiModels] = useState<Record<string, string[]>>({});
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [settingsInitialTab, setSettingsInitialTab] = useState<string | null>(null);
+    /** User's preferred time format from Settings → Interface (24h | 12h). Used for message timestamps. */
+    const [userTimeFormat, setUserTimeFormat] = useState<'24h' | '12h' | undefined>(undefined);
     const [isAutomationPopupOpen, setIsAutomationPopupOpen] = useState(false);
     const [showChangingModelOverlay, setShowChangingModelOverlay] = useState(false);
     const [tools, setTools] = useState<Array<{ name: string; description: string; category: string }>>([]);
@@ -2968,7 +2988,7 @@ function VAFDashboardContent() {
                                                             {/* Unauffällige Uhrzeit unter der Blase (Messenger-Stil) */}
                                                             {(msg.role === 'user' || msg.role === 'assistant') && (
                                                                 <div className={cn("w-full mt-0.5", isBot ? "text-left" : "text-right")}>
-                                                                    <span className="text-[10px] text-gray-400" title={new Date(msg.timestamp).toLocaleString('de-DE')}>{formatMessageTime(msg.timestamp)}</span>
+                                                                    <span className="text-[10px] text-gray-400" title={new Date(msg.timestamp).toLocaleString('en-US', userTimeFormat ? { hour12: userTimeFormat === '12h' } : undefined)}>{formatMessageTime(msg.timestamp, userTimeFormat)}</span>
                                                                 </div>
                                                             )}
                                                             {/* Show status steps below the active message if streaming */}

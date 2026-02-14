@@ -3,6 +3,7 @@ WhatsApp Integration API Routes
 
 Handles WhatsApp bridge start/stop, QR display for linking, status, and whitelist management.
 """
+import json
 import logging
 import subprocess
 import sys
@@ -24,6 +25,23 @@ _qr_state: Dict[str, Dict[str, Any]] = {}
 # QR process per username (to terminate before starting a new one)
 _qr_procs: Dict[str, subprocess.Popen] = {}
 _qr_lock = threading.Lock()
+
+
+def _jid_to_phone(jid: str) -> str:
+    """Extract E.164 phone from WhatsApp JID. Skips @lid, validates length 7-15."""
+    if not jid or not isinstance(jid, str):
+        return ""
+    if "@lid" in jid or jid.endswith("@broadcast") or jid.endswith("@status"):
+        return ""
+    part = jid.split("@")[0].split(":")[0].strip()
+    if not part or not part.isdigit() or len(part) < 7 or len(part) > 15:
+        return ""
+    return f"+{part}"
+
+
+def _normalize_phone(phone: str) -> str:
+    """Normalize phone to digits only for comparison."""
+    return "".join(c for c in (phone or "") if c.isdigit())
 
 
 def get_current_vaf_user(request: Request) -> Dict[str, str]:
@@ -49,6 +67,162 @@ class WhitelistAddRequest(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     enabled: Optional[bool] = None
     whitelist: Optional[list] = None
+
+
+@router.get("/dashboard/debug")
+async def get_whatsapp_dashboard_debug(request: Request):
+    """Debug: raw_chats count from bridge. Helps diagnose empty chat list."""
+    from vaf.api.whatsapp_bridge import get_whatsapp_chats, is_bridge_running
+
+    user_info = get_current_vaf_user(request)
+    username = user_info["username"]
+    raw_chats = get_whatsapp_chats(username, wait_timeout=3.0)
+    return {
+        "bridge_running": is_bridge_running(),
+        "raw_chats_count": len(raw_chats),
+        "username": username,
+    }
+
+
+@router.get("/dashboard")
+async def get_whatsapp_dashboard(request: Request):
+    """Data for the WhatsApp dashboard: status, sessions, activity, stats, whitelist. No sensitive data."""
+    import time as _time
+    from typing import Any, Dict
+
+    from vaf.api.whatsapp_bridge import get_whatsapp_chats, is_bridge_running
+    from vaf.core.whatsapp_auth import whatsapp_auth_exists
+
+    user_info = get_current_vaf_user(request)
+    username = user_info["username"]
+    whatsapp_config = Config.get("whatsapp_config") or {}
+    if not isinstance(whatsapp_config, dict):
+        whatsapp_config = {}
+
+    whitelist = whatsapp_config.get("whitelist") or []
+    whitelist = [e for e in whitelist if isinstance(e, dict) and e.get("phone_number")]
+
+    current_linked = whatsapp_auth_exists(username)
+    any_whitelist_linked = any(
+        whatsapp_auth_exists((e.get("vaf_username") or "admin").strip())
+        for e in whitelist if isinstance(e, dict)
+    )
+    linked = current_linked or any_whitelist_linked
+
+    activity = list(whatsapp_config.get("chat_activity") or [])[-100:]
+
+    def _phone_to_session_id(phone: str, vaf_username: str) -> str:
+        digits = "".join(c for c in phone if c.isdigit())
+        uname = (vaf_username or "admin").strip()
+        return f"whatsapp_{uname}_{digits}"
+
+    whitelist_by_phone: Dict[str, Dict[str, Any]] = {}
+    for e in whitelist:
+        phone = (e.get("phone_number") or "").strip()
+        if not phone:
+            continue
+        chat_id = phone if phone.startswith("+") else f"+{phone}"
+        whitelist_by_phone[chat_id] = e
+
+    sessions_by_chat: Dict[str, Dict[str, Any]] = {}
+    raw_chats = get_whatsapp_chats(username, wait_timeout=3.0)
+    for c in raw_chats:
+        jid = c.get("jid") or c.get("phone") or ""
+        if not jid:
+            continue
+        is_group = c.get("is_group", False) or "@g.us" in str(jid)
+        if is_group:
+            chat_id = jid
+            phone = jid
+        else:
+            phone = c.get("phone") or _jid_to_phone(jid)
+            chat_id = phone if phone and phone.startswith("+") else _jid_to_phone(jid) if jid else ""
+        if not chat_id:
+            continue
+        vaf_username = username
+        wl_entry = whitelist_by_phone.get(chat_id)
+        if wl_entry:
+            vaf_username = (wl_entry.get("vaf_username") or "admin").strip()
+        stype = "admin" if chat_id in whitelist_by_phone else "contact"
+        sessions_by_chat[chat_id] = {
+            "chat_id": chat_id,
+            "phone_number": phone or chat_id,
+            "vaf_username": vaf_username,
+            "session_id": _phone_to_session_id(phone or chat_id, vaf_username),
+            "type": stype,
+            "name": c.get("name"),
+            "last_ts": int(c.get("last_ts") or 0),
+            "message_count": 0,
+        }
+    for a in activity:
+        cid = str(a.get("chat_id") or "")
+        if not cid:
+            continue
+        if cid not in sessions_by_chat:
+            digits = "".join(c for c in cid if c.isdigit())
+            sessions_by_chat[cid] = {
+                "chat_id": cid,
+                "phone_number": cid,
+                "vaf_username": username,
+                "session_id": f"whatsapp_{username}_{digits}",
+                "type": "contact",
+                "name": None,
+                "last_ts": 0,
+                "message_count": 0,
+            }
+        rec = sessions_by_chat[cid]
+        ts = a.get("ts") or 0
+        rec["last_ts"] = max(rec.get("last_ts") or 0, int(ts))
+        rec["message_count"] = rec.get("message_count", 0) + 1
+    for e in whitelist:
+        phone = (e.get("phone_number") or "").strip()
+        if not phone:
+            continue
+        chat_id = phone if phone.startswith("+") else f"+{phone}"
+        if chat_id not in sessions_by_chat:
+            vaf_username = (e.get("vaf_username") or "admin").strip()
+            sessions_by_chat[chat_id] = {
+                "chat_id": chat_id,
+                "phone_number": phone,
+                "vaf_username": vaf_username,
+                "session_id": _phone_to_session_id(phone, vaf_username),
+                "type": "admin",
+                "name": None,
+                "last_ts": 0,
+                "message_count": 0,
+            }
+    for rec in sessions_by_chat.values():
+        rec.setdefault("last_ts", 0)
+        rec.setdefault("message_count", 0)
+    sessions = sorted(sessions_by_chat.values(), key=lambda s: (s.get("last_ts") or 0), reverse=True)
+
+    bucket_seconds = 4 * 3600
+    now_ts = int(_time.time())
+    cutoff = now_ts - 7 * 24 * 3600
+    buckets: Dict[int, int] = {}
+    for t in range(int(cutoff // bucket_seconds) * bucket_seconds, now_ts + 1, bucket_seconds):
+        buckets[t] = 0
+    for a in activity:
+        ts = a.get("ts") or 0
+        bucket_ts = (int(ts) // bucket_seconds) * bucket_seconds
+        if bucket_ts in buckets:
+            buckets[bucket_ts] += 1
+    stats_4h = [{"bucket_ts": ts, "count": c} for ts, c in sorted(buckets.items())]
+
+    return {
+        "configured": bool(whitelist) and linked,
+        "linked": linked,
+        "running": is_bridge_running(),
+        "enabled": whatsapp_config.get("enabled", False),
+        "username": username,
+        "sessions": sessions,
+        "stats_4h": stats_4h,
+        "activity": activity,
+        "whitelist": [
+            {"phone_number": e.get("phone_number", ""), "vaf_username": e.get("vaf_username")}
+            for e in whitelist
+        ],
+    }
 
 
 @router.get("/status")
@@ -99,6 +273,76 @@ async def stop_whatsapp_bridge():
     if is_bridge_running():
         stop_bridge()
     return {"status": "stopped", "message": "WhatsApp bridge stopped."}
+
+
+def _get_whatsapp_compaction_info(session_id: str) -> tuple:
+    """Return (last_compaction_at_turn, compaction_interval) for a session."""
+    from vaf.core.config import Config
+
+    interval = int(Config.get("memory_compaction_interval", 15))
+    try:
+        from vaf.core.session import SessionManager
+        _sm = SessionManager()
+        _session = _sm.load(session_id)
+        _runtime = getattr(_session, "runtime_state", None) or {}
+        if "last_compaction_at_turn" in _runtime:
+            last = int(_runtime["last_compaction_at_turn"])
+            return (last, interval)
+    except Exception:
+        pass
+    try:
+        compaction_path = Config.APP_DIR / "compaction_state.json"
+        if compaction_path.exists():
+            with open(compaction_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            v = state.get(session_id)
+            if isinstance(v, dict) and "turn" in v:
+                return (int(v.get("turn", 0)), interval)
+            if isinstance(v, (int, float)):
+                return (int(v), interval)
+    except Exception:
+        pass
+    return (0, interval)
+
+
+@router.get("/session/{session_id}/history")
+async def get_whatsapp_session_history(session_id: str):
+    """Return message history and compaction stats for a WhatsApp session."""
+    if not session_id.startswith("whatsapp_"):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+    try:
+        from vaf.core.session import SessionManager
+
+        session_mgr = SessionManager()
+        session = session_mgr.load(session_id)
+        messages = [
+            {"role": m.role, "content": (m.content or "")[:2000], "timestamp": getattr(m, "timestamp", None)}
+            for m in (session.messages or [])
+        ]
+        runtime_state = getattr(session, "runtime_state", None) or {}
+        user_turn_count = runtime_state.get("user_turn_count", 0)
+        if user_turn_count == 0 and session.messages:
+            user_turn_count = sum(1 for m in (session.messages or []) if getattr(m, "role", None) == "user")
+        last_compaction_at_turn, compaction_interval = _get_whatsapp_compaction_info(session_id)
+        return {
+            "session_id": session_id,
+            "messages": messages,
+            "user_turn_count": user_turn_count,
+            "compaction_interval": compaction_interval,
+            "last_compaction_at_turn": last_compaction_at_turn,
+        }
+    except FileNotFoundError:
+        last_compaction_at_turn, compaction_interval = _get_whatsapp_compaction_info(session_id)
+        return {
+            "session_id": session_id,
+            "messages": [],
+            "user_turn_count": 0,
+            "compaction_interval": compaction_interval,
+            "last_compaction_at_turn": last_compaction_at_turn,
+        }
+    except Exception as e:
+        logger.exception("WhatsApp session history error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def _run_qr_login(username: str) -> None:
@@ -165,9 +409,11 @@ def _run_qr_login(username: str) -> None:
                     with _qr_lock:
                         _qr_state[username] = {"qr": qr_data, "ts": __import__("time").time()}
                 elif typ == "connected":
-                    log_whatsapp_qr(f"[VAF] Received: connected selfJid={obj.get('selfJid', '')}")
+                    self_jid = obj.get("selfJid") or ""
+                    phone = _jid_to_phone(self_jid)
+                    log_whatsapp_qr(f"[VAF] Received: connected selfJid={self_jid} phone={phone}")
                     with _qr_lock:
-                        _qr_state[username] = {"connected": True, "ts": __import__("time").time()}
+                        _qr_state[username] = {"connected": True, "phone": phone, "ts": __import__("time").time()}
                     proc.terminate()
                     return
                 elif typ == "error":
@@ -208,7 +454,8 @@ async def get_qr_code(request: Request):
         state = _qr_state.get(username, {})
 
     if state.get("connected"):
-        return {"status": "connected", "message": "WhatsApp linked successfully."}
+        phone = state.get("phone") or ""
+        return {"status": "connected", "message": "WhatsApp linked successfully.", "phone": phone}
     if state.get("error"):
         return {"status": "error", "error": state["error"]}
     if state.get("qr"):
@@ -260,6 +507,23 @@ async def start_qr_flow(request: Request):
     t = threading.Thread(target=_run_qr_login, args=(username,), daemon=True)
     t.start()
     return {"status": "started", "message": "Scan the QR code in WhatsApp (Linked Devices). Poll GET /api/whatsapp/qr for the QR."}
+
+
+@router.post("/whitelist/remove")
+async def remove_whitelist_entry(request: Request, body: WhitelistAddRequest):
+    """Remove a whitelist entry by phone number."""
+    phone = (body.phone_number or "").strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="phone_number required")
+    config = Config.load()
+    wc = config.get("whatsapp_config") or {}
+    if not isinstance(wc, dict):
+        wc = {}
+    whitelist = [e for e in (wc.get("whitelist") or []) if isinstance(e, dict) and str(e.get("phone_number", "")).strip() != phone]
+    wc["whitelist"] = whitelist
+    config["whatsapp_config"] = wc
+    Config.save(config)
+    return {"status": "removed", "message": "Whitelist entry removed.", "whitelist_count": len(whitelist)}
 
 
 @router.post("/whitelist/add")

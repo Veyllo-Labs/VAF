@@ -11,3 +11,4 @@ export { default as MailDashboard } from './MailDashboard';
 export { default as CloudDashboard } from './CloudDashboard';
 export { default as CloudSetupWizard } from './CloudSetupWizard';
 export { default as WhatsAppSetupWizard } from './WhatsAppSetupWizard';
+export { default as WhatsAppDashboard } from './WhatsAppDashboard';

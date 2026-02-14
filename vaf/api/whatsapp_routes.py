@@ -72,7 +72,7 @@ class ConfigUpdateRequest(BaseModel):
 @router.get("/dashboard/debug")
 async def get_whatsapp_dashboard_debug(request: Request):
     """Debug: raw_chats count from bridge. Helps diagnose empty chat list."""
-    from vaf.api.whatsapp_bridge import get_whatsapp_chats, is_bridge_running
+    from vaf.api.whatsapp_bridge import get_connection_status, get_whatsapp_chats, is_bridge_running
 
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
@@ -90,7 +90,7 @@ async def get_whatsapp_dashboard(request: Request):
     import time as _time
     from typing import Any, Dict
 
-    from vaf.api.whatsapp_bridge import get_whatsapp_chats, is_bridge_running
+    from vaf.api.whatsapp_bridge import get_connection_status, get_whatsapp_chats, is_bridge_running
     from vaf.core.whatsapp_auth import whatsapp_auth_exists
 
     user_info = get_current_vaf_user(request)
@@ -209,15 +209,26 @@ async def get_whatsapp_dashboard(request: Request):
             buckets[bucket_ts] += 1
     stats_4h = [{"bucket_ts": ts, "count": c} for ts, c in sorted(buckets.items())]
 
+    running = is_bridge_running()
+    connected = get_connection_status(username, wait_timeout=2.0) if running else False
+
+    try:
+        from vaf.core.log_helper import get_app_log_dir
+        log_path = str(get_app_log_dir() / "whatsapp_qr.log")
+    except Exception:
+        log_path = "logs/whatsapp_qr.log"
+
     return {
         "configured": bool(whitelist) and linked,
         "linked": linked,
-        "running": is_bridge_running(),
+        "running": running,
+        "connected": connected,
         "enabled": whatsapp_config.get("enabled", False),
         "username": username,
         "sessions": sessions,
         "stats_4h": stats_4h,
         "activity": activity,
+        "log_path": log_path,
         "whitelist": [
             {"phone_number": e.get("phone_number", ""), "vaf_username": e.get("vaf_username")}
             for e in whitelist
@@ -273,6 +284,19 @@ async def stop_whatsapp_bridge():
     if is_bridge_running():
         stop_bridge()
     return {"status": "stopped", "message": "WhatsApp bridge stopped."}
+
+
+@router.post("/restart")
+async def restart_whatsapp_bridge():
+    """Restart the WhatsApp bridge (stop, wait for shutdown, start). Use when 'Restart bridge' doesn't reconnect."""
+    from vaf.api.whatsapp_bridge import restart_bridge
+
+    whatsapp_config = Config.get("whatsapp_config") or {}
+    if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("enabled"):
+        raise HTTPException(status_code=400, detail="WhatsApp not enabled. Enable in Settings -> Connections.")
+    if restart_bridge():
+        return {"status": "restarted", "message": "WhatsApp bridge restarted. Wait 20-30 s, then refresh."}
+    raise HTTPException(status_code=500, detail="Failed to restart bridge. Check Node.js and npm install in vaf/whatsapp_node.")
 
 
 def _get_whatsapp_compaction_info(session_id: str) -> tuple:

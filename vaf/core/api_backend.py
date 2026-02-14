@@ -83,12 +83,28 @@ class OpenAIProvider(BaseAIProvider):
                 # Enable usage for streaming (OpenAI specific)
                 kwargs["stream_options"] = {"include_usage": True}
                 
+                # DeepSeek Reasoner & R1: output primarily in reasoning_content; must yield both
+                is_reasoning = False
                 response = self.client.chat.completions.create(**kwargs)
                 for chunk in response:
                     if len(chunk.choices) > 0:
                         delta = chunk.choices[0].delta
-                        if delta.content:
-                            yield delta.content
+                        reasoning_chunk = getattr(delta, "reasoning_content", None) or ""
+                        content_chunk = delta.content or ""
+                        
+                        # Method 1: reasoning_content (DeepSeek Reasoner/R1, extended thinking models)
+                        if reasoning_chunk:
+                            if not is_reasoning:
+                                is_reasoning = True
+                                yield "<think>"
+                            yield reasoning_chunk
+                        
+                        # Method 2: content (standard answer field)
+                        if content_chunk:
+                            if is_reasoning:
+                                is_reasoning = False
+                                yield "</think>\n\n"
+                            yield content_chunk
                         
                         # Handle tool calls
                         if delta.tool_calls:
@@ -102,14 +118,25 @@ class OpenAIProvider(BaseAIProvider):
                     if hasattr(chunk, 'usage') and chunk.usage:
                         self.usage["input_tokens"] += chunk.usage.prompt_tokens
                         self.usage["output_tokens"] += chunk.usage.completion_tokens
+                
+                if is_reasoning:
+                    yield "</think>"
             else:
                 response = self.client.chat.completions.create(**kwargs)
-                if response.choices[0].message.content:
-                    yield response.choices[0].message.content
+                msg = response.choices[0].message
+                reasoning = getattr(msg, "reasoning_content", None) or ""
+                content = msg.content or ""
                 
-                # Handle tool calls
-                if response.choices[0].message.tool_calls:
-                    yield json.dumps({"tool_calls": [tc.model_dump() for tc in response.choices[0].message.tool_calls]})
+                # DeepSeek Reasoner: answer often in reasoning_content only
+                if reasoning:
+                    yield "<think>" + reasoning + "</think>\n\n"
+                if content:
+                    yield content
+                
+                # Handle tool calls (Reasoner has none)
+                tc = getattr(msg, "tool_calls", None)
+                if tc:
+                    yield json.dumps({"tool_calls": [t.model_dump() for t in tc]})
                 
                 if response.usage:
                     self.usage["input_tokens"] += response.usage.prompt_tokens
@@ -359,6 +386,13 @@ class APIBackendManager:
                 "local": "llama3"
             }
             model = self.config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, "gpt-4o"))
+
+        # DeepSeek Reasoner/R1: no function calling support; API returns 400 if tools passed
+        if self.provider_name == "deepseek" and model:
+            m = (model or "").lower()
+            if "reasoner" in m or "-r1" in m:
+                tools = None
+                tool_choice = "none"
 
         # Execute via provider
         for chunk in self.provider.chat_completion(messages, temperature, max_tokens, stream, model, tools, tool_choice):

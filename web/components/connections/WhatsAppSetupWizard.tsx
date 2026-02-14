@@ -25,9 +25,32 @@ export default function WhatsAppSetupWizard({ isOpen, onClose, onComplete }: Wha
             const res = await fetch(api('api/whatsapp/qr'), { credentials: 'include' });
             const data = await res.json();
             if (data.status === 'connected') {
-                setStep('phone');
                 setQrData(null);
                 setWaitingMsg('');
+                if (data.phone) {
+                    setPhoneNumber(data.phone);
+                    try {
+                        const addRes = await fetch(api('api/whatsapp/whitelist/add'), {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            credentials: 'include',
+                            body: JSON.stringify({ phone_number: data.phone }),
+                        });
+                        if (addRes.ok) {
+                            setStep('done');
+                            try {
+                                await fetch(api('api/whatsapp/start'), { method: 'POST', credentials: 'include' });
+                            } catch (_) {}
+                            setTimeout(() => { onComplete(); onClose(); }, 1500);
+                        } else {
+                            setStep('phone');
+                        }
+                    } catch (_) {
+                        setStep('phone');
+                    }
+                } else {
+                    setStep('phone');
+                }
                 return;
             }
             if (data.status === 'qr' && data.qr) {

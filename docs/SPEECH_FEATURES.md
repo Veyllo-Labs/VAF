@@ -11,7 +11,7 @@ VAF supports fully offline speech processing using Docker containers for high-qu
 - **Offline Operation**: No cloud dependencies; all processing runs locally via Docker
 - **Multi-Language Support**: Automatic language detection and routing to appropriate TTS voices
 - **Multi-Interface**: Speech works across CLI, Web UI, and Telegram
-- **Bidirectional Voice**: Telegram supports receiving and sending voice messages
+- **Bidirectional Voice**: Telegram and WhatsApp support receiving and sending voice messages (STT for incoming, TTS for outgoing)
 - **Browser-Native Audio**: Web UI handles audio conversion client-side for optimal compatibility
 
 ---
@@ -37,7 +37,8 @@ vaf/
 │   ├── agent.py               # Integration: _speak(), _speak_filler()
 │   └── web_server.py          # WebSocket handlers for Web UI speech
 ├── api/
-│   └── telegram_bridge.py     # Telegram voice message handling
+│   ├── telegram_bridge.py     # Telegram voice message handling
+│   └── whatsapp_bridge.py      # WhatsApp voice (STT + TTS reply)
 docker/
 └── tts-multilang/
     ├── app.py                 # Flask TTS API with multi-voice support
@@ -331,6 +332,16 @@ Whisper returns the detected language in the response. VAF uses this to:
 1. Route the agent response to the correct TTS voice
 2. Maintain conversation language consistency
 3. Enable multilingual voice conversations
+
+### WhatsApp Voice Messages
+
+WhatsApp supports the same bidirectional voice flow as Telegram:
+
+1. **Incoming:** User sends voice message → Node bridge downloads via Baileys → Python transcribes via Whisper STT → Agent processes text
+2. **Outgoing:** Agent response → TTS synthesizes → Sent as voice via Node bridge (`sendAudioAsVoice`)
+3. **Proactive voice:** The agent can explicitly send voice via `send_whatsapp(voice_lang="de")` or `send_telegram(voice_lang="de")` when the user requests it (e.g. "send as voice via WhatsApp")
+
+Requires `speech_stt_docker_url` (port 5003) and `speech_tts_docker_url` (port 5002). See [CONNECTIONS.md](CONNECTIONS.md) for WhatsApp setup.
 
 ---
 

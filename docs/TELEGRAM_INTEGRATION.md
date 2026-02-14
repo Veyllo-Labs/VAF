@@ -276,19 +276,29 @@ async def _sender_loop():
 |-------|------|-------------|
 | `chat_id` | string | Telegram chat ID |
 | `text` | string | Response text (or caption for documents) |
-| `voice_lang` | string | Language code for TTS (optional) |
+| `voice_lang` | string | Language code for TTS (optional). Set when user sent voice (auto-reply) or when agent calls `send_telegram` with `voice_lang` (proactive voice). |
 | `file_path` | string | Full path or folder alias (e.g. `Downloads\file.pdf`) for send_document (optional) |
 | `user_scope_id` | string | VAF user scope UUID |
 
 ### Proactive Document Delivery
 
-When the user asks for a document (e.g. "Schick mir die Rechnung XYZ" or "Send me the contract") via Telegram, the agent uses `send_telegram` with `file_path`:
+When the user asks for a document (e.g. "Send me the contract") via Telegram, the agent uses `send_telegram` with `file_path`:
 
 ```
-send_telegram(message="Hier deine Rechnung", file_path="/path/to/invoice.pdf")
+send_telegram(message="Here is your contract", file_path="/path/to/invoice.pdf")
 ```
 
 The Telegram bridge sends the file via `sendDocument` API with the message as caption. Supports PDF, DOCX, and other document types.
+
+### Proactive Voice Delivery
+
+When the user asks for a voice message via Telegram (e.g. "send it as voice via Telegram"), the agent uses `send_telegram` with `voice_lang`:
+
+```
+send_telegram(message="Here is the summary", voice_lang="de")
+```
+
+The bridge synthesizes audio via TTS and sends it as a Telegram voice message.
 
 **Path resolution:** The `file_path` argument supports:
 - Absolute paths (e.g. `C:\Users\...\Downloads\file.pdf`)

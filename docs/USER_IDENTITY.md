@@ -15,7 +15,7 @@ That data is stored per user and injected into the system prompt each turn.
 ## Storage
 
 - **File**: `~/.vaf/users/<username>/user_identity.json`
-- **Contents**: `name`, `preferred_language`, `city`, `country` (location), `preferences` (list of strings), `dos` (list), `donts` (list), `main_messenger` (optional: `"telegram"` | `"discord"` | `"slack"`), `timezone` (optional IANA e.g. `Europe/Berlin`), `date_format` (optional e.g. `dd.mm.yyyy`), `time_format` (optional `24h` | `12h`), `change_log` (list of `{ "at": "<ISO8601>", "action": "<summary>" }`).
+- **Contents**: `name`, `preferred_language`, `city`, `country` (location), `preferences` (list of strings), `dos` (list), `donts` (list), `main_messenger` (optional: `"telegram"` | `"discord"` | `"slack"` | `"whatsapp"`), `timezone` (optional IANA e.g. `Europe/Berlin`), `date_format` (optional e.g. `dd.mm.yyyy`), `time_format` (optional `24h` | `12h`), `change_log` (list of `{ "at": "<ISO8601>", "action": "<summary>" }`).
 - **Created**: When the workspace is first used; default `name` is the username, other fields empty.
 
 Do not confuse with `identity.json` in the same directory: that file holds the **agent's** display name, emoji, and theme (used in the Soul block). User identity is only about the human user.
@@ -31,7 +31,7 @@ In `vaf/core/system_prompt.py`, `build_prompt()` adds a block **"## User identit
 
 The **"## Current Time"** sentence in the system prompt uses the user's `timezone` (if set) and `date_format`/`time_format` so the model sees the correct local time and format.
 
-When the user has at least one messaging connection (Telegram, Discord), a **"## Messaging connections (proactive messages)"** subsection is added: it lists available channels and the preferred channel (if set), and instructs the agent to ask once if the user wants to receive something but has not set `main_messenger`, then to use `update_user_identity(main_messenger=...)` and the matching channel tool (`send_telegram`, `send_discord`, or `send_slack`). Only tools for configured connections are exposed to the agent. See [CONNECTIONS.md](CONNECTIONS.md) for proactive messaging.
+When the user has at least one messaging connection (Telegram, Discord, WhatsApp), a **"## Messaging connections (proactive messages)"** subsection is added: it lists available channels and the preferred channel (if set), and instructs the agent to ask once if the user wants to receive something but has not set `main_messenger`, then to use `update_user_identity(main_messenger=...)` and the matching channel tool (`send_telegram`, `send_discord`, `send_slack`, or `send_whatsapp`). Only tools for configured connections are exposed to the agent. See [CONNECTIONS.md](CONNECTIONS.md) for proactive messaging.
 
 That block is rebuilt every turn (dynamic system prompt), so the model always sees the latest user identity.
 
@@ -41,19 +41,20 @@ That block is rebuilt every turn (dynamic system prompt), so the model always se
 - **Name**: `update_user_identity`
 - **When to use**: When the user says their name, language, location, or rules (e.g. "call me Mert", "I prefer German", "I'm in Berlin" / "I'm based in Munich, Germany", "always be concise", "don't use emojis"). Also when the user says which channel to use for proactive messages (e.g. "send it via Telegram" → `main_messenger="telegram"`).
 
-Parameters (all optional): `name`, `language`, `city`, `country`, `main_messenger` (`"telegram"` | `"discord"` | `"slack"`), `timezone` (IANA e.g. `Europe/Berlin`), `date_format` (e.g. `dd.mm.yyyy`), `time_format` (`24h` | `12h`), `add_preference` / `remove_preference`, `add_do` / `remove_do`, `add_dont` / `remove_dont`. At least one must be provided.
+Parameters (all optional): `name`, `language`, `city`, `country`, `main_messenger` (`"telegram"` | `"discord"` | `"slack"` | `"whatsapp"`), `timezone` (IANA e.g. `Europe/Berlin`), `date_format` (e.g. `dd.mm.yyyy`), `time_format` (`24h` | `12h`), `add_preference` / `remove_preference`, `add_do` / `remove_do`, `add_dont` / `remove_dont`. At least one must be provided.
 
 On each successful run, the tool appends one entry to `change_log` with the current time (same source as the system prompt clock) and a short action summary (e.g. "name", "language", "preference"). The log is trimmed to the last 50 entries.
 
 The agent injects the current username into the tool call so the correct `user_identity.json` is updated.
 
-## Proactive messaging (send_telegram, send_discord)
+## Proactive messaging (send_telegram, send_discord, send_whatsapp)
 
 When the user asks the agent to send them something (e.g. a summary or a result "via Telegram"), the agent uses:
 
-1. **Messaging connections** (in the system prompt): which channels are available (Telegram, Discord) and whether `main_messenger` is set. Only tools for configured connections are exposed (e.g. `send_telegram` only if the user has Telegram).
-2. If preferred channel is not set, the agent asks once (e.g. "Should I send it via Discord, Telegram or Slack?") and stores the answer with `update_user_identity(main_messenger="telegram")` (or discord/slack).
-3. The agent uses the matching tool: **`send_telegram`** (`vaf/tools/send_telegram.py`), **`send_discord`** (`vaf/tools/send_discord.py`), or **`send_slack`** (`vaf/tools/send_slack.py`) depending on `main_messenger` or the user's request. For Telegram, the user must have sent at least one message from Telegram first so VAF can associate their chat ID (stored in `messaging_endpoints.json` under the platform data directory).
+1. **Messaging connections** (in the system prompt): which channels are available (Telegram, Discord, WhatsApp) and whether `main_messenger` is set. Only tools for configured connections are exposed (e.g. `send_telegram` only if the user has Telegram).
+2. If preferred channel is not set, the agent asks once (e.g. "Should I send it via Discord, Telegram, or WhatsApp?") and stores the answer with `update_user_identity(main_messenger="telegram")` (or discord/slack/whatsapp).
+3. The agent uses the matching tool: **`send_telegram`** (`vaf/tools/send_telegram.py`), **`send_discord`** (`vaf/tools/send_discord.py`), **`send_slack`** (`vaf/tools/send_slack.py`), or **`send_whatsapp`** (`vaf/tools/send_whatsapp.py`) depending on `main_messenger` or the user's request. For Telegram, the user must have sent at least one message from Telegram first so VAF can associate their chat ID. For WhatsApp, the whitelist phone number is used. Chat IDs / endpoints are stored in `messaging_endpoints.json` under the platform data directory.
+4. **Voice messages:** Both `send_telegram` and `send_whatsapp` support optional `voice_lang` (e.g. `"de"`, `"en"`) to send as a voice message instead of text when the user requests it.
 
 ## API
 

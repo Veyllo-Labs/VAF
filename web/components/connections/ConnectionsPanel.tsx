@@ -19,6 +19,7 @@ interface ConnectionsPanelProps {
     onOpenDiscordDashboard?: () => void;
     onOpenTelegramWizard: () => void;
     onOpenWhatsAppWizard?: () => void;
+    onOpenWhatsAppDashboard?: () => void;
     onOpenTelegramDashboard?: () => void;
     onOpenEmailDashboard?: () => void;
     onOpenEmailWizard?: () => void;
@@ -209,8 +210,8 @@ export const CATEGORIES = [
 /** Use relative /api/ so Next.js rewrites to backend. */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudDashboard, onOpenCloudWizard }: ConnectionsPanelProps) {
-    const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'disconnected' | 'checking'>>({});
+export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudDashboard, onOpenCloudWizard }: ConnectionsPanelProps) {
+    const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'linked' | 'disconnected' | 'checking'>>({});
     /** Cloud accounts from API (source of truth; config can be stale after OAuth) */
     const [cloudAccountsFromApi, setCloudAccountsFromApi] = useState<any[]>([]);
     /** Email accounts from API (source of truth; config only has legacy email_config, not email_config_by_user) */
@@ -280,7 +281,10 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             try {
                 const res = await fetch(api('api/whatsapp/status'), { credentials: 'include' });
                 const status = await res.json();
-                setConnectionStatus(prev => ({ ...prev, whatsapp: status.linked && status.running ? 'connected' : 'disconnected' }));
+                setConnectionStatus(prev => ({
+                    ...prev,
+                    whatsapp: status.linked && status.running ? 'connected' : status.linked ? 'linked' : 'disconnected',
+                }));
             } catch {
                 setConnectionStatus(prev => ({ ...prev, whatsapp: 'disconnected' }));
             }
@@ -509,10 +513,12 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                         <span className={cn(
                                                             "text-xs px-2 py-0.5 rounded-full",
                                                             status === 'connected' ? "bg-green-100 text-green-700" :
+                                                            status === 'linked' ? "bg-amber-100 text-amber-700" :
                                                             status === 'checking' ? "bg-yellow-100 text-yellow-700" :
                                                             "bg-gray-100 text-gray-500"
                                                         )}>
                                                             {status === 'connected' ? 'Connected' :
+                                                             status === 'linked' ? 'Linked' :
                                                              status === 'checking' ? 'Checking...' :
                                                              'Disconnected'}
                                                         </span>
@@ -572,7 +578,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                                 if (onOpenTelegramDashboard && configured) onOpenTelegramDashboard();
                                                                 else onOpenTelegramWizard();
                                                             }
-                                                            if (app.id === 'whatsapp') onOpenWhatsAppWizard?.();
+                                                            if (app.id === 'whatsapp') (onOpenWhatsAppDashboard && configured ? onOpenWhatsAppDashboard() : onOpenWhatsAppWizard?.());
                                                             if (app.id === 'email') {
                                                                 if (onOpenEmailDashboard) onOpenEmailDashboard();
                                                                 else if (onOpenEmailWizard) onOpenEmailWizard();

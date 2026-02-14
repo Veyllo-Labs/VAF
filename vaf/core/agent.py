@@ -1065,6 +1065,10 @@ class Agent:
             from vaf.tools.send_discord import SendDiscordTool
             from vaf.tools.send_slack import SendSlackTool
             from vaf.tools.send_whatsapp import SendWhatsAppTool
+            from vaf.tools.whatsapp_inbox import WhatsAppInboxTool
+            from vaf.tools.find_whatsapp_messages import FindWhatsAppMessagesTool
+            from vaf.tools.read_whatsapp_chat import ReadWhatsAppChatTool
+            from vaf.tools.whatsapp_call import WhatsAppCallTool
             from vaf.tools.mail_inbox import MailInboxTool
             from vaf.tools.read_mail import ReadMailTool
             from vaf.tools.find_mail import FindMailTool
@@ -1082,6 +1086,10 @@ class Agent:
             self.tools["send_discord"] = SendDiscordTool()
             self.tools["send_slack"] = SendSlackTool()
             self.tools["send_whatsapp"] = SendWhatsAppTool()
+            self.tools["whatsapp_inbox"] = WhatsAppInboxTool()
+            self.tools["find_whatsapp_messages"] = FindWhatsAppMessagesTool()
+            self.tools["read_whatsapp_chat"] = ReadWhatsAppChatTool()
+            self.tools["whatsapp_call"] = WhatsAppCallTool()
             self.tools["mail_inbox"] = MailInboxTool()
             self.tools["read_mail"] = ReadMailTool()
             self.tools["find_mail"] = FindMailTool()
@@ -5517,13 +5525,14 @@ class Agent:
             # Use >= 2 so short replies like "Hi" or "Ok" are accepted (CoT/first prompt)
             has_final_answer = len(temp_final) >= 2
 
-            # CoT fallback: Some models (e.g. VQ1) send the whole reply in reasoning_content and
-            # little or nothing in content. Treat substantial reasoning as a valid answer so we
-            # don't trigger infinite "Empty response" retries.
-            # UPDATE: Disabled this fallback because it prevents retrying when the model truly
-            # forgets to answer (outputting only <think>).
-            # if not has_final_answer and not tool_calls_detected and full_reasoning and len(full_reasoning.strip()) > 100:
-            #     has_final_answer = True
+            # CoT fallback for reasoning models (DeepSeek Reasoner/R1): These models put the
+            # answer primarily in reasoning_content and sometimes little/nothing in content.
+            # Without this, we get "API returned empty responses repeatedly" loops.
+            if not has_final_answer and not tool_calls_detected and full_reasoning and len(full_reasoning.strip()) > 100:
+                if self.api_backend and self.provider == "deepseek":
+                    model = (self.config.get("api_model_deepseek", "") or "").lower()
+                    if "reasoner" in model or "-r1" in model:
+                        has_final_answer = True
 
             # Empty Response Handler: No answer for the user (thinking only counts as empty)
             # NO RETRY LIMITS - will loop until we get a response
@@ -6083,6 +6092,8 @@ class Agent:
                 if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
+                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "list_email_accounts", "send_mail"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 # Pre-write intent/goal before sub-agent invocation for validation/retry

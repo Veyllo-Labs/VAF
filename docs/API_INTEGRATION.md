@@ -260,10 +260,13 @@ chmod 600 ~/.vaf/config.json
 ### DeepSeek
 
 **Models:**
-- `deepseek-chat` - General purpose
+- `deepseek-chat` - General purpose, supports function calling
 - `deepseek-coder` - Code-specialized
+- `deepseek-reasoner` - Chain-of-thought reasoning (outputs in `reasoning_content`); **no function calling**
 
 **Get API Key:** https://platform.deepseek.com/
+
+**Note:** `deepseek-reasoner` puts answers primarily in `reasoning_content`. VAF treats substantial reasoning as a valid response when `content` is empty.
 
 ### Google AI Studio
 

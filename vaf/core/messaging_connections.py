@@ -297,7 +297,7 @@ def get_messaging_connections(
             ws = get_user_workspace(username)
             ui = ws.get_user_identity()
             val = (ui.get("main_messenger") or "").strip().lower()
-            if val in ("telegram", "discord", "slack", "whatsapp"):
+            if val in ("telegram", "discord", "slack", "whatsapp", "email"):
                 main_messenger = val
         except Exception:
             pass

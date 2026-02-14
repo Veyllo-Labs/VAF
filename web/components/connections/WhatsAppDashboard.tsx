@@ -2,25 +2,27 @@
 
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, ExternalLink, MessageSquare, UserCheck, UserPlus, Trash2, Bot, User } from 'lucide-react';
+import { X, MessageSquare, UserCheck, UserPlus, Trash2, Bot, User, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import MessagesChart from './MessagesChart';
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-export interface TelegramDashboardProps {
+export interface WhatsAppDashboardProps {
     isOpen: boolean;
     onClose: () => void;
     config: any;
     onConfigChange: (key: string, value: any) => void;
+    onOpenSetupWizard?: () => void;
 }
 
-interface TelegramSession {
+interface WhatsAppSession {
     chat_id: string;
-    telegram_user_id: string;
-    telegram_username?: string | null;
+    phone_number: string;
+    name?: string | null;
     vaf_username?: string | null;
-    type: 'admin' | 'relay' | 'unknown';
+    session_id?: string;
+    type: string;
     last_ts: number;
     message_count: number;
 }
@@ -31,16 +33,15 @@ interface Stats4hBucket {
 }
 
 interface DashboardData {
-    bot_username: string | null;
     bot_link: string | null;
-    sessions: TelegramSession[];
+    sessions: WhatsAppSession[];
     stats_4h: Stats4hBucket[];
-    admin_whitelist: Array<{ telegram_user_id: string; telegram_username?: string | null; vaf_username?: string }>;
-    relay_whitelist: Array<{ telegram_user_id: string; telegram_username?: string | null; vaf_username?: string }>;
+    admin_whitelist: Array<{ phone_number: string; vaf_username?: string | null }>;
+    relay_whitelist: Array<{ phone_number: string; vaf_username?: string | null }>;
     activity: Array<{ chat_id: string; user_scope_id: string | null; ts: number; direction: string }>;
 }
 
-export default function TelegramDashboard({ isOpen, onClose, config, onConfigChange }: TelegramDashboardProps) {
+export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigChange, onOpenSetupWizard }: WhatsAppDashboardProps) {
     const [data, setData] = useState<DashboardData | null>(null);
     const [loading, setLoading] = useState(false);
     const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
@@ -53,7 +54,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
 
     useEffect(() => {
         if (isOpen) fetchDashboard();
-    }, [isOpen]);
+    }, [isOpen, config?.whatsapp_config]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -72,16 +73,18 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
         return () => window.removeEventListener('keydown', handleKeyDown, true);
     }, [isOpen, onClose, sessionHistoryPopoutChatId]);
 
+    const getSessionForChat = (chatId: string) => data?.sessions?.find((s) => s.chat_id === chatId);
+    const selectedSession = sessionHistoryPopoutChatId ? getSessionForChat(sessionHistoryPopoutChatId) : null;
+    const historySessionId = selectedSession?.session_id;
+
     useEffect(() => {
-        const chatId = sessionHistoryPopoutChatId ?? selectedChatId;
-        if (!chatId || !isOpen) {
+        if (!historySessionId || !isOpen) {
             setSessionHistory([]);
             setHistoryCompaction(null);
             return;
         }
-        const sessionId = `telegram_${chatId}`;
         setHistoryLoading(true);
-        fetch(api(`api/telegram/session/${encodeURIComponent(sessionId)}/history`), { credentials: 'include' })
+        fetch(api(`api/whatsapp/session/${encodeURIComponent(historySessionId)}/history`), { credentials: 'include' })
             .then((r) => r.json())
             .then((json) => {
                 setSessionHistory(Array.isArray(json.messages) ? json.messages : []);
@@ -96,24 +99,30 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 setHistoryCompaction(null);
             })
             .finally(() => setHistoryLoading(false));
-    }, [sessionHistoryPopoutChatId, selectedChatId, isOpen]);
+    }, [historySessionId, isOpen]);
 
     const fetchDashboard = async () => {
         setLoading(true);
         try {
-            const res = await fetch(api('api/telegram/dashboard'), { credentials: 'include' });
+            const res = await fetch(api('api/whatsapp/dashboard'), { credentials: 'include' });
             const json = await res.json();
+            if (!res.ok) {
+                console.warn('WhatsApp dashboard API error:', res.status, json);
+                setData(null);
+                return;
+            }
+            const whitelist = Array.isArray(json.whitelist) ? json.whitelist : [];
+            const sessions = Array.isArray(json.sessions) ? json.sessions : [];
             setData({
-                bot_username: json.bot_username ?? null,
-                bot_link: json.bot_link ?? null,
-                sessions: Array.isArray(json.sessions) ? json.sessions : [],
+                bot_link: json.linked ? 'https://web.whatsapp.com' : null,
+                sessions,
                 stats_4h: Array.isArray(json.stats_4h) ? json.stats_4h : [],
-                admin_whitelist: Array.isArray(json.admin_whitelist) ? json.admin_whitelist : [],
-                relay_whitelist: Array.isArray(json.relay_whitelist) ? json.relay_whitelist : [],
+                admin_whitelist: whitelist,
+                relay_whitelist: [],
                 activity: Array.isArray(json.activity) ? json.activity : [],
             });
-            if (!selectedChatId && Array.isArray(json.sessions) && json.sessions.length > 0) {
-                setSelectedChatId(json.sessions[0]?.chat_id ?? null);
+            if (!selectedChatId && sessions.length > 0) {
+                setSelectedChatId(sessions[0]?.chat_id ?? null);
             }
         } catch {
             setData(null);
@@ -123,34 +132,34 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     };
 
     const handleRelayAdd = async () => {
-        const id = relayAddId.trim();
-        if (!id) return;
+        const phone = relayAddId.trim();
+        if (!phone) return;
         try {
-            await fetch(api('api/telegram/relay-whitelist-add'), {
+            await fetch(api('api/whatsapp/whitelist/add'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ telegram_user_id: id, telegram_username: relayAddUsername.trim() || undefined }),
+                body: JSON.stringify({ phone_number: phone, vaf_username: relayAddUsername.trim() || undefined }),
             });
             setRelayAddId('');
             setRelayAddUsername('');
-            onConfigChange('telegram_config', { ...config.telegram_config, relay_whitelist: [...(config.telegram_config?.relay_whitelist || []), { telegram_user_id: id, telegram_username: relayAddUsername.trim() || null }] });
+            onConfigChange('whatsapp_config', { ...config.whatsapp_config, whitelist: [...(config.whatsapp_config?.whitelist || []), { phone_number: phone, vaf_username: relayAddUsername.trim() || null }] });
             fetchDashboard();
         } catch (e) {
             console.error(e);
         }
     };
 
-    const handleRelayRemove = async (telegram_user_id: string) => {
+    const handleRelayRemove = async (phone_number: string) => {
         try {
-            await fetch(api('api/telegram/relay-whitelist-remove'), {
+            await fetch(api('api/whatsapp/whitelist/remove'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ telegram_user_id }),
+                body: JSON.stringify({ phone_number }),
             });
-            const current = config.telegram_config?.relay_whitelist || [];
-            onConfigChange('telegram_config', { ...config.telegram_config, relay_whitelist: current.filter((e: any) => String(e.telegram_user_id) !== telegram_user_id) });
+            const current = config.whatsapp_config?.whitelist || [];
+            onConfigChange('whatsapp_config', { ...config.whatsapp_config, whitelist: current.filter((e: any) => String(e.phone_number) !== phone_number) });
             fetchDashboard();
         } catch (e) {
             console.error(e);
@@ -176,7 +185,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 onClick={e => e.stopPropagation()}
             >
                 <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
-                    <h3 className="text-lg font-semibold text-gray-900">Telegram</h3>
+                    <h3 className="text-lg font-semibold text-gray-900">WhatsApp</h3>
                     <button type="button" onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
                         <X className="w-5 h-5 text-gray-500" />
                     </button>
@@ -185,9 +194,19 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 <div className="flex-1 flex min-h-0">
                     {/* Left sidebar: session list (chats for this bot only) */}
                     <div className="w-56 shrink-0 border-r border-gray-200 flex flex-col bg-gray-50/50">
-                        <div className="px-3 py-2 border-b border-gray-200">
-                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Sessions</p>
-                            <p className="text-xs text-gray-400 mt-0.5">Chats with this bot</p>
+                        <div className="px-3 py-2 border-b border-gray-200 flex items-center justify-between gap-2">
+                            <div>
+                                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Chats</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); fetchDashboard(); }}
+                                disabled={loading}
+                                className="p-1.5 rounded hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors disabled:opacity-50"
+                                title="Chats aktualisieren"
+                            >
+                                <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
+                            </button>
                         </div>
                         <div className="flex-1 overflow-y-auto">
                             {loading ? (
@@ -210,12 +229,12 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                                                 )}
                                             >
                                                 <span className="text-sm font-medium truncate">
-                                                    @{s.telegram_username || s.telegram_user_id}
+                                                    {s.name || s.phone_number}
                                                 </span>
                                                 <span className="flex items-center gap-1.5 text-xs text-gray-500">
                                                     <span className={cn(
                                                         'px-1.5 py-0.5 rounded',
-                                                        s.type === 'admin' ? 'bg-green-100 text-green-700' : s.type === 'relay' ? 'bg-amber-100 text-amber-700' : 'bg-gray-200 text-gray-600'
+                                                        s.type === 'admin' ? 'bg-green-100 text-green-700' : s.type === 'relay' ? 'bg-amber-100 text-amber-700' : s.type === 'contact' ? 'bg-gray-200 text-gray-600' : 'bg-gray-200 text-gray-600'
                                                     )}>
                                                         {s.type}
                                                     </span>
@@ -229,7 +248,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                                     ))}
                                 </ul>
                             ) : (
-                                <p className="p-3 text-sm text-gray-500">No sessions yet. Add users in the wizard or relay list.</p>
+                                <p className="p-3 text-sm text-gray-500">Keine Chats. Bridge neu starten (Settings → Connections) und 1–2 Min. warten.</p>
                             )}
                         </div>
                     </div>
@@ -240,26 +259,8 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                         <div className="py-8 text-center text-gray-500">Loading…</div>
                     ) : data ? (
                         <>
-                            {/* Test link */}
-                            <div>
-                                <p className="text-sm font-medium text-gray-700 mb-2">Chat with bot</p>
-                                {data.bot_link ? (
-                                    <a
-                                        href={data.bot_link}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-100 transition-colors text-sm"
-                                    >
-                                        <ExternalLink className="w-4 h-4" />
-                                        Open in Telegram
-                                    </a>
-                                ) : (
-                                    <p className="text-sm text-gray-500">Bot link not available.</p>
-                                )}
-                            </div>
-
                             {/* Line chart: messages per 4-hour interval */}
-                            <MessagesChart buckets={data?.stats_4h ?? []} chartId="telegram-messages-chart" />
+                            <MessagesChart buckets={data?.stats_4h ?? []} chartId="whatsapp-messages-chart" />
 
                             {/* Activity: all or for selected session; when a chat is selected, whole block opens same DIN A4 Verlauf popup on click */}
                             <div
@@ -302,11 +303,11 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                                         <UserCheck className="w-4 h-4 text-gray-600" />
                                         <p className="text-sm font-medium text-gray-800">Full access</p>
                                     </div>
-                                    <p className="text-xs text-gray-500 mb-3">These users can use the full agent (tools, memory) via Telegram.</p>
+                                    <p className="text-xs text-gray-500 mb-3">These users can use the full agent (tools, memory) via WhatsApp.</p>
                                     <ul className="space-y-2">
                                         {(data.admin_whitelist || []).map((e, i) => (
                                             <li key={i} className="flex items-center justify-between text-sm py-1.5 px-2 rounded bg-gray-50">
-                                                <span className="text-gray-700">@{e.telegram_username || e.telegram_user_id}</span>
+                                                <span className="text-gray-700">{e.phone_number}</span>
                                                 {e.vaf_username && <span className="text-gray-500 text-xs">{e.vaf_username}</span>}
                                             </li>
                                         ))}
@@ -322,16 +323,16 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                                         <UserPlus className="w-4 h-4 text-gray-600" />
                                         <p className="text-sm font-medium text-gray-800">Relay contacts</p>
                                     </div>
-                                    <p className="text-xs text-gray-500 mb-3">These contacts can only send messages to you. No tools; replies are fixed (e.g. “I’ll pass that on”).</p>
+                                    <p className="text-xs text-gray-500 mb-3">These contacts can only send messages to you. No tools; replies are fixed (e.g. "I'll pass that on").</p>
                                     <ul className="space-y-2 mb-3">
                                         {(data.relay_whitelist || []).map((e, i) => (
                                             <li key={i} className="flex items-center justify-between text-sm py-1.5 px-2 rounded bg-gray-50">
-                                                <span className="text-gray-700">@{e.telegram_username || e.telegram_user_id}</span>
+                                                <span className="text-gray-700">{e.phone_number}</span>
                                                 <button
                                                     type="button"
                                                     onClick={() => {
                                                         if (!confirm('Are you sure you want to remove this relay contact?')) return;
-                                                        handleRelayRemove(e.telegram_user_id);
+                                                        handleRelayRemove(e.phone_number);
                                                     }}
                                                     className="p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-600"
                                                     title="Remove"
@@ -347,7 +348,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                                     <div className="flex gap-2 flex-wrap">
                                         <input
                                             type="text"
-                                            placeholder="Telegram user ID"
+                                            placeholder="Phone number"
                                             value={relayAddId}
                                             onChange={e => setRelayAddId(e.target.value)}
                                             className="flex-1 min-w-0 rounded border border-gray-300 px-2 py-1.5 text-sm"
@@ -383,6 +384,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
         {/* Session-Verlauf als eigenständiges Popup (Portal auf document.body), größer/höher als das Dashboard */}
         {typeof document !== 'undefined' &&
             sessionHistoryPopoutChatId &&
+            selectedSession &&
             createPortal(
                 <div
                     className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50"
@@ -394,7 +396,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                     >
                         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
                             <h4 className="text-sm font-semibold text-gray-900">
-                                @{data?.sessions?.find(s => s.chat_id === sessionHistoryPopoutChatId)?.telegram_username || sessionHistoryPopoutChatId}
+                                {selectedSession.phone_number}
                             </h4>
                             <button
                                 type="button"

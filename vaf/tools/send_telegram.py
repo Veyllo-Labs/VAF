@@ -35,14 +35,19 @@ class SendTelegramTool(BaseTool):
     description = (
         "Send a message to the user via Telegram. "
         "Use when the user asked you to send them something (e.g. 'send me the result via Telegram' or when main_messenger is Telegram). "
-        "When sending a document (invoice, contract, PDF, etc.), pass file_path with the full path to the file."
+        "For voice messages (Sprachnachricht), pass voice_lang (e.g. 'de', 'en'). "
+        "For documents (invoice, contract, PDF, etc.), pass file_path with the full path to the file."
     )
     parameters = {
         "type": "object",
         "properties": {
             "message": {
                 "type": "string",
-                "description": "The message text (caption) to send. For documents, use as caption (e.g. 'Here is your invoice').",
+                "description": "The message text (caption) to send. For documents, use as caption (e.g. 'Here is your invoice'). For voice, this is the text to speak (TTS).",
+            },
+            "voice_lang": {
+                "type": "string",
+                "description": "Optional. Language code (e.g. 'de', 'en') to send as voice message (Sprachnachricht). Use when user asks for a voice message via Telegram.",
             },
             "file_path": {
                 "type": "string",
@@ -85,9 +90,15 @@ class SendTelegramTool(BaseTool):
         if file_path and not file_path.is_file():
             return f"File not found or not a file: {file_path}"
 
+        voice_lang = (kwargs.get("voice_lang") or "").strip()
         try:
             text_to_send = message[:4096]
-            send_telegram_reply(chat_id, text_to_send, file_path=str(file_path) if file_path else None)
+            send_telegram_reply(
+                chat_id,
+                text_to_send,
+                voice_lang=voice_lang[:2].lower() if voice_lang else None,
+                file_path=str(file_path) if file_path else None,
+            )
         except Exception as e:
             return f"Failed to send Telegram message: {e}"
 
@@ -109,6 +120,8 @@ class SendTelegramTool(BaseTool):
         except Exception:
             pass  # Do not fail the tool if session append fails
 
+        if voice_lang:
+            return "Voice message sent to the user via Telegram."
         if file_path:
             return f"Message and document {file_path.name} sent to the user via Telegram."
         return "Message sent to the user via Telegram."

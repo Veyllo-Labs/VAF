@@ -2,9 +2,13 @@
 Long-lived WhatsApp bridge: one Node (Baileys) subprocess per user with linked auth.
 Receives messages via Node stdout, enqueues tasks, sends replies via stdin to Node.
 User isolation: each user's credentials and session are strictly separate.
+Voice messages from WhatsApp are downloaded by Node, transcribed via Whisper STT, and passed as text.
 """
+import asyncio
 import json
 import logging
+import os
+import time
 import queue
 import shutil
 import subprocess
@@ -12,6 +16,8 @@ import sys
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+import requests
 
 from vaf.core.config import Config
 from vaf.core.messaging_connections import save_whatsapp_chat_jid
@@ -28,6 +34,13 @@ _bridge_stop = threading.Event()
 _processes: Dict[str, subprocess.Popen] = {}
 _process_lock = threading.Lock()
 _outgoing_queue: Optional[queue.Queue] = None
+_chat_lists: Dict[str, List[Dict[str, Any]]] = {}
+_chat_list_events: Dict[str, threading.Event] = {}
+_chat_lists_lock = threading.Lock()
+
+# Reply with voice when user sent voice (like Telegram)
+_voice_reply_pending: Dict[str, str] = {}  # "username|chat_jid" -> voice_lang
+_voice_reply_lock = threading.Lock()
 
 
 def _wa_bridge_path() -> Path:
@@ -41,15 +54,101 @@ def _node_path() -> Optional[str]:
 
 
 def _jid_to_e164(jid: str) -> str:
-    """Convert WhatsApp JID to E.164-like string for comparison (e.g. 491234567890@s.whatsapp.net -> 491234567890)."""
-    if not jid or "@" not in jid:
-        return (jid or "").strip()
-    return jid.split("@")[0].strip()
+    """Convert WhatsApp JID to E.164-like string (e.g. 491234567890@s.whatsapp.net -> 491234567890).
+    Strips :device suffix, skips @lid/@broadcast/@status."""
+    if not jid or not isinstance(jid, str):
+        return ""
+    jid = jid.strip()
+    if "@lid" in jid or jid.endswith("@broadcast") or jid.endswith("@status"):
+        return ""
+    if "@" not in jid:
+        return jid
+    part = jid.split("@")[0].split(":")[0].strip()
+    if not part or not part.isdigit() or len(part) < 7 or len(part) > 15:
+        return ""
+    return part
 
 
 def _normalize_phone(phone: str) -> str:
     """Normalize phone to digits only for comparison."""
     return "".join(c for c in (phone or "") if c.isdigit())
+
+
+def _append_chat_activity(chat_id: str, user_scope_id: Any, direction: str = "in") -> None:
+    """Append one activity entry for the dashboard timeline (keeps last 100)."""
+    try:
+        config = Config.load()
+        wc = config.get("whatsapp_config") or {}
+        if not isinstance(wc, dict):
+            return
+        activity = list(wc.get("chat_activity") or [])
+        activity.append({"chat_id": str(chat_id), "user_scope_id": str(user_scope_id) if user_scope_id else None, "ts": time.time(), "direction": direction})
+        wc["chat_activity"] = activity[-100:]
+        config["whatsapp_config"] = wc
+        Config.save(config)
+    except Exception:
+        pass
+
+
+def _synthesize_voice_for_reply(text: str, lang: str) -> Optional[str]:
+    """Synthesize TTS to temp file. Returns path or None."""
+    try:
+        import tempfile
+        stt_url = (Config.get("speech_tts_docker_url") or "http://localhost:5002").strip().rstrip("/")
+        if not stt_url:
+            return None
+        resp = requests.post(
+            f"{stt_url}/synthesize",
+            json={"text": text[:4000], "language": lang[:2].lower(), "format": "ogg"},
+            timeout=60,
+        )
+        if not resp.ok or not resp.content:
+            return None
+        data = resp.content
+        if data[:4] not in (b"OggS", b"RIFF"):
+            return None
+        suffix = ".ogg" if data[:4] == b"OggS" else ".wav"
+        with tempfile.NamedTemporaryFile(prefix="vaf_wa_", suffix=suffix, delete=False) as f:
+            f.write(data)
+            return f.name
+    except Exception:
+        return None
+
+
+def _transcribe_voice_file(voice_path: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Transcribe a voice file via Docker Whisper STT.
+    Returns (transcribed_text, detected_language) or (None, None) on error.
+    """
+    try:
+        path_obj = Path(voice_path)
+        if not path_obj.is_file():
+            return None, None
+        stt_url = (Config.get("speech_stt_docker_url") or "http://localhost:5003").strip().rstrip("/")
+        asr_endpoint = f"{stt_url}/asr"
+        with open(voice_path, "rb") as f:
+            stt_resp = requests.post(
+                asr_endpoint,
+                files={"audio_file": ("voice.ogg", f, "audio/ogg")},
+                params={"encode": "true", "output": "json"},
+                timeout=60,
+            )
+        if not stt_resp.ok:
+            logger.warning("WhatsApp STT failed: %s - %s", stt_resp.status_code, stt_resp.text[:200])
+            return None, None
+        data = stt_resp.json()
+        text = (data.get("text") or "").strip()
+        language = data.get("language", "en")
+        logger.info("WhatsApp voice transcribed: lang=%s, text=%s...", language, (text or "")[:50])
+        return text, language
+    except Exception as e:
+        logger.warning("WhatsApp voice transcription error: %s", e)
+        return None, None
+    finally:
+        try:
+            os.unlink(voice_path)
+        except Exception:
+            pass
 
 
 def _allow_from_match(sender_jid: str, allowed_phones: List[str]) -> bool:
@@ -118,33 +217,63 @@ def _run_user_process(username: str, auth_dir: Path) -> Optional[subprocess.Pope
 
 
 def _sender_loop() -> None:
-    """Read (username, chat_jid, text) from queue, write to that user's Node stdin."""
+    """Read (username, chat_jid, text, voice_path?) from queue, write to that user's Node stdin."""
     global _outgoing_queue, _processes
     while True:
         try:
             item = _outgoing_queue.get(timeout=1.0)
             if item is None:
                 break
-            username, chat_jid, text = item
-            if not username or not chat_jid or not text:
+            voice_path = item[3] if len(item) >= 4 else None
+            username, chat_jid, text = item[0], item[1], (item[2] or "")
+            if not username or not chat_jid:
+                continue
+            if not voice_path and not text:
                 continue
             with _process_lock:
                 proc = _processes.get(username)
+                if (not proc or proc.poll() is not None) and len(_processes) == 1:
+                    proc = next(iter(_processes.values()))
             if not proc or proc.poll() is not None:
                 logger.warning("WhatsApp process for %s not running, dropped reply", username)
-                continue
-            chunks = chunk_whatsapp_text(text)
-            for chunk in chunks:
-                cmd = {"cmd": "send", "to": chat_jid, "text": chunk}
                 try:
-                    proc.stdin.write(json.dumps(cmd) + "\n")
-                    proc.stdin.flush()
+                    from vaf.core.log_helper import log_whatsapp_reply
+                    log_whatsapp_reply(f"DROPPED process_not_running username={username} jid={chat_jid}")
+                except Exception:
+                    pass
+                continue
+            if voice_path:
+                try:
+                    from pathlib import Path
+                    p = Path(voice_path)
+                    if p.is_file():
+                        cmd = {"cmd": "send_voice", "to": chat_jid, "path": str(p.resolve())}
+                        proc.stdin.write(json.dumps(cmd) + "\n")
+                        proc.stdin.flush()
+                    else:
+                        logger.warning("WhatsApp voice file not found: %s", voice_path)
                 except Exception as e:
-                    logger.warning("WhatsApp send failed for %s: %s", username, e)
-                    break
+                    logger.warning("WhatsApp voice send failed for %s: %s", username, e)
+            else:
+                chunks = chunk_whatsapp_text(text)
+                for chunk in chunks:
+                    cmd = {"cmd": "send", "to": chat_jid, "text": chunk}
+                    try:
+                        proc.stdin.write(json.dumps(cmd) + "\n")
+                        proc.stdin.flush()
+                    except Exception as e:
+                        logger.warning("WhatsApp send failed for %s: %s", username, e)
+                        break
             try:
                 from vaf.core.log_helper import log_whatsapp_reply
                 log_whatsapp_reply(f"SENDER ok username={username} jid={chat_jid}")
+            except Exception:
+                pass
+            try:
+                chat_id = f"+{_jid_to_e164(chat_jid)}" if _jid_to_e164(chat_jid) else str(chat_jid or "")
+                from vaf.core.whatsapp_message_store import append_message
+                body = "[Voice message]" if voice_path else text
+                append_message(username, chat_id or chat_jid, body, direction="out", content_type="voice" if voice_path else "text")
             except Exception:
                 pass
         except queue.Empty:
@@ -154,7 +283,9 @@ def _sender_loop() -> None:
 
 
 def _is_jid_whitelisted(username: str, chat_jid: str) -> bool:
-    """Verify chat_jid is in whitelist for this user. Nur Whitelist-Nummern dürfen Antworten erhalten."""
+    """Verify chat_jid is in whitelist for this user. Nur Whitelist-Nummern dürfen Antworten erhalten. @lid = self-chat, immer erlaubt."""
+    if (chat_jid or "").strip().endswith("@lid"):
+        return True  # Self-chat: reply to own saved messages
     whatsapp_config = Config.get("whatsapp_config") or {}
     if not isinstance(whatsapp_config, dict):
         return False
@@ -168,19 +299,32 @@ def _is_jid_whitelisted(username: str, chat_jid: str) -> bool:
     return _allow_from_match(chat_jid, allowed_phones)
 
 
-def _enqueue_reply(username: str, chat_jid: str, text: str) -> None:
-    """Callback for headless_runner: enqueue reply for this user's Node process. Only sends to whitelisted contacts."""
+def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional[str] = None) -> None:
+    """Callback for headless_runner: enqueue reply. If voice_path, send as voice message.
+    When user sent a voice message, auto-reply with voice (TTS) when possible."""
     if not _is_jid_whitelisted(username, chat_jid):
         logger.warning("WhatsApp: blocked reply to non-whitelisted JID %s for user %s", chat_jid, username)
         return
+    # If no voice_path but user sent voice, try to synthesize TTS (like Telegram)
+    if not voice_path and text:
+        with _voice_reply_lock:
+            lang = _voice_reply_pending.pop(f"{username}|{chat_jid}", None)
+        if lang:
+            voice_path = _synthesize_voice_for_reply(text, lang)
+            if voice_path:
+                try:
+                    from vaf.core.log_helper import log_whatsapp_reply
+                    log_whatsapp_reply(f"BRIDGE enqueue voice_reply username={username} lang={lang}")
+                except Exception:
+                    pass
     try:
         from vaf.core.log_helper import log_whatsapp_reply
-        log_whatsapp_reply(f"BRIDGE enqueue username={username} jid={chat_jid} len={len(text)}")
+        log_whatsapp_reply(f"BRIDGE enqueue username={username} jid={chat_jid} len={len(text)} voice={bool(voice_path)}")
     except Exception:
         pass
     if _outgoing_queue is not None:
         try:
-            _outgoing_queue.put((username, chat_jid, text))
+            _outgoing_queue.put((username, chat_jid, text, voice_path))
         except Exception:
             pass
 
@@ -226,19 +370,60 @@ def _read_user_process(
             logger.info("WhatsApp connected for user %s", username)
         elif typ == "message":
             from_jid = obj.get("from") or obj.get("senderJid")
+            from_e164 = obj.get("fromE164")  # Resolved via Baileys lidMapping when @lid
             body = (obj.get("body") or "").strip()
+            voice_path = obj.get("voice_path")
+            voice_lang: Optional[str] = None
+            was_voice = bool(voice_path)
+            if voice_path and body == "<voice>":
+                transcript, voice_lang = _transcribe_voice_file(voice_path)
+                body = transcript if transcript else "<media:audio>"
             if not body:
+                try:
+                    from vaf.core.log_helper import log_whatsapp_inbound
+                    log_whatsapp_inbound(f"SKIP no_body from={from_jid}")
+                except Exception:
+                    pass
                 continue
-            if not _allow_from_match(from_jid or "", allowed_phones):
+            # Self-chat (@lid): message to yourself – allow (linked account is user's)
+            # Also allow when fromE164 matches whitelist (clawdbot: resolved @lid)
+            is_self_chat = obj.get("selfChat") is True or (from_jid or "").strip().endswith("@lid")
+            allow_match = _allow_from_match(from_jid or "", allowed_phones) or (
+                from_e164 and _allow_from_match(from_e164, allowed_phones)
+            )
+            if not is_self_chat and not allow_match:
+                try:
+                    from vaf.core.log_helper import log_whatsapp_inbound
+                    log_whatsapp_inbound(f"REJECT not_whitelist from={from_jid}")
+                except Exception:
+                    pass
                 logger.debug("WhatsApp: rejected message from %s (not in allowFrom)", from_jid)
                 continue
+            try:
+                from vaf.core.log_helper import log_whatsapp_inbound
+                log_whatsapp_inbound(f"ACCEPT from={from_jid} self_chat={is_self_chat} body_len={len(body)}")
+            except Exception:
+                pass
             save_whatsapp_chat_jid(user_scope_id, username, from_jid)
-            session_id = f"whatsapp_{username}_{_jid_to_e164(from_jid)}"
+            # Use fromE164 when available (resolved @lid from Node); else derive from JID
+            resolved_e164 = from_e164 or _jid_to_e164(from_jid)
+            chat_id = f"+{resolved_e164}" if resolved_e164 else str(from_jid or "")
+            _append_chat_activity(chat_id, user_scope_id, "in")
+            try:
+                from vaf.core.whatsapp_message_store import append_message
+                append_message(username, chat_id, body, direction="in", sender_jid=from_jid, message_id=obj.get("messageId") or obj.get("message_id"), content_type="voice" if was_voice else "text")
+            except Exception:
+                pass
+            session_id = f"whatsapp_{username}_{resolved_e164 or _jid_to_e164(from_jid) or 'self'}"
             metadata: Dict[str, Any] = {
                 "user_scope_id": user_scope_id,
                 "username": username,
                 "whatsapp_chat_jid": from_jid,
             }
+            if voice_lang:
+                metadata["voice_lang"] = voice_lang
+                with _voice_reply_lock:
+                    _voice_reply_pending[f"{username}|{from_jid}"] = voice_lang
             tq = TaskQueue()
             tq.add(
                 session_id=session_id,
@@ -246,9 +431,28 @@ def _read_user_process(
                 source="whatsapp",
                 metadata=metadata,
             )
+            try:
+                from vaf.core.log_helper import log_whatsapp_inbound
+                log_whatsapp_inbound(f"ENQUEUED session={session_id} user={username}")
+            except Exception:
+                pass
             logger.info("WhatsApp message enqueued from %s for user %s", from_jid, username)
+        elif typ == "chats":
+            chats = obj.get("chats")
+            if isinstance(chats, list):
+                with _chat_lists_lock:
+                    _chat_lists[username] = chats
+                ev = _chat_list_events.get(username)
+                if ev:
+                    ev.set()
         elif typ == "error":
-            logger.warning("WhatsApp error for %s: %s", username, obj.get("message", ""))
+            err_msg = obj.get("message", "")
+            logger.warning("WhatsApp error for %s: %s", username, err_msg)
+            try:
+                from vaf.core.log_helper import log_whatsapp_reply
+                log_whatsapp_reply(f"ERROR username={username} msg={err_msg}")
+            except Exception:
+                pass
 
 
 def _run_bridge() -> None:
@@ -329,3 +533,58 @@ def stop_bridge() -> None:
 
 def is_bridge_running() -> bool:
     return _bridge_thread is not None and _bridge_thread.is_alive()
+
+
+def has_process_for_user(username: str) -> bool:
+    """True if we have a running Node process for this user (so sends will not be dropped)."""
+    if not is_bridge_running():
+        return False
+    uname = (username or "").strip() or "admin"
+    with _process_lock:
+        proc = _processes.get(uname)
+        if proc and proc.poll() is None and proc.stdin:
+            return True
+        if len(_processes) == 1:
+            p = next(iter(_processes.values()))
+            return p.poll() is None and p.stdin is not None
+        return False
+
+
+def _request_chats(username: str) -> Optional[str]:
+    """Send getChats to the Node process. Returns the username whose process was used (for lookup), or None."""
+    with _process_lock:
+        proc = _processes.get(username)
+        target_username = username
+        if not proc or proc.poll() is not None or not proc.stdin:
+            if len(_processes) == 1:
+                target_username = next(iter(_processes.keys()))
+                proc = _processes.get(target_username)
+            else:
+                proc = None
+    if proc and proc.poll() is None and proc.stdin:
+        try:
+            proc.stdin.write(json.dumps({"cmd": "getChats"}) + "\n")
+            proc.stdin.flush()
+            return target_username
+        except Exception as e:
+            logger.warning("WhatsApp getChats failed for %s: %s", username, e)
+    return None
+
+
+def get_whatsapp_chats(username: str, force_refresh: bool = False, wait_timeout: float = 3.0) -> List[Dict[str, Any]]:
+    """Return the list of all WhatsApp chats. Requests from bridge when running."""
+    if not is_bridge_running():
+        with _chat_lists_lock:
+            return list(_chat_lists.get(username, []))
+    used_username = _request_chats(username)
+    if not used_username:
+        with _chat_lists_lock:
+            return list(_chat_lists.get(username, []))
+    with _chat_lists_lock:
+        if used_username not in _chat_list_events:
+            _chat_list_events[used_username] = threading.Event()
+        ev = _chat_list_events[used_username]
+        ev.clear()
+    ev.wait(timeout=wait_timeout)
+    with _chat_lists_lock:
+        return list(_chat_lists.get(used_username, []))

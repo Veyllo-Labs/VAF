@@ -76,6 +76,17 @@ def log_whatsapp_qr(message: str) -> None:
         pass
 
 
+def log_whatsapp_inbound(message: str) -> None:
+    """Always append to logs/whatsapp_inbound.log (for diagnosing inbound/self-chat). No-op on error."""
+    try:
+        log_dir = get_app_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "whatsapp_inbound.log", "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().isoformat()} {message}\n")
+    except Exception:
+        pass
+
+
 def log_whatsapp_reply(message: str) -> None:
     """Always append to logs/whatsapp_reply.log (for diagnosing WhatsApp delivery). No-op on error."""
     try:

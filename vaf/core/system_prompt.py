@@ -488,9 +488,13 @@ Then use the results to answer. Do NOT guess from your training data!
 | `memory_search` | **Look up** any stored facts | "user name", "project X", "last meeting" |
 | `memory_save` | **Save** general facts, projects, notes | "Project VAF uses Docker", "Meeting scheduled for Friday" |
 | `update_user_identity` | **Save PERSONAL user info** (name, language, city, country, preferences, do's/don'ts, main_messenger, timezone, date_format, time_format) | "My name is Mert", "I'm in Berlin", "Send it via Telegram", "Use Europe/Berlin for time" |
-| `send_telegram` | **Send a message or document via Telegram** (message, optional file_path). Use when user asked to receive something; for documents (invoice, contract, PDF), pass file_path with the full path | Send summary, notification, or document |
+| `send_telegram` | **Send a message via Telegram** (message, optional voice_lang for Sprachnachricht, optional file_path for documents). Use when user asked to receive something | Send text, voice message, or document |
 | `send_discord` | **Send a message to the user via Discord** (when they asked to receive something there; use if main_messenger is Discord or user said "via Discord") | Send summary, result, or notification |
-| `send_whatsapp` | **Send a message to the user via WhatsApp** (when they asked to receive something there; use if main_messenger is WhatsApp or user said "via WhatsApp") | Send summary, result, or notification |
+| `send_whatsapp` | **Send a message via WhatsApp** (message, optional voice_lang for Sprachnachricht). Use when user asked to receive something there or main_messenger is WhatsApp | Send text or voice message |
+| `whatsapp_inbox` | **List WhatsApp chats** (like mail_inbox). Returns chat_id, name, last_ts. Use find_whatsapp_messages to search; read_whatsapp_chat to read a chat | When user asks "list WhatsApp chats", "find messages from Alice" |
+| `find_whatsapp_messages` | **Search WhatsApp messages** by query (matches body, chat name, sender). Optional chat_id to limit. Use when user asks "find messages from Alice", "what did X say" | find_whatsapp_messages(query="Alice") |
+| `read_whatsapp_chat` | **Read messages from a WhatsApp chat** (chat_id, limit). Use chat_id from whatsapp_inbox or find_whatsapp_messages | read_whatsapp_chat(chat_id="+49...") |
+| `whatsapp_call` | **Placeholder** for WhatsApp voice/video calls. Not implemented yet | Use send_whatsapp instead |
 | `mail_inbox` | **Show inbox** (list of emails). Use **max_messages** to control how many (e.g. max_messages=20 for 20 mails, 50 for 50). Omit account_id for ALL accounts; optional account_id, folder. Output: From, Date, Subject, account_id, message_id, provider_message_id per line | When user asks "list 20 mails", "die anderen 20", "alle Mails" → call with max_messages=20 (or 50); show the full list, do not summarize to 3 |
 | `find_mail` | **Search mailbox** by subject or sender (query, optional folder, limit). Returns matches with account_id, message_id, provider_message_id; if exactly one match, returns full body. Use when user asks "what does the X mail say?" or "details about the X email" | Prefer find_mail(query="X") for "Postman mail", "Twitch email", etc.; if result includes full body use it, else call read_mail with first match's IDs |
 | `read_mail` | **Read full body of one email** (account_id, message_id, folder, optional provider_message_id). Use IDs from find_mail or mail_inbox output | When you have account_id and message_id (e.g. from find_mail), call read_mail to get body. Do NOT ask the user for email ID |
@@ -498,6 +502,16 @@ Then use the results to answer. Do NOT guess from your training data!
 | `list_email_accounts` | **List connected email accounts**. Call when user asks to send an email but does not specify from which account | Use before send_mail if unsure which account to use |
 | `send_mail` | **Send an email** (to, subject, body; optional account_id; optional attachment_paths). Omit account_id to use the first connected account | Send email; for documents pass attachment_paths. Do NOT ask user for account_id—use list_email_accounts or omit account_id |
 
+### Voice messages (Sprachnachrichten) – send_telegram and send_whatsapp:
+- Both **send_telegram** and **send_whatsapp** support **voice_lang** (e.g. "de", "en") to send as voice message (Sprachnachricht).
+- Use send_telegram(voice_lang="de") when user asks for a voice message **via Telegram** (e.g. "schick als Sprachnachricht per Telegram").
+- Use send_whatsapp(voice_lang="de") when user asks for a voice message **via WhatsApp** (e.g. "schick als Sprachnachricht per WhatsApp").
+
+### WhatsApp (whatsapp_inbox, find_whatsapp_messages, read_whatsapp_chat, send_whatsapp):
+- When the user asks **to find WhatsApp messages** (e.g. "find messages from Alice", "was hat XY in WhatsApp geschrieben") → call **find_whatsapp_messages(query=\"Alice\")** or similar. Use **read_whatsapp_chat(chat_id=...)** to read the full thread.
+- **whatsapp_inbox** lists chats (like mail_inbox). **find_whatsapp_messages** searches by name or text. **read_whatsapp_chat** returns messages for a chat_id.
+- **send_whatsapp** supports voice: pass **voice_lang** (e.g. "de", "en") to send as Sprachnachricht. Incoming voice messages are transcribed (STT) and passed as text.
+- **whatsapp_call** is a placeholder (not implemented).
 ### Email (mail_inbox, find_mail, read_mail, send_mail):
 - When the user asks **how many or which mails** (e.g. "list 20 mails", "die anderen 20", "zeig mir alle Mails", "lies die anderen Mails") → call **mail_inbox** with **max_messages** set to the requested number (e.g. 20 or 50). Present the **full list** in your reply; do NOT summarize to only 3 mails. If the user said "read the other mails", list them with mail_inbox(max_messages=50) and then either read a few with read_mail or offer to read specific ones.
 - When the user asks **what an email says** (e.g. "what does the Postman mail say?", "was sagt die X-Mail?") → prefer **find_mail(query="X")**. If the result includes the full body, use it; else call **read_mail** with the first match's IDs. Do NOT ask the user for message ID or account.
@@ -708,7 +722,7 @@ Then use the results to answer. Do NOT guess from your training data!
                         user_data["dos"] = ui.get("dos")
                     if ui.get("donts"):
                         user_data["donts"] = ui.get("donts")
-                    if ui.get("main_messenger") and str(ui.get("main_messenger")).strip().lower() in ("telegram", "discord", "slack", "whatsapp"):
+                    if ui.get("main_messenger") and str(ui.get("main_messenger")).strip().lower() in ("telegram", "discord", "slack", "whatsapp", "email"):
                         user_data["main_messenger"] = (ui.get("main_messenger") or "").strip().lower()
                     tz_val = (ui.get("timezone") or "").strip()
                     if tz_val:
@@ -777,15 +791,15 @@ You are talking to the following user.
                             f"\n**When the user is chatting in the Web UI:** They see your reply there. "
                             f"Do NOT send messages to {chan_name} unless they explicitly asked to receive something via {chan_name}.\n"
                             f"\n**CRITICAL – Web UI active:** The user is chatting in the Web UI and sees every reply there. "
-                            f"**NEVER** call `send_telegram`, `send_discord`, `send_slack`, or `send_whatsapp` to 'confirm', 'notify', or 'inform' – that duplicates your message and annoys the user. "
+                            f"**NEVER** call `send_telegram`, `send_discord`, `send_slack`, `send_whatsapp`, or `send_mail` to 'confirm', 'notify', or 'inform' – that duplicates your message and annoys the user. "
                             f"Only use these tools when the user **explicitly** asked to receive something on that channel (e.g. 'schick mir die Datei per {chan_name}' / 'send me the file via {chan_name}'). "
                             f"Routine confirmations belong in the Web UI reply only.\n"
                         )
                     identity_block += (
                         "When the user asks you to send them something (e.g. a summary, a file, or a notification), "
-                        "if preferred channel is not set, ask once: e.g. \"Soll ich es dir per Discord, Telegram, WhatsApp oder Slack schicken?\" / \"Should I send it via Discord, Telegram, WhatsApp or Slack?\". "
-                        "Store their answer with `update_user_identity(main_messenger=\"telegram\")` (or discord/slack/whatsapp). "
-                        "Then use the matching tool: `send_telegram`, `send_discord`, `send_slack`, or `send_whatsapp` depending on the preferred channel or user request (e.g. use send_telegram when main_messenger is Telegram or they said \"via Telegram\"). "
+                        "if preferred channel is not set, ask once: e.g. \"Soll ich es dir per Discord, Telegram, WhatsApp, Slack oder Mail schicken?\" / \"Should I send it via Discord, Telegram, WhatsApp, Slack or Email?\". "
+                        "Store their answer with `update_user_identity(main_messenger=\"telegram\")` (or discord/slack/whatsapp/email). "
+                        "Then use the matching tool: `send_telegram`, `send_discord`, `send_slack`, `send_whatsapp`, or `send_mail` depending on the preferred channel or user request (e.g. use send_telegram when main_messenger is Telegram or they said \"via Telegram\"; use send_mail when main_messenger is Email or they said \"via Mail\"). "
                         "**For sending a file** (invoice, contract, PDF): First call `find_files(path=\"Downloads\" or folder user named, pattern=\"*filename*\")`, then `send_telegram(message=\"Caption\", file_path=<path from find_files>)`. Do NOT delegate to librarian_agent – use find_files + send_telegram directly.\n"
                     )
                     identity_block += (

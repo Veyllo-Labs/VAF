@@ -106,7 +106,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 
@@ -215,6 +215,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showDiscordWizard, setShowDiscordWizard] = useState(false);
     const [showTelegramWizard, setShowTelegramWizard] = useState(false);
     const [showWhatsAppWizard, setShowWhatsAppWizard] = useState(false);
+    const [showWhatsAppDashboard, setShowWhatsAppDashboard] = useState(false);
     const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
     const [showDiscordDashboard, setShowDiscordDashboard] = useState(false);
     const [showMailDashboard, setShowMailDashboard] = useState(false);
@@ -452,7 +453,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const parseList = (text: string) => text.split('\n').map(s => s.trim()).filter(s => s.length > 0);
 
         const rawMain = (userIdentityDraft.main_messenger || '').trim().toLowerCase();
-        const main_messenger = ['telegram', 'discord', 'slack'].includes(rawMain) ? rawMain : null;
+        const main_messenger = ['telegram', 'discord', 'slack', 'whatsapp', 'email'].includes(rawMain) ? rawMain : null;
         const updateData = {
             name: userIdentityDraft.name.trim() || undefined,
             preferred_language: userIdentityDraft.preferred_language.trim() || undefined,
@@ -1667,6 +1668,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 onOpenDiscordDashboard={() => setShowDiscordDashboard(true)}
                                 onOpenTelegramWizard={() => setShowTelegramWizard(true)}
                                 onOpenWhatsAppWizard={() => setShowWhatsAppWizard(true)}
+                                onOpenWhatsAppDashboard={() => setShowWhatsAppDashboard(true)}
                                 onOpenTelegramDashboard={() => setShowTelegramDashboard(true)}
                                 onOpenEmailDashboard={() => setShowMailDashboard(true)}
                                 onOpenEmailWizard={() => setShowEmailWizard(true)}
@@ -3056,6 +3058,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     <option value="telegram">Telegram</option>
                                                     <option value="discord">Discord</option>
                                                     <option value="slack">Slack</option>
+                                                    <option value="whatsapp">WhatsApp</option>
+                                                    <option value="email">Mail</option>
                                                 </select>
                                                 <p className="text-xs text-gray-400 mt-0.5">Preferred channel for proactive messages from the agent.</p>
                                             </div>
@@ -3814,6 +3818,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onComplete={() => {
                     setShowWhatsAppWizard(false);
                     onRefreshConfig?.();
+                }}
+            />
+
+            {/* WhatsApp Dashboard (when configured, Settings opens this) */}
+            <WhatsAppDashboard
+                isOpen={showWhatsAppDashboard}
+                onClose={() => setShowWhatsAppDashboard(false)}
+                config={localConfig}
+                onConfigChange={handleChange}
+                onOpenSetupWizard={() => {
+                    setShowWhatsAppDashboard(false);
+                    setShowWhatsAppWizard(true);
                 }}
             />
 

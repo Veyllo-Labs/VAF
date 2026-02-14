@@ -288,6 +288,12 @@ def run_headless_agent():
                     pass
                 print(f"[Headless] Processing task for session {task.session_id}...")
                 # Do not log "Processing task..." to Web UI – redundant after every user message
+                if getattr(task, "source", None) == "whatsapp":
+                    try:
+                        from vaf.core.log_helper import log_whatsapp_inbound
+                        log_whatsapp_inbound(f"HEADLESS processing session={task.session_id}")
+                    except Exception:
+                        pass
 
                 # Set current user from task metadata before load_session_context so init_chat/build_prompt get User identity
                 meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
@@ -306,6 +312,7 @@ def run_headless_agent():
                         or meta.get("username") is not None
                         or meta.get("telegram_chat_id") is not None
                         or meta.get("discord_channel_id") is not None
+                        or meta.get("whatsapp_chat_jid") is not None
                     ):
                         try:
                             session = session_mgr.load(task.session_id)
@@ -317,12 +324,16 @@ def run_headless_agent():
                                 session.metadata["telegram_chat_id"] = meta["telegram_chat_id"]
                             if meta.get("discord_channel_id") is not None:
                                 session.metadata["discord_channel_id"] = meta["discord_channel_id"]
+                            if meta.get("whatsapp_chat_jid") is not None:
+                                session.metadata["whatsapp_chat_jid"] = meta["whatsapp_chat_jid"]
                             if meta.get("voice_lang"):
                                 session.metadata["voice_lang"] = meta["voice_lang"]
                             if getattr(task, "source", None) == "telegram":
                                 session.metadata["source"] = "telegram"
                             if getattr(task, "source", None) == "discord":
                                 session.metadata["source"] = "discord"
+                            if getattr(task, "source", None) == "whatsapp":
+                                session.metadata["source"] = "whatsapp"
                             session_mgr.save(session)
                         except Exception:
                             pass
@@ -781,6 +792,7 @@ def run_headless_agent():
                         except FileNotFoundError:
                             # New session from Telegram, Discord, WhatsApp, etc.: create so first exchange is persisted
                             _sid = task.session_id
+                            meta_save = (task.metadata or {}) if getattr(task, "metadata", None) else {}
                             if _sid.startswith("telegram_"):
                                 _label = f"Telegram {_sid.replace('telegram_', '', 1)}"
                             elif _sid.startswith("discord_"):
@@ -790,6 +802,12 @@ def run_headless_agent():
                             else:
                                 _label = _sid
                             session = Session(id=task.session_id, name=_label)
+                            if meta_save.get("whatsapp_chat_jid") is not None:
+                                session.metadata["whatsapp_chat_jid"] = meta_save["whatsapp_chat_jid"]
+                            if meta_save.get("username") is not None:
+                                session.metadata["username"] = meta_save["username"]
+                            if meta_save.get("user_scope_id") is not None:
+                                session.metadata["user_scope_id"] = meta_save["user_scope_id"]
                         _user_input = input_text or ""
                         _assistant_response = "".join(response_parts) if response_parts else str(response_text or "")
 

@@ -655,6 +655,7 @@ function VAFDashboardContent() {
     }, [router, fetchUserTimeFormat]);
 
     const [input, setInput] = useState('');
+    const inputValueRef = useRef('');
     const [insertedSelections, setInsertedSelections] = useState<InsertedSelectionRange[]>([]);
     const [suggestion, setSuggestion] = useState('');
     const [messages, setMessages] = useState<Message[]>([]);
@@ -953,6 +954,7 @@ function VAFDashboardContent() {
     const hasSpokenRef = useRef(false);
     const animationFrameRef = useRef<number | null>(null);
     const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+    const pendingSttSendRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -1853,15 +1855,19 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'stt_result') {
-                    // STT transcription result
-                    const text = data.text || '';
+                    // STT transcription result: append to existing input so multiple voice segments accumulate
+                    const text = (data.text || '').trim();
                     if (text) {
-                        setInput(text);
+                        const prev = inputValueRef.current || '';
+                        const newValue = prev ? prev.trimEnd() + ' ' + text : text;
+                        setInput(newValue);
                         setIsProcessingAudio(false);
 
-                        // Auto-send after 0.5s for "Enter" effect
-                        setTimeout(() => {
-                            sendMessage(undefined, text);
+                        // Reset timer so we only send after user stops speaking (last segment + 0.5s)
+                        if (pendingSttSendRef.current) clearTimeout(pendingSttSendRef.current);
+                        pendingSttSendRef.current = setTimeout(() => {
+                            pendingSttSendRef.current = null;
+                            sendMessage(undefined, newValue);
                         }, 500);
                     } else {
                         setIsProcessingAudio(false);
@@ -1949,6 +1955,21 @@ function VAFDashboardContent() {
     useEffect(() => {
         if (scrollRef.current) scrollRef.current.scrollIntoView({ behavior: 'smooth' });
     }, [messages, loading]);
+
+    // Keep inputValueRef in sync so WebSocket handlers see latest input (e.g. STT append)
+    useEffect(() => {
+        inputValueRef.current = input;
+    }, [input]);
+
+    // Clear pending STT auto-send on unmount
+    useEffect(() => {
+        return () => {
+            if (pendingSttSendRef.current) {
+                clearTimeout(pendingSttSendRef.current);
+                pendingSttSendRef.current = null;
+            }
+        };
+    }, []);
 
     // Sync sttEnabled state with config changes
     useEffect(() => {

@@ -509,8 +509,62 @@ async def startup_event():
                     log("WebServer", "WhatsApp bridge auto-started (configured and enabled)")
                 elif is_bridge_running():
                     log("WebServer", "WhatsApp bridge already running")
+                asyncio.create_task(_whatsapp_reconnect_worker())
+                log("WebServer", "WhatsApp auto-reconnect worker started")
     except Exception as e:
         log("WebServer", f"WhatsApp bridge auto-start skipped or failed: {e}")
+
+
+async def _whatsapp_reconnect_worker():
+    """
+    Periodically check WhatsApp connection; if bridge is running but disconnected,
+    restart the bridge so it reconnects with stored credentials (no user action needed).
+    """
+    from vaf.api.whatsapp_bridge import is_bridge_running, get_connection_status, restart_bridge
+    loop = asyncio.get_running_loop()
+    last_restart_at = 0.0
+    check_interval = 120.0   # check every 2 minutes
+    disconnected_since = None  # time when we first saw disconnected
+    disconnect_grace = 90.0   # restart only if disconnected for this long (seconds)
+    cooldown = 180.0          # after a restart, wait this long before next check
+
+    while True:
+        await asyncio.sleep(check_interval)
+        try:
+            whatsapp_config = Config.get("whatsapp_config") or {}
+            if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("enabled"):
+                disconnected_since = None
+                continue
+            whitelist = whatsapp_config.get("whitelist") or []
+            if not any(isinstance(e, dict) and e.get("phone_number") for e in whitelist):
+                disconnected_since = None
+                continue
+            if not is_bridge_running():
+                disconnected_since = None
+                continue
+            # Cooldown after a restart
+            now = loop.time()
+            if now - last_restart_at < cooldown:
+                continue
+            # Sync call in executor to avoid blocking
+            connected = await loop.run_in_executor(
+                None, lambda: get_connection_status("admin", wait_timeout=2.0)
+            )
+            if connected:
+                disconnected_since = None
+                continue
+            if disconnected_since is None:
+                disconnected_since = now
+            if now - disconnected_since < disconnect_grace:
+                continue
+            # Restart bridge to reconnect
+            log("WebServer", "WhatsApp disconnected; auto-restarting bridge to reconnect")
+            await loop.run_in_executor(None, restart_bridge)
+            last_restart_at = loop.time()
+            disconnected_since = None
+        except Exception as e:
+            log("WebServer", f"WhatsApp reconnect worker error: {e}")
+            disconnected_since = None
 
 
 async def _auto_capture_worker():

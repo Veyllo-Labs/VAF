@@ -70,7 +70,7 @@ class GetContactTool(BaseTool):
                 if not v:
                     continue
                 if t == "whatsapp" or t == "phone":
-                    parts.append(f"WhatsApp/Phone: {v} (use as chat_id in read_whatsapp_chat, find_whatsapp_messages)")
+                    parts.append(f"WhatsApp/Phone: {v} (use as chat_id in read_whatsapp_chat, find_whatsapp_messages; or as to_phone in send_whatsapp to send them a message)")
                 elif t == "telegram":
                     parts.append(f"Telegram: {v}")
                 elif t == "email":

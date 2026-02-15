@@ -83,6 +83,14 @@ def _normalize_phone(phone: str) -> str:
     return "".join(c for c in (phone or "") if c.isdigit())
 
 
+def _e164_to_jid(phone: str) -> str:
+    """Convert E.164 or phone string to WhatsApp JID (e.g. +491761234567 -> 491761234567@s.whatsapp.net)."""
+    digits = _normalize_phone(phone or "")
+    if not digits or len(digits) < 7 or len(digits) > 15:
+        return ""
+    return f"{digits}@s.whatsapp.net"
+
+
 def _append_chat_activity(chat_id: str, user_scope_id: Any, direction: str = "in") -> None:
     """Append one activity entry for the dashboard timeline (keeps last 100)."""
     try:
@@ -406,13 +414,14 @@ def send_whatsapp_with_confirmation(
     voice_path: Optional[str] = None,
     document_path: Optional[str] = None,
     timeout: float = 15.0,
+    allow_contact_send: bool = False,
 ) -> str:
     """
     Send a WhatsApp message (text, voice, or document) and wait for delivery confirmation from the Node bridge.
     Returns a success message or an error string for the agent to report.
-    Use this from the send_whatsapp tool to verify delivery.
+    When allow_contact_send is True, the recipient may be any phone/JID (e.g. a contact); otherwise only whitelisted.
     """
-    if not _is_jid_whitelisted(username, chat_jid):
+    if not allow_contact_send and not _is_jid_whitelisted(username, chat_jid):
         return (
             "WhatsApp: Cannot send – chat/phone number is not in the whitelist. "
             "Add your number in Settings → Connections → WhatsApp."

@@ -241,7 +241,7 @@ The WhatsApp dashboard (Settings → Connections → Dashboard) shows:
 
 - **Connection status** (indicator next to "Chats"): Green = WhatsApp connected, amber = bridge running but not connected, gray = bridge not started.
 - **Refresh (↻)**: Refreshes chat list and re-checks connection status (ping/pong with the Node bridge).
-- **Restart bridge**: When "Bridge running, WhatsApp not connected" appears, use the "Restart bridge" button to stop and restart the bridge. Wait 20–30 seconds, then refresh.
+- **Reconnection**: If the bridge is running but WhatsApp is not connected (amber), VAF automatically restarts the bridge periodically so it reconnects with stored credentials; no action required in most cases. If it stays disconnected, use "Restart bridge" in the dashboard or Settings → Connections → Stop then Start; wait 20–30 seconds, then refresh.
 - **send_whatsapp** now verifies delivery: The tool waits for confirmation from the Node bridge. If the message fails (e.g. "WhatsApp not connected"), the agent receives an error instead of a fake success.
 
 ### Configuration
@@ -271,7 +271,7 @@ The WhatsApp dashboard (Settings → Connections → Dashboard) shows:
 - **"wa-bridge.js not found"**: Run `npm install` in `vaf/whatsapp_node/`.
 - **Black terminal / no QR code**: Install Node.js 18+, run `npm install` in `vaf/whatsapp_node/`, restart VAF.
 - **No reply**: Ensure the bridge is running (Settings → Connections, WhatsApp toggle on) and your phone number is in the whitelist.
-- **Bridge running, WhatsApp not connected**: The Node process is alive but the Baileys socket is not connected. Use "Restart bridge" in the WhatsApp Dashboard, or Settings → Connections → Stop, then Start. Ensure your phone has internet and WhatsApp is open. If it still fails, use Reset and scan a new QR code.
+- **Bridge running, WhatsApp not connected**: The Node process is alive but the Baileys socket is not connected. VAF **automatically restarts the bridge** when it detects this state (about every 2 minutes); after restart the bridge reconnects with stored credentials. If it still does not reconnect, use "Restart bridge" in the WhatsApp Dashboard or Settings → Connections → Stop, then Start. Ensure your phone has internet and WhatsApp is open. If it still fails, use Reset and scan a new QR code.
 - **Auto-disconnect on session expiry**: When the bridge needs a new QR (session invalid) but cannot display it, VAF stops the bridge and sets the toggle to OFF. Message: "Session expired. Log in again: Reset, scan QR, turn ON." OpenClaw has the same constraint (Baileys session can expire); they use `clawdbot channels login` to re-pair. We use Reset in the UI.
 - **Restart doesn't help**: If "Restart bridge" keeps showing amber (not connected) after 20–30 seconds:
   - **1. Reset and new QR**: The session may be invalid. Settings → Connections → WhatsApp → Reset & get new QR code. Scan with your phone; wait for "Linked".

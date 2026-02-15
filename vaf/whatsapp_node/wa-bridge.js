@@ -83,7 +83,13 @@ function getContentType(msg) {
   if (m.audioMessage) return "audio";
   if (m.documentMessage) return "document";
   if (m.stickerMessage) return "sticker";
-  return "unknown";
+  if (m.reactionMessage) return "reaction";
+  if (m.viewOnceMessage) return "view_once";
+  if (m.contactMessage || m.contactsArrayMessage) return "contact";
+  if (m.locationMessage) return "location";
+  if (m.pollCreationMessage) return "poll";
+  if (m.buttonsMessage || m.templateButtonReplyMessage) return "button";
+  return "other";
 }
 
 let currentSock = null;
@@ -97,9 +103,14 @@ const chatStore = new Map();
 const echoSent = new Map(); // text -> timestamp
 const ECHO_TTL_MS = 90_000;
 
+/** Normalize for echo match: trim and collapse repeated whitespace so minor differences don't break matching. */
+function normalizeForEcho(text) {
+  if (!text || typeof text !== "string") return "";
+  return text.trim().replace(/\s+/g, " ");
+}
+
 function rememberSentText(text) {
-  if (!text || typeof text !== "string") return;
-  const t = text.trim();
+  const t = normalizeForEcho(text);
   if (!t) return;
   echoSent.set(t, Date.now());
   if (echoSent.size > 50) {
@@ -111,8 +122,8 @@ function rememberSentText(text) {
 }
 
 function isEcho(text) {
-  if (!text || typeof text !== "string") return false;
-  const t = text.trim();
+  const t = normalizeForEcho(text);
+  if (!t) return false;
   const ts = echoSent.get(t);
   if (!ts) return false;
   if (Date.now() - ts > ECHO_TTL_MS) {
@@ -337,6 +348,7 @@ async function connect(authDir) {
           body = body || "<media:audio>";
         }
       } else if (!body && contentType !== "text") {
+        // Use a short label so the agent can say "I can't process this type" (not "audio")
         body = `<media:${contentType}>`;
       }
       if (!body) continue;
@@ -378,19 +390,23 @@ async function main() {
       const obj = JSON.parse(line);
       const reqId = obj?.req_id || null;
       if (obj?.cmd === "send" && obj?.to && typeof obj?.text === "string") {
+        try {
+          fs.writeSync(2, `${LOG_PREFIX} send to=${obj.to} len=${(obj.text || "").length}\n`);
+        } catch (_) {}
         if (connectionState !== "open") {
           const msg = "WhatsApp not connected";
           if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
           else emit({ type: "error", message: msg });
         } else {
           const text = obj.text;
+          // Mark as sent NOW so when the echo arrives (often before sendMessage resolves) we skip it
+          rememberSentText(text);
           const sendPromise = currentSock.sendMessage(obj.to, { text });
           const timeoutMs = 12000;
           const timeoutPromise = new Promise((_, reject) => {
             setTimeout(() => reject(new Error(`Send timeout after ${timeoutMs / 1000}s`)), timeoutMs);
           });
           Promise.race([sendPromise, timeoutPromise]).then(() => {
-            rememberSentText(text);
             if (reqId) emit({ type: "send_result", req_id: reqId, success: true });
           }).catch((err) => {
             const msg = `Send failed: ${err?.message ?? err}`;
@@ -421,6 +437,38 @@ async function main() {
             if (reqId) emit({ type: "send_result", req_id: reqId, success: true });
           }).catch((err) => {
             const msg = `Voice send failed: ${err?.message ?? err}`;
+            if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
+            else emit({ type: "error", message: msg });
+          });
+        }
+      } else if (obj?.cmd === "send_document" && obj?.to && obj?.path) {
+        try {
+          fs.writeSync(2, `${LOG_PREFIX} send_document to=${obj.to} path=${obj.path}\n`);
+        } catch (_) {}
+        if (connectionState !== "open") {
+          const msg = "WhatsApp not connected";
+          if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
+          else emit({ type: "error", message: msg });
+        } else if (!fs.existsSync(obj.path)) {
+          const msg = `Document not found: ${obj.path}`;
+          if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
+          else emit({ type: "error", message: msg });
+        } else {
+          const buf = fs.readFileSync(obj.path);
+          const base = path.basename(obj.path);
+          const ext = path.extname(obj.path).toLowerCase();
+          const mimeMap = { ".pdf": "application/pdf", ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".txt": "text/plain", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png" };
+          const mimetype = mimeMap[ext] || "application/octet-stream";
+          const opts = obj.caption ? { caption: String(obj.caption) } : {};
+          const sendPromise = currentSock.sendMessage(obj.to, { document: buf, mimetype, fileName: obj.fileName || base }, opts);
+          const timeoutMs = 30000;
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error(`Document send timeout after ${timeoutMs / 1000}s`)), timeoutMs);
+          });
+          Promise.race([sendPromise, timeoutPromise]).then(() => {
+            if (reqId) emit({ type: "send_result", req_id: reqId, success: true });
+          }).catch((err) => {
+            const msg = `Document send failed: ${err?.message ?? err}`;
             if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
             else emit({ type: "error", message: msg });
           });

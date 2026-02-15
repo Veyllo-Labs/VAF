@@ -728,6 +728,15 @@ def run_headless_agent():
                         elif task_source == "whatsapp":
                             chat_jid = meta.get("whatsapp_chat_jid")
                             username = meta.get("username") or "admin"
+                            # Fallback: session may have whatsapp_chat_jid if task metadata was not persisted (e.g. self-chat @lid)
+                            if not chat_jid:
+                                try:
+                                    _s = session_mgr.load(task.session_id)
+                                    chat_jid = (_s.metadata or {}).get("whatsapp_chat_jid")
+                                    if not username or username == "admin":
+                                        username = (_s.metadata or {}).get("username") or "admin"
+                                except Exception:
+                                    pass
                             if chat_jid:
                                 from vaf.core.whatsapp_reply import send_whatsapp_reply
                                 try:
@@ -743,6 +752,14 @@ def run_headless_agent():
                                 if not out:
                                     out = "[No reply text]"
                                 send_whatsapp_reply(username, str(chat_jid), out)
+                            else:
+                                try:
+                                    from vaf.core.log_helper import log_whatsapp_reply
+                                    log_whatsapp_reply(
+                                        f"HEADLESS whatsapp reply SKIP no chat_jid session={task.session_id!r}"
+                                    )
+                                except Exception:
+                                    pass
                     except Exception:
                         pass
 

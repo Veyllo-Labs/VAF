@@ -257,11 +257,10 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             if (res.ok) {
                 const data = await res.json();
                 setCloudAccountsFromApi(data.accounts || []);
-            } else {
-                setCloudAccountsFromApi([]);
             }
+            // On error: keep previous list so a transient API/network failure doesn't hide existing connections
         } catch {
-            setCloudAccountsFromApi([]);
+            // Keep previous cloudAccountsFromApi; do not set to []
         }
     };
 
@@ -444,6 +443,18 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
     const CLOUD_IDS = ['google_drive', 'onedrive', 'icloud', 'dropbox', 'nextcloud'];
     const isCloudApp = (id: string) => CLOUD_IDS.includes(id);
 
+    /** Cloud accounts from config (fallback when API fails or before first load), scoped to current user */
+    const cloudAccountsFromConfig = (() => {
+        const localAdmin = ((config?.local_admin_username ?? 'admin') as string).trim().toLowerCase();
+        const username = (currentUser?.username ?? '').trim().toLowerCase();
+        if (!username || username === localAdmin) {
+            return Array.isArray(config?.cloud_config?.accounts) ? config.cloud_config.accounts : [];
+        }
+        const byUser = config?.cloud_config_by_user as Record<string, { accounts?: unknown[] }> | undefined;
+        const userAccounts = byUser?.[username]?.accounts;
+        return Array.isArray(userAccounts) ? userAccounts : [];
+    })();
+
     const isConfigured = (app: ConnectionApp) => {
         if (app.id === 'contacts') return true;
         if (app.id === 'email') {
@@ -458,7 +469,9 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             return whitelist.some((e: any) => e?.phone_number);
         }
         if (isCloudApp(app.id)) {
-            return cloudAccountsFromApi.some((a: any) => a.provider === app.id);
+            const fromApi = cloudAccountsFromApi.some((a: any) => a.provider === app.id);
+            const fromConfig = cloudAccountsFromConfig.some((a: any) => a.provider === app.id);
+            return fromApi || fromConfig;
         }
         const appConfig = config[app.configKey];
         return appConfig?.verified === true;
@@ -474,7 +487,9 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             return config?.whatsapp_config?.enabled === true;
         }
         if (isCloudApp(app.id)) {
-            return cloudAccountsFromApi.some((a: any) => a.provider === app.id && a.sync_enabled !== false);
+            const fromApi = cloudAccountsFromApi.some((a: any) => a.provider === app.id && a.sync_enabled !== false);
+            const fromConfig = cloudAccountsFromConfig.some((a: any) => a.provider === app.id && a.sync_enabled !== false);
+            return fromApi || fromConfig;
         }
         const appConfig = config[app.configKey];
         return appConfig?.enabled === true;

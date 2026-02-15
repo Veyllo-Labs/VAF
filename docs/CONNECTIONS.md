@@ -562,6 +562,14 @@ For **Google Drive**, create an OAuth 2.0 Client (Web application) in [Google Cl
 
 OAuth tokens are stored in the OS keyring (or encrypted fallback file), same pattern as Email. Config holds only account metadata (`cloud_config.accounts`: `account_id`, `provider`, `display_name`, `sync_enabled`).
 
+### Troubleshooting (connection no longer appears)
+
+If the Google Drive (or other cloud) connection sometimes **disappears from the dashboard** (Settings → Connections):
+
+- **Transient API/network errors**: The UI now keeps the last known cloud list when the accounts API fails and uses config as a fallback for the "Connected" state, so a short network or server glitch should no longer hide the connection. Refresh the page or reopen Settings → Connections to retry loading accounts.
+- **Multi-user**: Ensure you are logged in as the same user who added the account. Cloud accounts are stored per user (`cloud_config` for local admin, `cloud_config_by_user[username]` for others). If you added Google Drive while not logged in (or as admin), it is tied to that user; other users will not see it.
+- **Token expired**: If the account appears in the list but browse/sync fails with "Token expired or invalid", remove the account in Settings → Connections → Cloud and add Google Drive again (re-authorize in the browser).
+
 ## Future Integrations
 
 We're working on additional integrations:

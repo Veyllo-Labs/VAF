@@ -62,6 +62,21 @@ app.add_middleware(
 # Max sessions sent to Web UI (sidebar list); increase if users have many chats.
 SESSION_LIST_LIMIT = 500
 
+# Session ID prefixes for channel chats (WhatsApp, Telegram, Discord). These are shown only in their dashboards, not in the main chat list.
+_CHANNEL_SESSION_PREFIXES = ("whatsapp_", "telegram_", "discord_")
+
+
+def _is_channel_session(session_id: str) -> bool:
+    """True if this session is a channel/contact chat (WhatsApp, Telegram, Discord), not a main Web UI chat."""
+    if not session_id or not isinstance(session_id, str):
+        return False
+    return session_id.startswith(_CHANNEL_SESSION_PREFIXES)
+
+
+def _web_ui_sessions(sessions: list) -> list:
+    """Filter to sessions that belong in the main Web UI sidebar (exclude channel sessions)."""
+    return [s for s in sessions if not _is_channel_session(s.get("id") or "")]
+
 log("WebServer", "Getting WebInterfaceManager...")
 manager = get_web_interface()
 
@@ -1538,11 +1553,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         log("API", f"WebSocket handshake failed: {e}")
         raise e
     try:
-        # Send initial session list
+        # Send initial session list (only Web UI chats; channel sessions appear in their dashboards)
         sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
+        web_sessions = _web_ui_sessions(sessions)
         await websocket.send_json({
-            "type": "session_list", 
-            "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
+            "type": "session_list",
+            "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in web_sessions]
         })
         # Send cached stats if available, otherwise send defaults
         stats_to_send = manager.last_stats
@@ -1575,9 +1591,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             })
         except Exception:
             pass
-        # Auto-load latest session so WebUI gets a valid sessionId immediately
-        if sessions:
-            sid = sessions[0]["id"]
+        # Auto-load latest Web UI session so WebUI gets a valid sessionId immediately (not a channel chat)
+        if web_sessions:
+            sid = web_sessions[0]["id"]
             try:
                 # Subscribe this connection to the session for scoped updates
                 manager.subscribe_to_session(websocket, sid)
@@ -1643,9 +1659,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 
                 if type == "get_sessions":
                     sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
+                    web_sessions = _web_ui_sessions(sessions)
                     await websocket.send_json({
-                        "type": "session_list", 
-                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
+                        "type": "session_list",
+                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in web_sessions]
                     })                
                 elif type == "load_session":
                     sid = cmd.get("id")
@@ -1753,9 +1770,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     session_mgr.delete(sid)
                     # Broadcast update
                     sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
+                    web_sessions = _web_ui_sessions(sessions)
                     await manager.broadcast({
-                        "type": "session_list", 
-                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
+                        "type": "session_list",
+                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in web_sessions]
                     })
 
                 elif type == "new_session":
@@ -1773,10 +1791,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     
                     # Refresh list
                     sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
-                    
+                    web_sessions = _web_ui_sessions(sessions)
                     await websocket.send_json({
-                        "type": "session_list", 
-                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
+                        "type": "session_list",
+                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in web_sessions]
                     })                    
                     # Clear frontend chat
                     await websocket.send_json({
@@ -1797,9 +1815,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         
                         # Broadcast update
                         sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
+                        web_sessions = _web_ui_sessions(sessions)
                         await manager.broadcast({
-                            "type": "session_list", 
-                            "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in sessions]
+                            "type": "session_list",
+                            "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in web_sessions]
                         })
 
                 elif type == "get_config":

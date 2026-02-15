@@ -13,6 +13,7 @@ Connect external apps and services to interact with your VAF agent.
 | **Email** | ✅ Available | OAuth2 (Google, Microsoft, Apple) or IMAP/SMTP; read and send email via agent |
 | Slack | 🔜 Coming Soon | Integrate VAF into your Slack workspace |
 | **WhatsApp** | ✅ Available | Chat with your agent on WhatsApp (QR link, per-user isolation) |
+| **Contacts** | ✅ Available | Central contact list with personal file and assistant whitelist |
 
 ### Calendar
 
@@ -152,6 +153,7 @@ The Discord configuration is stored locally in your VAF config:
 ### Whitelist and multi-user
 
 - Each whitelist entry links one Telegram user to one VAF user (user_scope_id and username from the Web UI session when that user was added).
+- **Contact whitelist**: If a Telegram user ID is stored in a contact (Settings → Connections → Contacts) with **Can reach your assistant** enabled, that contact can send messages to your assistant (handled in your context, like a front office).
 - Only whitelisted users receive replies; others see an authorization message.
 - RAG, memories, and user identity are scoped per user, same as in the Web UI.
 
@@ -205,8 +207,8 @@ Global options (top-level in config):
 
 - **Per-user isolation**: Each VAF user has their own WhatsApp session. Credentials are stored in `~/.vaf/users/<username>/whatsapp/`. Other users cannot see or use your WhatsApp.
 - **QR link**: Scan a QR code with WhatsApp (Linked Devices) to link your phone.
-- **Whitelist**: Only configured phone numbers (E.164) can send messages **and** receive replies. Each whitelist entry maps a phone number to a VAF user. The user stays **reachable** on WhatsApp so the bot can send them content (reports, notes, PDFs, audio).
-- **Read-only for everyone else**: The bot replies only to numbers in your whitelist. It does not message other contacts or react to messages from non-whitelisted numbers.
+- **Whitelist**: Only configured phone numbers (E.164) can send messages **and** receive replies. Each whitelist entry maps a phone number to a VAF user. Numbers in **Contacts** (Settings → Connections → Contacts) with **Can reach your assistant** can also send messages to your assistant (handled in your context).
+- **Read-only for everyone else**: The bot replies only to numbers in your whitelist (config or contact whitelist). It does not message other contacts or react to messages from non-whitelisted numbers.
 - **Node.js required**: Uses Baileys via a Node subprocess. Run `npm install` in `vaf/whatsapp_node/` before first use.
 - **Agent tools**: `whatsapp_inbox`, `find_whatsapp_messages`, `read_whatsapp_chat` list/search/read chats. **`send_whatsapp`** sends text, voice (Sprachnachricht), or **documents (PDF, etc.)** to the user – WhatsApp as a channel where the bot can send the user content. `whatsapp_call` is a placeholder (not implemented).
 - **Voice (TTS/STT)**: Incoming voice messages are downloaded, transcribed via Whisper STT (speech_stt_docker_url, default localhost:5003), and passed as text to the agent. When the user sends a voice message, replies can automatically be sent as voice (TTS) in the detected language. The agent can also explicitly send voice via `send_whatsapp(voice_lang="de")` or `send_telegram(voice_lang="de")`.
@@ -293,6 +295,37 @@ The WhatsApp dashboard (Settings → Connections → Dashboard) shows:
   - **Other network**: Test VAF on a different machine/network.
   - After each failure: Click "Reset & get new QR code" before scanning again.
 - **Verification timeout**: Send the exact 6-digit code to the bot in a **private chat** (DM).
+
+## Contacts
+
+Contacts provide a **central list** of people with **channel IDs** (WhatsApp, Telegram, email) and a **personal file** per contact. The agent can resolve a name (e.g. “Max”) to that contact’s channels and then use the usual read/find tools (e.g. “Has Max written to me?” → `get_contact(name="Max")` then `read_whatsapp_chat` or `find_mail`). Contacts with **Can reach your assistant** enabled can send messages to your assistant; the assistant handles them in your context (like a front office for you), not as a separate user account.
+
+### Personal file fields
+
+All optional; labels in the UI are in English.
+
+| Field | Description |
+|-------|-------------|
+| **Preferred language** | e.g. `de`, `en` |
+| **How to address** | e.g. “du”, “Sie”, “First name only” |
+| **Birthday** | MM-DD or ISO date |
+| **Notes** | Free-form text |
+| **Can reach your assistant (front office)** | When enabled, this contact can send messages to your assistant via their channel IDs (WhatsApp, Telegram). The assistant processes them in your context (like a front office for you), not as a separate user. |
+
+### Where to manage contacts
+
+- **Settings → Connections → Contacts** (gear icon): open the Contacts dashboard to list, add, edit, and delete contacts. Each contact has a **Channels** section (WhatsApp number, Telegram username/ID, Email) and a **Personal file** section (language, how to address, birthday, notes, and the “Can reach your assistant (front office)” toggle).
+
+### Front Office behaviour
+
+When a contact with **Can reach your assistant** enabled sends a message (e.g. via WhatsApp or Telegram), the agent responds in **Front Office** mode: it uses a dedicated system prompt (role + anti-prompt-injection) and a restricted tool set so the contact cannot abuse the system. See [FRONT_OFFICE.md](FRONT_OFFICE.md) for when it activates, which tools are allowed, and how to override the anti-injection text.
+
+### Agent tools
+
+- **`list_contacts`**: Returns contact names (and optionally which channels they have). Use when the user asks who is in their contact list.
+- **`get_contact(name="...")`**: Returns one contact’s data (channel IDs and personal file). Use to resolve a name to channels, then call `read_whatsapp_chat`, `find_whatsapp_messages`, `find_mail`, etc., with the contact’s IDs.
+
+For questions like “Has [Name] written to me?”, the agent should call `get_contact(name="...")` to resolve the name to channel IDs, then use the appropriate read/find tool for that channel.
 
 ## Proactive messaging
 

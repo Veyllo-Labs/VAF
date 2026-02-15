@@ -345,7 +345,7 @@ def _sender_loop() -> None:
 
 
 def _is_jid_whitelisted(username: str, chat_jid: str) -> bool:
-    """Verify chat_jid is in whitelist for this user. Nur Whitelist-Nummern dürfen Antworten erhalten. @lid = self-chat, immer erlaubt."""
+    """Verify chat_jid is in whitelist for this user (config whitelist or contact with allow_as_assistant_user). @lid = self-chat, always allowed."""
     if (chat_jid or "").strip().endswith("@lid"):
         return True  # Self-chat: reply to own saved messages
     whatsapp_config = Config.get("whatsapp_config") or {}
@@ -358,6 +358,14 @@ def _is_jid_whitelisted(username: str, chat_jid: str) -> bool:
             p = entry.get("phone_number")
             if p:
                 allowed_phones.append(str(p))
+    try:
+        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
+        for c in get_contacts_allowing_assistant(uname):
+            for p in _contact_whatsapp_values(c):
+                if p:
+                    allowed_phones.append(str(p))
+    except Exception:
+        pass
     return _allow_from_match(chat_jid, allowed_phones)
 
 
@@ -458,6 +466,7 @@ def _read_user_process(
     proc: subprocess.Popen,
 ) -> None:
     """Read JSON lines from process stdout, handle events."""
+    config_phones: List[str] = []  # Whitelist only (for from_contact detection)
     allowed_phones: List[str] = []
     whatsapp_config = Config.get("whatsapp_config") or {}
     if isinstance(whatsapp_config, dict):
@@ -465,13 +474,24 @@ def _read_user_process(
             if isinstance(entry, dict) and entry.get("vaf_username") == username:
                 p = entry.get("phone_number")
                 if p:
+                    config_phones.append(str(p))
                     allowed_phones.append(str(p))
     if not allowed_phones:
         for entry in (whatsapp_config.get("whitelist") or []):
             if isinstance(entry, dict) and str(entry.get("user_scope_id")) == user_scope_id:
                 p = entry.get("phone_number")
                 if p:
+                    config_phones.append(str(p))
                     allowed_phones.append(str(p))
+    # Contact whitelist: all WhatsApp numbers from contacts with allow_as_assistant_user
+    try:
+        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
+        for c in get_contacts_allowing_assistant(username):
+            for p in _contact_whatsapp_values(c):
+                if p and p not in allowed_phones:
+                    allowed_phones.append(str(p))
+    except Exception:
+        pass
     if not allowed_phones:
         logger.warning("WhatsApp: no allowFrom for user %s, rejecting inbound", username)
 
@@ -562,11 +582,17 @@ def _read_user_process(
             inbound_to_agent = whatsapp_config.get("inbound_to_agent", True)
             if inbound_to_agent:
                 session_id = f"whatsapp_{username}_{resolved_e164 or _jid_to_e164(from_jid) or 'self'}"
+                in_config = _allow_from_match(from_jid or "", config_phones) or (
+                    from_e164 and _allow_from_match(from_e164, config_phones)
+                )
+                from_contact = not is_self_chat and allow_match and not in_config
                 metadata: Dict[str, Any] = {
                     "user_scope_id": user_scope_id,
                     "username": username,
                     "whatsapp_chat_jid": from_jid,
                 }
+                if from_contact:
+                    metadata["from_contact"] = True
                 if voice_lang:
                     metadata["voice_lang"] = voice_lang
                     with _voice_reply_lock:

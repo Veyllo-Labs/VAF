@@ -104,6 +104,8 @@ Each whitelist entry maps a Telegram user to a VAF user scope:
 | `user_scope_id` | VAF user scope UUID |
 | `vaf_username` | VAF username for display |
 
+In addition, any Telegram user whose ID is stored in a VAF user's **Contacts** with **Can reach your assistant** enabled can send messages to that user's assistant (handled in the user's context, like a front office). The bridge checks the config whitelist first, then the relay whitelist, then contacts.
+
 ---
 
 ## Voice Message Support

@@ -156,6 +156,16 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount WhatsApp routes: {e}")
 
+# Mount Contacts routes (central contact list with personal file)
+try:
+    from vaf.api.contact_routes import router as contact_router
+    app.include_router(contact_router)
+    log("WebServer", "Contacts routes mounted at /api/contacts")
+except ImportError as e:
+    log("WebServer", f"Contacts routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount Contacts routes: {e}")
+
 # Mount Auth routes (Local Network Authentication)
 try:
     from vaf.api.auth_routes import router as auth_router

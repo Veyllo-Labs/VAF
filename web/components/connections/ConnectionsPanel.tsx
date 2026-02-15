@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import {
     MessageCircle, Phone, Mail, Slack, Plus, Settings,
     CheckCircle2, XCircle, Loader2, Trash2, Power,
-    Calendar, Cloud, HardDrive, FolderSync
+    Calendar, Cloud, HardDrive, FolderSync, Users
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -25,13 +25,14 @@ interface ConnectionsPanelProps {
     onOpenEmailWizard?: () => void;
     onOpenCloudDashboard?: () => void;
     onOpenCloudWizard?: (provider?: string) => void;
+    onOpenContactsDashboard?: () => void;
 }
 
 export interface ConnectionApp {
     id: string;
     name: string;
     icon: React.ElementType;
-    category: 'communication' | 'calendar' | 'cloud' | 'productivity' | 'social';
+    category: 'contacts' | 'communication' | 'calendar' | 'cloud' | 'productivity' | 'social';
     description: string;
     configKey: string;
     available: boolean;
@@ -40,6 +41,19 @@ export interface ConnectionApp {
 }
 
 export const CONNECTION_APPS: ConnectionApp[] = [
+    // ============ Contacts (own category, top) ============
+    {
+        id: 'contacts',
+        name: 'Contacts',
+        icon: Users,
+        category: 'contacts',
+        description: 'Central contact list with personal file and assistant whitelist',
+        configKey: 'contacts',
+        available: true,
+        comingSoon: false,
+        iconColor: 'bg-gray-600',
+    },
+
     // ============ Communication ============
     {
         id: 'discord',
@@ -94,7 +108,6 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         comingSoon: false,
         iconColor: 'bg-red-500',
     },
-
     // ============ Calendar ============
     {
         id: 'google_calendar',
@@ -200,6 +213,7 @@ export const CONNECTION_APPS: ConnectionApp[] = [
 ];
 
 export const CATEGORIES = [
+    { id: 'contacts', label: 'Contacts', description: 'Central contact list with personal file' },
     { id: 'communication', label: 'Communication', description: 'Messaging & chat platforms' },
     { id: 'calendar', label: 'Calendar', description: 'Scheduling & event management' },
     { id: 'cloud', label: 'Cloud Storage', description: 'File sync & cloud drives' },
@@ -210,7 +224,7 @@ export const CATEGORIES = [
 /** Use relative /api/ so Next.js rewrites to backend. */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudDashboard, onOpenCloudWizard }: ConnectionsPanelProps) {
+export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudDashboard, onOpenCloudWizard, onOpenContactsDashboard }: ConnectionsPanelProps) {
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'linked' | 'disconnected' | 'checking'>>({});
     /** Cloud accounts from API (source of truth; config can be stale after OAuth) */
     const [cloudAccountsFromApi, setCloudAccountsFromApi] = useState<any[]>([]);
@@ -431,6 +445,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
     const isCloudApp = (id: string) => CLOUD_IDS.includes(id);
 
     const isConfigured = (app: ConnectionApp) => {
+        if (app.id === 'contacts') return true;
         if (app.id === 'email') {
             const fromApi = emailAccountsFromApi.length > 0;
             const fromConfig = Array.isArray(config?.email_config?.accounts) && config.email_config.accounts.length > 0;
@@ -450,6 +465,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
     };
 
     const isEnabled = (app: ConnectionApp) => {
+        if (app.id === 'contacts') return true;
         if (app.id === 'email') {
             const accounts = emailAccountsFromApi.length > 0 ? emailAccountsFromApi : (config?.email_config?.accounts ?? []);
             return Array.isArray(accounts) && accounts.length > 0 && (accounts as any[]).some((a: any) => a.enabled !== false);
@@ -517,7 +533,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                             Coming Soon
                                                         </span>
                                                     )}
-                                                    {configured && (
+                                                    {configured && app.id !== 'contacts' && (
                                                         <span className={cn(
                                                             "text-xs px-2 py-0.5 rounded-full",
                                                             status === 'connected' ? "bg-green-100 text-green-700" :
@@ -559,7 +575,15 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                         </div>
 
                                         <div className="flex items-center gap-2">
-                                            {configured ? (
+                                            {app.id === 'contacts' ? (
+                                                <button
+                                                    onClick={() => onOpenContactsDashboard?.()}
+                                                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                                                    title="Open contacts"
+                                                >
+                                                    <Settings className="w-4 h-4 text-gray-500" />
+                                                </button>
+                                            ) : configured ? (
                                                 <>
                                                     {/* Toggle Switch */}
                                                     <button

@@ -15,7 +15,7 @@ import queue
 import tempfile
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -59,6 +59,24 @@ def _relay_whitelist_lookup(telegram_user_id: str) -> Optional[Dict[str, Any]]:
         if str(entry.get("telegram_user_id")) == str(telegram_user_id):
             return entry
     return None
+
+
+def _resolve_telegram_user(telegram_user_id: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """Resolve telegram_user_id to (whitelist/relay/contact entry, is_relay). Returns (None, False) if not allowed."""
+    entry = _whitelist_lookup(telegram_user_id)
+    if entry:
+        return (entry, False)
+    entry = _relay_whitelist_lookup(telegram_user_id)
+    if entry:
+        return (entry, True)
+    try:
+        from vaf.core.messaging_connections import get_contact_whitelist_telegram_entry
+        entry = get_contact_whitelist_telegram_entry(telegram_user_id)
+        if entry:
+            return (entry, False)
+    except Exception:
+        pass
+    return (None, False)
 
 
 def _append_chat_activity(chat_id: str, user_scope_id: Any, direction: str = "in") -> None:
@@ -509,6 +527,9 @@ def _run_bot():
         if is_relay:
             metadata["relay"] = True
             metadata["relay_to_username"] = vaf_username
+        if pending.get("from_contact"):
+            metadata["from_contact"] = True
+            metadata["telegram_user_id"] = str(telegram_user_id)  # So headless can load contact data for prompt
         if voice_lang:
             metadata["voice_lang"] = voice_lang  # Pass language to agent context
         # So the LLM sees that this user message was a voice message (transcribed)
@@ -532,23 +553,14 @@ def _run_bot():
             return
         telegram_user_id = str(user.id)
         chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
-        entry = _whitelist_lookup(telegram_user_id)
-        relay_entry = None
+        entry, is_relay = _resolve_telegram_user(telegram_user_id)
         if not entry:
-            relay_entry = _relay_whitelist_lookup(telegram_user_id)
-            if not relay_entry:
-                await update.message.reply_text(
-                    "You are not authorized to use this bot. Please add your Telegram in VAF Settings → Connections."
-                )
-                return
-        if entry:
-            user_scope_id = entry.get("user_scope_id")
-            vaf_username = entry.get("vaf_username") or "admin"
-            is_relay = False
-        else:
-            user_scope_id = relay_entry.get("user_scope_id")
-            vaf_username = relay_entry.get("vaf_username") or "admin"
-            is_relay = True
+            await update.message.reply_text(
+                "You are not authorized to use this bot. Please add your Telegram in VAF Settings → Connections."
+            )
+            return
+        user_scope_id = entry.get("user_scope_id")
+        vaf_username = entry.get("vaf_username") or "admin"
         msg_text = update.message.text.strip()
         if not msg_text:
             return
@@ -562,6 +574,7 @@ def _run_bot():
                     "vaf_username": vaf_username,
                     "telegram_user_id": telegram_user_id,
                     "relay": is_relay,
+                    "from_contact": bool(entry.get("from_contact")),
                 }
             rec = _pending_by_chat[chat_id]
             rec["text"] = (rec["text"] + " " + msg_text).strip() if rec["text"] else msg_text
@@ -584,24 +597,14 @@ def _run_bot():
         chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
 
         # Check authorization
-        entry = _whitelist_lookup(telegram_user_id)
-        relay_entry = None
+        entry, is_relay = _resolve_telegram_user(telegram_user_id)
         if not entry:
-            relay_entry = _relay_whitelist_lookup(telegram_user_id)
-            if not relay_entry:
-                await update.message.reply_text(
-                    "You are not authorized to use this bot. Please add your Telegram in VAF Settings → Connections."
-                )
-                return
-
-        if entry:
-            user_scope_id = entry.get("user_scope_id")
-            vaf_username = entry.get("vaf_username") or "admin"
-            is_relay = False
-        else:
-            user_scope_id = relay_entry.get("user_scope_id")
-            vaf_username = relay_entry.get("vaf_username") or "admin"
-            is_relay = True
+            await update.message.reply_text(
+                "You are not authorized to use this bot. Please add your Telegram in VAF Settings → Connections."
+            )
+            return
+        user_scope_id = entry.get("user_scope_id")
+        vaf_username = entry.get("vaf_username") or "admin"
 
         # Get voice file ID
         voice = update.message.voice
@@ -653,24 +656,14 @@ def _run_bot():
         telegram_user_id = str(user.id)
         chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
 
-        entry = _whitelist_lookup(telegram_user_id)
-        relay_entry = None
+        entry, is_relay = _resolve_telegram_user(telegram_user_id)
         if not entry:
-            relay_entry = _relay_whitelist_lookup(telegram_user_id)
-            if not relay_entry:
-                await update.message.reply_text(
-                    "You are not authorized to use this bot. Please add your Telegram in VAF Settings → Connections."
-                )
-                return
-
-        if entry:
-            user_scope_id = entry.get("user_scope_id")
-            vaf_username = entry.get("vaf_username") or "admin"
-            is_relay = False
-        else:
-            user_scope_id = relay_entry.get("user_scope_id")
-            vaf_username = relay_entry.get("vaf_username") or "admin"
-            is_relay = True
+            await update.message.reply_text(
+                "You are not authorized to use this bot. Please add your Telegram in VAF Settings → Connections."
+            )
+            return
+        user_scope_id = entry.get("user_scope_id")
+        vaf_username = entry.get("vaf_username") or "admin"
 
         file_name = doc.file_name or "document"
         ext = os.path.splitext(file_name.lower())[1]
@@ -721,6 +714,9 @@ def _run_bot():
         if is_relay:
             metadata["relay"] = True
             metadata["relay_to_username"] = vaf_username
+        if entry.get("from_contact"):
+            metadata["from_contact"] = True
+            metadata["telegram_user_id"] = str(telegram_user_id)
 
         tq.add(
             session_id=session_id,
@@ -757,9 +753,8 @@ def _run_bot():
         user = update.effective_user
         if not user:
             return
-        entry = _whitelist_lookup(str(user.id))
-        relay = _relay_whitelist_lookup(str(user.id))
-        if not entry and not relay:
+        entry, _ = _resolve_telegram_user(str(user.id))
+        if not entry:
             return  # Silently ignore unauthorized
         await update.message.reply_text(
             "📷 Foto-Unterstützung kommt bald. Aktuell kannst du mir Dokumente (PDF, DOCX) schicken – "

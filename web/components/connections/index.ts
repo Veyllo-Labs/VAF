@@ -12,3 +12,5 @@ export { default as CloudDashboard } from './CloudDashboard';
 export { default as CloudSetupWizard } from './CloudSetupWizard';
 export { default as WhatsAppSetupWizard } from './WhatsAppSetupWizard';
 export { default as WhatsAppDashboard } from './WhatsAppDashboard';
+export { default as ContactsDashboard } from './ContactsDashboard';
+export type { Contact, ChannelEntry, ContactsDashboardProps } from './ContactsDashboard';

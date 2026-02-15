@@ -39,6 +39,7 @@ class ListContactsTool(BaseTool):
         lines = []
         for i, c in enumerate(contacts, 1):
             name = (c.get("name") or "").strip() or "(no name)"
+            cid = c.get("id") or ""
             if c.get("channels"):
                 types = sorted({ch["type"].capitalize() for ch in c["channels"] if ch.get("type")})
                 ch = ", ".join(types) + (f" ({len(c['channels'])} entries)" if len(c["channels"]) > len(types) else "")
@@ -51,5 +52,5 @@ class ListContactsTool(BaseTool):
                 if c.get("email"):
                     channels.append("Email")
                 ch = ", ".join(channels) if channels else "—"
-            lines.append(f"{i}. {name} | Channels: {ch}")
-        return "Contacts:\n" + "\n".join(lines) + "\n\nUse get_contact(name=\"...\") to get full details and channel IDs (e.g. for read_whatsapp_chat, find_mail)."
+            lines.append(f"{i}. {name} | contact_id: {cid} | Channels: {ch}")
+        return "Contacts:\n" + "\n".join(lines) + "\n\nUse get_contact(name=\"...\") for full details. For update_contact or delete_contact use contact_id; if multiple contacts share a name, always ask the user which one they mean."

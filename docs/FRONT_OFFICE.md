@@ -37,7 +37,7 @@ In Front Office, only an **allow-list** of tools is available. All other tools (
 - **Mail:** `mail_inbox`, `find_mail`, `read_mail`, `send_mail`, `list_email_accounts`, `mark_mail_answered`
 - **Search:** `web_search`
 
-**Not available in Front Office** (among others): `update_user_identity`, `python` / code execution, file and workspace write tools, `replace_editor_selection`, coder/librarian agents, `update_intent`, `update_working_memory`.
+**Not available in Front Office** (among others): `update_user_identity`, `create_contact`, `update_contact`, `delete_contact`, `python` / code execution, file and workspace write tools, `replace_editor_selection`, coder/librarian agents, `update_intent`, `update_working_memory`.
 
 At runtime, the headless runner sets `agent._active_tools` to the intersection of this allow-list and `agent.tools`, so if a tool is not loaded it is simply skipped. After the turn, `_active_tools` is set back to `None` so the next task sees all tools again.
 

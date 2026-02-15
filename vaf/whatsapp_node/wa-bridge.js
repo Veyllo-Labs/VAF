@@ -336,11 +336,12 @@ async function connect(authDir) {
         const isPtt = msg.message?.audioMessage?.ptt === true;
         const dlType = isPtt ? "ptt" : "audio";
         try {
-          const stream = await downloadContentFromMessage(msg, dlType);
+          const stream = await downloadContentFromMessage(msg.message.audioMessage, dlType);
           const buf = await toBuffer(stream);
           const ext = isPtt ? ".ogg" : ".opus";
           const tmpFile = path.join(os.tmpdir(), `vaf_wa_voice_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
           fs.writeFileSync(tmpFile, buf);
+          try { fs.writeSync(2, `${LOG_PREFIX} voice downloaded: ${tmpFile} (${buf.length} bytes)\n`); } catch (_) {}
           voicePath = tmpFile;
           body = "<voice>";
         } catch (err) {
@@ -427,7 +428,7 @@ async function main() {
           const p = obj.path;
           const buf = fs.readFileSync(p);
           try { fs.unlinkSync(p); } catch (_) {}
-          const mimetype = p.toLowerCase().endsWith(".ogg") ? "audio/ogg" : "audio/mpeg";
+          const mimetype = p.toLowerCase().endsWith(".ogg") ? "audio/ogg; codecs=opus" : "audio/mpeg";
           const sendPromise = currentSock.sendMessage(obj.to, { audio: buf, mimetype }, { sendAudioAsVoice: true });
           const timeoutMs = 12000;
           const timeoutPromise = new Promise((_, reject) => {

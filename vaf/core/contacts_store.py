@@ -135,14 +135,17 @@ def get_contact_by_id(contact_id: str, username: Optional[str] = None) -> Option
 
 def get_contact_by_name(name: str, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Return first contact whose name matches (case-insensitive), or None."""
+    matches = get_contacts_by_name(name, username)
+    return matches[0] if matches else None
+
+
+def get_contacts_by_name(name: str, username: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return all contacts whose name matches (case-insensitive). Use to detect duplicates."""
     name_clean = (name or "").strip()
     if not name_clean:
-        return None
+        return []
     with _LOCK:
-        for c in _load_all(username):
-            if (c.get("name") or "").strip().lower() == name_clean.lower():
-                return dict(c)
-    return None
+        return [dict(c) for c in _load_all(username) if (c.get("name") or "").strip().lower() == name_clean.lower()]
 
 
 def _normalize_phone_for_match(value: str) -> str:

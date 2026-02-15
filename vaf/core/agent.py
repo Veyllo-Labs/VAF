@@ -1070,6 +1070,9 @@ class Agent:
             from vaf.tools.read_whatsapp_chat import ReadWhatsAppChatTool
             from vaf.tools.list_contacts import ListContactsTool
             from vaf.tools.get_contact import GetContactTool
+            from vaf.tools.create_contact import CreateContactTool
+            from vaf.tools.update_contact import UpdateContactTool
+            from vaf.tools.delete_contact import DeleteContactTool
             from vaf.tools.whatsapp_call import WhatsAppCallTool
             from vaf.tools.mail_inbox import MailInboxTool
             from vaf.tools.read_mail import ReadMailTool
@@ -1100,6 +1103,9 @@ class Agent:
             self.tools["send_mail"] = SendMailTool()
             self.tools["list_contacts"] = ListContactsTool()
             self.tools["get_contact"] = GetContactTool()
+            self.tools["create_contact"] = CreateContactTool()
+            self.tools["update_contact"] = UpdateContactTool()
+            self.tools["delete_contact"] = DeleteContactTool()
 
             # RequestClarification is strictly for Sub-Agents (via coder_only flag),
             # but we register it here so it's available in the system (even if filtered out later for Main Agent).
@@ -6100,7 +6106,7 @@ class Agent:
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                if name in ("list_contacts", "get_contact"):
+                if name in ("list_contacts", "get_contact", "create_contact", "update_contact", "delete_contact"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "list_email_accounts", "send_mail"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"

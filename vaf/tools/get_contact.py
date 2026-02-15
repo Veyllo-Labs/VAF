@@ -37,15 +37,33 @@ class GetContactTool(BaseTool):
             return "name is required (e.g. get_contact(name='Max'))."
 
         try:
-            from vaf.core.contacts_store import get_contact_by_name
+            from vaf.core.contacts_store import get_contacts_by_name
         except ImportError as e:
             return f"Contacts unavailable: {e}"
 
-        contact = get_contact_by_name(name, username)
-        if not contact:
+        matches = get_contacts_by_name(name, username)
+        if not matches:
             return f"No contact found with name '{name}'. Use list_contacts to see existing contacts."
+        if len(matches) > 1:
+            lines = [
+                f"Multiple contacts have the name \"{name}\". You must ask the user which one they mean before updating or deleting.",
+                "Contacts (use contact_id with update_contact or delete_contact after user confirms):",
+            ]
+            for c in matches:
+                cid = c.get("id") or "(no id)"
+                short = []
+                for ch in (c.get("channels") or [])[:3]:
+                    v = (ch.get("value") or "").strip()
+                    if v:
+                        short.append(v[:30] + ("..." if len(v) > 30 else ""))
+                if not short and c.get("email"):
+                    short.append((c.get("email") or "")[:30])
+                label = ", ".join(short) if short else "no channels"
+                lines.append(f"  - contact_id: {cid} | {label}")
+            return "\n".join(lines)
 
-        parts = [f"Contact: {contact.get('name', '')}"]
+        contact = matches[0]
+        parts = [f"Contact: {contact.get('name', '')}", f"contact_id: {contact.get('id', '')} (use for update_contact or delete_contact)"]
         if contact.get("channels"):
             for ch in contact["channels"]:
                 t, v = ch.get("type", ""), ch.get("value", "")

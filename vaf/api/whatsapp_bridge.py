@@ -103,24 +103,33 @@ def _synthesize_voice_for_reply(text: str, lang: str) -> Optional[str]:
     """Synthesize TTS to temp file. Returns path or None."""
     try:
         import tempfile
-        stt_url = (Config.get("speech_tts_docker_url") or "http://localhost:5002").strip().rstrip("/")
-        if not stt_url:
+        tts_url = (Config.get("speech_tts_docker_url") or "http://localhost:5002").strip().rstrip("/")
+        if not tts_url:
+            logger.warning("WhatsApp TTS: no speech_tts_docker_url configured")
             return None
+        logger.info("WhatsApp TTS: synthesizing lang=%s text_len=%d url=%s", lang, len(text), tts_url)
         resp = requests.post(
-            f"{stt_url}/synthesize",
+            f"{tts_url}/synthesize",
             json={"text": text[:4000], "language": lang[:2].lower(), "format": "ogg"},
             timeout=60,
         )
-        if not resp.ok or not resp.content:
+        if not resp.ok:
+            logger.warning("WhatsApp TTS failed: %s - %s", resp.status_code, resp.text[:200])
+            return None
+        if not resp.content:
+            logger.warning("WhatsApp TTS: empty response body")
             return None
         data = resp.content
         if data[:4] not in (b"OggS", b"RIFF"):
+            logger.warning("WhatsApp TTS: unknown audio format (magic: %s)", data[:4].hex())
             return None
         suffix = ".ogg" if data[:4] == b"OggS" else ".wav"
         with tempfile.NamedTemporaryFile(prefix="vaf_wa_", suffix=suffix, delete=False) as f:
             f.write(data)
+            logger.info("WhatsApp TTS: wrote %d bytes to %s", len(data), f.name)
             return f.name
-    except Exception:
+    except Exception as e:
+        logger.warning("WhatsApp TTS synthesis error: %s", e)
         return None
 
 
@@ -132,9 +141,12 @@ def _transcribe_voice_file(voice_path: str) -> tuple[Optional[str], Optional[str
     try:
         path_obj = Path(voice_path)
         if not path_obj.is_file():
+            logger.warning("WhatsApp STT: voice file not found: %s", voice_path)
             return None, None
+        file_size = path_obj.stat().st_size
         stt_url = (Config.get("speech_stt_docker_url") or "http://localhost:5003").strip().rstrip("/")
         asr_endpoint = f"{stt_url}/asr"
+        logger.info("WhatsApp STT: transcribing %s (%d bytes) via %s", voice_path, file_size, asr_endpoint)
         with open(voice_path, "rb") as f:
             stt_resp = requests.post(
                 asr_endpoint,

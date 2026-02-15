@@ -203,6 +203,8 @@ Global options (top-level in config):
 
 ## WhatsApp Integration
 
+For full technical documentation (architecture, voice flow, configuration, troubleshooting), see [WHATSAPP_INTEGRATION.md](WHATSAPP_INTEGRATION.md).
+
 ### Features
 
 - **Per-user isolation**: Each VAF user has their own WhatsApp session. Credentials are stored in `~/.vaf/users/<username>/whatsapp/`. Other users cannot see or use your WhatsApp.

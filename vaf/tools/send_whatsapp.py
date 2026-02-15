@@ -32,7 +32,8 @@ class SendWhatsAppTool(BaseTool):
     description = (
         "Send content via WhatsApp: text, voice message (voice_lang), or document (file_path). "
         "Default: sends to the account owner. To send to a contact (e.g. Anne), use to_phone with the contact's WhatsApp number from get_contact(name='...'). "
-        "Example: get_contact(name='Anne') then send_whatsapp(message='...', to_phone='+491761234567')."
+        "When sending a voice message to a contact, use the contact's preferred_language for voice_lang (get_contact returns 'Preferred language: xx'); e.g. Anne speaks Turkish → voice_lang='tr'. "
+        "Example: get_contact(name='Anne') then send_whatsapp(message='...', to_phone='+491761234567', voice_lang='tr')."
     )
     parameters = {
         "type": "object",
@@ -47,7 +48,7 @@ class SendWhatsAppTool(BaseTool):
             },
             "voice_lang": {
                 "type": "string",
-                "description": "Optional. Language code (e.g. 'de', 'en') to send as voice message (Sprachnachricht).",
+                "description": "Optional. Language code for voice message (e.g. 'de', 'en', 'tr'). When sending to a contact, use the contact's preferred_language from get_contact.",
             },
             "file_path": {
                 "type": "string",
@@ -127,12 +128,26 @@ class SendWhatsAppTool(BaseTool):
                 return f"File not found or not a file: {file_path_str}"
         elif voice_lang:
             voice_path = self._synthesize_voice(out, voice_lang[:2].lower())
+            if not voice_path:
+                return (
+                    "Voice message could not be generated (TTS failed). "
+                    "Check Settings → Speech / TTS: is the TTS service running (speech_tts_docker_url, e.g. http://localhost:5002)? "
+                    "You can send the same text as a normal message without voice_lang."
+                )
+            if Path(voice_path).stat().st_size == 0:
+                try:
+                    Path(voice_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return "TTS produced an empty file. Cannot send voice message. Send as text instead (omit voice_lang)."
 
         try:
+            # Voice/document use longer timeout in bridge (TTS + upload)
             result = send_whatsapp_with_confirmation(
                 username, chat_jid, out,
                 voice_path=voice_path,
                 document_path=document_path,
+                timeout=45.0 if (voice_path or document_path) else 15.0,
                 allow_contact_send=allow_contact_send,
             )
         except Exception as e:

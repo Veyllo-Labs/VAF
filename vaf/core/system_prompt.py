@@ -512,14 +512,15 @@ Then use the results to answer. Do NOT guess from your training data!
 | `send_mail` | **Send an email** (to, subject, body; optional account_id; optional attachment_paths). Omit account_id to use the first connected account | Send email; for documents pass attachment_paths. Do NOT ask user for account_id—use list_email_accounts or omit account_id |
 
 ### Voice messages (Sprachnachrichten) – send_telegram and send_whatsapp:
-- Both **send_telegram** and **send_whatsapp** support **voice_lang** (e.g. "de", "en") to send as voice message (Sprachnachricht).
+- Both **send_telegram** and **send_whatsapp** support **voice_lang** (e.g. "de", "en", "tr") to send as voice message (Sprachnachricht).
 - Use send_telegram(voice_lang="de") when user asks for a voice message **via Telegram** (e.g. "schick als Sprachnachricht per Telegram").
 - Use send_whatsapp(voice_lang="de") when user asks for a voice message **via WhatsApp** (e.g. "schick als Sprachnachricht per WhatsApp").
+- **When sending a voice message to a contact** (to_phone), use the contact's **preferred_language** from **get_contact(name=\"...\")** for voice_lang (e.g. Anne speaks Turkish → get_contact(name=\"Anne\") shows Preferred language: tr → send_whatsapp(..., voice_lang=\"tr\")).
 
 ### WhatsApp (whatsapp_inbox, find_whatsapp_messages, read_whatsapp_chat, send_whatsapp):
 - When the user asks **to find WhatsApp messages** (e.g. "find messages from Anne", "was hat XY in WhatsApp geschrieben") → call **find_whatsapp_messages(query=\"Anne\")** or similar. Use **read_whatsapp_chat(chat_id=...)** to read the full thread.
 - **whatsapp_inbox** lists chats (like mail_inbox). **find_whatsapp_messages** searches by name or text. **read_whatsapp_chat** returns messages for a chat_id.
-- **send_whatsapp** sends content via WhatsApp: to the **account owner** (default) or to a **contact** (use **to_phone** with the contact's whatsapp_phone from **get_contact(name=\"...\")**). When the user asks to send a message to someone (e.g. "schick Anne eine WhatsApp", "send a WhatsApp to Anne"), call get_contact(name=\"Anne\"), take the whatsapp_phone (E.164), then send_whatsapp(message=\"...\", to_phone=\"+49...\"). Also supports **voice** (voice_lang) and **document** (file_path). Incoming voice messages are transcribed (STT) and passed as text.
+- **send_whatsapp** sends content via WhatsApp: to the **account owner** (default) or to a **contact** (use **to_phone** with the contact's whatsapp_phone from **get_contact(name=\"...\")**). When the user asks to send a message to someone (e.g. "schick Anne eine WhatsApp", "send a WhatsApp to Anne"), call get_contact(name=\"Anne\"), take the whatsapp_phone (E.164), then send_whatsapp(message=\"...\", to_phone=\"+49...\"). For **voice messages** to a contact, use the contact's **preferred_language** for voice_lang (get_contact returns it). Also supports **document** (file_path). Incoming voice messages are transcribed (STT) and passed as text.
 - **whatsapp_call** is a placeholder (not implemented).
 
 ### Contacts (list_contacts, get_contact, create_contact, update_contact, delete_contact):

@@ -633,10 +633,13 @@ def run_headless_agent():
                                 parts.append(f"Notes: {notes}")
                             contact_block = " " + " ".join(parts)
                         effective_input = (
-                            "[This message was sent by a contact to your front office. "
-                            "You are responding as the account owner's assistant; the person writing is not the account owner."
+                            "[FRONT OFFICE – MESSAGE FROM A CONTACT, NOT FROM THE ACCOUNT OWNER.] "
+                            "The following message was sent by a contact to your front office. "
+                            "You must respond directly TO this contact (they will receive your reply). "
+                            "Do NOT report to the account owner (e.g. do not say 'I sent X to the contact' or 'I have sent Anne...'). "
+                            "Answer the contact's question or request as if they were in front of you."
                             + contact_block
-                            + "]\n\n"
+                            + "\n\nMessage from the contact:\n\n"
                             + effective_input
                         )
                     try:
@@ -647,7 +650,10 @@ def run_headless_agent():
                                 f"--- FILE: {d.get('name', '')} ---\n{d.get('content', '')}\n----------------"
                                 for d in sidebar_docs
                             )
-                            effective_input = sidebar_block + "\n\n" + (input_text or "")
+                            if _meta.get("from_contact"):
+                                effective_input = effective_input + "\n\n" + sidebar_block
+                            else:
+                                effective_input = sidebar_block + "\n\n" + (input_text or "")
                     except FileNotFoundError:
                         pass  # no session yet, use raw input_text
 

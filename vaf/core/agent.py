@@ -4286,6 +4286,16 @@ class Agent:
             tool_calls_detected = []
             auto_continue = False  # Track if response was cut off
 
+            # When we're about to stream the next assistant turn after tool execution,
+            # clear the Web UI stream buffer so only the final reply is shown (not the
+            # pre-tool text like "Ich werde get_contact nutzen..." plus tool blocks).
+            if len(self.history) > history_snapshot_len + 1 and self.history[-1].get("role") == "tool":
+                if stream_callback and hasattr(stream_callback, "clear"):
+                    try:
+                        stream_callback.clear()
+                    except Exception:
+                        pass
+
             # Log which LLM backend is used (for debugging: VQ1 vs API vs server)
             try:
                 if self.api_backend:

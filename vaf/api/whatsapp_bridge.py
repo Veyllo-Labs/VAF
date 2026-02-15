@@ -83,6 +83,17 @@ def _normalize_phone(phone: str) -> str:
     return "".join(c for c in (phone or "") if c.isdigit())
 
 
+def _to_e164_display(phone_or_jid: str) -> str:
+    """Return E.164 display form with exactly one leading + (e.g. +491761234567). Avoids double plus."""
+    if not phone_or_jid or not isinstance(phone_or_jid, str):
+        return ""
+    s = (phone_or_jid or "").strip().lstrip("+")
+    digits = "".join(c for c in s if c.isdigit())
+    if not digits or len(digits) < 7 or len(digits) > 15:
+        return ""
+    return f"+{digits}"
+
+
 def _e164_to_jid(phone: str) -> str:
     """Convert E.164 or phone string to WhatsApp JID (e.g. +491761234567 -> 491761234567@s.whatsapp.net)."""
     digits = _normalize_phone(phone or "")
@@ -140,24 +151,44 @@ def _transcribe_voice_file(voice_path: str) -> tuple[Optional[str], Optional[str
     try:
         path_obj = Path(voice_path)
         if not path_obj.is_file():
+            logger.warning("WhatsApp STT: voice file not found: %s", voice_path)
             return None, None
         stt_url = (Config.get("speech_stt_docker_url") or "http://localhost:5003").strip().rstrip("/")
         asr_endpoint = f"{stt_url}/asr"
+        # Use MIME type from extension (Node sends .ogg for PTT, .opus for other audio)
+        ext = (path_obj.suffix or "").lower()
+        mime = "audio/ogg" if ext == ".ogg" else ("audio/opus" if ext == ".opus" else "audio/ogg")
+        filename = f"voice{ext}" if ext else "voice.ogg"
         with open(voice_path, "rb") as f:
             stt_resp = requests.post(
                 asr_endpoint,
-                files={"audio_file": ("voice.ogg", f, "audio/ogg")},
+                files={"audio_file": (filename, f, mime)},
                 params={"encode": "true", "output": "json"},
                 timeout=60,
             )
+        if stt_resp.status_code == 404:
+            transcribe_endpoint = f"{stt_url}/transcribe"
+            with open(voice_path, "rb") as f:
+                stt_resp = requests.post(
+                    transcribe_endpoint,
+                    files={"audio_file": (filename, f, mime)},
+                    params={"encode": "true", "output": "json"},
+                    timeout=60,
+                )
         if not stt_resp.ok:
-            logger.warning("WhatsApp STT failed: %s - %s", stt_resp.status_code, stt_resp.text[:200])
+            logger.warning("WhatsApp STT failed: %s - %s", stt_resp.status_code, (stt_resp.text or "")[:200])
             return None, None
-        data = stt_resp.json()
-        text = (data.get("text") or "").strip()
+        try:
+            data = stt_resp.json()
+        except Exception:
+            text = (stt_resp.text or "").strip()
+            data = {}
+        text = (data.get("text") or data.get("transcript") or "").strip()
+        if not text and isinstance(data.get("results"), list) and data["results"]:
+            text = (data["results"][0].get("transcript") or "").strip()
         language = data.get("language", "en")
         logger.info("WhatsApp voice transcribed: lang=%s, text=%s...", language, (text or "")[:50])
-        return text, language
+        return text or None, language
     except Exception as e:
         logger.warning("WhatsApp voice transcription error: %s", e)
         return None, None
@@ -279,6 +310,8 @@ def _sender_loop() -> None:
                     from pathlib import Path
                     p = Path(voice_path)
                     if p.is_file():
+                        size = p.stat().st_size
+                        logger.info("WhatsApp sending voice to %s, path=%s, size=%s", chat_jid, p, size)
                         cmd = {"cmd": "send_voice", "to": chat_jid, "path": str(p.resolve())}
                         if req_id:
                             cmd["req_id"] = req_id
@@ -416,6 +449,9 @@ def send_whatsapp_with_confirmation(
     timeout: float = 15.0,
     allow_contact_send: bool = False,
 ) -> str:
+    # Voice/document need more time (TTS synthesis, file upload)
+    if voice_path or document_path:
+        timeout = max(timeout, 45.0)
     """
     Send a WhatsApp message (text, voice, or document) and wait for delivery confirmation from the Node bridge.
     Returns a success message or an error string for the agent to report.
@@ -454,17 +490,17 @@ def send_whatsapp_with_confirmation(
         success, error = result_queue.get(timeout=timeout)
         if success:
             if document_path:
-                return "Document sent to the user via WhatsApp."
+                return "Document sent via WhatsApp."
             if voice_path:
-                return "Voice message sent to the user via WhatsApp."
-            return "Message sent to the user via WhatsApp."
+                return "Voice message sent via WhatsApp."
+            return "Message sent via WhatsApp."
         return f"WhatsApp could not deliver the message: {error}"
     except queue.Empty:
         with _pending_sends_lock:
             _pending_sends.pop(req_id, None)
         return (
-            "WhatsApp send timed out. The message may or may not have been delivered. "
-            "Check Settings → Connections → WhatsApp (bridge running, linked)."
+            "No delivery confirmation from the WhatsApp bridge within the time limit. "
+            "If the message appeared in WhatsApp, it was delivered; otherwise check Settings → Connections → WhatsApp (bridge running, linked)."
         )
 
 
@@ -577,9 +613,13 @@ def _read_user_process(
             except Exception:
                 pass
             save_whatsapp_chat_jid(user_scope_id, username, from_jid)
-            # Use fromE164 when available (resolved @lid from Node); else derive from JID
-            resolved_e164 = from_e164 or _jid_to_e164(from_jid)
-            chat_id = f"+{resolved_e164}" if resolved_e164 else str(from_jid or "")
+            # Use fromE164 when available (resolved @lid from Node); else derive from JID.
+            # Normalize to single leading + so we never get ++ (Node may send fromE164 with +).
+            raw = from_e164 or _jid_to_e164(from_jid) or ""
+            chat_id = _to_e164_display(raw) if raw else str(from_jid or "")
+            if not chat_id:
+                chat_id = str(from_jid or "")
+            resolved_digits = _normalize_phone(raw) if raw else ""
             _append_chat_activity(chat_id, user_scope_id, "in")
             try:
                 from vaf.core.whatsapp_message_store import append_message
@@ -590,7 +630,7 @@ def _read_user_process(
             # but incoming messages do not trigger the agent (no two-way chat).
             inbound_to_agent = whatsapp_config.get("inbound_to_agent", True)
             if inbound_to_agent:
-                session_id = f"whatsapp_{username}_{resolved_e164 or _jid_to_e164(from_jid) or 'self'}"
+                session_id = f"whatsapp_{username}_{resolved_digits or 'self'}"
                 in_config = _allow_from_match(from_jid or "", config_phones) or (
                     from_e164 and _allow_from_match(from_e164, config_phones)
                 )

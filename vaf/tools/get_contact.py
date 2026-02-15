@@ -87,7 +87,7 @@ class GetContactTool(BaseTool):
             if contact.get("email"):
                 parts.append(f"Email: {contact['email']}")
         if contact.get("preferred_language"):
-            parts.append(f"Preferred language: {contact['preferred_language']}")
+            parts.append(f"Preferred language: {contact['preferred_language']} (use for send_whatsapp(voice_lang='...') when sending voice messages to this contact)")
         if contact.get("how_to_address"):
             parts.append(f"How to address: {contact['how_to_address']}")
         if contact.get("birthday"):

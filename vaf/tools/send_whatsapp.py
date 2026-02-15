@@ -25,15 +25,14 @@ def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
 
 class SendWhatsAppTool(BaseTool):
     """
-    Send content to the user via WhatsApp (text, voice, or document).
-    Use when the user asked you to send them something (report, notes, PDF, audio) via WhatsApp.
-    WhatsApp is the channel where the bot can reach the user; the user stays registered (linked + whitelist).
+    Send content via WhatsApp: to the account owner (default) or to a contact (to_phone).
+    Use to_phone when the user asks to send a message to someone (e.g. Anne); get the number from get_contact(name='Anne').
     """
     name = "send_whatsapp"
     description = (
-        "Send content to the user via WhatsApp: text, voice message (voice_lang), or document (file_path). "
-        "Use when the user asked you to send them something via WhatsApp (e.g. report, notes, PDF, audio). "
-        "For documents (PDF, DOCX, etc.) pass file_path with the full path (e.g. from find_files or Downloads)."
+        "Send content via WhatsApp: text, voice message (voice_lang), or document (file_path). "
+        "Default: sends to the account owner. To send to a contact (e.g. Anne), use to_phone with the contact's WhatsApp number from get_contact(name='...'). "
+        "Example: get_contact(name='Anne') then send_whatsapp(message='...', to_phone='+491761234567')."
     )
     parameters = {
         "type": "object",
@@ -41,6 +40,10 @@ class SendWhatsAppTool(BaseTool):
             "message": {
                 "type": "string",
                 "description": "The message text (or caption for documents; or text to speak if voice_lang is set).",
+            },
+            "to_phone": {
+                "type": "string",
+                "description": "Optional. E.164 phone number (e.g. +491761234567) to send to a contact instead of the owner. Use the contact's whatsapp_phone from get_contact when the user asks to send a message to someone (e.g. 'send to Anne').",
             },
             "voice_lang": {
                 "type": "string",
@@ -68,6 +71,7 @@ class SendWhatsAppTool(BaseTool):
                 is_bridge_running,
                 has_process_for_user,
                 send_whatsapp_with_confirmation,
+                _e164_to_jid,
             )
         except ImportError as e:
             return f"WhatsApp send unavailable: {e}"
@@ -83,13 +87,24 @@ class SendWhatsAppTool(BaseTool):
                 "Try: Settings → Connections → WhatsApp → Stop, then Start. Ensure WhatsApp is linked (QR scanned) and your number is in the whitelist."
             )
 
-        chat_jid = get_whatsapp_chat_jid(user_scope_id, username)
-        if not chat_jid:
-            return (
-                "No WhatsApp contact found for this user. "
-                "The user must link WhatsApp in Settings → Connections → WhatsApp (scan QR) and add their phone number to the whitelist. "
-                "Once linked, you can send proactive messages."
-            )
+        to_phone = (kwargs.get("to_phone") or kwargs.get("phone_number") or "").strip()
+        allow_contact_send = False
+        if to_phone:
+            chat_jid = _e164_to_jid(to_phone)
+            if not chat_jid:
+                return (
+                    "Invalid phone number for to_phone. Use E.164 format (e.g. +491761234567). "
+                    "Get the contact's whatsapp_phone from get_contact(name='...') when the user asks to send to a contact."
+                )
+            allow_contact_send = True
+        else:
+            chat_jid = get_whatsapp_chat_jid(user_scope_id, username)
+            if not chat_jid:
+                return (
+                    "No WhatsApp contact found for this user. "
+                    "The user must link WhatsApp in Settings → Connections → WhatsApp (scan QR) and add their phone number to the whitelist. "
+                    "Once linked, you can send proactive messages."
+                )
 
         # Strip <think>...</think> for clean delivery
         out = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
@@ -118,6 +133,7 @@ class SendWhatsAppTool(BaseTool):
                 username, chat_jid, out,
                 voice_path=voice_path,
                 document_path=document_path,
+                allow_contact_send=allow_contact_send,
             )
         except Exception as e:
             return f"Failed to send WhatsApp message: {e}"

@@ -322,10 +322,15 @@ When a contact with **Can reach your assistant** enabled sends a message (e.g. v
 
 ### Agent tools
 
-- **`list_contacts`**: Returns contact names (and optionally which channels they have). Use when the user asks who is in their contact list.
-- **`get_contact(name="...")`**: Returns one contact’s data (channel IDs and personal file). Use to resolve a name to channels, then call `read_whatsapp_chat`, `find_whatsapp_messages`, `find_mail`, etc., with the contact’s IDs.
+- **`list_contacts`**: Returns all contacts with name, **contact_id**, and channels. Use when the user asks who is in their contact list. The **contact_id** is required for `update_contact` and `delete_contact`.
+- **`get_contact(name="...")`**: Returns one contact’s **contact_id**, channel IDs, and personal file. If multiple contacts share the same name, the tool returns all of them with their contact_ids and instructs the agent to ask the user which one they mean before any update or delete.
+- **`create_contact`**: Create a contact (required: name; optional: email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, allow_as_assistant_user). Returns the new contact with contact_id.
+- **`update_contact(contact_id, ...)`**: Update a contact by **contact_id** (from list_contacts or get_contact). Optional fields: name, email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, allow_as_assistant_user.
+- **`delete_contact(contact_id)`**: Delete a contact by **contact_id**.
 
-For questions like “Has [Name] written to me?”, the agent should call `get_contact(name="...")` to resolve the name to channel IDs, then use the appropriate read/find tool for that channel.
+**Same name (disambiguation):** Multiple contacts can have the same display name (e.g. two “Max”). The agent must never guess which one the user means for update or delete. When `get_contact(name)` returns multiple matches, the agent tells the user “There are multiple contacts named [X]”, lists them (contact_id and a short label such as phone or email), and asks which one to update or delete. Only after the user confirms should the agent call `update_contact` or `delete_contact` with that contact_id. This behaviour is enforced in the system prompt and in the tool responses.
+
+For questions like “Has [Name] written to me?”, the agent calls `get_contact(name="...")` to resolve the name to channel IDs (or to disambiguate if there are several contacts with that name), then uses the appropriate read/find tool for that channel.
 
 ## Proactive messaging
 

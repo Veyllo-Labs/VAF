@@ -320,11 +320,12 @@ async def get_graph(
 ):
     """Get memory graph data for ReactFlow visualization."""
     try:
-        use_cache = not highlight and user_scope_id is None
+        use_cache = not highlight
+        scope_str = str(user_scope_id) if user_scope_id else None
         highlight_ids = highlight.split(",") if highlight else None
         if use_cache:
             cache = get_cache()
-            graph_data = await cache.get_graph(limit)
+            graph_data = await cache.get_graph(limit, user_scope_id=scope_str)
             if graph_data is not None:
                 return GraphResponse(**graph_data)
 
@@ -337,7 +338,7 @@ async def get_graph(
             )
             if use_cache:
                 cache = get_cache()
-                await cache.set_graph(graph_data, limit)
+                await cache.set_graph(graph_data, limit, user_scope_id=scope_str)
             return GraphResponse(**graph_data)
     except Exception as e:
         logger.error(f"Failed to get graph: {e}")
@@ -345,17 +346,21 @@ async def get_graph(
 
 
 @memory_router.get("/{memory_id}", response_model=MemoryResponse)
-async def get_memory(memory_id: str, include_content: bool = Query(default=True)):
-    """Get a memory by ID."""
+async def get_memory(
+    memory_id: str,
+    include_content: bool = Query(default=True),
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
+):
+    """Get a memory by ID (scoped to current user)."""
     try:
         memory_uuid = UUID(memory_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid memory ID")
-    
+
     try:
         async with get_db() as db:
             pipeline = RagPipeline(db)
-            memory = await pipeline.get_memory(memory_uuid, decrypt=include_content)
+            memory = await pipeline.get_memory(memory_uuid, decrypt=include_content, user_scope_id=user_scope_id)
             
             if not memory:
                 raise HTTPException(status_code=404, detail="Memory not found")
@@ -369,20 +374,25 @@ async def get_memory(memory_id: str, include_content: bool = Query(default=True)
 
 
 @memory_router.put("/{memory_id}", response_model=MemoryResponse)
-async def update_memory(memory_id: str, request: MemoryUpdate):
-    """Update a memory's content and/or metadata."""
+async def update_memory(
+    memory_id: str,
+    request: MemoryUpdate,
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
+):
+    """Update a memory's content and/or metadata (scoped to current user)."""
     try:
         memory_uuid = UUID(memory_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid memory ID")
-    
+
     try:
         async with get_db() as db:
             pipeline = RagPipeline(db)
             memory = await pipeline.update_memory(
                 memory_uuid,
                 content=request.content,
-                metadata=request.metadata
+                metadata=request.metadata,
+                user_scope_id=user_scope_id
             )
             await get_cache().invalidate_graph()
             chunk_count = await pipeline.get_chunk_count(memory.id)
@@ -403,10 +413,14 @@ async def update_memory(memory_id: str, request: MemoryUpdate):
 
 
 @memory_router.delete("/{memory_id}")
-async def delete_memory(memory_id: str, hard: bool = Query(default=False)):
+async def delete_memory(
+    memory_id: str,
+    hard: bool = Query(default=False),
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
+):
     """
-    Delete a memory.
-    
+    Delete a memory (scoped to current user).
+
     - Default: soft delete (set is_deleted flag)
     - hard=True: permanent deletion
     """
@@ -414,11 +428,11 @@ async def delete_memory(memory_id: str, hard: bool = Query(default=False)):
         memory_uuid = UUID(memory_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid memory ID")
-    
+
     try:
         async with get_db() as db:
             pipeline = RagPipeline(db)
-            deleted = await pipeline.delete_memory(memory_uuid, soft=not hard)
+            deleted = await pipeline.delete_memory(memory_uuid, soft=not hard, user_scope_id=user_scope_id)
 
             if not deleted:
                 raise HTTPException(status_code=404, detail="Memory not found")
@@ -433,8 +447,12 @@ async def delete_memory(memory_id: str, hard: bool = Query(default=False)):
 
 
 @memory_router.put("/{memory_id}/connections")
-async def update_connections(memory_id: str, request: ConnectionUpdate):
-    """Update manual connections for a memory."""
+async def update_connections(
+    memory_id: str,
+    request: ConnectionUpdate,
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
+):
+    """Update manual connections for a memory (scoped to current user)."""
     try:
         memory_uuid = UUID(memory_id)
     except ValueError:
@@ -447,7 +465,8 @@ async def update_connections(memory_id: str, request: ConnectionUpdate):
             connections = await graph_manager.update_connections(
                 memory_uuid,
                 request.related_ids,
-                request.connection_type
+                request.connection_type,
+                user_scope_id=user_scope_id
             )
             await get_cache().invalidate_graph()
             return {
@@ -461,8 +480,12 @@ async def update_connections(memory_id: str, request: ConnectionUpdate):
 
 
 @memory_router.post("/{memory_id}/tags")
-async def add_tag_to_memory(memory_id: str, request: AddTagRequest):
-    """Add a tag to a memory's metadata."""
+async def add_tag_to_memory(
+    memory_id: str,
+    request: AddTagRequest,
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
+):
+    """Add a tag to a memory's metadata (scoped to current user)."""
     try:
         memory_uuid = UUID(memory_id)
     except ValueError:
@@ -473,7 +496,7 @@ async def add_tag_to_memory(memory_id: str, request: AddTagRequest):
             pipeline = RagPipeline(db)
 
             # Get current memory (decrypt=False since we only need metadata)
-            memory = await pipeline.get_memory(memory_uuid, decrypt=False)
+            memory = await pipeline.get_memory(memory_uuid, decrypt=False, user_scope_id=user_scope_id)
             if not memory:
                 raise HTTPException(status_code=404, detail="Memory not found")
 
@@ -495,7 +518,7 @@ async def add_tag_to_memory(memory_id: str, request: AddTagRequest):
             current_meta["tags"] = current_tags
 
             # Update memory with new metadata
-            await pipeline.update_memory(memory_uuid, metadata=current_meta)
+            await pipeline.update_memory(memory_uuid, metadata=current_meta, user_scope_id=user_scope_id)
             await get_cache().invalidate_graph()
 
             return {
@@ -511,8 +534,12 @@ async def add_tag_to_memory(memory_id: str, request: AddTagRequest):
 
 
 @memory_router.delete("/{memory_id}/tags/{tag}")
-async def remove_tag_from_memory(memory_id: str, tag: str):
-    """Remove a tag from a memory's metadata."""
+async def remove_tag_from_memory(
+    memory_id: str,
+    tag: str,
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
+):
+    """Remove a tag from a memory's metadata (scoped to current user)."""
     try:
         memory_uuid = UUID(memory_id)
     except ValueError:
@@ -523,7 +550,7 @@ async def remove_tag_from_memory(memory_id: str, tag: str):
             pipeline = RagPipeline(db)
 
             # Get current memory (decrypt=False since we only need metadata)
-            memory = await pipeline.get_memory(memory_uuid, decrypt=False)
+            memory = await pipeline.get_memory(memory_uuid, decrypt=False, user_scope_id=user_scope_id)
             if not memory:
                 raise HTTPException(status_code=404, detail="Memory not found")
 
@@ -539,7 +566,7 @@ async def remove_tag_from_memory(memory_id: str, tag: str):
                 current_meta["tags"] = current_tags
 
                 # Update memory with new metadata
-                await pipeline.update_memory(memory_uuid, metadata=current_meta)
+                await pipeline.update_memory(memory_uuid, metadata=current_meta, user_scope_id=user_scope_id)
                 await get_cache().invalidate_graph()
 
             return {

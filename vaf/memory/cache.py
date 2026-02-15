@@ -185,33 +185,38 @@ class MemoryCache:
     # Graph Cache
     # =========================================================================
     
-    async def get_graph(self, limit: int = 100) -> Optional[Dict[str, Any]]:
-        """Get cached graph data."""
+    async def get_graph(
+        self, limit: int = 100, user_scope_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Get cached graph data (scoped per user)."""
         if not await self.is_available():
             return None
-        
+
         try:
-            key = f"{CacheKeys.MEMORY_GRAPH}{limit}"
+            scope_key = user_scope_id or "global"
+            key = f"{CacheKeys.MEMORY_GRAPH}{scope_key}:{limit}"
             data = await self.client.get(key)
             if data:
                 return json.loads(data)
         except Exception as e:
             logger.debug(f"Cache get_graph error: {e}")
-        
+
         return None
-    
+
     async def set_graph(
         self,
         graph_data: Dict[str, Any],
         limit: int = 100,
+        user_scope_id: Optional[str] = None,
         ttl: int = None
     ) -> bool:
-        """Cache graph data."""
+        """Cache graph data (scoped per user)."""
         if not await self.is_available():
             return False
-        
+
         try:
-            key = f"{CacheKeys.MEMORY_GRAPH}{limit}"
+            scope_key = user_scope_id or "global"
+            key = f"{CacheKeys.MEMORY_GRAPH}{scope_key}:{limit}"
             ttl = ttl or self.DEFAULT_GRAPH_TTL
             await self.client.setex(key, ttl, json.dumps(graph_data))
             return True

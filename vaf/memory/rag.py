@@ -468,20 +468,27 @@ Always cite which source(s) you used."""
             logger.error(f"Error streaming answer: {e}")
             yield f"Error: {str(e)}"
     
-    async def get_memory(self, memory_id: UUID, decrypt: bool = True) -> Optional[Dict[str, Any]]:
+    async def get_memory(
+        self, memory_id: UUID, decrypt: bool = True, user_scope_id: Optional[UUID] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Get a memory by ID.
-        
+
         Args:
             memory_id: Memory UUID
             decrypt: Whether to decrypt content
-            
+            user_scope_id: If set, only return the memory if it belongs to this user
+
         Returns:
             Memory dict with optional decrypted content
         """
+        conditions = [Memory.id == memory_id]
+        if user_scope_id is not None:
+            conditions.append(Memory.user_scope_id == user_scope_id)
+
         result = await self.db.execute(
             select(Memory)
-            .where(Memory.id == memory_id)
+            .where(and_(*conditions))
             .options(selectinload(Memory.chunks))
         )
         memory = result.scalar_one_or_none()
@@ -511,24 +518,30 @@ Always cite which source(s) you used."""
         self,
         memory_id: UUID,
         content: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        user_scope_id: Optional[UUID] = None
     ) -> Memory:
         """
         Update a memory's content and/or metadata.
-        
+
         Args:
             memory_id: Memory UUID
             content: New content (re-encrypted, re-chunked)
             metadata: New metadata (merged with existing)
-            
+            user_scope_id: If set, only update the memory if it belongs to this user
+
         Returns:
             Updated Memory object
         """
+        conditions = [Memory.id == memory_id]
+        if user_scope_id is not None:
+            conditions.append(Memory.user_scope_id == user_scope_id)
+
         result = await self.db.execute(
-            select(Memory).where(Memory.id == memory_id)
+            select(Memory).where(and_(*conditions))
         )
         memory = result.scalar_one_or_none()
-        
+
         if not memory:
             raise ValueError(f"Memory {memory_id} not found")
 
@@ -585,19 +598,26 @@ Always cite which source(s) you used."""
         
         return memory
     
-    async def delete_memory(self, memory_id: UUID, soft: bool = True) -> bool:
+    async def delete_memory(
+        self, memory_id: UUID, soft: bool = True, user_scope_id: Optional[UUID] = None
+    ) -> bool:
         """
         Delete a memory.
-        
+
         Args:
             memory_id: Memory UUID
             soft: If True, soft delete (set is_deleted flag)
-            
+            user_scope_id: If set, only delete the memory if it belongs to this user
+
         Returns:
             True if deleted, False if not found
         """
+        conditions = [Memory.id == memory_id]
+        if user_scope_id is not None:
+            conditions.append(Memory.user_scope_id == user_scope_id)
+
         result = await self.db.execute(
-            select(Memory).where(Memory.id == memory_id)
+            select(Memory).where(and_(*conditions))
         )
         memory = result.scalar_one_or_none()
         

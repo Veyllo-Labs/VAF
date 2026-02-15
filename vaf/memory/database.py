@@ -157,11 +157,16 @@ async def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 @asynccontextmanager
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
+async def get_db(user_scope_id: Optional[str] = None) -> AsyncGenerator[AsyncSession, None]:
     """
     Async context manager for database sessions.
 
     MEMORY LEAK FIX: For daemon threads, disposes engine after session closes.
+
+    Args:
+        user_scope_id: If set, activates PostgreSQL Row-Level Security (RLS)
+            for this session by setting ``app.current_user_scope_id``. When
+            omitted (local admin / no auth), RLS allows access to all rows.
 
     Usage:
         async with get_db() as db:
@@ -174,6 +179,12 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     is_daemon = not _is_main_thread()
 
     try:
+        # Set RLS context for this session (defense-in-depth)
+        if user_scope_id:
+            await session.execute(
+                text("SET LOCAL app.current_user_scope_id = :scope"),
+                {"scope": str(user_scope_id)}
+            )
         yield session
         await session.commit()
     except Exception:
@@ -227,13 +238,25 @@ async def init_db(drop_existing: bool = False):
         
         # Index for chunk embeddings (main RAG search)
         await conn.execute(text("""
-            CREATE INDEX IF NOT EXISTS ix_chunks_embedding_hnsw 
-            ON chunks 
+            CREATE INDEX IF NOT EXISTS ix_chunks_embedding_hnsw
+            ON chunks
             USING hnsw (embedding vector_cosine_ops)
             WITH (m = 16, ef_construction = 64)
         """))
-        
-        logger.info("Memory database initialized successfully")
+
+        # Enable Row-Level Security on memories table (defense-in-depth)
+        await conn.execute(text("ALTER TABLE memories ENABLE ROW LEVEL SECURITY"))
+        await conn.execute(text("DROP POLICY IF EXISTS user_isolation_memories ON memories"))
+        await conn.execute(text("""
+            CREATE POLICY user_isolation_memories ON memories
+                USING (
+                    COALESCE(current_setting('app.current_user_scope_id', true), '') = ''
+                    OR user_scope_id IS NULL
+                    OR user_scope_id = current_setting('app.current_user_scope_id', true)::uuid
+                )
+        """))
+
+        logger.info("Memory database initialized successfully (RLS enabled)")
 
 
 async def check_db_connection() -> bool:

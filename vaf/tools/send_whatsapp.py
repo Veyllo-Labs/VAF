@@ -1,34 +1,54 @@
 """
 Send a proactive message to the user via WhatsApp.
-Supports text and voice messages (Sprachnachrichten), like Telegram.
+Supports text, voice messages (Sprachnachrichten), and documents (PDF, etc.) – WhatsApp as a channel where the bot can send the user content.
 """
 import re
 import tempfile
 from pathlib import Path
 
 from vaf.tools.base import BaseTool
+from vaf.tools.filesystem import is_safe_path
+
+
+def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
+    """Resolve file path (folder aliases like Downloads, absolute paths). Returns (resolved_path, error_message)."""
+    s = (path_str or "").strip()
+    if not s:
+        return None, None
+    if s.lower().startswith("file://"):
+        s = s[7:]
+    safe, result = is_safe_path(s)
+    if not safe:
+        return None, result
+    return Path(result), None
 
 
 class SendWhatsAppTool(BaseTool):
     """
-    Send a message to the user via WhatsApp.
-    Use when the user asked you to send them something and they prefer WhatsApp or said "via WhatsApp".
+    Send content to the user via WhatsApp (text, voice, or document).
+    Use when the user asked you to send them something (report, notes, PDF, audio) via WhatsApp.
+    WhatsApp is the channel where the bot can reach the user; the user stays registered (linked + whitelist).
     """
     name = "send_whatsapp"
     description = (
-        "Send a message to the user via WhatsApp. "
-        "Use when the user asked you to send them something (e.g. 'send me the result via WhatsApp' or when main_messenger is WhatsApp)."
+        "Send content to the user via WhatsApp: text, voice message (voice_lang), or document (file_path). "
+        "Use when the user asked you to send them something via WhatsApp (e.g. report, notes, PDF, audio). "
+        "For documents (PDF, DOCX, etc.) pass file_path with the full path (e.g. from find_files or Downloads)."
     )
     parameters = {
         "type": "object",
         "properties": {
             "message": {
                 "type": "string",
-                "description": "The message text to send (or to speak, if voice_lang is set).",
+                "description": "The message text (or caption for documents; or text to speak if voice_lang is set).",
             },
             "voice_lang": {
                 "type": "string",
                 "description": "Optional. Language code (e.g. 'de', 'en') to send as voice message (Sprachnachricht).",
+            },
+            "file_path": {
+                "type": "string",
+                "description": "Optional. Full path to a file to send as document (PDF, DOCX, etc.). Use when user asks for a report, notes, or PDF via WhatsApp.",
             },
         },
         "required": ["message"]
@@ -37,7 +57,7 @@ class SendWhatsAppTool(BaseTool):
     def run(self, **kwargs) -> str:
         message = (kwargs.get("message") or "").strip()
         if not message:
-            return "No message provided. Pass the message text to send."
+            return "No message provided. Pass the message text (or caption for documents)."
 
         username = kwargs.get("username") or "admin"
         user_scope_id = kwargs.get("user_scope_id")
@@ -78,12 +98,27 @@ class SendWhatsAppTool(BaseTool):
             out = "[No reply text]"
 
         voice_lang = (kwargs.get("voice_lang") or "").strip()
+        file_path_str = (kwargs.get("file_path") or "").strip()
         voice_path = None
-        if voice_lang:
+        document_path = None
+
+        if file_path_str:
+            resolved, path_error = _resolve_path(file_path_str)
+            if path_error:
+                return path_error
+            if resolved and resolved.is_file():
+                document_path = str(resolved.resolve())
+            else:
+                return f"File not found or not a file: {file_path_str}"
+        elif voice_lang:
             voice_path = self._synthesize_voice(out, voice_lang[:2].lower())
 
         try:
-            result = send_whatsapp_with_confirmation(username, chat_jid, out, voice_path=voice_path)
+            result = send_whatsapp_with_confirmation(
+                username, chat_jid, out,
+                voice_path=voice_path,
+                document_path=document_path,
+            )
         except Exception as e:
             return f"Failed to send WhatsApp message: {e}"
         finally:

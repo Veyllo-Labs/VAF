@@ -205,11 +205,15 @@ Global options (top-level in config):
 
 - **Per-user isolation**: Each VAF user has their own WhatsApp session. Credentials are stored in `~/.vaf/users/<username>/whatsapp/`. Other users cannot see or use your WhatsApp.
 - **QR link**: Scan a QR code with WhatsApp (Linked Devices) to link your phone.
-- **Whitelist**: Only configured phone numbers (E.164) can send messages **and** receive replies. Each whitelist entry maps a phone number to a VAF user.
+- **Whitelist**: Only configured phone numbers (E.164) can send messages **and** receive replies. Each whitelist entry maps a phone number to a VAF user. The user stays **reachable** on WhatsApp so the bot can send them content (reports, notes, PDFs, audio).
 - **Read-only for everyone else**: The bot replies only to numbers in your whitelist. It does not message other contacts or react to messages from non-whitelisted numbers.
 - **Node.js required**: Uses Baileys via a Node subprocess. Run `npm install` in `vaf/whatsapp_node/` before first use.
-- **Agent tools** (like email): `whatsapp_inbox`, `find_whatsapp_messages`, `read_whatsapp_chat` list chats, search messages, and read a chat. Messages are stored as they arrive. `send_whatsapp` supports optional `voice_lang` (e.g. `"de"`, `"en"`) for voice messages. `whatsapp_call` is a placeholder (not implemented).
+- **Agent tools**: `whatsapp_inbox`, `find_whatsapp_messages`, `read_whatsapp_chat` list/search/read chats. **`send_whatsapp`** sends text, voice (Sprachnachricht), or **documents (PDF, etc.)** to the user – WhatsApp as a channel where the bot can send the user content. `whatsapp_call` is a placeholder (not implemented).
 - **Voice (TTS/STT)**: Incoming voice messages are downloaded, transcribed via Whisper STT (speech_stt_docker_url, default localhost:5003), and passed as text to the agent. When the user sends a voice message, replies can automatically be sent as voice (TTS) in the detected language. The agent can also explicitly send voice via `send_whatsapp(voice_lang="de")` or `send_telegram(voice_lang="de")`.
+
+#### WhatsApp as send-only channel (optional)
+
+If you want WhatsApp only as a place **where the bot can send you things** (audio, reports, notes, PDFs) and **not** as a two-way chat (incoming messages do not trigger the agent), set **`inbound_to_agent`** to `false` in `whatsapp_config`. The user remains linked and reachable; the bot can still use `send_whatsapp` to send you content. Incoming WhatsApp messages are no longer enqueued to the agent.
 
 #### Agent WhatsApp tools (whatsapp_inbox, find_whatsapp_messages, read_whatsapp_chat, send_whatsapp)
 
@@ -218,7 +222,7 @@ Global options (top-level in config):
 | `whatsapp_inbox` | List WhatsApp chats. Returns chat_id, name, last_ts. Use `find_whatsapp_messages` to search; `read_whatsapp_chat` to read a chat. | User asks "list WhatsApp chats" or "show my WhatsApp conversations". |
 | `find_whatsapp_messages` | Search messages by query (matches body, chat name, sender). Optional `chat_id` to limit to one chat. | User asks "find messages from Anne" or "what did X say in WhatsApp" → find_whatsapp_messages(query="Anne"). |
 | `read_whatsapp_chat` | Read messages from a chat (`chat_id`, `limit`). Use chat_id from whatsapp_inbox or find_whatsapp_messages. | read_whatsapp_chat(chat_id="+49...") for full thread. |
-| `send_whatsapp` | Send text or voice message. Pass `voice_lang` (e.g. `"de"`) to send as voice message instead of text. | User asks to receive something via WhatsApp; use voice_lang when they prefer voice. |
+| `send_whatsapp` | Send text, voice message (`voice_lang`), or **document** (`file_path` to PDF, DOCX, etc.). Use when the user asks for a report, notes, or PDF via WhatsApp. | User asks to receive something via WhatsApp (text, voice, or document); use `file_path` for PDFs/reports. |
 
 ### Setup
 
@@ -244,6 +248,7 @@ The WhatsApp dashboard (Settings → Connections → Dashboard) shows:
 {
   "whatsapp_config": {
     "enabled": true,
+    "inbound_to_agent": true,
     "whitelist": [
       {
         "phone_number": "+49123456789",
@@ -254,6 +259,8 @@ The WhatsApp dashboard (Settings → Connections → Dashboard) shows:
   }
 }
 ```
+
+- **`inbound_to_agent`** (default `true`): When `true`, incoming WhatsApp messages are enqueued and the agent replies (two-way chat). When `false`, WhatsApp is send-only: the bot can send you content (text, voice, documents), but incoming messages do **not** trigger the agent. The user stays reachable; only the direction "user → agent" is disabled.
 
 ### Troubleshooting
 

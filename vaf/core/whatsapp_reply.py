@@ -24,7 +24,14 @@ def send_whatsapp_reply(username: str, chat_jid: str, text: str, voice_path: Opt
         )
     except Exception:
         pass
-    if not _send_callback or not username or not chat_jid:
+    if not username or not chat_jid:
+        return
+    if not _send_callback:
+        try:
+            from vaf.core.log_helper import log_whatsapp_reply
+            log_whatsapp_reply("REPLY DROPPED callback not set (bridge not running?)")
+        except Exception:
+            pass
         return
     if not text and not voice_path:
         return

@@ -246,10 +246,11 @@ def _sender_loop() -> None:
                 break
             req_id = item[4] if len(item) >= 5 else None
             voice_path = item[3] if len(item) >= 4 else None
+            document_path = item[5] if len(item) >= 6 else None
             username, chat_jid, text = item[0], item[1], (item[2] or "")
             if not username or not chat_jid:
                 continue
-            if not voice_path and not text:
+            if not voice_path and not text and not document_path:
                 continue
             with _process_lock:
                 proc = _processes.get(username)
@@ -284,6 +285,25 @@ def _sender_loop() -> None:
                     logger.warning("WhatsApp voice send failed for %s: %s", username, e)
                     if req_id:
                         _deliver_send_result(req_id, False, str(e))
+            elif document_path:
+                try:
+                    from pathlib import Path
+                    p = Path(document_path)
+                    if p.is_file():
+                        cmd = {"cmd": "send_document", "to": chat_jid, "path": str(p.resolve()), "caption": (text or "")[:1024]}
+                        if req_id:
+                            cmd["req_id"] = req_id
+                        proc.stdin.write(json.dumps(cmd) + "\n")
+                        proc.stdin.flush()
+                    else:
+                        err = "Document file not found"
+                        logger.warning("WhatsApp document not found: %s", document_path)
+                        if req_id:
+                            _deliver_send_result(req_id, False, err)
+                except Exception as e:
+                    logger.warning("WhatsApp document send failed for %s: %s", username, e)
+                    if req_id:
+                        _deliver_send_result(req_id, False, str(e))
             else:
                 chunks = chunk_whatsapp_text(text)
                 for i, chunk in enumerate(chunks):
@@ -306,8 +326,16 @@ def _sender_loop() -> None:
             try:
                 chat_id = f"+{_jid_to_e164(chat_jid)}" if _jid_to_e164(chat_jid) else str(chat_jid or "")
                 from vaf.core.whatsapp_message_store import append_message
-                body = "[Voice message]" if voice_path else text
-                append_message(username, chat_id or chat_jid, body, direction="out", content_type="voice" if voice_path else "text")
+                if voice_path:
+                    body = "[Voice message]"
+                    ctype = "voice"
+                elif document_path:
+                    body = "[Document] " + (text or "") if text else "[Document]"
+                    ctype = "document"
+                else:
+                    body = text
+                    ctype = "text"
+                append_message(username, chat_id or chat_jid, body, direction="out", content_type=ctype)
             except Exception:
                 pass
         except queue.Empty:
@@ -368,10 +396,11 @@ def send_whatsapp_with_confirmation(
     chat_jid: str,
     text: str,
     voice_path: Optional[str] = None,
+    document_path: Optional[str] = None,
     timeout: float = 15.0,
 ) -> str:
     """
-    Send a WhatsApp message and wait for delivery confirmation from the Node bridge.
+    Send a WhatsApp message (text, voice, or document) and wait for delivery confirmation from the Node bridge.
     Returns a success message or an error string for the agent to report.
     Use this from the send_whatsapp tool to verify delivery.
     """
@@ -399,7 +428,7 @@ def send_whatsapp_with_confirmation(
     with _pending_sends_lock:
         _pending_sends[req_id] = result_queue
     try:
-        _outgoing_queue.put((username, chat_jid, text or "", voice_path, req_id))
+        _outgoing_queue.put((username, chat_jid, text or "", voice_path, req_id, document_path))
     except Exception as e:
         with _pending_sends_lock:
             _pending_sends.pop(req_id, None)
@@ -407,7 +436,11 @@ def send_whatsapp_with_confirmation(
     try:
         success, error = result_queue.get(timeout=timeout)
         if success:
-            return "Voice message sent to the user via WhatsApp." if voice_path else "Message sent to the user via WhatsApp."
+            if document_path:
+                return "Document sent to the user via WhatsApp."
+            if voice_path:
+                return "Voice message sent to the user via WhatsApp."
+            return "Message sent to the user via WhatsApp."
         return f"WhatsApp could not deliver the message: {error}"
     except queue.Empty:
         with _pending_sends_lock:
@@ -524,29 +557,35 @@ def _read_user_process(
                 append_message(username, chat_id, body, direction="in", sender_jid=from_jid, message_id=obj.get("messageId") or obj.get("message_id"), content_type="voice" if was_voice else "text")
             except Exception:
                 pass
-            session_id = f"whatsapp_{username}_{resolved_e164 or _jid_to_e164(from_jid) or 'self'}"
-            metadata: Dict[str, Any] = {
-                "user_scope_id": user_scope_id,
-                "username": username,
-                "whatsapp_chat_jid": from_jid,
-            }
-            if voice_lang:
-                metadata["voice_lang"] = voice_lang
-                with _voice_reply_lock:
-                    _voice_reply_pending[f"{username}|{from_jid}"] = voice_lang
-            tq = TaskQueue()
-            tq.add(
-                session_id=session_id,
-                input_text=body,
-                source="whatsapp",
-                metadata=metadata,
-            )
-            try:
-                from vaf.core.log_helper import log_whatsapp_inbound
-                log_whatsapp_inbound(f"ENQUEUED session={session_id} user={username}")
-            except Exception:
-                pass
-            logger.info("WhatsApp message enqueued from %s for user %s", from_jid, username)
+            # When inbound_to_agent is False, WhatsApp is send-only: bot can send to user (audio, PDF, reports),
+            # but incoming messages do not trigger the agent (no two-way chat).
+            inbound_to_agent = whatsapp_config.get("inbound_to_agent", True)
+            if inbound_to_agent:
+                session_id = f"whatsapp_{username}_{resolved_e164 or _jid_to_e164(from_jid) or 'self'}"
+                metadata: Dict[str, Any] = {
+                    "user_scope_id": user_scope_id,
+                    "username": username,
+                    "whatsapp_chat_jid": from_jid,
+                }
+                if voice_lang:
+                    metadata["voice_lang"] = voice_lang
+                    with _voice_reply_lock:
+                        _voice_reply_pending[f"{username}|{from_jid}"] = voice_lang
+                tq = TaskQueue()
+                tq.add(
+                    session_id=session_id,
+                    input_text=body,
+                    source="whatsapp",
+                    metadata=metadata,
+                )
+                try:
+                    from vaf.core.log_helper import log_whatsapp_inbound
+                    log_whatsapp_inbound(f"ENQUEUED session={session_id} user={username}")
+                except Exception:
+                    pass
+                logger.info("WhatsApp message enqueued from %s for user %s", from_jid, username)
+            else:
+                logger.debug("WhatsApp inbound not forwarded to agent (inbound_to_agent=false); user still reachable for sends.")
         elif typ == "chats":
             chats = obj.get("chats")
             if isinstance(chats, list):

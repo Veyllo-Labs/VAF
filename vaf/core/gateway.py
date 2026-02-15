@@ -168,8 +168,15 @@ async def download_file(path: str = Query(..., description="Absolute path to loc
         filename=target.name,
     )
 
-def run_agent_step(agent: Agent, text: str, context: dict):
-    """Blocking function to run the agent step."""
+def run_agent_step(agent: Agent, text: str, context: dict, server_user_scope_id: str = None):
+    """Blocking function to run the agent step.
+
+    Args:
+        agent: The VAF Agent instance
+        text: User input text
+        context: Client-sent context (platform, etc. — user_scope_id is IGNORED from here)
+        server_user_scope_id: Server-validated user_scope_id from JWT (trusted)
+    """
     from vaf.core.config import Config
 
     # Session context: so the agent knows which channel (e.g. Discord vs CLI)
@@ -180,16 +187,16 @@ def run_agent_step(agent: Agent, text: str, context: dict):
         agent._current_chat_source = "cli"
 
     # RAG: fetch memory context for this turn (pre-injection, before LLM)
+    # SECURITY: user_scope_id comes from server-validated JWT, NOT from client context
     memory_context = ""
     try:
         if Config.get("memory_enabled", True):
             from vaf.memory.rag import run_memory_search_sync
             from uuid import UUID
             user_scope_id = None
-            raw = (context or {}).get("user_scope_id")
-            if raw:
+            if server_user_scope_id:
                 try:
-                    user_scope_id = UUID(str(raw))
+                    user_scope_id = UUID(str(server_user_scope_id))
                 except (ValueError, TypeError):
                     pass
             k = int(Config.get("memory_rag_k", 5))
@@ -210,6 +217,14 @@ def run_agent_step(agent: Agent, text: str, context: dict):
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str, client_type: str = "cli"):
     await manager.connect(websocket, client_id, client_type)
+
+    # SECURITY: Extract user_scope_id from authenticated session (server-side),
+    # so clients cannot impersonate other users by sending a fake user_scope_id.
+    server_user_scope_id = None
+    user_state = getattr(websocket.state, "user", None) if hasattr(websocket, "state") else None
+    if user_state and isinstance(user_state, dict):
+        server_user_scope_id = user_state.get("user_scope_id")
+
     try:
         while True:
             data = await websocket.receive_text()
@@ -217,14 +232,14 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, client_type: 
                 # 1. Parse generic message to inspect headers
                 raw_msg = json.loads(data)
                 logger.debug(f"Received from {client_id}: {raw_msg}")
-                
+
                 # Echo / Acknowledge
                 await manager.send_personal_message(
                     EventFrame(
-                        source="gateway", 
-                        type="status", 
+                        source="gateway",
+                        type="status",
                         payload=SystemStatusPayload(state="thinking", active_agent="default").model_dump()
-                    ), 
+                    ),
                     client_id
                 )
 
@@ -239,14 +254,18 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, client_type: 
                     # Execute Agent in ThreadPool
                     text = raw_msg.get("payload", {}).get("text", "")
                     context = raw_msg.get("payload", {}).get("context", {})
-                    
+
+                    # SECURITY: Strip user_scope_id from client context — use server-validated value only
+                    context.pop("user_scope_id", None)
+
                     loop = asyncio.get_running_loop()
                     response_text = await loop.run_in_executor(
-                        executor, 
-                        run_agent_step, 
-                        agent_instance, 
-                        text, 
-                        context
+                        executor,
+                        run_agent_step,
+                        agent_instance,
+                        text,
+                        context,
+                        server_user_scope_id
                     )
                     
                     # Send Completion

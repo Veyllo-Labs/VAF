@@ -388,12 +388,19 @@ class GraphManager:
         # So we want distance < (1 - threshold)
         max_distance = 1.0 - threshold
         
+        # Scope filter: only connect to memories belonging to the same user
+        scope_filters = [
+            Memory.id != memory.id,
+            Memory.is_deleted == False,
+            Memory.embedding.isnot(None)
+        ]
+        if memory.user_scope_id is not None:
+            scope_filters.append(Memory.user_scope_id == memory.user_scope_id)
+        else:
+            scope_filters.append(Memory.user_scope_id.is_(None))
+
         query = select(Memory, Memory.embedding.cosine_distance(memory.embedding).label("distance")).where(
-            and_(
-                Memory.id != memory.id,
-                Memory.is_deleted == False,
-                Memory.embedding.isnot(None)
-            )
+            and_(*scope_filters)
         ).order_by("distance").limit(max_connections)
         
         result = await self.db.execute(query)
@@ -446,22 +453,25 @@ class GraphManager:
     
     async def get_tree_children(
         self,
-        parent_id: Optional[UUID] = None
+        parent_id: Optional[UUID] = None,
+        user_scope_id: Optional[UUID] = None
     ) -> List[Memory]:
         """
         Get child memories in tree hierarchy.
-        
+
         Args:
             parent_id: Parent memory UUID (None for root memories)
-            
+            user_scope_id: If set, only return children belonging to this user
+
         Returns:
             List of child Memory objects
         """
+        conditions = [Memory.parent_id == parent_id, Memory.is_deleted == False]
+        if user_scope_id is not None:
+            conditions.append(Memory.user_scope_id == user_scope_id)
+
         query = select(Memory).where(
-            and_(
-                Memory.parent_id == parent_id,
-                Memory.is_deleted == False
-            )
+            and_(*conditions)
         ).order_by(Memory.created_at)
         
         result = await self.db.execute(query)
@@ -497,32 +507,46 @@ class GraphManager:
     async def move_memory(
         self,
         memory_id: UUID,
-        new_parent_id: Optional[UUID]
+        new_parent_id: Optional[UUID],
+        user_scope_id: Optional[UUID] = None
     ) -> Memory:
         """
         Move a memory to a new parent in the tree.
-        
+
         Args:
             memory_id: Memory to move
             new_parent_id: New parent UUID (None for root)
-            
+            user_scope_id: If set, validate that both memory and parent belong to this user
+
         Returns:
             Updated Memory object
         """
+        conditions = [Memory.id == memory_id]
+        if user_scope_id is not None:
+            conditions.append(Memory.user_scope_id == user_scope_id)
+
         result = await self.db.execute(
-            select(Memory).where(Memory.id == memory_id)
+            select(Memory).where(and_(*conditions))
         )
         memory = result.scalar_one_or_none()
-        
+
         if not memory:
             raise ValueError(f"Memory {memory_id} not found")
-        
-        # Check for circular reference
+
+        # Check for circular reference and validate parent ownership
         if new_parent_id:
+            if user_scope_id is not None:
+                parent_result = await self.db.execute(
+                    select(Memory.id).where(
+                        and_(Memory.id == new_parent_id, Memory.user_scope_id == user_scope_id)
+                    )
+                )
+                if not parent_result.scalar_one_or_none():
+                    raise ValueError(f"Parent memory {new_parent_id} not found")
             path = await self.get_tree_path(new_parent_id)
             if any(m.id == memory_id for m in path):
                 raise ValueError("Cannot create circular reference in tree")
-        
+
         memory.parent_id = new_parent_id
         await self.db.flush()
         
@@ -532,21 +556,35 @@ class GraphManager:
         self,
         memory_id: UUID,
         related_ids: List[str],
-        connection_type: str = "manual"
+        connection_type: str = "manual",
+        user_scope_id: Optional[UUID] = None
     ) -> List[Connection]:
         """
         Update manual connections for a memory.
-        
+
         Replaces existing manual connections with new ones.
-        
+        Both source and target memories must belong to the same user scope.
+
         Args:
             memory_id: Memory UUID
             related_ids: List of related memory ID strings
             connection_type: Type of connections to update
-            
+            user_scope_id: If set, validate that source and all targets belong to this user
+
         Returns:
             List of new Connection objects
         """
+        # Verify source memory belongs to user
+        if user_scope_id is not None:
+            source_result = await self.db.execute(
+                select(Memory.id).where(
+                    and_(Memory.id == memory_id, Memory.user_scope_id == user_scope_id)
+                )
+            )
+            if not source_result.scalar_one_or_none():
+                logger.warning(f"update_connections: source memory {memory_id} not owned by scope {user_scope_id}")
+                return []
+
         # Remove existing connections of this type
         existing = await self.db.execute(
             select(Connection).where(
@@ -558,12 +596,22 @@ class GraphManager:
         )
         for conn in existing.scalars().all():
             await self.db.delete(conn)
-        
-        # Create new connections
+
+        # Create new connections (only to memories owned by same user)
         connections = []
         for related_id in related_ids:
             try:
                 target_uuid = UUID(related_id)
+                # Validate target belongs to same user scope
+                if user_scope_id is not None:
+                    target_result = await self.db.execute(
+                        select(Memory.id).where(
+                            and_(Memory.id == target_uuid, Memory.user_scope_id == user_scope_id)
+                        )
+                    )
+                    if not target_result.scalar_one_or_none():
+                        logger.warning(f"Skipping cross-user connection to {related_id}")
+                        continue
                 conn = await self.create_connection(
                     source_id=memory_id,
                     target_id=target_uuid,
@@ -573,5 +621,5 @@ class GraphManager:
                 connections.append(conn)
             except ValueError:
                 logger.warning(f"Invalid UUID: {related_id}")
-        
+
         return connections

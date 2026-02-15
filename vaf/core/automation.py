@@ -62,9 +62,12 @@ class AutomationTask:
     next_run: Optional[str] = None
     output_path: Optional[str] = None  # Where to save results
     output_format: str = "markdown"  # markdown, json, txt
-    
+
     # Task parameters (filled by clarification)
     parameters: Dict[str, Any] = field(default_factory=dict)
+
+    # User isolation: scope automations to specific users
+    user_scope_id: Optional[str] = None
     
     def to_dict(self) -> Dict:
         """Convert to dict, excluding next_run (calculated dynamically)."""
@@ -150,15 +153,23 @@ class AutomationTask:
 
 class AutomationManager:
     """Manages automation tasks and scheduling."""
-    
-    def __init__(self, storage_dir: str = None):
+
+    def __init__(self, storage_dir: str = None, user_scope_id: Optional[str] = None):
+        self.user_scope_id = user_scope_id
+
         if storage_dir:
             self.storage_dir = Path(storage_dir)
         else:
             # OS-unabhängiger Pfad
             from vaf.core.platform import Platform
-            self.storage_dir = Platform.vaf_dir() / "automations"
-        
+            base_dir = Platform.vaf_dir() / "automations"
+            if user_scope_id:
+                # Per-user isolation: store automations in user-specific subdirectory
+                self.storage_dir = base_dir / user_scope_id
+            else:
+                # Legacy/admin: global automations directory
+                self.storage_dir = base_dir
+
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         # Trash directory (system-independent)
         self.trash_dir = self.storage_dir / "trash"
@@ -830,10 +841,18 @@ vaf automation delete <id>   # Delete task
                     from vaf.core.config import Config
                     if Config.get("memory_enabled", True):
                         from vaf.memory.rag import run_memory_search_sync
+                        from uuid import UUID as _UUID
                         k = int(Config.get("memory_rag_k", 5))
                         k = max(1, min(20, k))
+                        # Use task's user_scope_id for scoped RAG search
+                        task_scope = None
+                        if task.user_scope_id:
+                            try:
+                                task_scope = _UUID(str(task.user_scope_id))
+                            except (ValueError, TypeError):
+                                pass
                         memory_context = run_memory_search_sync(
-                            query=prompt, k=k, user_scope_id=None, caller="automation"
+                            query=prompt, k=k, user_scope_id=task_scope, caller="automation"
                         )
                 except Exception:
                     memory_context = ""

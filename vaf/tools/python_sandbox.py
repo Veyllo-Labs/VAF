@@ -146,10 +146,12 @@ Returns stdout/stderr from the execution."""
         return self._ephemeral_sandbox.execute(command, timeout=timeout)
     
     def run(self, **kwargs) -> str:
-        """Execute Python code in Docker sandbox."""
+        """Execute Python code in Docker sandbox (per-user isolated workspace)."""
         code = str(kwargs.get("code", "")).strip()
         timeout = int(kwargs.get("timeout", 30))
         packages = kwargs.get("packages", [])
+        # User scope for workspace isolation — each user gets their own temp directory
+        user_scope_id = kwargs.get("user_scope_id")
         
         if not code:
             return "[ERROR] python_sandbox: No code provided."
@@ -171,9 +173,10 @@ Returns stdout/stderr from the execution."""
             execute_fn = self._execute_in_ephemeral
         
         try:
-            # Step 3: Create unique workspace for this execution
+            # Step 3: Create unique workspace for this execution (per-user isolated)
             exec_id = uuid.uuid4().hex[:8]
-            workdir = f"/tmp/vaf_{exec_id}"
+            scope_prefix = str(user_scope_id).replace("-", "")[:12] if user_scope_id else "shared"
+            workdir = f"/tmp/vaf_{scope_prefix}_{exec_id}"
             
             # Create workspace directory
             exit_code, _, err = execute_fn(f"mkdir -p {workdir}", timeout=5)

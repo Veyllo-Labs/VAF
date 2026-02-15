@@ -1068,6 +1068,8 @@ class Agent:
             from vaf.tools.whatsapp_inbox import WhatsAppInboxTool
             from vaf.tools.find_whatsapp_messages import FindWhatsAppMessagesTool
             from vaf.tools.read_whatsapp_chat import ReadWhatsAppChatTool
+            from vaf.tools.list_contacts import ListContactsTool
+            from vaf.tools.get_contact import GetContactTool
             from vaf.tools.whatsapp_call import WhatsAppCallTool
             from vaf.tools.mail_inbox import MailInboxTool
             from vaf.tools.read_mail import ReadMailTool
@@ -1096,7 +1098,9 @@ class Agent:
             self.tools["mark_mail_answered"] = MarkMailAnsweredTool()
             self.tools["list_email_accounts"] = ListEmailAccountsTool()
             self.tools["send_mail"] = SendMailTool()
-            
+            self.tools["list_contacts"] = ListContactsTool()
+            self.tools["get_contact"] = GetContactTool()
+
             # RequestClarification is strictly for Sub-Agents (via coder_only flag),
             # but we register it here so it's available in the system (even if filtered out later for Main Agent).
             # Note: The filter loop above relies on 'coder_only' attribute.
@@ -1817,6 +1821,7 @@ class Agent:
             user_scope_id=getattr(self, "_current_user_scope_id", None),
             current_source=getattr(self, "_current_chat_source", None),
             last_interaction=get_last_interaction(getattr(self, "_current_user_scope_id", None)),
+            front_office=getattr(self, "_front_office_mode", False),
         )
         
         # Optional: Load Project Context (VAF.md)
@@ -3990,6 +3995,7 @@ class Agent:
                 user_scope_id=getattr(self, "_current_user_scope_id", None),
                 current_source=getattr(self, "_current_chat_source", None),
                 last_interaction=get_last_interaction(getattr(self, "_current_user_scope_id", None)),
+                front_office=getattr(self, "_front_office_mode", False),
             )
         
         # ------------------------------------------------------------------
@@ -6093,6 +6099,8 @@ class Agent:
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
+                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                if name in ("list_contacts", "get_contact"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "list_email_accounts", "send_mail"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"

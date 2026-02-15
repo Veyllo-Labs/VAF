@@ -583,8 +583,62 @@ def run_headless_agent():
                     # So build_prompt knows current channel (WebUI vs Telegram)
                     agent._current_chat_source = getattr(task, "source", "web")
 
+                    _meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                    if _meta.get("from_contact"):
+                        agent._front_office_mode = True
+                        try:
+                            from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
+                            agent._active_tools = tuple(n for n in FRONT_OFFICE_ALLOWED_TOOLS if n in agent.tools)
+                        except Exception:
+                            agent._active_tools = None
+                    else:
+                        agent._front_office_mode = False
+                        agent._active_tools = None
+
                     # Sidebar documents: inject into this turn only (session history stays clean)
                     effective_input = input_text or ""
+                    # When message is from a contact (front office), pass contact data so the agent can personalize
+                    if _meta.get("from_contact"):
+                        contact = None
+                        _username = _meta.get("username") or "admin"
+                        try:
+                            from vaf.core.contacts_store import (
+                                get_contact_by_telegram_user_id,
+                                get_contact_by_whatsapp_phone,
+                            )
+                            task_source = getattr(task, "source", None)
+                            if task_source == "telegram":
+                                _tid = _meta.get("telegram_user_id")
+                                if _tid:
+                                    contact = get_contact_by_telegram_user_id(_tid, _username)
+                            elif task_source == "whatsapp":
+                                _jid = _meta.get("whatsapp_chat_jid")
+                                if _jid:
+                                    contact = get_contact_by_whatsapp_phone(_jid, _username)
+                        except Exception:
+                            pass
+                        contact_block = ""
+                        if contact:
+                            parts = [f"Contact name: {contact.get('name') or 'Unknown'}."]
+                            if contact.get("preferred_language"):
+                                parts.append(f"Preferred language: {contact['preferred_language']}.")
+                            if contact.get("how_to_address"):
+                                parts.append(f"How to address them: {contact['how_to_address']}.")
+                            if contact.get("birthday"):
+                                parts.append(f"Birthday: {contact['birthday']}.")
+                            if contact.get("notes"):
+                                notes = (contact["notes"] or "").strip()
+                                if len(notes) > 600:
+                                    notes = notes[:597] + "..."
+                                parts.append(f"Notes: {notes}")
+                            contact_block = " " + " ".join(parts)
+                        effective_input = (
+                            "[This message was sent by a contact to your front office. "
+                            "You are responding as the account owner's assistant; the person writing is not the account owner."
+                            + contact_block
+                            + "]\n\n"
+                            + effective_input
+                        )
                     try:
                         session_for_sidebar = session_mgr.load(task.session_id)
                         sidebar_docs = (getattr(session_for_sidebar, "runtime_state", None) or {}).get("sidebar_documents") or []
@@ -1028,6 +1082,9 @@ def run_headless_agent():
                             send_whatsapp_reply(meta.get("username") or "admin", str(meta["whatsapp_chat_jid"]), f"Sorry, something went wrong: {err_msg}")
                     except Exception:
                         pass
+                finally:
+                    agent._front_office_mode = False
+                    agent._active_tools = None
                 try:
                     if is_debug_logging_enabled():
                         from datetime import datetime as _dt

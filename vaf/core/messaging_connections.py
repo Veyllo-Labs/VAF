@@ -303,3 +303,39 @@ def get_messaging_connections(
             pass
 
     return {"available": available, "main_messenger": main_messenger}
+
+
+def get_contact_whitelist_telegram_entry(telegram_user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    If telegram_user_id is in any user's contact list with allow_as_assistant_user=True,
+    return an entry dict like Telegram whitelist: user_scope_id, vaf_username, telegram_user_id.
+    Used by Telegram bridge to allow contacts as assistant users.
+    """
+    telegram_config = Config.get("telegram_config") or {}
+    if not isinstance(telegram_config, dict):
+        return None
+    whitelist = telegram_config.get("whitelist") or []
+    seen: set = set()
+    try:
+        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_telegram_values
+    except Exception:
+        return None
+    for entry in whitelist:
+        if not isinstance(entry, dict):
+            continue
+        scope = entry.get("user_scope_id")
+        uname = (entry.get("vaf_username") or "admin").strip()
+        key = (str(scope), uname)
+        if key in seen:
+            continue
+        seen.add(key)
+        for c in get_contacts_allowing_assistant(uname):
+            for val in _contact_telegram_values(c):
+                if (val or "").strip() == str(telegram_user_id).strip():
+                    return {
+                    "user_scope_id": scope,
+                    "vaf_username": uname,
+                    "telegram_user_id": str(telegram_user_id),
+                    "from_contact": True,  # So bridge/headless can treat as front-office (not the account owner)
+                }
+    return None

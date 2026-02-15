@@ -106,7 +106,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 
@@ -217,6 +217,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showWhatsAppWizard, setShowWhatsAppWizard] = useState(false);
     const [showWhatsAppDashboard, setShowWhatsAppDashboard] = useState(false);
     const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
+    const [showContactsDashboard, setShowContactsDashboard] = useState(false);
     const [showDiscordDashboard, setShowDiscordDashboard] = useState(false);
     const [showMailDashboard, setShowMailDashboard] = useState(false);
     const [showEmailWizard, setShowEmailWizard] = useState(false);
@@ -1677,6 +1678,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     setCloudWizardProvider(provider);
                                     setShowCloudWizard(true);
                                 }}
+                                onOpenContactsDashboard={() => setShowContactsDashboard(true)}
                             />
                         )}
 
@@ -3839,6 +3841,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onClose={() => setShowTelegramDashboard(false)}
                 config={localConfig}
                 onConfigChange={handleChange}
+            />
+
+            {/* Contacts (list + personal file, from Connections) */}
+            <ContactsDashboard
+                isOpen={showContactsDashboard}
+                onClose={() => setShowContactsDashboard(false)}
             />
 
             {/* Discord Dashboard (when configured, Settings opens this) */}

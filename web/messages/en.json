@@ -1,4 +1,45 @@
 {
+  "auth": {
+    "checkingSession": "Checking session…",
+    "redirectingToLogin": "Redirecting to login…"
+  },
+  "status": {
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "idle": "Idle"
+  },
+  "main": {
+    "dropFilesHere": "Drop files here",
+    "veylloAgenticFramework": "Veyllo Agentic Framework",
+    "howCanIHelp": "How can I help you?",
+    "startConversationOrWorkflow": "Start a conversation or choose a workflow",
+    "tools": "Tools",
+    "workflows": "Workflows",
+    "navigateSelect": "↑↓ Navigate · Enter Select",
+    "totalContextConsumed": "Total context consumed",
+    "remainingCapacity": "Remaining capacity",
+    "memoryLearning": "Memory Learning",
+    "ragSnippetsThisTurn": "RAG snippets (this turn)",
+    "ragHits": "RAG: {count} hit(s)",
+    "voiceInput": "Voice input",
+    "stopRecording": "Stop recording (Auto-stop active)",
+    "processing": "Processing…",
+    "attachmentsDocumentViewer": "Attachments (Document Viewer) – stay in context while panel is open",
+    "chatEndedOnThisDay": "Chat ended on this day",
+    "continuedOnThisDay": "Continued on this day",
+    "conversation": "Conversation",
+    "tokens": "tokens",
+    "attachmentsShort": "Attachments",
+    "documentViewerTitle": "Document Viewer"
+  },
+  "nav": {
+    "settings": "Settings",
+    "newSession": "New session",
+    "loadSession": "Load session",
+    "clearConversation": "Clear conversation",
+    "stopSpeaking": "Stop speaking",
+    "help": "Show help"
+  },
   "common": {
     "save": "Save",
     "cancel": "Cancel",

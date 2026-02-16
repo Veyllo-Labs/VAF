@@ -1,4 +1,45 @@
 {
+  "auth": {
+    "checkingSession": "Sitzung wird geprüft…",
+    "redirectingToLogin": "Weiterleitung zur Anmeldung…"
+  },
+  "status": {
+    "connected": "Verbunden",
+    "disconnected": "Getrennt",
+    "idle": "Leerlauf"
+  },
+  "main": {
+    "dropFilesHere": "Dateien hier ablegen",
+    "veylloAgenticFramework": "Veyllo Agentic Framework",
+    "howCanIHelp": "Womit kann ich helfen?",
+    "startConversationOrWorkflow": "Starte eine Unterhaltung oder wähle einen Workflow",
+    "tools": "Tools",
+    "workflows": "Workflows",
+    "navigateSelect": "↑↓ Navigieren · Enter Auswählen",
+    "totalContextConsumed": "Verbrauchter Kontext gesamt",
+    "remainingCapacity": "Verbleibende Kapazität",
+    "memoryLearning": "Memory Learning",
+    "ragSnippetsThisTurn": "RAG-Snippets (diese Runde)",
+    "ragHits": "RAG: {count} Treffer",
+    "voiceInput": "Spracheingabe",
+    "stopRecording": "Aufnahme stoppen (Auto-Stop aktiv)",
+    "processing": "Wird verarbeitet…",
+    "attachmentsDocumentViewer": "Anhänge (Document Viewer) – bleiben im Kontext, solange die Leiste offen ist",
+    "chatEndedOnThisDay": "Chat an diesem Tag beendet",
+    "continuedOnThisDay": "An diesem Tag fortgesetzt",
+    "conversation": "Unterhaltung",
+    "tokens": "Tokens",
+    "attachmentsShort": "Anhänge",
+    "documentViewerTitle": "Document Viewer"
+  },
+  "nav": {
+    "settings": "Einstellungen",
+    "newSession": "Neue Sitzung",
+    "loadSession": "Sitzung laden",
+    "clearConversation": "Unterhaltung löschen",
+    "stopSpeaking": "Sprachausgabe stoppen",
+    "help": "Hilfe anzeigen"
+  },
   "common": {
     "save": "Speichern",
     "cancel": "Abbrechen",

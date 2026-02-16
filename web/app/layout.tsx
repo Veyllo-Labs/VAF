@@ -17,7 +17,9 @@ export default function RootLayout({
     <html lang="de" className="light" suppressHydrationWarning>
       <body className="antialiased min-h-screen bg-background text-foreground">
         <HostnameNormalizer />
-        <IntlProviderWrapper>{children}</IntlProviderWrapper>
+        <IntlProviderWrapper>
+          {children}
+        </IntlProviderWrapper>
       </body>
     </html>
   );

@@ -1,21 +1,90 @@
-# 🌐 VAF Network Features & Security
+# VAF Network Features & Security
 
 VAF (Veyllo Agent Framework) includes robust networking capabilities designed to allow secure, local collaboration. This document details the architecture, security measures, and usage of these features.
 
-## 🔒 Security Model
+## Security Model
 
-Security is the primary design constraint for VAF's network features. The system employs a "Defense in Depth" strategy:
+Security is the primary design constraint for VAF's network features. The system employs a **Defense in Depth** strategy with five layers:
 
-### 1. Firewall Automation
+### Layer 1: OS Firewall Automation
+
 When "Local Network Hosting" is enabled, VAF automatically configures the OS firewall (Windows Firewall, macOS pf, or Linux iptables) to:
-- **Allow**: Traffic from RFC 1918 Private IP ranges (e.g., `192.168.x.x`, `10.x.x.x`).
-- **Allow**: Localhost traffic.
+- **Allow**: Traffic from RFC 1918 Private IP ranges (`192.168.0.0/16`, `10.0.0.0/8`, `172.16.0.0/12`).
+- **Allow**: Localhost traffic (`127.0.0.0/8`, `::1`).
 - **Block**: All other incoming traffic to VAF ports (default 3000/8001).
 
-### 2. Authentication
-- **Localhost Bypass**: Accessing VAF from the host machine (`127.0.0.1`) grants automatic administrative access for convenience.
-- **Remote Access**: Any connection from a non-localhost IP **must** authenticate using a valid username and password.
-- **2FA**: Two-Factor Authentication (TOTP) is enforced for administrative accounts and optional for standard users.
+Implementation: `vaf/network/firewall.py`
+
+### Layer 2: IP Validation Middleware
+
+Every HTTP request passes through `IPValidationMiddleware` which validates the client IP against RFC 1918 private ranges at the application level. This acts as a second barrier if firewall rules are misconfigured or bypassed.
+
+- Rejects any non-private IP with HTTP 403
+- Uses `vaf/network/binding.py` for IP classification
+- Active only in network mode (localhost mode skips this layer)
+
+Implementation: `vaf/auth/middleware.py` -> `IPValidationMiddleware`
+
+### Layer 3: JWT Authentication Middleware
+
+Network clients must authenticate via JWT tokens. The `AuthMiddleware` enforces this:
+
+- **Localhost Bypass**: Connections from `127.0.0.1` are allowed without a token (backward-compatible with single-user desktop mode).
+- **Network Clients**: Must present a valid JWT via `Authorization: Bearer <token>` header or `vaf_token` cookie.
+- **Auth-Exempt Paths**: Login, bootstrap, and static asset endpoints are accessible without a token.
+- **2FA Enforcement**: If `local_network_require_2fa` is enabled, tokens from users who haven't completed 2FA setup are rejected with HTTP 403.
+
+Implementation: `vaf/auth/middleware.py` -> `AuthMiddleware`
+
+### Layer 4: Rate Limiting
+
+The `RateLimitMiddleware` protects login endpoints against brute-force attacks:
+
+- Tracks failed login attempts per IP address
+- Blocks IPs after exceeding the threshold (default: 5 attempts)
+- Sliding time window (default: 15 minutes)
+- Applies to `/api/auth/login`, `/api/auth/bootstrap`, `/api/auth/verify-2fa`
+- Returns HTTP 429 with `Retry-After` header when blocked
+- Automatically clears failure count on successful login
+
+Configuration:
+| Key | Default | Description |
+|-----|---------|-------------|
+| `local_network_rate_limit_attempts` | `5` | Max failed attempts before blocking |
+| `local_network_rate_limit_window_minutes` | `15` | Sliding window in minutes |
+
+Implementation: `vaf/auth/rate_limit.py` -> `RateLimitMiddleware`
+
+### Layer 5: Security Headers
+
+All HTTP responses include security headers to protect against common web attacks:
+
+| Header | Value | Purpose |
+|--------|-------|---------|
+| `X-Content-Type-Options` | `nosniff` | Prevents MIME-type sniffing |
+| `X-Frame-Options` | `DENY` | Prevents clickjacking via iframes |
+| `X-XSS-Protection` | `1; mode=block` | Legacy XSS filter |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Limits referrer leakage |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` | Disables browser APIs |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | HSTS (only when TLS active) |
+
+Implementation: `_SecurityHeadersMiddleware` in `vaf/core/web_server.py`
+
+### Middleware Execution Order
+
+Requests pass through middleware from outermost to innermost:
+
+```
+Request -> RateLimitMiddleware -> IPValidationMiddleware -> AuthMiddleware -> SecurityHeaders -> Route Handler
+```
+
+### Authentication Details
+
+- **Password Hashing**: Argon2id (time_cost=2, memory_cost=64MB)
+- **JWT Tokens**: HS256, configurable expiry (default 24h), refresh tokens (7 days)
+- **2FA**: TOTP (RFC 6238), secrets encrypted at rest with AES-256-GCM
+- **Session Tracking**: Token hashes (SHA-256) stored in PostgreSQL, no plaintext tokens in DB
+- **Cookies**: `vaf_token` cookie with `httponly`, `samesite=lax`, and `secure` flag (when TLS active)
 
 **2FA persistence after restart:** Your 2FA setup is stored in two places that must persist across restarts:
 1. **Config** (`~/.vaf/config.json` or `VAF_CONFIG_DIR`): The JWT secret used to encrypt TOTP secrets must be kept. If this file is missing or the secret is lost (e.g. new install or different user), the server cannot decrypt existing 2FA data.
@@ -23,33 +92,249 @@ When "Local Network Hosting" is enabled, VAF automatically configures the OS fir
 
 If you see "2FA was reset (e.g. after config or restart)" when entering your code, the encryption key changed (e.g. config was reset). Use "Back to login", sign in again, and set up 2FA with the new QR code.
 
-### 3. Identity vs. Memory Scoping
+### Identity vs. Memory Scoping
+
 - **Global Personality (Soul)**: The agent's identity (Name, Emoji) and behavioral rules (Soul) are defined by the **Administrator** and are global for all users. This ensures a consistent experience across the network.
 - **Isolated Memory (RAG)**: While the personality is shared, the **RAG memory is strictly isolated per user**. Facts and history stored by a user are only accessible to them, preventing data leakage between connected devices.
 
-### 4. Connection Tracking
+### Connection Tracking
+
 The system actively tracks all connections (WebSocket and HTTP) to the VAF backend.
 - **Real-time Monitoring**: The "Network Topology" map in Settings visualizes all active devices.
 - **Pre-Auth Tracking**: Devices are detected and displayed as "Guest" or "Unauthenticated" immediately upon connection, ensuring visibility of unauthorized access attempts.
 
 ---
 
-## 🛠️ Configuration
+## TLS/SSL Encryption
+
+VAF supports full TLS encryption for both HTTP (HTTPS) and WebSocket (WSS) traffic within the local network. This prevents eavesdropping and man-in-the-middle attacks even on shared LANs.
+
+### Quick Start (Automatic Certificates)
+
+The simplest way to enable TLS:
+
+1. Set `local_network_tls_enabled` to `true` in `~/.vaf/config.json`
+2. Restart VAF
+
+That's it. VAF automatically generates a local Certificate Authority (CA) and server certificate. No manual `openssl` commands needed.
+
+### How Auto-SSL Works
+
+When TLS is enabled and no valid certificate is configured, VAF's `ssl_utils` module automatically:
+
+1. **Creates a local CA** (`~/.vaf/ssl/ca.pem` + `ca-key.pem`)
+   - RSA 2048-bit key
+   - Valid for 10 years
+   - Used to sign server certificates
+   - Only needs to be installed once in the browser/OS for trust
+
+2. **Creates a server certificate** (`~/.vaf/ssl/server.pem` + `server-key.pem`)
+   - RSA 2048-bit key, signed by the local CA
+   - Valid for 1 year
+   - Includes Subject Alternative Names (SANs) for:
+     - `localhost` / `127.0.0.1` / `::1`
+     - All detected local network IPs (e.g. `192.168.1.100`)
+     - Machine hostname and FQDN
+
+3. **Persists certificates** in `~/.vaf/ssl/`
+   - Certificates are generated once and reused across restarts
+   - On each startup, the server checks if the certificate has at least 30 days remaining
+   - If expired or expiring soon, only the server certificate is regenerated (CA stays the same)
+   - Config paths (`local_network_ssl_cert`, `local_network_ssl_key`) are updated automatically
+
+### Certificate Lifecycle
+
+```
+First Start (TLS enabled)
+    |
+    v
+Certificates exist in ~/.vaf/ssl/?
+    |                    |
+    No                  Yes
+    |                    |
+    v                    v
+Generate CA         Certificate valid (>30 days)?
+Generate Server         |              |
+    |                  Yes             No
+    |                   |              |
+    v                   v              v
+Store in              Reuse        Regenerate server cert
+~/.vaf/ssl/                        (keep CA unchanged)
+    |
+    v
+Update config paths
+    |
+    v
+Start Uvicorn with SSL
+```
+
+### Eliminating Browser Warnings
+
+Self-signed certificates will show a browser warning. To eliminate this, install the CA certificate as a trusted root:
+
+**Windows:**
+```
+1. Open ~/.vaf/ssl/ca.pem
+2. Double-click -> "Install Certificate"
+3. Store Location: "Local Machine"
+4. Place in: "Trusted Root Certification Authorities"
+5. Restart browser
+```
+
+**macOS:**
+```bash
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain ~/.vaf/ssl/ca.pem
+```
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo cp ~/.vaf/ssl/ca.pem /usr/local/share/ca-certificates/vaf-local-ca.crt
+sudo update-ca-certificates
+```
+
+**Firefox** (all platforms):
+Firefox uses its own certificate store. Go to `Settings -> Privacy & Security -> Certificates -> View Certificates -> Authorities -> Import` and select `~/.vaf/ssl/ca.pem`.
+
+### Custom Certificates
+
+If you prefer to use your own certificates (e.g. from a corporate CA or Let's Encrypt):
+
+```json
+{
+  "local_network_tls_enabled": true,
+  "local_network_ssl_cert": "/path/to/your/cert.pem",
+  "local_network_ssl_key": "/path/to/your/key.pem"
+}
+```
+
+When custom paths are configured and the files exist, VAF uses them directly without auto-generating anything.
+
+### What TLS Protects
+
+When TLS is active, the following changes take effect across the stack:
+
+| Component | Without TLS | With TLS |
+|-----------|-------------|----------|
+| Backend API | `http://host:8001` | `https://host:8001` |
+| WebSocket | `ws://host:8001/ws` | `wss://host:8001/ws` |
+| Auth Cookies | `httponly`, `samesite=lax` | `httponly`, `samesite=lax`, **`secure`** |
+| CORS Origins | `http://` variants only | `http://` + `https://` variants |
+| Security Headers | Standard set | Standard set + **HSTS** (`max-age=31536000`) |
+| Frontend Proxy | `http://127.0.0.1:8001` | `https://127.0.0.1:8001` |
+
+### TLS Configuration Reference
+
+| Config Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `local_network_tls_enabled` | `bool` | `false` | Master toggle for TLS |
+| `local_network_ssl_cert` | `string` | `""` | Path to PEM certificate (auto-populated if empty) |
+| `local_network_ssl_key` | `string` | `""` | Path to PEM private key (auto-populated if empty) |
+
+### File Locations
+
+```
+~/.vaf/ssl/
+  ca.pem            # Local CA certificate (install in browser for trust)
+  ca-key.pem        # Local CA private key (chmod 600)
+  server.pem        # Server certificate + CA chain
+  server-key.pem    # Server private key (chmod 600)
+```
+
+Implementation: `vaf/network/ssl_utils.py`
+
+---
+
+## CORS Configuration
+
+CORS origins are dynamically built based on the current mode:
+
+- **Localhost mode**: `http://localhost:3000-3011` and `http://127.0.0.1:3000-3011`
+- **Network mode**: Adds all detected local network IPs (e.g. `http://192.168.1.100:3000`)
+- **TLS mode**: Adds `https://` variants of all allowed origins
+
+This ensures that browsers on network devices can make credentialed requests to the API without CORS errors.
+
+Implementation: `_build_cors_origins()` in `vaf/core/web_server.py`
+
+---
+
+## Configuration
 
 Network settings are managed via the Web UI (Settings -> Local Network).
 
-### Customizable Parameters
-- **Enable Local Network Hosting**: Master toggle for external access.
-- **Port**: The frontend port can be customized (default: 3000) to avoid conflicts.
-- **Host IP**: Displays the detected LAN IP address for sharing.
-- **TLS (HTTPS/WSS)**: Optional. Set `local_network_tls_enabled` to `true` in `~/.vaf/config.json` and provide paths to `local_network_ssl_cert` (PEM certificate) and `local_network_ssl_key` (PEM private key). The backend then serves over HTTPS and WSS so API and WebSocket traffic are encrypted. Generate a self-signed cert for development: `openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"`. Access the app via `https://localhost:3000` (or your host) so the frontend uses `wss://` for the WebSocket.
+### All Network Configuration Keys
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `local_network_enabled` | `bool` | `false` | Master toggle for LAN access |
+| `local_network_port` | `int` | `8001` | Backend API port |
+| `local_network_port_frontend` | `int` | `3000` | Frontend port |
+| `local_network_firewall_enabled` | `bool` | `true` | Auto-configure OS firewall rules |
+| `local_network_require_2fa` | `bool` | `true` | Enforce TOTP 2FA for network users |
+| `local_network_jwt_secret` | `string` | `""` | JWT signing secret (auto-generated if empty) |
+| `local_network_jwt_expiry_hours` | `int` | `24` | Access token TTL in hours |
+| `local_network_rate_limit_attempts` | `int` | `5` | Failed login attempts before blocking |
+| `local_network_rate_limit_window_minutes` | `int` | `15` | Rate limit sliding window |
+| `local_network_tls_enabled` | `bool` | `false` | Enable HTTPS/WSS encryption |
+| `local_network_ssl_cert` | `string` | `""` | PEM certificate path (auto-populated) |
+| `local_network_ssl_key` | `string` | `""` | PEM private key path (auto-populated) |
 
 ### Live Updates
+
 Changes to network settings trigger an automatic, orchestrated restart of the frontend and backend services to apply new bindings (e.g., switching from `127.0.0.1` to `0.0.0.0`).
 
 ---
 
-## 📡 API Reference
+## Architecture Overview
+
+### File Structure
+
+```
+vaf/
+  auth/
+    middleware.py        # AuthMiddleware + IPValidationMiddleware
+    rate_limit.py        # RateLimitMiddleware (brute-force protection)
+    crypto.py            # Argon2, JWT, AES-256-GCM for TOTP
+    models.py            # SQLAlchemy models (LocalUser, UserSession)
+    database.py          # Auth DB session (shared with memory DB)
+    user_config.py       # Per-user config directories
+  network/
+    binding.py           # IP detection, RFC 1918 validation
+    firewall.py          # OS firewall automation (Windows/macOS/Linux)
+    connection_tracker.py # Real-time connection monitoring
+    ssl_utils.py         # Auto-SSL certificate generation
+  api/
+    auth_routes.py       # Login, 2FA, bootstrap, token refresh
+    network_routes.py    # Access URL, connection list
+  core/
+    web_server.py        # FastAPI app, middleware stack, CORS, TLS server
+    frontend_manager.py  # Next.js process management with TLS env vars
+```
+
+### Request Flow (Network Mode with TLS)
+
+```
+Browser (https://192.168.1.100:3000)
+    |
+    v
+Next.js Frontend (serves static + proxies /api/ to backend)
+    |  (env: VAF_TLS_ENABLED=true, VAF_API_HOST=0.0.0.0)
+    v
+Uvicorn + FastAPI (https://0.0.0.0:8001)
+    |
+    +-- SecurityHeadersMiddleware (adds X-Frame-Options, HSTS, etc.)
+    +-- RateLimitMiddleware (blocks brute-force on /api/auth/*)
+    +-- IPValidationMiddleware (rejects non-RFC1918 IPs)
+    +-- AuthMiddleware (validates JWT for non-localhost clients)
+    |
+    v
+Route Handler (API endpoint or WebSocket)
+```
+
+---
+
+## API Reference
 
 ### 1. Get Access URL
 **GET** `/api/network/access-url`
@@ -83,3 +368,16 @@ Returns a list of currently connected devices for the Network Topology map.
   }
 ]
 ```
+
+### 3. Authentication Endpoints
+
+| Method | Endpoint | Auth Required | Description |
+|--------|----------|---------------|-------------|
+| GET | `/api/auth/needs-setup` | No | Check if first admin must be created |
+| POST | `/api/auth/bootstrap` | No | Create first admin account |
+| POST | `/api/auth/login` | No | Username/password login |
+| POST | `/api/auth/setup-2fa` | Bearer | Generate TOTP QR code |
+| POST | `/api/auth/verify-2fa` | Temp Token | Verify TOTP code, get full token |
+| POST | `/api/auth/refresh` | Refresh Token | Exchange refresh token for new access token |
+| POST | `/api/auth/logout` | No | Clear auth cookie |
+| GET | `/api/auth/me` | Bearer/Cookie | Get current user info |

@@ -43,14 +43,46 @@ async def json_exception_handler(request, exc):
 
 # CORS: explicit origins required when frontend sends credentials (cookies).
 # Regex + credentials can fail in some browsers; list is reliable.
-_CORS_ORIGINS = [
-    "http://localhost",
-    "http://127.0.0.1",
-] + [
-    f"http://localhost:{p}" for p in range(3000, 3012)
-] + [
-    f"http://127.0.0.1:{p}" for p in range(3000, 3012)
-]
+def _build_cors_origins() -> list[str]:
+    """Build CORS allow-list including localhost AND local-network IPs when enabled."""
+    origins = [
+        "http://localhost",
+        "http://127.0.0.1",
+    ] + [
+        f"http://localhost:{p}" for p in range(3000, 3012)
+    ] + [
+        f"http://127.0.0.1:{p}" for p in range(3000, 3012)
+    ]
+
+    # When TLS is enabled, add https:// variants
+    tls_on = Config.get("local_network_tls_enabled", False)
+    if tls_on:
+        origins += [
+            "https://localhost",
+            "https://127.0.0.1",
+        ] + [
+            f"https://localhost:{p}" for p in range(3000, 3012)
+        ] + [
+            f"https://127.0.0.1:{p}" for p in range(3000, 3012)
+        ]
+
+    # When local network is enabled, add private-IP origins
+    if Config.get("local_network_enabled", False):
+        try:
+            from vaf.network.binding import get_all_local_ips
+            for _iface, ip in get_all_local_ips():
+                for port in [3000, 8001]:
+                    origins.append(f"http://{ip}:{port}")
+                    origins.append(f"http://{ip}")
+                    if tls_on:
+                        origins.append(f"https://{ip}:{port}")
+                        origins.append(f"https://{ip}")
+        except Exception:
+            pass  # IP middleware validates anyway
+
+    return list(set(origins))  # deduplicate
+
+_CORS_ORIGINS = _build_cors_origins()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
@@ -219,21 +251,54 @@ except Exception as e:
 # Add authentication middleware if local network is enabled
 if Config.get("local_network_enabled", False):
     try:
-        from vaf.auth.middleware import AuthMiddleware, IPValidationMiddleware  # type: ignore[import-untyped]
-        from vaf.auth.rate_limit import RateLimitMiddleware  # type: ignore[import-untyped]
-        
+        from vaf.auth.middleware import AuthMiddleware, IPValidationMiddleware
+        from vaf.auth.rate_limit import RateLimitMiddleware
+
         # Add rate limiting first (outermost)
         app.add_middleware(RateLimitMiddleware)
         # Add IP validation
         app.add_middleware(IPValidationMiddleware)
         # Add auth middleware (innermost - closest to route handlers)
         app.add_middleware(AuthMiddleware)
-        
+
         log("WebServer", "Authentication middleware enabled for local network mode")
     except ImportError as e:
-        log("WebServer", f"Auth middleware not available: {e}")
+        log("WebServer", f"WARNING: Auth middleware import failed - network mode is INSECURE: {e}")
     except Exception as e:
-        log("WebServer", f"Failed to add auth middleware: {e}")
+        log("WebServer", f"WARNING: Failed to add auth middleware - network mode is INSECURE: {e}")
+
+    # Auto-generate SSL certificates if TLS enabled but no certs configured
+    if Config.get("local_network_tls_enabled", False):
+        try:
+            from vaf.network.ssl_utils import ensure_ssl_certificates
+            _ssl_cert, _ssl_key = ensure_ssl_certificates()
+            if _ssl_cert and _ssl_key:
+                log("WebServer", f"SSL certificates ready: {_ssl_cert}")
+            else:
+                log("WebServer", "TLS enabled but no certificates available")
+        except Exception as e:
+            log("WebServer", f"SSL certificate setup failed: {e}")
+
+# Security headers middleware (always active, stronger in network mode)
+from starlette.middleware.base import BaseHTTPMiddleware as _BaseHM
+from starlette.requests import Request as _Req
+from starlette.responses import Response as _Resp
+
+class _SecurityHeadersMiddleware(_BaseHM):
+    """Add security headers to all responses."""
+    async def dispatch(self, request: _Req, call_next):
+        response: _Resp = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        # HSTS only when TLS is active
+        if Config.get("local_network_tls_enabled", False):
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+
+app.add_middleware(_SecurityHeadersMiddleware)
 
 log("WebServer", "Module initialization complete")
 
@@ -1222,10 +1287,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 pass
                 
     except ImportError:
-        # Fallback localhost check (including Docker network range)
+        # Fallback localhost check (including Docker network range 172.16.0.0/12)
+        import ipaddress as _ipaddr
+        _is_docker = False
+        try:
+            _is_docker = _ipaddr.ip_address(client_ip) in _ipaddr.ip_network("172.16.0.0/12")
+        except ValueError:
+            pass
         is_localhost_client = (
-            client_ip in ["127.0.0.1", "::1", "localhost"] or
-            client_ip.startswith("172.") # Docker bridge network
+            client_ip in ["127.0.0.1", "::1", "localhost"] or _is_docker
         )
     
     # Check local network setting
@@ -2619,13 +2689,28 @@ def run_server(host="127.0.0.1", port=8001):
     tls_enabled = Config.get("local_network_tls_enabled", False)
     ssl_cert = (Config.get("local_network_ssl_cert") or "").strip()
     ssl_key = (Config.get("local_network_ssl_key") or "").strip()
+
+    # Auto-generate certificates if TLS enabled but no valid certs
+    if tls_enabled and (not ssl_cert or not ssl_key or not os.path.isfile(ssl_cert) or not os.path.isfile(ssl_key)):
+        try:
+            from vaf.network.ssl_utils import ensure_ssl_certificates
+            ssl_cert, ssl_key = ensure_ssl_certificates()
+            if ssl_cert and ssl_key:
+                log("WebServer", f"Auto-generated SSL certificate: {ssl_cert}")
+        except Exception as e:
+            log("WebServer", f"SSL auto-generation failed, falling back to HTTP: {e}")
+            ssl_cert, ssl_key = "", ""
+
     if tls_enabled and ssl_cert and ssl_key and os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
         config = uvicorn.Config(
             app=app, host=host, port=port, loop="asyncio", log_level="error",
             ssl_certfile=ssl_cert, ssl_keyfile=ssl_key
         )
+        log("WebServer", f"Starting with TLS (HTTPS/WSS) on {host}:{port}")
     else:
         config = uvicorn.Config(app=app, host=host, port=port, loop="asyncio", log_level="error")
+        if tls_enabled:
+            log("WebServer", f"WARNING: TLS enabled but no certificates available, running HTTP on {host}:{port}")
     server = uvicorn.Server(config)
 
     # We run this in the thread provided by the caller

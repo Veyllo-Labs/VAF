@@ -244,6 +244,14 @@ class FrontendManager:
             log_file = os.path.join(log_dir, "web_debug.log")
             use_debug_log = is_debug_logging_enabled()
 
+            # Pass backend connection info as environment variables for next.config.js
+            frontend_env = os.environ.copy()
+            if Config.get("local_network_tls_enabled", False):
+                frontend_env["VAF_TLS_ENABLED"] = "true"
+            if Config.get("local_network_enabled", False):
+                frontend_env["VAF_API_HOST"] = host
+            frontend_env["VAF_API_PORT"] = str(Config.get("local_network_port", 8001))
+
             # Start Process - avoid shell=True to have direct control over process tree
             # -H specifies the hostname/interface to bind to
             cmd = [npm_path, "run", "dev", "--", "-p", str(port), "-H", host]
@@ -266,6 +274,7 @@ class FrontendManager:
                     stdout=out_err,
                     stderr=subprocess.STDOUT,
                     creationflags=creationflags,
+                    env=frontend_env,
                     shell=False
                 )
             else:
@@ -275,6 +284,7 @@ class FrontendManager:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     creationflags=creationflags,
+                    env=frontend_env,
                     shell=False
                 )
 

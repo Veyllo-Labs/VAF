@@ -1093,6 +1093,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <div className="space-y-6">
                                 <Section title="API Keys">
                                     <Input
+                                        label="Veyllo Key"
+                                        value={localConfig.api_key_veyllo || ''}
+                                        onChange={(v: string) => handleChange('api_key_veyllo', v)}
+                                        type="password"
+                                        placeholder="Veyllo API key (server coming soon)"
+                                    />
+                                    <Input
                                         label="OpenAI Key"
                                         value={localConfig.api_key_openai || ''}
                                         onChange={(v: string) => handleChange('api_key_openai', v)}

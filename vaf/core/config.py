@@ -33,6 +33,7 @@ class Config:
         
         # API Keys (Base64 encoded for basic obfuscation - NOT encryption!)
         # For production, consider using system keyring for API keys and tokens.
+        "api_key_veyllo": "",  # Veyllo API server coming later
         "api_key_openai": "",
         "api_key_anthropic": "",
         "api_key_deepseek": "",
@@ -246,7 +247,7 @@ class Config:
         Best Practice: Base64 encoding for storage (not encryption, but prevents casual viewing)
         
         Args:
-            provider: Provider name (openai, anthropic, deepseek, google, openrouter)
+            provider: Provider name (veyllo, openai, anthropic, deepseek, google, openrouter)
             api_key: Raw API key string
         """
         if not api_key:

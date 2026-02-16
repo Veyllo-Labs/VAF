@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, lazy, Suspense, useMemo, useRef } from 'react';
+import { useTranslations } from 'next-intl';
 // PERFORMANCE: Lazy load ReactFlow - it's heavy and only needed for specific modals
 const ReactFlow = lazy(() => import('reactflow').then(mod => ({ default: mod.default })));
 import {
@@ -144,16 +145,16 @@ export interface SettingsModalProps {
 }
 
 const CATEGORIES = [
-    { id: 'general', label: 'General', icon: Globe },
-    { id: 'persona', label: 'Persona & Memory', icon: Users, adminOnly: true },
-    { id: 'ai', label: 'AI & Model', icon: Cpu },
-    { id: 'voice', label: 'Voice & Speech', icon: Volume2 },
-    { id: 'interface', label: 'Interface', icon: Monitor },
-    { id: 'connections', label: 'Connections', icon: MessageSquare },
-    { id: 'advanced', label: 'Advanced', icon: Zap },
-    { id: 'automations', label: 'Automations', icon: Check },
-    { id: 'local_network', label: 'Local Network', icon: Network },
-    { id: 'about', label: 'About', icon: Globe },
+    { id: 'general', labelKey: 'general', icon: Globe },
+    { id: 'persona', labelKey: 'persona', icon: Users, adminOnly: true },
+    { id: 'ai', labelKey: 'ai', icon: Cpu },
+    { id: 'voice', labelKey: 'voice', icon: Volume2 },
+    { id: 'interface', labelKey: 'interface', icon: Monitor },
+    { id: 'connections', labelKey: 'connections', icon: MessageSquare },
+    { id: 'advanced', labelKey: 'advanced', icon: Zap },
+    { id: 'automations', labelKey: 'automations', icon: Check },
+    { id: 'local_network', labelKey: 'localNetwork', icon: Network },
+    { id: 'about', labelKey: 'about', icon: Globe },
 ];
 
 const PROVIDERS = [
@@ -199,6 +200,20 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 
 
 export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect }: SettingsModalProps) {
+    const t = useTranslations();
+    const tTabs = useTranslations('settings.tabs');
+    const tCommon = useTranslations('common');
+    const tGeneral = useTranslations('settings.general');
+    const tPersona = useTranslations('settings.persona');
+    const tAi = useTranslations('settings.ai');
+    const tVoice = useTranslations('settings.voice');
+    const tInterface = useTranslations('settings.interface');
+    const tAdvanced = useTranslations('settings.advanced');
+    const tLocalNet = useTranslations('settings.localNetwork');
+    const tAutomations = useTranslations('settings.automations');
+    const tAbout = useTranslations('settings.about');
+    const tModals = useTranslations('modals');
+
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [activeTab, setActiveTab] = useState('general');
     const [changed, setChanged] = useState(false);
@@ -1014,7 +1029,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 {/* Sidebar */}
                 <div className="w-64 bg-gray-50/50 border-r border-gray-200 flex flex-col pt-6 pb-4 px-3 gap-1">
                     <div className="px-3 mb-4">
-                        <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">Settings</h2>
+                        <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">{t('settings.title')}</h2>
                     </div>
 
                     {CATEGORIES.map(cat => {
@@ -1031,7 +1046,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             )}
                         >
                             <cat.icon size={18} />
-                            {cat.label}
+                            {tTabs(cat.labelKey)}
                         </button>
                     )})}
 
@@ -1068,7 +1083,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 className="flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-all text-gray-600 hover:bg-red-50 hover:text-red-600 w-full"
                             >
                                 <LogOut size={18} />
-                                Log out
+                                {tCommon('logOut')}
                             </button>
                         )}
                     </div>
@@ -1079,7 +1094,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     {/* Header */}
                     <div className="h-16 border-b border-gray-100 flex items-center justify-between px-8 shrink-0">
                         <h1 className="text-xl font-bold text-gray-800">
-                            {CATEGORIES.find(c => c.id === activeTab)?.label}
+                            {(() => { const cat = CATEGORIES.find(c => c.id === activeTab); return cat ? tTabs(cat.labelKey) : ''; })()}
                         </h1>
                         <button onClick={onClose} className="p-2 -mr-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
                             <X size={20} />
@@ -1091,56 +1106,56 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'general' && (
                             <div className="space-y-6">
-                                <Section title="API Keys">
+                                <Section title={tGeneral('apiKeys')}>
                                     <Input
-                                        label="OpenAI Key"
+                                        label={tGeneral('openaiKey')}
                                         value={localConfig.api_key_openai || ''}
                                         onChange={(v: string) => handleChange('api_key_openai', v)}
                                         type="password" placeholder="sk-..."
                                     />
                                     <Input
-                                        label="Anthropic Key"
+                                        label={tGeneral('anthropicKey')}
                                         value={localConfig.api_key_anthropic || ''}
                                         onChange={(v: string) => handleChange('api_key_anthropic', v)}
                                         type="password" placeholder="sk-ant-..."
                                     />
                                     <Input
-                                        label="DeepSeek Key"
+                                        label={tGeneral('deepseekKey')}
                                         value={localConfig.api_key_deepseek || ''}
                                         onChange={(v: string) => handleChange('api_key_deepseek', v)}
                                         type="password"
                                     />
                                     <Input
-                                        label="Google Key"
+                                        label={tGeneral('googleKey')}
                                         value={localConfig.api_key_google || ''}
                                         onChange={(v: string) => handleChange('api_key_google', v)}
                                         type="password"
                                     />
                                     <Input
-                                        label="OpenRouter Key"
+                                        label={tGeneral('openrouterKey')}
                                         value={localConfig.api_key_openrouter || ''}
                                         onChange={(v: string) => handleChange('api_key_openrouter', v)}
                                         type="password"
                                     />
                                 </Section>
-                                <Section title="Web Search (API)">
-                                    <p className="text-xs text-gray-500 mb-3">Optional. When set, these APIs are used for web search before fallback (scrape/DDG).</p>
+                                <Section title={tGeneral('webSearch')}>
+                                    <p className="text-xs text-gray-500 mb-3">{tGeneral('webSearchDesc')}</p>
                                     <Input
-                                        label="Brave Search API Key"
+                                        label={tGeneral('braveSearchKey')}
                                         value={localConfig.api_key_brave_search || ''}
                                         onChange={(v: string) => handleChange('api_key_brave_search', v)}
                                         type="password"
                                         placeholder="From api-dashboard.search.brave.com"
                                     />
                                     <Input
-                                        label="Google Search API Key"
+                                        label={tGeneral('googleSearchKey')}
                                         value={localConfig.api_key_google_search || ''}
                                         onChange={(v: string) => handleChange('api_key_google_search', v)}
                                         type="password"
                                         placeholder="Cloud Console – Custom Search API"
                                     />
                                     <Input
-                                        label="Google Search Engine ID (cx)"
+                                        label={tGeneral('googleSearchEngineId')}
                                         value={localConfig.google_search_engine_id || ''}
                                         onChange={(v: string) => handleChange('google_search_engine_id', v)}
                                         type="text"
@@ -1149,16 +1164,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 </Section>
 
                                 {currentUser?.role === 'admin' && (
-                                    <Section title="Central Credentials (Mail, Calendar, Cloud)">
+                                    <Section title={tGeneral('centralCredentials')}>
                                         <p className="text-xs text-gray-500 mb-4">
-                                            One OAuth client per provider is used for Mail, Calendar, and Cloud. Configure once and all users can connect with one click. Add both redirect URIs in your app registration: /api/email/oauth/callback and /api/cloud/oauth/callback.
+                                            {tGeneral('centralCredentialsDesc')}
                                         </p>
                                         <div className="space-y-6">
                                             <div>
-                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Google (Gmail, Drive, Calendar)</h4>
+                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">{tGeneral('googleProvider')}</h4>
                                                 <div className="grid grid-cols-1 gap-3">
                                                     <Input
-                                                        label="Google Client ID"
+                                                        label={tGeneral('googleClientId')}
                                                         value={displayOAuthValue(localConfig.email_oauth_google_client_id || localConfig.cloud_oauth_google_client_id, BUILTIN_GOOGLE_CLIENT_ID)}
                                                         onChange={(v: string) => {
                                                             setLocalConfig((prev: any) => ({
@@ -1172,7 +1187,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         placeholder="xxx.apps.googleusercontent.com"
                                                     />
                                                     <Input
-                                                        label="Google Client Secret"
+                                                        label={tGeneral('googleClientSecret')}
                                                         value={localConfig.email_oauth_google_client_secret || localConfig.cloud_oauth_google_client_secret || ''}
                                                         onChange={(v: string) => {
                                                             setLocalConfig((prev: any) => ({
@@ -1188,10 +1203,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
                                             </div>
                                             <div>
-                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Microsoft (Outlook, OneDrive, Calendar)</h4>
+                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">{tGeneral('microsoftProvider')}</h4>
                                                 <div className="grid grid-cols-1 gap-3">
                                                     <Input
-                                                        label="Microsoft Client ID"
+                                                        label={tGeneral('microsoftClientId')}
                                                         value={localConfig.email_oauth_microsoft_client_id || localConfig.cloud_oauth_microsoft_client_id || ''}
                                                         onChange={(v: string) => {
                                                             setLocalConfig((prev: any) => ({
@@ -1205,7 +1220,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         placeholder="Azure App Registration"
                                                     />
                                                     <Input
-                                                        label="Microsoft Client Secret"
+                                                        label={tGeneral('microsoftClientSecret')}
                                                         value={localConfig.email_oauth_microsoft_client_secret || localConfig.cloud_oauth_microsoft_client_secret || ''}
                                                         onChange={(v: string) => {
                                                             setLocalConfig((prev: any) => ({
@@ -1220,17 +1235,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
                                             </div>
                                             <div>
-                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Apple (Mail only)</h4>
+                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">{tGeneral('appleProvider')}</h4>
                                                 <div className="grid grid-cols-1 gap-3">
-                                                    <Input label="Apple Client ID" value={localConfig.email_oauth_apple_client_id || ''} onChange={(v: string) => handleChange('email_oauth_apple_client_id', v)} type="text" placeholder="iCloud Mail OAuth (if available)" />
-                                                    <Input label="Apple Client Secret" value={localConfig.email_oauth_apple_client_secret || ''} onChange={(v: string) => handleChange('email_oauth_apple_client_secret', v)} type="password" />
+                                                    <Input label={tGeneral('appleClientId')} value={localConfig.email_oauth_apple_client_id || ''} onChange={(v: string) => handleChange('email_oauth_apple_client_id', v)} type="text" placeholder="iCloud Mail OAuth (if available)" />
+                                                    <Input label={tGeneral('appleClientSecret')} value={localConfig.email_oauth_apple_client_secret || ''} onChange={(v: string) => handleChange('email_oauth_apple_client_secret', v)} type="password" />
                                                 </div>
                                             </div>
                                             <div>
-                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Dropbox (Cloud only)</h4>
+                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">{tGeneral('dropboxProvider')}</h4>
                                                 <div className="grid grid-cols-1 gap-3">
-                                                    <Input label="Dropbox App Key" value={localConfig.cloud_oauth_dropbox_client_id || ''} onChange={(v: string) => handleChange('cloud_oauth_dropbox_client_id', v)} type="text" placeholder="Dropbox App Console" />
-                                                    <Input label="Dropbox App Secret" value={localConfig.cloud_oauth_dropbox_client_secret || ''} onChange={(v: string) => handleChange('cloud_oauth_dropbox_client_secret', v)} type="password" />
+                                                    <Input label={tGeneral('dropboxAppKey')} value={localConfig.cloud_oauth_dropbox_client_id || ''} onChange={(v: string) => handleChange('cloud_oauth_dropbox_client_id', v)} type="text" placeholder="Dropbox App Console" />
+                                                    <Input label={tGeneral('dropboxAppSecret')} value={localConfig.cloud_oauth_dropbox_client_secret || ''} onChange={(v: string) => handleChange('cloud_oauth_dropbox_client_secret', v)} type="password" />
                                                 </div>
                                             </div>
                                         </div>
@@ -1245,10 +1260,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <div className="flex justify-center py-12"><div className="w-8 h-8 border-2 border-gray-200 border-t-gray-900 rounded-full animate-spin" /></div>
                                 ) : (
                                     <>
-                                        <Section title="Identity">
+                                        <Section title={tPersona('identity')}>
                                             <div className="grid grid-cols-2 gap-4">
                                                 <Input
-                                                    label="Agent Name"
+                                                    label={tPersona('agentName')}
                                                     value={personaData?.identity?.name || ''}
                                                     onChange={(v) => {
                                                         const newIdentity = { ...personaData?.identity, name: v };
@@ -1261,7 +1276,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     }}
                                                 />
                                                 <Input
-                                                    label="Emoji Symbol"
+                                                    label={tPersona('emojiSymbol')}
                                                     value={personaData?.identity?.emoji || ''}
                                                     onChange={(v) => {
                                                         const newIdentity = { ...personaData?.identity, emoji: v };
@@ -1276,14 +1291,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             </div>
                                         </Section>
 
-                                        <Section title="The Soul (System Prompt)">
+                                        <Section title={tPersona('soul')}>
                                             <div className="flex justify-between items-center mb-2">
-                                                <p className="text-xs text-gray-500">Define your agent's personality, rules, and behavior using Markdown.</p>
+                                                <p className="text-xs text-gray-500">{tPersona('soulDesc')}</p>
                                                 <button
                                                     onClick={() => setShowSoulWizard(true)}
                                                     className="text-xs px-2 py-1 bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 transition-colors flex items-center gap-1 font-medium"
                                                 >
-                                                    <Wand2 size={12} /> Create with Wizard
+                                                    <Wand2 size={12} /> {tPersona('createWithWizard')}
                                                 </button>
                                             </div>
                                             <textarea
@@ -1298,10 +1313,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             />
                                         </Section>
 
-                                        <Section title="Long-term Memory (RAG Source)">
+                                        <Section title={tPersona('longTermMemory')}>
                                             <div className="flex flex-wrap items-center gap-4">
                                                 <div className="flex items-center gap-2">
-                                                    <span className="text-sm font-medium text-gray-700">Max RAG Snippets per Query</span>
+                                                    <span className="text-sm font-medium text-gray-700">{tPersona('maxRagSnippets')}</span>
                                                     <input
                                                         type="number"
                                                         min={1}
@@ -1312,7 +1327,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     />
                                                 </div>
                                                 <div className="flex items-center gap-2">
-                                                    <span className="text-sm font-medium text-gray-700">Min Relevance %</span>
+                                                    <span className="text-sm font-medium text-gray-700">{tPersona('minRelevance')}</span>
                                                     <input
                                                         type="number"
                                                         min={0}
@@ -1326,7 +1341,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     />
                                                 </div>
                                             </div>
-                                            <p className="text-xs text-gray-400 mt-1">Max snippets (1–20). Min Relevance: only snippets with relevance ≥ this % are included; e.g. 30% = exclude everything below 30%.</p>
+                                            <p className="text-xs text-gray-400 mt-1">{tPersona('ragDesc')}</p>
                                             <div className="flex flex-wrap gap-2 mt-3">
                                                 <button
                                                     onClick={() => setShowMemoryModal(true)}
@@ -1338,14 +1353,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             : "bg-gray-100 text-gray-400 cursor-not-allowed"
                                                     )}
                                                 >
-                                                    <Brain size={16} /> View Graph
+                                                    <Brain size={16} /> {tPersona('viewGraph')}
                                                 </button>
                                                 <button
                                                     type="button"
                                                     onClick={() => setShowUserIdentityModal(true)}
                                                     className="text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2 bg-amber-100 text-amber-700 hover:bg-amber-200"
                                                 >
-                                                    <User size={16} /> User Identity
+                                                    <User size={16} /> {tPersona('userIdentity')}
                                                 </button>
                                             </div>
                                         </Section>
@@ -1356,28 +1371,28 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'ai' && (
                             <div className="space-y-6">
-                                <Section title="Provider">
+                                <Section title={tAi('provider')}>
                                     <Select
-                                        label="Primary AI Provider"
+                                        label={tAi('primaryProvider')}
                                         value={localConfig.provider || 'local'}
                                         onChange={(v: string) => handleChange('provider', v)}
                                         options={[
-                                            { value: 'local', label: 'Local (llama.cpp)' },
+                                            { value: 'local', label: tAi('localLlama') },
                                             ...PROVIDERS.map(p => ({ value: p.id, label: p.label }))
                                         ]}
                                     />
                                 </Section>
 
                                 {(!localConfig.provider || localConfig.provider === 'local') && (
-                                    <Section title="Local Model Settings">
+                                    <Section title={tAi('localModelSettings')}>
                                         <div className="flex gap-2 items-end">
                                             <div className="flex-1">
                                                 <Select
-                                                    label="Local Model File"
+                                                    label={tAi('localModelFile')}
                                                     value={localConfig.model || ''}
                                                     onChange={(v: string) => handleChange('model', v)}
                                                     options={[
-                                                        { value: '', label: 'Select a model...' },
+                                                        { value: '', label: tAi('selectModel') },
                                                         ...availableModels.map(m => ({ value: m, label: m }))
                                                     ]}
                                                 />
@@ -1385,22 +1400,22 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <button
                                                 onClick={onRefreshLocalModels}
                                                 className="px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center"
-                                                title="Refresh local models"
+                                                title={tAi('refreshLocalModels')}
                                             >
                                                 <RefreshCw size={18} />
                                             </button>
                                         </div>
-                                        <p className="text-xs text-gray-400 mt-1 mb-4">Models must be placed in the <code>/models</code> directory.</p>
+                                        <p className="text-xs text-gray-400 mt-1 mb-4">{tAi('modelsDir')}</p>
 
                                         <div className="grid grid-cols-2 gap-4 mt-4">
                                             <Input
-                                                label="Context Window (n_ctx)"
+                                                label={tAi('contextWindow')}
                                                 value={localConfig.n_ctx || 8192}
                                                 onChange={(v: string) => handleChange('n_ctx', parseInt(v))}
                                                 type="number"
                                             />
                                             <Input
-                                                label="GPU Layers"
+                                                label={tAi('gpuLayers')}
                                                 value={localConfig.gpu_layers ?? -1}
                                                 onChange={(v: string) => handleChange('gpu_layers', parseInt(v))}
                                                 type="number"
@@ -1408,15 +1423,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </div>
                                         <div className="mt-4">
                                             <Switch
-                                                label="Prompt cache: Auto (40% free RAM, max 8 GB)"
-                                                description="When enabled, cache size is computed from free system RAM. When disabled, use the value below."
+                                                label={tAi('promptCacheAuto')}
+                                                description={tAi('promptCacheAutoDesc')}
                                                 checked={localConfig.llama_cache_ram === -1}
                                                 onChange={(v: boolean) => handleChange('llama_cache_ram', v ? -1 : 4096)}
                                             />
                                             {localConfig.llama_cache_ram !== -1 && (
                                                 <div className="mt-3">
                                                     <Input
-                                                        label="Prompt Cache RAM (MB)"
+                                                        label={tAi('promptCacheRam')}
                                                         value={localConfig.llama_cache_ram ?? 4096}
                                                         onChange={(v: string) => {
                                                             const n = parseInt(v, 10);
@@ -1424,11 +1439,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         }}
                                                         type="number"
                                                     />
-                                                    <p className="text-xs text-gray-400 mt-1">Memory reserved to cache conversation history. Higher = faster replies in long chats, but uses more RAM. Set to 0 to disable. Default: 4096. Applies after next server start.</p>
+                                                    <p className="text-xs text-gray-400 mt-1">{tAi('promptCacheRamDesc')}</p>
                                                 </div>
                                             )}
                                             {localConfig.llama_cache_ram === -1 && (
-                                                <p className="text-xs text-gray-400 mt-2">Auto: 40% of free system RAM, capped at 8192 MB.</p>
+                                                <p className="text-xs text-gray-400 mt-2">{tAi('promptCacheAutoInfo')}</p>
                                             )}
                                         </div>
                                     </Section>
@@ -1439,11 +1454,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     const hasKey = !!localConfig[`api_key_${p.id}`];
                                     
                                     return (
-                                        <Section key={p.id} title={`${p.label} Settings`}>
+                                        <Section key={p.id} title={`${p.label} – ${tAi('provider')}`}>
                                             {!hasKey && (
                                                 <div className="p-3 bg-yellow-50 text-yellow-700 text-sm rounded-lg mb-4 flex items-center gap-2">
                                                     <Shield size={16} />
-                                                    <span>Please set the API Key in the <strong>General</strong> tab first.</span>
+                                                    <span>{tAi('apiKeyMissing')}</span>
                                                 </div>
                                             )}
                                             <div className="flex gap-2 items-end">
@@ -1464,7 +1479,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
                                                         fetchingProvider === p.id && "animate-pulse"
                                                     )}
-                                                    title="Fetch available models"
+                                                    title={tAi('fetchModels')}
                                                     disabled={!hasKey}
                                                 >
                                                     <RefreshCw size={18} className={cn(fetchingProvider === p.id && "animate-spin")} />
@@ -1476,9 +1491,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                 <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-100">
                                     <div className="flex items-center justify-between mb-3">
-                                        <label className="text-sm font-medium text-gray-700">Temperature</label>
+                                        <label className="text-sm font-medium text-gray-700">{tAi('temperature')}</label>
                                         <div className="flex items-center gap-2">
-                                            <span className="text-xs text-gray-500">Auto</span>
+                                            <span className="text-xs text-gray-500">{tAi('auto')}</span>
                                             <button
                                                 onClick={() => handleChange('temperature_auto', !localConfig.temperature_auto)}
                                                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
@@ -1499,15 +1514,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                                                 </svg>
-                                                <span className="text-sm font-medium">Adaptive Temperature</span>
+                                                <span className="text-sm font-medium">{tAi('adaptiveTemperature')}</span>
                                             </div>
                                             <p className="text-xs text-blue-600 mt-1">
-                                                Temperature is automatically adjusted based on task type:
+                                                {tAi('adaptiveDesc')}
                                             </p>
                                             <ul className="text-xs text-blue-600 mt-1 space-y-0.5 ml-4 list-disc">
-                                                <li><strong>0.1-0.3:</strong> Math, logic, code, factual queries</li>
-                                                <li><strong>0.4-0.6:</strong> General conversation, explanations</li>
-                                                <li><strong>0.7-0.9:</strong> Creative writing, brainstorming</li>
+                                                <li><strong>0.1-0.3:</strong> {tAi('tempMath')}</li>
+                                                <li><strong>0.4-0.6:</strong> {tAi('tempGeneral')}</li>
+                                                <li><strong>0.7-0.9:</strong> {tAi('tempCreative')}</li>
                                             </ul>
                                         </div>
                                     ) : (
@@ -1522,9 +1537,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 className="w-full accent-blue-500"
                                             />
                                             <div className="flex justify-between text-xs text-gray-400 mt-1">
-                                                <span>Strict (0)</span>
-                                                <span>Balanced (0.7)</span>
-                                                <span>Creative (2)</span>
+                                                <span>{tAi('strict')}</span>
+                                                <span>{tAi('balanced')}</span>
+                                                <span>{tAi('creative')}</span>
                                             </div>
                                         </>
                                     )}
@@ -1534,39 +1549,39 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'voice' && (
                             <div className="space-y-6">
-                                <Section title="Speech to Text">
+                                <Section title={tVoice('stt')}>
                                     <Switch
-                                        label="Enable Voice Input (STT)"
+                                        label={tVoice('enableVoiceInput')}
                                         checked={localConfig.stt_enabled || false}
                                         onChange={(v: boolean) => handleChange('stt_enabled', v)}
                                     />
                                     {localConfig.stt_enabled && (
                                         <div className="mt-4 space-y-4">
                                             <Select
-                                                label="STT Engine"
+                                                label={tVoice('sttEngine')}
                                                 value={localConfig.speech_stt_engine ?? 'docker'}
                                                 onChange={(v: string) => handleChange('speech_stt_engine', v)}
                                                 options={[
-                                                    { value: 'docker', label: 'Docker (HTTP STT service)' },
-                                                    { value: 'local', label: 'Local (faster-whisper + ffmpeg)' },
+                                                    { value: 'docker', label: tVoice('dockerStt') },
+                                                    { value: 'local', label: tVoice('localStt') },
                                                 ]}
                                             />
                                             {(localConfig.speech_stt_engine ?? 'docker') === 'docker' && (
                                                 <Input
-                                                    label="Docker STT URL"
+                                                    label={tVoice('dockerSttUrl')}
                                                     placeholder="http://localhost:5003"
                                                     value={localConfig.speech_stt_docker_url || 'http://localhost:5003'}
                                                     onChange={(v: string) => handleChange('speech_stt_docker_url', v)}
                                                 />
                                             )}
                                             <p className="text-xs text-gray-500">
-                                                Docker: STT service in container (no local model). Local: requires faster-whisper and ffmpeg.
+                                                {tVoice('sttDesc')}
                                             </p>
                                         </div>
                                     )}
                                 </Section>
 
-                                <Section title="Text to Speech">
+                                <Section title={tVoice('tts')}>
                                     <TTSSettings
                                         ttsEnabled={localConfig.speech_tts_enabled || false}
                                         ttsUrl={localConfig.speech_tts_docker_url || 'http://localhost:5002'}
@@ -1587,27 +1602,27 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'interface' && (
                             <div className="space-y-6">
-                                <Section title="Date & Time">
-                                    <p className="text-xs text-gray-500 mb-4">Used in the system prompt and for showing dates/times to you. Stored in your user identity.</p>
+                                <Section title={tInterface('dateTime')}>
+                                    <p className="text-xs text-gray-500 mb-4">{tInterface('dateTimeDesc')}</p>
                                     {personaLoading ? (
                                         <p className="text-sm text-gray-500">Loading…</p>
                                     ) : (
                                         <>
                                             <div className="grid grid-cols-1 gap-4">
                                                 <Select
-                                                    label="Timezone"
+                                                    label={tInterface('timezone')}
                                                     value={dateTimeTimezone}
                                                     onChange={(v: string) => setDateTimeTimezone(v)}
                                                     options={DATE_TIME_TIMEZONES}
                                                 />
                                                 <Select
-                                                    label="Date format"
+                                                    label={tInterface('dateFormat')}
                                                     value={dateTimeDateFormat}
                                                     onChange={(v: string) => setDateTimeDateFormat(v)}
                                                     options={DATE_TIME_DATE_FORMATS}
                                                 />
                                                 <Select
-                                                    label="Time format"
+                                                    label={tInterface('timeFormat')}
                                                     value={dateTimeTimeFormat}
                                                     onChange={(v: string) => setDateTimeTimeFormat(v)}
                                                     options={DATE_TIME_TIME_FORMATS}
@@ -1619,29 +1634,29 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 disabled={dateTimeSaving}
                                                 className="mt-3 px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 text-sm font-medium"
                                             >
-                                                {dateTimeSaving ? 'Saving…' : 'Save'}
+                                                {dateTimeSaving ? tCommon('saving') : tCommon('save')}
                                             </button>
                                         </>
                                     )}
                                 </Section>
-                                <Section title="Automation">
+                                <Section title={tInterface('automation')}>
                                     <Switch
-                                        label="Auto-open Links"
-                                        description="Automatically open search result links in browser tabs (off by default)"
+                                        label={tInterface('autoOpenLinks')}
+                                        description={tInterface('autoOpenLinksDesc')}
                                         checked={localConfig.ux_auto_open_links ?? false}
                                         onChange={(v: boolean) => handleChange('ux_auto_open_links', v)}
                                     />
                                     <div className="h-4" />
                                     <Switch
-                                        label="Auto-open Outputs"
-                                        description="Open generated files/folders automatically"
+                                        label={tInterface('autoOpenOutputs')}
+                                        description={tInterface('autoOpenOutputsDesc')}
                                         checked={localConfig.ux_auto_open_outputs ?? true}
                                         onChange={(v: boolean) => handleChange('ux_auto_open_outputs', v)}
                                     />
                                     {localConfig.ux_auto_open_outputs && (
                                         <div className="mt-2 pl-4 border-l-2 border-gray-100 animate-in slide-in-from-top-1 fade-in">
                                             <Input
-                                                label="Max Limit (Items)"
+                                                label={tInterface('maxLimit')}
                                                 value={localConfig.ux_auto_open_max || 20}
                                                 onChange={(v: string) => handleChange('ux_auto_open_max', parseInt(v))}
                                                 type="number"
@@ -1650,8 +1665,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     )}
                                     <div className="h-4" />
                                     <Switch
-                                        label="Separate Terminals (Global)"
-                                        description="Applies to CLI/workflows. WebUI still runs sub-agents headless and streams output."
+                                        label={tInterface('separateTerminals')}
+                                        description={tInterface('separateTerminalsDesc')}
                                         checked={localConfig.sub_agents_in_separate_terminals ?? true}
                                         onChange={(v: boolean) => handleChange('sub_agents_in_separate_terminals', v)}
                                     />
@@ -1684,10 +1699,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'local_network' && (
                             <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                                <Section title="Network Settings">
+                                <Section title={tLocalNet('networkSettings')}>
                                      <Switch
-                                        label="Enable Local Network Hosting"
-                                        description="Allow other devices on the network to access this agent"
+                                        label={tLocalNet('enableHosting')}
+                                        description={tLocalNet('enableHostingDesc')}
                                         checked={localConfig.local_network_enabled || false}
                                         onChange={(v: boolean) => {
                                             if (v) {
@@ -1716,17 +1731,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <div className="flex items-center justify-between gap-3">
                                                     <div className="flex-1 min-w-0">
                                                         <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
-                                                            {isLanUrl ? 'Network access link (for other devices)' : 'Network access link'}
+                                                            {isLanUrl ? tLocalNet('networkAccessLinkLan') : tLocalNet('networkAccessLink')}
                                                         </div>
                                                         <div className="font-mono text-sm text-gray-900 break-all">{accessUrl}</div>
                                                         {!localConfig.local_network_enabled && (
-                                                            <div className="text-xs text-gray-500 mt-1">Enable hosting above so other devices can use this link.</div>
+                                                            <div className="text-xs text-gray-500 mt-1">{tLocalNet('enableHostingHint')}</div>
                                                         )}
                                                         {localConfig.local_network_enabled && isLanUrl && (
-                                                            <div className="text-xs text-green-700 mt-1">Other devices on your network use this URL (IP address). Share it so they can open VAF.</div>
+                                                            <div className="text-xs text-green-700 mt-1">{tLocalNet('lanUrlHint')}</div>
                                                         )}
                                                         {localConfig.local_network_enabled && !isLanUrl && (
-                                                            <div className="text-xs text-amber-700 mt-1">localhost only works on this PC. Other devices need your PC&apos;s IP (e.g. http://192.168.x.x:3000). Backend will show it when available.</div>
+                                                            <div className="text-xs text-amber-700 mt-1">{tLocalNet('localhostHint')}</div>
                                                         )}
                                                     </div>
                                                     <button
@@ -1752,7 +1767,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         ) : (
                                                             <Copy size={16} />
                                                         )}
-                                                        <span className="text-xs font-medium hidden sm:inline">{networkLinkCopied ? 'Copied' : 'Copy'}</span>
+                                                        <span className="text-xs font-medium hidden sm:inline">{networkLinkCopied ? tCommon('copied') : tCommon('copy')}</span>
                                                     </button>
                                                 </div>
                                             </div>
@@ -1761,7 +1776,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 </Section>
                                 
                                 <div className={cn("space-y-6 transition-all duration-300", !localConfig.local_network_enabled && "opacity-50 pointer-events-none grayscale-[0.5]")}>
-                                    <Section title="User Management">
+                                    <Section title={tLocalNet('userManagement')}>
                                         <div className="flex flex-col gap-4">
                                             {/* Toolbar */}
                                             <div className="flex items-center justify-between">
@@ -1769,7 +1784,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                                                     <input 
                                                         type="text" 
-                                                        placeholder="Search users..." 
+                                                        placeholder={tLocalNet('searchUsers')}
                                                         value={userSearch}
                                                         onChange={(e) => setUserSearch(e.target.value)}
                                                         className="w-full pl-9 pr-4 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
@@ -1779,7 +1794,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     onClick={() => setShowAddUserModal(true)}
                                                     className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white font-medium rounded-lg text-sm shadow-sm hover:shadow transition-all flex items-center gap-2"
                                                 >
-                                                    <Plus size={16} /> Add New User
+                                                    <Plus size={16} /> {tLocalNet('addNewUser')}
                                                 </button>
                                             </div>
 
@@ -1788,18 +1803,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <table className="w-full text-sm text-left">
                                                     <thead className="bg-gray-50 text-gray-500 font-medium border-b border-gray-200">
                                                         <tr>
-                                                            <th className="px-4 py-3 font-semibold">Username</th>
-                                                            <th className="px-4 py-3 font-semibold">Role</th>
-                                                            <th className="px-4 py-3 font-semibold">Last Active</th>
-                                                            <th className="px-4 py-3 font-semibold">Status</th>
-                                                            <th className="px-4 py-3 font-semibold text-right">Actions</th>
+                                                            <th className="px-4 py-3 font-semibold">{tLocalNet('username')}</th>
+                                                            <th className="px-4 py-3 font-semibold">{tLocalNet('role')}</th>
+                                                            <th className="px-4 py-3 font-semibold">{tLocalNet('lastActive')}</th>
+                                                            <th className="px-4 py-3 font-semibold">{tLocalNet('status')}</th>
+                                                            <th className="px-4 py-3 font-semibold text-right">{tLocalNet('actions')}</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-gray-100">
                                                         {usersLoading ? (
                                                             <tr>
                                                                 <td colSpan={5} className="px-4 py-8 text-center text-gray-500">
-                                                                    Loading users…
+                                                                    {tLocalNet('loadingUsers')}
                                                                 </td>
                                                             </tr>
                                                         ) : users.filter(u => 
@@ -1823,7 +1838,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                             : "bg-gray-50 text-gray-600 border-gray-200"
                                                                     )}>
                                                                         <div className={cn("w-1.5 h-1.5 rounded-full", user.status === 'active' ? "bg-green-500" : "bg-gray-400")} />
-                                                                        {user.status === 'active' ? 'Active' : 'Inactive'}
+                                                                        {user.status === 'active' ? tCommon('active') : tCommon('inactive')}
                                                                     </span>
                                                                 </td>
                                                                 <td className="px-4 py-3 text-right">
@@ -1853,24 +1868,24 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 ).length === 0 && (
                                                     <div className="p-8 text-center text-gray-500">
                                                         {users.length === 0
-                                                            ? 'No users yet. Add a user to allow network access.'
-                                                            : `No users found matching "${userSearch}"`}
+                                                            ? tLocalNet('noUsersYet')
+                                                            : tLocalNet('noUsersFound', { query: userSearch })}
                                                     </div>
                                                 )}
                                             </div>
                                         </div>
                                     </Section>
 
-                                    <Section title="Connection Details">
+                                    <Section title={tLocalNet('connectionDetails')}>
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                             <div className="flex flex-col gap-1.5 w-full">
-                                                <label className="text-sm font-medium text-gray-700 ml-1">Host IP Address</label>
+                                                <label className="text-sm font-medium text-gray-700 ml-1">{tLocalNet('hostIp')}</label>
                                                 <div className="px-4 h-10 flex items-center bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 font-mono select-all">
                                                     {networkAccessUrl ? new URL(networkAccessUrl).hostname : (displayHost || 'localhost')}
                                                 </div>
                                             </div>
                                             <div className="flex flex-col gap-1.5 w-full">
-                                                <label className="text-sm font-medium text-gray-700 ml-1">Port</label>
+                                                <label className="text-sm font-medium text-gray-700 ml-1">{tLocalNet('port')}</label>
                                                 <input
                                                     type="number"
                                                     value={localConfig.local_network_port_frontend || 3000}
@@ -1884,28 +1899,28 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-lg flex flex-col gap-2">
                                             <div className="flex items-center gap-2 text-blue-800 font-medium text-sm">
                                                 <Shield size={16} />
-                                                Security Status: Protected
+                                                {tLocalNet('securityStatus')}
                                             </div>
                                             <div className="grid grid-cols-1 gap-2 pl-6">
                                                 <div className="flex items-center gap-2 text-xs text-blue-700">
                                                     <CheckCircle size={12} className="text-blue-600" />
-                                                    <span>Firewall Active: accessible only from Local Network (RFC 1918)</span>
+                                                    <span>{tLocalNet('firewallActive')}</span>
                                                 </div>
                                                 <div className="flex items-center gap-2 text-xs text-blue-700">
                                                     <CheckCircle size={12} className="text-blue-600" />
-                                                    <span>Authentication: 2FA/Password required for new devices</span>
+                                                    <span>{tLocalNet('authRequired')}</span>
                                                 </div>
                                                 <div className="flex items-center gap-2 text-xs text-blue-700">
                                                     <CheckCircle size={12} className="text-blue-600" />
-                                                    <span>Internet Exposure: Blocked (No public access)</span>
+                                                    <span>{tLocalNet('noPublicAccess')}</span>
                                                 </div>
                                             </div>
                                         </div>
                                     </Section>
 
-                                    <Section title="Network Topology">
+                                    <Section title={tLocalNet('networkTopology')}>
                                         <div className="space-y-3">
-                                            <p className="text-xs text-gray-500 mb-2">Visualize active devices and connections on your VAF infrastructure.</p>
+                                            <p className="text-xs text-gray-500 mb-2">{tLocalNet('networkTopologyDesc')}</p>
                                             
                                             <button 
                                                 onClick={() => setShowNetworkModal(true)}
@@ -1918,13 +1933,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     <Network size={32} className="text-gray-600" />
                                                 </div>
                                                 <div className="text-center z-10">
-                                                    <div className="font-bold text-gray-900 text-lg">View Network Map</div>
-                                                    <div className="text-sm text-gray-500 mt-1">Interactive topology of {networkNodes.length} active device(s)</div>
+                                                    <div className="font-bold text-gray-900 text-lg">{tLocalNet('viewNetworkMap')}</div>
+                                                    <div className="text-sm text-gray-500 mt-1">{tLocalNet('activeDevices', { count: networkNodes.length })}</div>
                                                 </div>
                                                 
                                                 <div className="absolute bottom-4 right-4 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-1 rounded-md border border-blue-100">
                                                     <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                                                    Live View
+                                                    {tLocalNet('liveView')}
                                                 </div>
                                             </button>
                                         </div>
@@ -1935,20 +1950,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'advanced' && (
                             <div className="space-y-6">
-                                <Section title="Sub-Agents">
+                                <Section title={tAdvanced('subAgents')}>
                                     <Switch
-                                        label="Separate Terminals (Global)"
-                                        description="Applies to CLI/workflows. WebUI still runs sub-agents headless and streams output."
+                                        label={tInterface('separateTerminals')}
+                                        description={tInterface('separateTerminalsDesc')}
                                         checked={localConfig.sub_agents_in_separate_terminals ?? true}
                                         onChange={(v: boolean) => handleChange('sub_agents_in_separate_terminals', v)}
                                     />
                                     <div className="mt-4">
                                         <Select
-                                            label="Sub-Agent Provider"
+                                            label={tAdvanced('subAgentProvider')}
                                             value={localConfig.subagent_provider || 'inherit'}
                                             onChange={(v: string) => handleChange('subagent_provider', v)}
                                             options={[
-                                                { value: 'inherit', label: 'Same as Main Agent' },
+                                                { value: 'inherit', label: tAdvanced('sameAsMain') },
                                                 { value: 'openai', label: 'OpenAI' },
                                                 { value: 'anthropic', label: 'Anthropic' },
                                                 { value: 'deepseek', label: 'DeepSeek' },
@@ -1958,15 +1973,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </div>
                                     <div className="h-4" />
                                     <Switch
-                                        label="Sub-Agent Timeout"
-                                        description="Limit execution time for sub-agents"
+                                        label={tAdvanced('subAgentTimeout')}
+                                        description={tAdvanced('subAgentTimeoutDesc')}
                                         checked={localConfig.subagent_timeout_enabled ?? true}
                                         onChange={(v: boolean) => handleChange('subagent_timeout_enabled', v)}
                                     />
                                     {localConfig.subagent_timeout_enabled && (
                                         <div className="mt-2 pl-4 border-l-2 border-gray-100">
                                             <Input
-                                                label="Timeout (minutes)"
+                                                label={tAdvanced('timeoutMinutes')}
                                                 value={localConfig.subagent_timeout_minutes || 120}
                                                 onChange={(v: string) => handleChange('subagent_timeout_minutes', parseInt(v))}
                                                 type="number"
@@ -1975,38 +1990,38 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     )}
                                 </Section>
 
-                                <Section title="System">
+                                <Section title={tAdvanced('system')}>
                                     <Switch
-                                        label="Web UI Dashboard"
-                                        description="Start Web UI automatically on launch"
+                                        label={tAdvanced('webUiDashboard')}
+                                        description={tAdvanced('webUiDashboardDesc')}
                                         checked={localConfig.web_ui_enabled ?? true}
                                         onChange={(v: boolean) => handleChange('web_ui_enabled', v)}
                                     />
                                     <div className="h-4" />
                                     <Switch
-                                        label="Start Tray on Login"
-                                        description="Auto-start the tray app when your OS logs in"
+                                        label={tAdvanced('startTrayOnLogin')}
+                                        description={tAdvanced('startTrayOnLoginDesc')}
                                         checked={localConfig.tray_autostart ?? false}
                                         onChange={(v: boolean) => handleChange('tray_autostart', v)}
                                     />
                                     <div className="h-4" />
                                     <Switch
-                                        label="Server Persistence"
-                                        description="Keep server running in background after exit"
+                                        label={tAdvanced('serverPersistence')}
+                                        description={tAdvanced('serverPersistenceDesc')}
                                         checked={localConfig.server_persistence_enabled ?? false}
                                         onChange={(v: boolean) => handleChange('server_persistence_enabled', v)}
                                     />
                                     <div className="h-4" />
                                     <Switch
-                                        label="Memory System"
-                                        description="Store and retrieve memories with AI-powered RAG"
+                                        label={tAdvanced('memorySystem')}
+                                        description={tAdvanced('memorySystemDesc')}
                                         checked={localConfig.memory_enabled ?? true}
                                         onChange={(v: boolean) => handleChange('memory_enabled', v)}
                                     />
                                     <div className="h-4" />
                                     <Switch
-                                        label="Debug Logs"
-                                        description="Write domain and queue logs; turn off to reduce disk I/O"
+                                        label={tAdvanced('debugLogs')}
+                                        description={tAdvanced('debugLogsDesc')}
                                         checked={localConfig.debug_logs_enabled ?? false}
                                         onChange={(v: boolean) => handleChange('debug_logs_enabled', v)}
                                     />
@@ -2016,8 +2031,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-100 transition-colors"
                                     >
                                         <div className="flex flex-col items-start">
-                                            <span className="text-sm font-medium text-gray-700">Tools</span>
-                                            <span className="text-xs text-gray-500">{tools.length} tools loaded</span>
+                                            <span className="text-sm font-medium text-gray-700">{tAdvanced('tools')}</span>
+                                            <span className="text-xs text-gray-500">{tAdvanced('toolsLoaded', { count: tools.length })}</span>
                                         </div>
                                         <ChevronRight size={16} className="text-gray-400" />
                                     </button>
@@ -2027,8 +2042,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-100 transition-colors"
                                     >
                                         <div className="flex flex-col items-start">
-                                            <span className="text-sm font-medium text-gray-700">Workflows</span>
-                                            <span className="text-xs text-gray-500">{workflows.length} workflows available</span>
+                                            <span className="text-sm font-medium text-gray-700">{tAdvanced('workflows')}</span>
+                                            <span className="text-xs text-gray-500">{tAdvanced('workflowsAvailable', { count: workflows.length })}</span>
                                         </div>
                                         <ChevronRight size={16} className="text-gray-400" />
                                     </button>
@@ -2041,8 +2056,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-100 transition-colors"
                                     >
                                         <div className="flex flex-col items-start">
-                                            <span className="text-sm font-medium text-gray-700">Trusted Sources</span>
-                                            <span className="text-xs text-gray-500">{trustedSources.categories?.length ?? 0} categories · used for safe search</span>
+                                            <span className="text-sm font-medium text-gray-700">{tAdvanced('trustedSources')}</span>
+                                            <span className="text-xs text-gray-500">{tAdvanced('trustedSourcesCategories', { count: trustedSources.categories?.length ?? 0 })}</span>
                                         </div>
                                         <ChevronRight size={16} className="text-gray-400" />
                                     </button>
@@ -2058,20 +2073,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <Zap size={32} className="text-gray-400" />
                                         </div>
                                         <div>
-                                            <h3 className="text-lg font-medium text-gray-900">No Automations Yet</h3>
+                                            <h3 className="text-lg font-medium text-gray-900">{tAutomations('noAutomationsTitle')}</h3>
                                             <p className="text-sm text-gray-500 max-w-xs mx-auto mt-1">
-                                                Create custom workflows and scheduled tasks to automate your daily work.
+                                                {tAutomations('noAutomationsDesc')}
                                             </p>
                                         </div>
                                         <button
                                             onClick={() => setShowCreateAutomationModal(true)}
                                             className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg text-sm transition-colors"
                                         >
-                                            Create New Automation
+                                            {tAutomations('createNew')}
                                         </button>
                                     </div>
                                 ) : (
-                                    <Section title="Scheduled Automations">
+                                    <Section title={tAutomations('scheduled')}>
                                         <div className="space-y-3">
                                             {automations.map((auto, idx) => (
                                                 <div key={idx} className="p-4 bg-white border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
@@ -2083,17 +2098,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                     "px-2 py-0.5 rounded text-xs font-medium",
                                                                     auto.enabled ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
                                                                 )}>
-                                                                    {auto.enabled ? "Active" : "Disabled"}
+                                                                    {auto.enabled ? tCommon('active') : tCommon('disabled')}
                                                                 </div>
                                                             </div>
                                                             <div className="text-sm text-gray-600 mt-1">{auto.description}</div>
                                                             <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
                                                                 <div className="flex items-center gap-1">
-                                                                    <span className="font-medium">Frequency:</span>
+                                                                    <span className="font-medium">{tAutomations('frequency')}:</span>
                                                                     <span>{auto.frequency}</span>
                                                                 </div>
                                                                 <div className="flex items-center gap-1">
-                                                                    <span className="font-medium">Time:</span>
+                                                                    <span className="font-medium">{tAutomations('time')}:</span>
                                                                     <span>{auto.time}</span>
                                                                 </div>
                                                             </div>
@@ -2107,7 +2122,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 onClick={() => setShowCreateAutomationModal(true)}
                                                 className="w-full px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg text-sm transition-colors"
                                             >
-                                                Create New Automation
+                                                {tAutomations('createNew')}
                                             </button>
                                         </div>
                                     </Section>
@@ -2126,18 +2141,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <p className="text-xs text-gray-400 mt-1">v2.4.0 (Mac/Metal Optimized)</p>
                                 </div>
 
-                                <Section title="Credits">
+                                <Section title={tAbout('credits')}>
                                     <div className="space-y-3 text-sm text-gray-600">
                                         <div className="flex justify-between">
-                                            <span>Core Engine</span>
+                                            <span>{tAbout('coreEngine')}</span>
                                             <span className="font-medium">Python 3.11 + Llama.cpp</span>
                                         </div>
                                         <div className="flex justify-between">
-                                            <span>Frontend</span>
+                                            <span>{tAbout('frontend')}</span>
                                             <span className="font-medium">Next.js + Tailwind</span>
                                         </div>
                                         <div className="flex justify-between">
-                                            <span>Developed by</span>
+                                            <span>{tAbout('developedBy')}</span>
                                             <span className="font-medium">Veyllo Labs</span>
                                         </div>
                                     </div>
@@ -2153,7 +2168,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             onClick={onClose}
                             className="px-6 py-2.5 rounded-xl font-medium text-gray-600 hover:bg-gray-200 transition-colors"
                         >
-                            Cancel
+                            {tCommon('cancel')}
                         </button>
                         <button
                             onClick={handleSave}
@@ -2161,7 +2176,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             className="px-8 py-2.5 rounded-xl font-medium bg-gray-900 text-white hover:bg-black shadow-lg shadow-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
                         >
                             <Save size={18} />
-                            Save Changes
+                            {tCommon('saveChanges')}
                         </button>
                     </div>
                 </div>
@@ -2172,7 +2187,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {showLogoutConfirm && (
                             <div className="bg-white rounded-2xl border border-gray-200 shadow-xl p-6 w-full max-w-sm">
                                 <p className="text-sm font-medium text-gray-800 text-center mb-6">
-                                    Are you sure you want to log out?
+                                    {tCommon('logoutConfirm')}
                                 </p>
                                 <div className="flex gap-3">
                                     <button
@@ -2180,21 +2195,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onClick={() => setShowLogoutConfirm(false)}
                                         className="flex-1 py-2.5 rounded-xl font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
                                     >
-                                        No
+                                        {tCommon('no')}
                                     </button>
                                     <button
                                         type="button"
                                         onClick={handleLogoutYes}
                                         className="flex-1 py-2.5 rounded-xl font-medium bg-gray-900 hover:bg-gray-800 text-white transition-colors"
                                     >
-                                        Yes
+                                        {tCommon('yes')}
                                     </button>
                                 </div>
                             </div>
                         )}
                         {isLoggingOut && (
                             <div className="bg-white rounded-2xl border border-gray-200 shadow-xl p-8 w-full max-w-sm flex flex-col items-center gap-4">
-                                <p className="text-lg font-medium text-gray-800">Have a nice day</p>
+                                <p className="text-lg font-medium text-gray-800">{tCommon('haveANiceDay')}</p>
                                 <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
                                     <div
                                         className="h-full bg-gray-900 rounded-full transition-[width] duration-[1500ms] ease-out"
@@ -2218,8 +2233,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {/* Header */}
                         <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
                             <div>
-                                <h2 className="text-2xl font-bold text-gray-800">Available Tools</h2>
-                                <p className="text-sm text-gray-500">{tools.length} modules installed</p>
+                                <h2 className="text-2xl font-bold text-gray-800">{tModals('tools.title')}</h2>
+                                <p className="text-sm text-gray-500">{tModals('tools.modulesInstalled', { count: tools.length })}</p>
                             </div>
                             <button onClick={() => setShowToolsModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
                                 <X size={24} />
@@ -2232,7 +2247,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
                                 <input
                                     type="text"
-                                    placeholder="Search tools by name or description..."
+                                    placeholder={tModals('tools.searchPlaceholder')}
                                     value={toolsSearch}
                                     onChange={(e) => setToolsSearch(e.target.value)}
                                     className="w-full pl-12 pr-4 h-12 bg-white border border-gray-200 rounded-xl text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
@@ -2284,7 +2299,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 group-hover:text-gray-600">
                                                     <span className="font-mono">v1.0.0</span>
                                                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity text-blue-600 font-medium">
-                                                        View Code <ChevronRight size={12} />
+                                                        {tModals('tools.viewCode')} <ChevronRight size={12} />
                                                     </div>
                                                 </div>
                                             </div>
@@ -2305,8 +2320,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4 text-gray-400">
                                         <Search size={32} />
                                     </div>
-                                    <h3 className="text-lg font-medium text-gray-900">No tools found</h3>
-                                    <p className="text-sm text-gray-500 mt-1">Try adjusting your search terms.</p>
+                                    <h3 className="text-lg font-medium text-gray-900">{tModals('tools.noToolsFound')}</h3>
+                                    <p className="text-sm text-gray-500 mt-1">{tModals('tools.noToolsFoundHint')}</p>
                                 </div>
                             )}
                         </div>
@@ -2352,8 +2367,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {/* Header */}
                         <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
                             <div>
-                                <h2 className="text-2xl font-bold text-gray-800">Available Workflows</h2>
-                                <p className="text-sm text-gray-500">{workflows.length} templates available</p>
+                                <h2 className="text-2xl font-bold text-gray-800">{tModals('workflows.title')}</h2>
+                                <p className="text-sm text-gray-500">{tModals('workflows.templatesAvailable', { count: workflows.length })}</p>
                             </div>
                             <button onClick={() => setShowWorkflowsModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
                                 <X size={24} />
@@ -2366,7 +2381,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
                                 <input
                                     type="text"
-                                    placeholder="Search workflows..."
+                                    placeholder={tModals('workflows.searchPlaceholder')}
                                     value={workflowsSearch}
                                     onChange={(e) => setWorkflowsSearch(e.target.value)}
                                     className="w-full pl-12 pr-4 h-12 bg-white border border-gray-200 rounded-xl text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all"
@@ -2401,7 +2416,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         <GitBranch size={20} />
                                                     </div>
                                                     <span className="px-2 py-1 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-md">
-                                                        {wf.steps} Steps
+                                                        {tModals('workflows.steps', { count: wf.steps })}
                                                     </span>
                                                 </div>
                                                 
@@ -2414,9 +2429,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
 
                                                 <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 group-hover:text-gray-600">
-                                                    <span className="font-mono">Template</span>
+                                                    <span className="font-mono">{tModals('workflows.template')}</span>
                                                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity text-purple-600 font-medium">
-                                                        Details <ChevronRight size={12} />
+                                                        {tModals('workflows.details')} <ChevronRight size={12} />
                                                     </div>
                                                 </div>
                                             </div>
@@ -2437,8 +2452,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4 text-gray-400">
                                         <Search size={32} />
                                     </div>
-                                    <h3 className="text-lg font-medium text-gray-900">No workflows found</h3>
-                                    <p className="text-sm text-gray-500 mt-1">Try adjusting your search terms.</p>
+                                    <h3 className="text-lg font-medium text-gray-900">{tModals('workflows.noWorkflowsFound')}</h3>
+                                    <p className="text-sm text-gray-500 mt-1">{tModals('workflows.noWorkflowsFoundHint')}</p>
                                 </div>
                             )}
                         </div>
@@ -2456,8 +2471,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     >
                         <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
                             <div>
-                                <h2 className="text-2xl font-bold text-gray-800">Trusted Sources</h2>
-                                <p className="text-sm text-gray-500">Categories used for safe search (nur vertrauenswürdige Quellen)</p>
+                                <h2 className="text-2xl font-bold text-gray-800">{tModals('trustedSources.title')}</h2>
+                                <p className="text-sm text-gray-500">{tModals('trustedSources.subtitle')}</p>
                             </div>
                             <button onClick={() => setShowTrustedSourcesModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
                                 <X size={24} />
@@ -2474,7 +2489,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <div className="w-14 h-14 rounded-xl bg-gray-100 flex items-center justify-center mb-3 text-gray-400">
                                         <Link2 size={28} />
                                     </div>
-                                    <p className="text-sm text-gray-600">No categories loaded. Check backend connection.</p>
+                                    <p className="text-sm text-gray-600">{tModals('trustedSources.noCategories')}</p>
                                 </div>
                             ) : (
                             <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,320px))] gap-x-3 gap-y-2 justify-center justify-items-stretch items-start content-start">
@@ -2487,14 +2502,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 className="flex-1 flex flex-col items-center justify-center gap-2 py-6 rounded-lg border-2 border-dashed border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-600 hover:bg-gray-50/50 transition-colors w-full"
                                             >
                                                 <Plus size={40} className="shrink-0" />
-                                                <span className="text-sm font-medium">New category</span>
+                                                <span className="text-sm font-medium">{tModals('trustedSources.newCategory')}</span>
                                             </button>
                                         ) : (
                                             <div className="space-y-3">
-                                                <p className="text-sm font-medium text-gray-700">Category name (unique)</p>
+                                                <p className="text-sm font-medium text-gray-700">{tModals('trustedSources.categoryNameUnique')}</p>
                                                 <input
                                                     type="text"
-                                                    placeholder="e.g. Meine News"
+                                                    placeholder={tModals('trustedSources.namePlaceholder')}
                                                     value={newCategoryName}
                                                     onChange={(e) => setNewCategoryName(e.target.value)}
                                                     className="w-full px-4 py-3 rounded-xl bg-white border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 text-sm"
@@ -2512,13 +2527,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         }}
                                                         className="px-4 py-2 rounded-lg font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors"
                                                     >
-                                                        Create
+                                                        {tCommon('create')}
                                                     </button>
                                                     <button
                                                         onClick={() => { setShowCreateCategoryForm(false); setNewCategoryName(''); }}
                                                         className="px-4 py-2 rounded-lg font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
                                                     >
-                                                        Cancel
+                                                        {tCommon('cancel')}
                                                     </button>
                                                 </div>
                                             </div>
@@ -2545,7 +2560,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         <button
                                                             onClick={() => { setAddFormCategoryId(cat.id); setTrustedSourceForm({ categoryId: cat.id, name: '', url: '' }); }}
                                                             className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-                                                            title="Add link to this category"
+                                                            title={tModals('trustedSources.addLink', { name: cat.name })}
                                                         >
                                                             <Plus size={18} />
                                                         </button>
@@ -2556,11 +2571,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             onClick={(e) => {
                                                                 e.preventDefault();
                                                                 e.stopPropagation();
-                                                                if (!confirm('Are you sure you want to delete this category? This action cannot be undone.')) return;
+                                                                if (!confirm(tModals('trustedSources.deleteCategoryConfirm'))) return;
                                                                 onDeleteTrustedCategory(cat.id);
                                                             }}
                                                             className="p-2 cursor-pointer relative z-10 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                                            title="Delete category"
+                                                            title={tCommon('delete')}
                                                         >
                                                             <Trash2 size={18} />
                                                         </button>
@@ -2575,15 +2590,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             <span className="text-xs text-gray-500 truncate block">{src.url}</span>
                                                         </div>
                                                         <div className="flex items-center gap-2 shrink-0">
-                                                            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600" title="Trust score (1–10)">Trust {src.trust_score}</span>
+                                                            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600">{tModals('trustedSources.trustScore', { score: src.trust_score })}</span>
                                                             {onRemoveTrustedSource && (
                                                                 <button
                                                                     onClick={() => {
-                                                                        if (!confirm('Are you sure you want to remove this trusted source?')) return;
+                                                                        if (!confirm(tModals('trustedSources.removeSourceConfirm'))) return;
                                                                         onRemoveTrustedSource((src.domains && src.domains[0]) || '', src.is_custom);
                                                                     }}
                                                                     className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                                                    title="Remove"
+                                                                    title={tCommon('delete')}
                                                                 >
                                                                     <Trash2 size={16} />
                                                                 </button>
@@ -2595,10 +2610,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             {/* Inline add form for this category */}
                                             {onAddTrustedSource && addFormCategoryId === cat.id && (
                                                 <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
-                                                    <p className="text-sm font-medium text-gray-700">Add link to {cat.name}</p>
+                                                    <p className="text-sm font-medium text-gray-700">{tModals('trustedSources.addLink', { name: cat.name })}</p>
                                                     <input
                                                         type="text"
-                                                        placeholder="Name (e.g. My Source)"
+                                                        placeholder={tModals('trustedSources.namePlaceholder')}
                                                         value={trustedSourceForm.categoryId === cat.id ? trustedSourceForm.name : ''}
                                                         onChange={(e) => setTrustedSourceForm((f) => ({ ...f, name: e.target.value }))}
                                                         className="w-full px-4 py-3 rounded-xl bg-white border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 text-sm"
@@ -2621,13 +2636,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             }}
                                                             className="px-4 py-2 rounded-lg font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors"
                                                         >
-                                                            Save
+                                                            {tCommon('save')}
                                                         </button>
                                                         <button
                                                             onClick={() => { setAddFormCategoryId(null); setTrustedSourceForm({ categoryId: '', name: '', url: '' }); }}
                                                             className="px-4 py-2 rounded-lg font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
                                                         >
-                                                            Cancel
+                                                            {tCommon('cancel')}
                                                         </button>
                                                     </div>
                                                 </div>
@@ -2657,7 +2672,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 </div>
                                 <div>
                                     <h2 className="text-lg font-bold text-gray-800">{workflowModal.name}</h2>
-                                    <p className="text-xs text-gray-500">Interactive Flow Visualization</p>
+                                    <p className="text-xs text-gray-500">{tModals('workflows.flowVisualization')}</p>
                                 </div>
                             </div>
                             <button onClick={() => setWorkflowModal(null)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
@@ -2690,7 +2705,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             {/* Right: Code Viewer (Fixed 30%) */}
                             <div className="w-[30%] shrink-0 bg-[#1e1e1e] flex flex-col border-l border-gray-800">
                                 <div className="h-10 border-b border-gray-700 flex items-center px-4 bg-[#252526] shrink-0">
-                                    <span className="text-xs font-mono font-medium text-gray-400 uppercase tracking-wide">Step Definition</span>
+                                    <span className="text-xs font-mono font-medium text-gray-400 uppercase tracking-wide">{tModals('workflows.stepDefinition')}</span>
                                 </div>
                                 <div className="flex-1 overflow-auto p-4 font-mono text-xs text-[#d4d4d4] leading-relaxed selection:bg-purple-500/30">
                                     <pre>{workflowModal.selectedCode}</pre>
@@ -2716,7 +2731,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <Brain size={20} className="text-white" />
                                 </div>
                                 <div>
-                                    <h2 className="text-xl font-bold text-gray-900">Memory Graph</h2>
+                                    <h2 className="text-xl font-bold text-gray-900">{tModals('memory.title')}</h2>
                                     <p className="text-sm text-gray-500">
                                         {memoryStats?.memories ?? 0} memories • {memoryStats?.chunks ?? 0} chunks • {memoryEdges.length} connections
                                     </p>
@@ -2729,17 +2744,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors text-sm disabled:opacity-50"
                                 >
                                     <RefreshCw size={16} className={memoryLoading ? 'animate-spin' : ''} />
-                                    Refresh
+                                    {tCommon('refresh')}
                                 </button>
-                                <a 
+                                <a
                                     href="/memory"
                                     target="_blank"
                                     className="flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors text-sm"
                                 >
-                                    Open Full View
+                                    {tModals('memory.openFullView')}
                                     <ChevronRight size={16} />
                                 </a>
-                                <button onClick={() => setShowMemoryModal(false)} className="p-2 hover:bg-gray-200 rounded-lg transition-colors text-gray-500 hover:text-gray-700" title="Close">
+                                <button onClick={() => setShowMemoryModal(false)} className="p-2 hover:bg-gray-200 rounded-lg transition-colors text-gray-500 hover:text-gray-700" title={tCommon('close')}>
                                     <X size={20} />
                                 </button>
                             </div>
@@ -2751,7 +2766,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <div className="flex items-center justify-center h-full">
                                     <div className="text-center">
                                         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-400 mx-auto mb-4" />
-                                        <p className="text-sm text-gray-500">Loading memory graph...</p>
+                                        <p className="text-sm text-gray-500">{tModals('memory.loadingGraph')}</p>
                                     </div>
                                 </div>
                             ) : memoryNodes.length === 0 ? (
@@ -2762,14 +2777,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </div>
                                         {(memoryStats?.memories ?? 0) > 0 ? (
                                             <>
-                                                <h3 className="text-lg font-semibold text-gray-900 mb-1">Graph couldn&apos;t load memories</h3>
+                                                <h3 className="text-lg font-semibold text-gray-900 mb-1">{tModals('memory.graphError')}</h3>
                                                 {memoryGraphError && (
                                                     <p className="text-sm text-red-600 max-w-sm mb-2 font-mono">
                                                         {memoryGraphError}
                                                     </p>
                                                 )}
                                                 <p className="text-sm text-gray-500 max-w-sm mb-4">
-                                                    Check the connection and try Refresh.
+                                                    {tModals('memory.graphErrorHint')}
                                                 </p>
                                                 <button
                                                     type="button"
@@ -2778,22 +2793,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white font-medium rounded-lg transition-colors text-sm"
                                                 >
                                                     <RefreshCw size={16} className={memoryLoading ? 'animate-spin' : ''} />
-                                                    Refresh
+                                                    {tCommon('refresh')}
                                                 </button>
                                             </>
                                         ) : (
                                             <>
-                                                <h3 className="text-lg font-semibold text-gray-900 mb-1">No memories yet</h3>
+                                                <h3 className="text-lg font-semibold text-gray-900 mb-1">{tModals('memory.noMemoriesTitle')}</h3>
                                                 <p className="text-sm text-gray-500 max-w-sm">
-                                                    Create your first memory to see the graph visualization.
-                                                    Memories are auto-connected based on semantic similarity.
+                                                    {tModals('memory.noMemoriesDesc')}
                                                 </p>
                                                 <a 
                                                     href="/memory"
                                                     target="_blank"
                                                     className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors text-sm"
                                                 >
-                                                    Create Memory
+                                                    {tModals('memory.createMemory')}
                                                     <ChevronRight size={16} />
                                                 </a>
                                             </>
@@ -2904,25 +2918,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <div className="flex items-center gap-6 text-xs text-gray-500">
                                 <div className="flex items-center gap-2">
                                     <div className="w-3 h-3 rounded bg-white border-2 border-gray-300" />
-                                    <span>Memory</span>
+                                    <span>{tModals('memory.legendMemory')}</span>
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <div className="w-3 h-3 rounded bg-purple-100 border-2 border-purple-400" />
-                                    <span>Tag</span>
+                                    <span>{tModals('memory.legendTag')}</span>
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <div className="w-6 h-0.5 bg-purple-400" style={{ borderTop: '2px dashed #a855f7' }} />
-                                    <span>Tag Connection</span>
+                                    <span>{tModals('memory.legendTagConnection')}</span>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
                                 {memoryStats?.db_connected ? (
                                     <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">
-                                        Connected
+                                        {tModals('memory.connected')}
                                     </span>
                                 ) : (
                                     <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600">
-                                        Disconnected
+                                        {tModals('memory.disconnected')}
                                     </span>
                                 )}
                             </div>
@@ -2951,11 +2965,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <User size={20} className="text-amber-800" />
                                 </div>
                                 <div>
-                                    <h2 className="text-xl font-bold text-gray-900">User Identity</h2>
-                                    <p className="text-sm text-gray-500">Stored in user_identity.json • Timeline of agent updates</p>
+                                    <h2 className="text-xl font-bold text-gray-900">{tModals('userIdentity.title')}</h2>
+                                    <p className="text-sm text-gray-500">{tModals('userIdentity.subtitle')}</p>
                                 </div>
                             </div>
-                            <button onClick={() => setShowUserIdentityModal(false)} className="p-2 hover:bg-amber-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700" title="Close">
+                            <button onClick={() => setShowUserIdentityModal(false)} className="p-2 hover:bg-amber-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700" title={tCommon('close')}>
                                 <X size={20} />
                             </button>
                         </div>
@@ -2963,17 +2977,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             {/* Left: User identity (human) – user_identity.json */}
                             <div className="flex-1 min-w-0 border-r border-gray-200 overflow-y-auto p-5 bg-gray-50">
                                 <div className="flex items-center justify-between mb-3">
-                                    <h3 className="text-sm font-semibold text-gray-700">User identity (user_identity.json)</h3>
+                                    <h3 className="text-sm font-semibold text-gray-700">{tModals('userIdentity.identityHeading')}</h3>
                                     {personaData?.user_identity && !isEditingUserIdentity && (
                                         <button
                                             onClick={startEditingUserIdentity}
                                             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-700 bg-amber-100 hover:bg-amber-200 rounded-lg transition-colors"
-                                            title="Edit"
+                                            title={tCommon('edit')}
                                         >
                                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                                             </svg>
-                                            Edit
+                                            {tCommon('edit')}
                                         </button>
                                     )}
                                     {isEditingUserIdentity && (
@@ -2985,21 +2999,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                                                 </svg>
-                                                Save
+                                                {tCommon('save')}
                                             </button>
                                             <button
                                                 onClick={cancelEditingUserIdentity}
                                                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors"
                                             >
-                                                Cancel
+                                                {tCommon('cancel')}
                                             </button>
                                         </div>
                                     )}
                                 </div>
                                 <p className="text-xs text-gray-500 mb-4">
                                     {isEditingUserIdentity
-                                        ? "Edit each field below. Use one entry per line for lists."
-                                        : "Who the agent is talking to. Click Edit to modify."}
+                                        ? tModals('userIdentity.editHint')
+                                        : tModals('userIdentity.viewHint')}
                                 </p>
 
                                 {personaData?.user_identity ? (
@@ -3007,66 +3021,65 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         /* Edit Mode - Text inputs */
                                         <div className="space-y-4 text-sm">
                                             <div>
-                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Name</label>
+                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.name')}</label>
                                                 <input
                                                     type="text"
                                                     value={userIdentityDraft.name}
                                                     onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, name: e.target.value })}
                                                     className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
-                                                    placeholder="Your name"
                                                 />
                                             </div>
                                             <div>
-                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Language</label>
+                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.language')}</label>
                                                 <input
                                                     type="text"
                                                     value={userIdentityDraft.preferred_language}
                                                     onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, preferred_language: e.target.value })}
                                                     className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
-                                                    placeholder="e.g. de, en, tr"
+                                                    placeholder="z.B. de, en, tr"
                                                 />
                                             </div>
                                             <div className="grid grid-cols-2 gap-3">
                                                 <div>
-                                                    <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">City</label>
+                                                    <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.city')}</label>
                                                     <input
                                                         type="text"
                                                         value={userIdentityDraft.city}
                                                         onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, city: e.target.value })}
                                                         className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
-                                                        placeholder="e.g. Berlin, Munich"
+                                                        placeholder="z.B. Berlin, München"
                                                     />
                                                 </div>
                                                 <div>
-                                                    <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Country</label>
+                                                    <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.country')}</label>
                                                     <input
                                                         type="text"
                                                         value={userIdentityDraft.country}
                                                         onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, country: e.target.value })}
                                                         className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
-                                                        placeholder="e.g. Germany, DE"
+                                                        placeholder="z.B. Deutschland, DE"
                                                     />
                                                 </div>
                                             </div>
-                                            <p className="text-xs text-gray-400 -mt-1">Location helps the agent answer weather, time, and local questions.</p>
+                                            <p className="text-xs text-gray-400 -mt-1">{tModals('userIdentity.locationHint')}</p>
                                             <div>
-                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Main messenger</label>
+                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.mainMessenger')}</label>
                                                 <select
                                                     value={userIdentityDraft.main_messenger || ''}
                                                     onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, main_messenger: e.target.value })}
                                                     className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
                                                 >
-                                                    <option value="">Not set</option>
+                                                    <option value="">{tModals('userIdentity.notSet')}</option>
                                                     <option value="telegram">Telegram</option>
                                                     <option value="discord">Discord</option>
                                                     <option value="slack">Slack</option>
                                                     <option value="whatsapp">WhatsApp</option>
                                                     <option value="email">Mail</option>
                                                 </select>
-                                                <p className="text-xs text-gray-400 mt-0.5">Preferred channel for proactive messages from the agent.</p>
+                                                <p className="text-xs text-gray-400 mt-0.5">{tModals('userIdentity.mainMessengerHint')}</p>
                                             </div>
                                             <div>
-                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Preferences <span className="text-gray-400 font-normal">(one per line)</span></label>
+                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.preferences')} <span className="text-gray-400 font-normal">{tModals('userIdentity.preferencesHint')}</span></label>
                                                 <textarea
                                                     value={userIdentityDraft.preferences}
                                                     onChange={(e) => {
@@ -3081,7 +3094,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 />
                                             </div>
                                             <div>
-                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Do <span className="text-gray-400 font-normal">(one per line)</span></label>
+                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.dos')} <span className="text-gray-400 font-normal">{tModals('userIdentity.preferencesHint')}</span></label>
                                                 <textarea
                                                     value={userIdentityDraft.dos}
                                                     onChange={(e) => {
@@ -3096,7 +3109,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 />
                                             </div>
                                             <div>
-                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">Don&apos;t <span className="text-gray-400 font-normal">(one per line)</span></label>
+                                                <label className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.donts')} <span className="text-gray-400 font-normal">{tModals('userIdentity.preferencesHint')}</span></label>
                                                 <textarea
                                                     value={userIdentityDraft.donts}
                                                     onChange={(e) => {
@@ -3115,25 +3128,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         /* View Mode - Display values */
                                         <div className="space-y-3 text-sm">
                                             <div className="bg-white rounded-lg p-3 border border-gray-100">
-                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Name</span>
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.name')}</span>
                                                 <p className="text-gray-900 mt-1">{personaData.user_identity.name || '—'}</p>
                                             </div>
                                             <div className="bg-white rounded-lg p-3 border border-gray-100">
-                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Language</span>
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.language')}</span>
                                                 <p className="text-gray-900 mt-1">{personaData.user_identity.preferred_language || '—'}</p>
                                             </div>
                                             <div className="bg-white rounded-lg p-3 border border-gray-100">
-                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Location</span>
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.location')}</span>
                                                 <p className="text-gray-900 mt-1">
                                                     {[personaData.user_identity.city, personaData.user_identity.country].filter(Boolean).join(', ') || '—'}
                                                 </p>
                                             </div>
                                             <div className="bg-white rounded-lg p-3 border border-gray-100">
-                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Main messenger</span>
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.mainMessenger')}</span>
                                                 <p className="text-gray-900 mt-1">{personaData.user_identity.main_messenger ? String(personaData.user_identity.main_messenger).charAt(0).toUpperCase() + String(personaData.user_identity.main_messenger).slice(1) : '—'}</p>
                                             </div>
                                             <div className="bg-white rounded-lg p-3 border border-gray-100">
-                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Preferences</span>
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.preferences')}</span>
                                                 {(personaData.user_identity.preferences?.length ?? 0) > 0 ? (
                                                     <ul className="mt-1 space-y-1">
                                                         {personaData.user_identity.preferences.map((p: string, i: number) => (
@@ -3148,7 +3161,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 )}
                                             </div>
                                             <div className="bg-white rounded-lg p-3 border border-gray-100">
-                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Do</span>
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.dos')}</span>
                                                 {(personaData.user_identity.dos?.length ?? 0) > 0 ? (
                                                     <ul className="mt-1 space-y-1">
                                                         {personaData.user_identity.dos.map((d: string, i: number) => (
@@ -3163,7 +3176,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 )}
                                             </div>
                                             <div className="bg-white rounded-lg p-3 border border-gray-100">
-                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">Don&apos;t</span>
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.donts')}</span>
                                                 {(personaData.user_identity.donts?.length ?? 0) > 0 ? (
                                                     <ul className="mt-1 space-y-1">
                                                         {personaData.user_identity.donts.map((d: string, i: number) => (
@@ -3180,12 +3193,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </div>
                                     )
                                 ) : (
-                                    <p className="text-gray-500 text-sm">Load Persona &amp; Memory tab first, or no user identity data yet.</p>
+                                    <p className="text-gray-500 text-sm">{tModals('userIdentity.noDataYet')}</p>
                                 )}
                             </div>
                             {/* Right: Timeline (change_log) – schmal, scrollbar bei vielen Einträgen */}
                             <div className="w-80 shrink-0 min-h-0 flex flex-col border-l border-gray-100">
-                                <h3 className="text-sm font-semibold text-gray-700 mb-3 shrink-0 p-4 pb-0">Timeline</h3>
+                                <h3 className="text-sm font-semibold text-gray-700 mb-3 shrink-0 p-4 pb-0">{tModals('userIdentity.timeline')}</h3>
                                 {personaData?.user_identity?.change_log?.length > 0 ? (
                                     <div ref={timelineRef} className="flex-1 min-h-0 overflow-y-auto p-4 pt-3">
                                         <div className="relative">
@@ -3222,10 +3235,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 <div className="flex items-center gap-2">
                                                                     <p className="text-xs text-gray-500 font-mono">{typeof entry.at === 'string' ? new Date(entry.at).toLocaleString() : entry.at}</p>
                                                                     {isManual && (
-                                                                        <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full">manual</span>
+                                                                        <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full">{tModals('userIdentity.manual')}</span>
                                                                     )}
                                                                     {isNewEntry && (
-                                                                        <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full animate-bounce">new</span>
+                                                                        <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full animate-bounce">{tModals('userIdentity.new')}</span>
                                                                     )}
                                                                 </div>
                                                                 <p className="text-sm text-gray-900 font-medium mt-0.5">{entry.action || 'update'}</p>
@@ -3238,7 +3251,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </div>
                                 ) : (
                                     <div className="flex-1 min-h-0 overflow-y-auto p-4 pt-0">
-                                        <p className="text-gray-500 text-sm">No updates yet. Changes from the agent or your edits will appear here.</p>
+                                        <p className="text-gray-500 text-sm">{tModals('userIdentity.noUpdatesYet')}</p>
                                     </div>
                                 )}
                             </div>
@@ -3262,8 +3275,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <Users className="w-5 h-5 text-white" />
                                 </div>
                                 <div>
-                                    <h2 className="text-xl font-bold text-gray-900">Add New User</h2>
-                                    <p className="text-sm text-gray-500">Create a local network account</p>
+                                    <h2 className="text-xl font-bold text-gray-900">{tModals('addUser.title')}</h2>
+                                    <p className="text-sm text-gray-500">{tModals('addUser.subtitle')}</p>
                                 </div>
                             </div>
                             <button onClick={() => setShowAddUserModal(false)} className="p-2 hover:bg-gray-200 rounded-lg transition-colors">
@@ -3276,33 +3289,33 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             {/* Basic Info */}
                             <div className="grid grid-cols-2 gap-4">
                                 <Input
-                                    label="Username *"
+                                    label={tModals('addUser.usernameRequired')}
                                     value={newUser.username}
                                     onChange={(v) => setNewUser({...newUser, username: v})}
                                     placeholder="johndoe"
                                 />
                                 <Input
-                                    label="Email *"
+                                    label={tModals('addUser.emailRequired')}
                                     value={newUser.email}
                                     onChange={(v) => setNewUser({...newUser, email: v})}
                                     placeholder="john@example.com"
                                 />
                                 <Select
-                                    label="Role *"
+                                    label={tModals('addUser.roleRequired')}
                                     value={newUser.role}
                                     onChange={(v) => setNewUser({...newUser, role: v})}
                                     options={[
-                                        { value: 'User', label: 'User' },
-                                        { value: 'Admin', label: 'Administrator' },
-                                        { value: 'Guest', label: 'Guest (Read-only)' }
+                                        { value: 'User', label: tModals('addUser.roleUser') },
+                                        { value: 'Admin', label: tModals('addUser.roleAdmin') },
+                                        { value: 'Guest', label: tModals('addUser.roleGuest') }
                                     ]}
                                 />
                                 <Input
-                                    label="Initial Password"
+                                    label={tModals('addUser.initialPassword')}
                                     value={newUser.password}
                                     onChange={(v) => setNewUser({...newUser, password: v})}
                                     type="password"
-                                    placeholder="Auto-generated if empty"
+                                    placeholder={tModals('addUser.autoGenerated')}
                                 />
                             </div>
 
@@ -3310,8 +3323,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <div className="space-y-3">
                                 <div className="flex items-center justify-between">
                                     <div>
-                                        <h4 className="text-sm font-medium text-gray-700">Available Tools</h4>
-                                        <p className="text-xs text-gray-400">Select which tools this user can access</p>
+                                        <h4 className="text-sm font-medium text-gray-700">{tModals('addUser.availableTools')}</h4>
+                                        <p className="text-xs text-gray-400">{tModals('addUser.availableToolsDesc')}</p>
                                     </div>
                                     <button
                                         type="button"
@@ -3322,7 +3335,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         }}
                                         className="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
                                     >
-                                        {tools.length > 0 && tools.every(t => newUser.tools.includes(t.name)) ? 'Deselect All' : 'Select All'}
+                                        {tools.length > 0 && tools.every(t => newUser.tools.includes(t.name)) ? tCommon('deselectAll') : tCommon('selectAll')}
                                     </button>
                                 </div>
                                 <div className="max-h-36 overflow-y-auto border border-gray-200 rounded-xl p-3 bg-gray-50 grid grid-cols-3 gap-2">
@@ -3343,18 +3356,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <span className="text-sm text-gray-700 truncate" title={tool.description}>{tool.name}</span>
                                         </label>
                                     )) : (
-                                        <div className="col-span-3 text-center py-4 text-sm text-gray-400">No tools available</div>
+                                        <div className="col-span-3 text-center py-4 text-sm text-gray-400">{tModals('addUser.noToolsAvailable')}</div>
                                     )}
                                 </div>
-                                <p className="text-xs text-gray-400">{newUser.tools.length} of {tools.length} tools selected</p>
+                                <p className="text-xs text-gray-400">{tModals('addUser.toolsSelected', { selected: newUser.tools.length, total: tools.length })}</p>
                             </div>
 
                             {/* Workflows Section */}
                             <div className="space-y-3">
                                 <div className="flex items-center justify-between">
                                     <div>
-                                        <h4 className="text-sm font-medium text-gray-700">Available Workflows</h4>
-                                        <p className="text-xs text-gray-400">Select which workflows this user can run</p>
+                                        <h4 className="text-sm font-medium text-gray-700">{tModals('addUser.availableWorkflows')}</h4>
+                                        <p className="text-xs text-gray-400">{tModals('addUser.availableWorkflowsDesc')}</p>
                                     </div>
                                     <button
                                         type="button"
@@ -3365,7 +3378,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         }}
                                         className="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
                                     >
-                                        {workflows.length > 0 && workflows.every(w => newUser.workflows.includes(w.id)) ? 'Deselect All' : 'Select All'}
+                                        {workflows.length > 0 && workflows.every(w => newUser.workflows.includes(w.id)) ? tCommon('deselectAll') : tCommon('selectAll')}
                                     </button>
                                 </div>
                                 <div className="max-h-36 overflow-y-auto border border-gray-200 rounded-xl p-3 bg-gray-50 grid grid-cols-2 gap-2">
@@ -3389,10 +3402,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             </div>
                                         </label>
                                     )) : (
-                                        <div className="col-span-2 text-center py-4 text-sm text-gray-400">No workflows available</div>
+                                        <div className="col-span-2 text-center py-4 text-sm text-gray-400">{tModals('addUser.noWorkflowsAvailable')}</div>
                                     )}
                                 </div>
-                                <p className="text-xs text-gray-400">{newUser.workflows.length} of {workflows.length} workflows selected</p>
+                                <p className="text-xs text-gray-400">{tModals('addUser.workflowsSelected', { selected: newUser.workflows.length, total: workflows.length })}</p>
                             </div>
 
                             {/* Memory Database Toggle */}
@@ -3401,11 +3414,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <Database size={20} className="text-gray-600" />
                                 </div>
                                 <div className="flex-1">
-                                    <div className="text-sm font-medium text-gray-900">Enable Memory System</div>
+                                    <div className="text-sm font-medium text-gray-900">{tModals('addUser.enableMemory')}</div>
                                     <div className="text-xs text-gray-500">
                                         {newUser.createDb
-                                            ? "User gets a personal memory database - VAF remembers conversations and context"
-                                            : "No memory storage - conversations won't be saved between sessions"}
+                                            ? tModals('addUser.enableMemoryOn')
+                                            : tModals('addUser.enableMemoryOff')}
                                     </div>
                                 </div>
                                 <button
@@ -3430,11 +3443,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 onClick={() => setShowAddUserModal(false)}
                                 className="text-gray-600 hover:bg-gray-200 px-4 py-2 rounded-lg transition-colors"
                             >
-                                Cancel
+                                {tCommon('cancel')}
                             </button>
                             <button onClick={handleCreateUser} className="bg-gray-900 hover:bg-gray-800 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors">
                                 <Plus size={18} />
-                                Create User
+                                {tModals('addUser.createUser')}
                             </button>
                         </div>
                     </div>
@@ -3455,7 +3468,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     {editingUser.username[0].toUpperCase()}
                                 </div>
                                 <div>
-                                    <h2 className="text-xl font-bold text-gray-900">Edit User</h2>
+                                    <h2 className="text-xl font-bold text-gray-900">{tModals('editUser.title')}</h2>
                                     <p className="text-sm text-gray-500">{editingUser.username}</p>
                                 </div>
                             </div>
@@ -3467,39 +3480,39 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         <div className="p-6 space-y-6">
                             <div className="space-y-4">
                                 <div className="grid grid-cols-2 gap-4">
-                                    <Input 
-                                        label="Username" 
-                                        value={editingUser.username} 
-                                        onChange={(v) => setEditingUser({...editingUser, username: v})} 
+                                    <Input
+                                        label={tLocalNet('username')}
+                                        value={editingUser.username}
+                                        onChange={(v) => setEditingUser({...editingUser, username: v})}
                                     />
-                                    <Select 
-                                        label="Role" 
-                                        value={editingUser.role} 
-                                        onChange={(v) => setEditingUser({...editingUser, role: v})} 
+                                    <Select
+                                        label={tLocalNet('role')}
+                                        value={editingUser.role}
+                                        onChange={(v) => setEditingUser({...editingUser, role: v})}
                                         options={[
-                                            { value: 'User', label: 'User' },
-                                            { value: 'Admin', label: 'Administrator' },
-                                            { value: 'Guest', label: 'Guest' }
+                                            { value: 'User', label: tModals('addUser.roleUser') },
+                                            { value: 'Admin', label: tModals('addUser.roleAdmin') },
+                                            { value: 'Guest', label: tModals('addUser.roleGuest') }
                                         ]}
                                     />
                                 </div>
-                                <Input 
-                                    label="Email" 
-                                    value={editingUser.email} 
-                                    onChange={(v) => setEditingUser({...editingUser, email: v})} 
+                                <Input
+                                    label="E-Mail"
+                                    value={editingUser.email}
+                                    onChange={(v) => setEditingUser({...editingUser, email: v})}
                                 />
                             </div>
 
-                            <Section title="Security & Access">
+                            <Section title={tModals('editUser.securityAccess')}>
                                 <div className="space-y-3">
                                     <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
                                         <div className="flex items-center gap-3">
                                             <div className="p-2 bg-yellow-50 text-yellow-600 rounded-lg">
                                                 <Lock size={16} />
                                             </div>
-                                            <span className="text-sm font-medium text-gray-700">Password</span>
+                                            <span className="text-sm font-medium text-gray-700">{tModals('editUser.password')}</span>
                                         </div>
-                                        <button className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline">Reset</button>
+                                        <button className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline">{tCommon('reset')}</button>
                                     </div>
                                     
                                     <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
@@ -3507,9 +3520,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <div className="p-2 bg-purple-50 text-purple-600 rounded-lg">
                                                 <Shield size={16} />
                                             </div>
-                                            <span className="text-sm font-medium text-gray-700">2FA Status</span>
+                                            <span className="text-sm font-medium text-gray-700">{tModals('editUser.twoFaStatus')}</span>
                                         </div>
-                                        <button className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline">Reset 2FA</button>
+                                        <button className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline">{tModals('editUser.resetTwoFa')}</button>
                                     </div>
 
                                     <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
@@ -3517,7 +3530,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <div className={cn("p-2 rounded-lg transition-colors", editingUser.status === 'active' ? "bg-green-50 text-green-600" : "bg-gray-100 text-gray-500")}>
                                                 {editingUser.status === 'active' ? <CheckCircle size={16} /> : <XCircle size={16} />}
                                             </div>
-                                            <span className="text-sm font-medium text-gray-700">Account Status</span>
+                                            <span className="text-sm font-medium text-gray-700">{tModals('editUser.accountStatus')}</span>
                                         </div>
                                         <Switch 
                                             label="" 
@@ -3531,14 +3544,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         <div className="flex items-center justify-between p-6 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
                             <button onClick={handleDeleteUser} className="px-4 py-2 text-red-600 hover:bg-red-50 font-medium rounded-lg transition-colors flex items-center gap-2">
-                                <Trash2 size={16} /> Delete User
+                                <Trash2 size={16} /> {tModals('editUser.deleteUser')}
                             </button>
                             <div className="flex gap-3">
                                 <button onClick={() => setEditingUser(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-200 font-medium rounded-lg transition-colors">
-                                    Cancel
+                                    {tCommon('cancel')}
                                 </button>
                                 <button onClick={handleUpdateUser} className="px-6 py-2 bg-gray-900 text-white hover:bg-black font-medium rounded-lg shadow-sm hover:shadow transition-all flex items-center gap-2">
-                                    <Save size={16} /> Save Changes
+                                    <Save size={16} /> {tCommon('saveChanges')}
                                 </button>
                             </div>
                         </div>
@@ -3568,7 +3581,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </span>
                                         <span className={cn("text-xs flex items-center gap-1", selectedUser.status === 'active' ? "text-green-600" : "text-gray-400")}>
                                             <div className={cn("w-1.5 h-1.5 rounded-full", selectedUser.status === 'active' ? "bg-green-500" : "bg-gray-400")} />
-                                            {selectedUser.status === 'active' ? 'Active Account' : 'Inactive'}
+                                            {selectedUser.status === 'active' ? tModals('userDetail.activeAccount') : tCommon('inactive')}
                                         </span>
                                     </div>
                                 </div>
@@ -3584,15 +3597,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             {/* Stats Grid */}
                             <div className="grid grid-cols-3 gap-4">
                                 <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
-                                    <div className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Last Active</div>
+                                    <div className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">{tModals('userDetail.lastActive')}</div>
                                     <div className="text-lg font-mono font-medium text-gray-900">{selectedUser.lastActive}</div>
                                 </div>
                                 <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
-                                    <div className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Access Level</div>
+                                    <div className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">{tModals('userDetail.accessLevel')}</div>
                                     <div className="text-lg font-medium text-gray-900 capitalize">{selectedUser.access}</div>
                                 </div>
                                 <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
-                                    <div className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Memory Usage</div>
+                                    <div className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">{tModals('userDetail.memoryUsage')}</div>
                                     <div className="text-lg font-mono font-medium text-gray-900">24.5 MB</div>
                                 </div>
                             </div>
@@ -3601,7 +3614,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <div className="space-y-6">
                                 <div>
                                     <h4 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2">
-                                        <Cpu size={16} /> Authorized Tools
+                                        <Cpu size={16} /> {tModals('userDetail.authorizedTools')}
                                     </h4>
                                     <div className="grid grid-cols-2 gap-2">
                                         {['Web Search', 'File System', 'Code Interpreter', 'Memory System', 'Data Analysis', 'Image Gen'].map(tool => {
@@ -3621,7 +3634,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                 <div>
                                     <h4 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2">
-                                        <Workflow size={16} /> Active Workflows
+                                        <Workflow size={16} /> {tModals('userDetail.activeWorkflows')}
                                     </h4>
                                     <div className="space-y-2">
                                         {['Daily Summary', 'Code Review', 'Data Sync'].map(wf => {
@@ -3644,7 +3657,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 onClick={() => setSelectedUser(null)}
                                 className="px-6 py-2.5 rounded-xl font-medium text-gray-600 hover:bg-gray-200 transition-colors"
                             >
-                                Close
+                                {tCommon('close')}
                             </button>
                             <button
                                 onClick={() => {
@@ -3653,7 +3666,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 }}
                                 className="px-6 py-2.5 rounded-xl font-medium bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all flex items-center gap-2"
                             >
-                                <Edit size={16} /> Edit User
+                                <Edit size={16} /> {tModals('userDetail.editUser')}
                             </button>
                         </div>
                     </div>
@@ -3675,16 +3688,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <Network size={24} />
                                 </div>
                                 <div>
-                                    <h2 className="text-2xl font-bold text-gray-800">Network Map</h2>
+                                    <h2 className="text-2xl font-bold text-gray-800">{tModals('networkMap.title')}</h2>
                                     <p className="text-sm text-gray-500">
-                                        Real-time device topology{networkNodes.length > 1 ? ` • ${networkNodes.length - 1} device(s)` : ' • No active devices'}
+                                        {tModals('networkMap.realtimeTopology')}{networkNodes.length > 1 ? ` • ${tModals('networkMap.devices', { count: networkNodes.length - 1 })}` : ` • ${tModals('networkMap.noActiveDevices')}`}
                                     </p>
                                 </div>
                             </div>
                             <div className="flex items-center gap-3">
                                 <div className="px-3 py-1.5 bg-green-50 text-green-700 text-xs font-medium rounded-full border border-green-100 flex items-center gap-2">
                                     <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                                    System Online
+                                    {tModals('networkMap.systemOnline')}
                                 </div>
                                 <button onClick={() => setShowNetworkModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
                                     <X size={24} />
@@ -3716,23 +3729,23 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                             {/* Legend Overlay */}
                             <div className="absolute top-6 left-6 p-4 bg-white/90 backdrop-blur rounded-xl border border-gray-200 shadow-lg space-y-3 z-10">
-                                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide">Device Types</h4>
+                                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide">{tModals('networkMap.deviceTypes')}</h4>
                                 <div className="space-y-2">
                                     <div className="flex items-center gap-2 text-sm text-gray-600">
                                         <div className="w-6 h-6 rounded bg-gray-900 flex items-center justify-center text-white"><Server size={12} /></div>
-                                        <span>VAF Host</span>
+                                        <span>{tModals('networkMap.vafHost')}</span>
                                     </div>
                                     <div className="flex items-center gap-2 text-sm text-gray-600">
                                         <div className="w-6 h-6 rounded bg-green-100 text-green-600 flex items-center justify-center border border-green-200"><Monitor size={12} /></div>
-                                        <span>Desktop</span>
+                                        <span>{tModals('networkMap.desktop')}</span>
                                     </div>
                                     <div className="flex items-center gap-2 text-sm text-gray-600">
                                         <div className="w-6 h-6 rounded bg-purple-100 text-purple-600 flex items-center justify-center border border-purple-200"><Laptop size={12} /></div>
-                                        <span>Laptop</span>
+                                        <span>{tModals('networkMap.laptop')}</span>
                                     </div>
                                     <div className="flex items-center gap-2 text-sm text-gray-600">
                                         <div className="w-6 h-6 rounded bg-pink-100 text-pink-600 flex items-center justify-center border border-pink-200"><Smartphone size={12} /></div>
-                                        <span>Mobile</span>
+                                        <span>{tModals('networkMap.mobile')}</span>
                                     </div>
                                 </div>
                             </div>
@@ -3750,11 +3763,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <div className="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-2">
                                 <ShieldAlert size={32} className="text-yellow-600" />
                             </div>
-                            <h3 className="text-xl font-bold text-gray-900">Security Warning</h3>
+                            <h3 className="text-xl font-bold text-gray-900">{tLocalNet('securityWarningTitle')}</h3>
                             <p className="text-sm text-gray-600 leading-relaxed">
-                                Are you sure you want to share VAF with your network?
+                                {tLocalNet('securityWarningText')}
                                 <br/><br/>
-                                <strong className="text-gray-800">Please do not do this if you are in an insecure or public network.</strong>
+                                <strong className="text-gray-800">{tLocalNet('securityWarningStrong')}</strong>
                             </p>
                         </div>
                         <div className="flex items-center border-t border-gray-100 bg-gray-50/50 p-4 gap-3">
@@ -3762,16 +3775,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 onClick={() => setShowNetworkWarning(false)}
                                 className="flex-1 py-2.5 bg-white border border-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
                             >
-                                Cancel
+                                {tCommon('cancel')}
                             </button>
-                            <button 
+                            <button
                                 onClick={() => {
                                     handleChange('local_network_enabled', true);
                                     setShowNetworkWarning(false);
                                 }}
                                 className="flex-1 py-2.5 bg-gray-900 text-white font-medium rounded-lg hover:bg-black transition-colors"
                             >
-                                Enable Hosting
+                                {tLocalNet('enableHosting')}
                             </button>
                         </div>
                     </div>
@@ -3790,8 +3803,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </div>
                         </div>
                         <div className="text-center">
-                            <h3 className="text-lg font-bold text-gray-900">Applying Network Settings</h3>
-                            <p className="text-sm text-gray-500 mt-1">Restarting server infrastructure...</p>
+                            <h3 className="text-lg font-bold text-gray-900">{tLocalNet('applyingNetworkSettings')}</h3>
+                            <p className="text-sm text-gray-500 mt-1">{tLocalNet('restartingServer')}</p>
                         </div>
                     </div>
                 </div>

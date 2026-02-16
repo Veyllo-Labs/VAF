@@ -49,6 +49,25 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 COOKIE_NAME = "vaf_token"
 
 
+def _cookie_secure() -> bool:
+    """Return True when TLS is active so cookies get the Secure flag."""
+    from vaf.core.config import Config as _Cfg
+    return bool(_Cfg.get("local_network_tls_enabled", False))
+
+
+def _set_auth_cookie(response: Response, token: str, max_age: int) -> None:
+    """Set the auth cookie with correct Secure flag depending on TLS config."""
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        httponly=True,
+        max_age=max_age,
+        samesite="lax",
+        secure=_cookie_secure(),
+        path="/",
+    )
+
+
 # --- Request/Response models ---
 
 class BootstrapRequest(BaseModel):
@@ -167,14 +186,7 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
             await db.commit()
 
         max_age = 30 * 24 * 3600  # bootstrap: 30 days cookie for first admin
-        response.set_cookie(
-            key=COOKIE_NAME,
-            value=access,
-            httponly=True,
-            max_age=max_age,
-            samesite="lax",
-            path="/",
-        )
+        _set_auth_cookie(response, access, max_age)
         return {
             "access_token": access,
             "refresh_token": refresh,
@@ -311,14 +323,7 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
         await db.commit()
 
     max_age = 30 * 24 * 3600
-    response.set_cookie(
-        key=COOKIE_NAME,
-        value=access,
-        httponly=True,
-        max_age=max_age,
-        samesite="lax",
-        path="/",
-    )
+    _set_auth_cookie(response, access, max_age)
     return {"access_token": access, "refresh_token": refresh}
 
 
@@ -364,14 +369,7 @@ async def login(body: LoginRequest, request: Request, response: Response):
         }
 
     max_age = 30 * 24 * 3600 if body.remember_me else 24 * 3600
-    response.set_cookie(
-        key=COOKIE_NAME,
-        value=access,
-        httponly=True,
-        max_age=max_age,
-        samesite="lax",
-        path="/",
-    )
+    _set_auth_cookie(response, access, max_age)
     return {
         "access_token": access,
         "refresh_token": refresh,
@@ -465,12 +463,5 @@ async def refresh(body: RefreshRequest, response: Response):
             user.role,
             str(user.user_scope_id),
         )
-    response.set_cookie(
-        key=COOKIE_NAME,
-        value=access,
-        httponly=True,
-        max_age=24 * 3600,
-        samesite="lax",
-        path="/",
-    )
+    _set_auth_cookie(response, access, 24 * 3600)
     return {"access_token": access}

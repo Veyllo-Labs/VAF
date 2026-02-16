@@ -1,41 +1,44 @@
-"use client";
+/**
+ * Zustand store for the active UI locale.
+ *
+ * Reads from localStorage on first access; writes back on every change.
+ * Components subscribe via `useLocaleStore()`.
+ */
 
-import { create } from "zustand";
-import { defaultLocale, resolveBrowserLocale, isSupportedLocale, type LocaleCode } from "./languages";
+import { create } from 'zustand';
+import { defaultLocale, isSupportedLocale, resolveBrowserLocale } from './languages';
 
-const STORAGE_KEY = "ui_locale";
-
-function getStoredLocale(): LocaleCode | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored && isSupportedLocale(stored)) return stored as LocaleCode;
-  } catch {
-    // ignore
-  }
-  return null;
-}
+const STORAGE_KEY = 'ui_locale';
 
 interface LocaleState {
-  locale: LocaleCode;
-  /** Call once on app mount to init from localStorage or browser */
+  locale: string;
+  /** Call once on app mount to read persisted / browser locale. */
   init: () => void;
-  setLocale: (code: LocaleCode) => void;
+  /** Switch the active locale and persist it. */
+  setLocale: (code: string) => void;
+}
+
+function readPersistedLocale(): string {
+  if (typeof window === 'undefined') return defaultLocale;
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored && isSupportedLocale(stored)) return stored;
+  } catch {
+    // localStorage blocked / unavailable
+  }
+  return resolveBrowserLocale();
 }
 
 export const useLocaleStore = create<LocaleState>((set) => ({
-  locale: defaultLocale,
+  locale: defaultLocale, // will be overwritten by init()
   init: () => {
-    const stored = getStoredLocale();
-    if (stored) {
-      set({ locale: stored });
-      return;
-    }
-    set({ locale: resolveBrowserLocale() });
+    const resolved = readPersistedLocale();
+    set({ locale: resolved });
   },
-  setLocale: (code: LocaleCode) => {
+  setLocale: (code: string) => {
+    if (!isSupportedLocale(code)) return;
     try {
-      if (typeof window !== "undefined") localStorage.setItem(STORAGE_KEY, code);
+      localStorage.setItem(STORAGE_KEY, code);
     } catch {
       // ignore
     }

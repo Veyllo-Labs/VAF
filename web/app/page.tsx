@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState, useRef, Fragment, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import {
     Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
@@ -167,11 +168,12 @@ function formatMessageTime(ts: number, timeFormat?: '24h' | '12h'): string {
 
 /** Day separator in chat: date at top (end) and bottom (continuation). */
 function DaySeparator({ endDate, startDate }: { endDate: number; startDate: number }) {
+    const t = useTranslations('main');
     return (
         <div className="flex flex-col items-stretch py-4">
-            <div className="text-right text-xs text-gray-400 pr-1" title="Chat ended on this day">{formatDayLabel(endDate)}</div>
+            <div className="text-right text-xs text-gray-400 pr-1" title={t('chatEndedOnThisDay')}>{formatDayLabel(endDate)}</div>
             <div className="border-t border-gray-200 my-1" aria-hidden />
-            <div className="text-right text-xs text-gray-400 pr-1" title="Continued on this day">{formatDayLabel(startDate)}</div>
+            <div className="text-right text-xs text-gray-400 pr-1" title={t('continuedOnThisDay')}>{formatDayLabel(startDate)}</div>
         </div>
     );
 }
@@ -609,6 +611,10 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
 function VAFDashboardContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
+    const tAuth = useTranslations('auth');
+    const tStatus = useTranslations('status');
+    const tMain = useTranslations('main');
+    const tNav = useTranslations('nav');
     const [authChecking, setAuthChecking] = useState(true);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [currentUser, setCurrentUser] = useState<any>(null);
@@ -832,12 +838,12 @@ function VAFDashboardContent() {
         if (lastWord.startsWith('/')) {
             const query = lastWord.slice(1).toLowerCase();
             const commands = [
-                { name: 'clear', description: 'Clear conversation' },
-                { name: 'help', description: 'Show help' },
-                { name: 'settings', description: 'Open settings' },
-                { name: 'stop', description: 'Stop speaking' },
-                { name: 'new', description: 'New session' },
-                { name: 'load', description: 'Load session' },
+                { name: 'clear', description: tNav('clearConversation') },
+                { name: 'help', description: tNav('help') },
+                { name: 'settings', description: tNav('settings') },
+                { name: 'stop', description: tNav('stopSpeaking') },
+                { name: 'new', description: tNav('newSession') },
+                { name: 'load', description: tNav('loadSession') },
             ];
 
             // Ensure tools are loaded if list is empty
@@ -2568,7 +2574,7 @@ function VAFDashboardContent() {
     const isLocalProvider = providerName === 'local';
     const isConnected = status === 'connected';
     const showIdleState = isConnected && isLocalProvider && modelLoaded === false;
-    const connectionLabel = isConnected ? (showIdleState ? 'Idle' : 'Connected') : 'Disconnected';
+    const connectionLabel = isConnected ? (showIdleState ? tStatus('idle') : tStatus('connected')) : tStatus('disconnected');
 
     const handleArtifactChange = (nextValue: string) => {
         const nextFile = subAgentState.artifactFile || subAgentState.currentFile;
@@ -2640,14 +2646,14 @@ function VAFDashboardContent() {
         return (
             <main className="h-screen flex flex-col items-center justify-center bg-gray-50">
                 <div className="w-10 h-10 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin" />
-                <p className="mt-4 text-sm text-gray-500">Checking session…</p>
+                <p className="mt-4 text-sm text-gray-500">{tAuth('checkingSession')}</p>
             </main>
         );
     }
     if (!isAuthenticated) {
         return (
             <main className="h-screen flex flex-col items-center justify-center bg-gray-50">
-                <p className="text-sm text-gray-500">Redirecting to login…</p>
+                <p className="text-sm text-gray-500">{tAuth('redirectingToLogin')}</p>
             </main>
         );
     }
@@ -2661,7 +2667,7 @@ function VAFDashboardContent() {
         >
             {isDragOver && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-blue-100/95 pointer-events-none">
-                    <span className="text-lg font-medium text-blue-700">Drop files here</span>
+                    <span className="text-lg font-medium text-blue-700">{tMain('dropFilesHere')}</span>
                 </div>
             )}
             <div className="flex-1 flex min-h-0 overflow-hidden">
@@ -2672,7 +2678,7 @@ function VAFDashboardContent() {
                         <div className="w-[38px] h-[38px] rounded-lg overflow-hidden shrink-0 -ml-[5.5px]">
                             <img src="/logo.png" alt="VAF" className="w-full h-full object-cover" />
                         </div>
-                        <span className="font-bold text-gray-800 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity delay-100 duration-300 overflow-hidden">Veyllo Agentic Framework</span>
+                        <span className="font-bold text-gray-800 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity delay-100 duration-300 overflow-hidden">{tMain('veylloAgenticFramework')}</span>
                     </div>
 
                     {/* Session-Liste: äußere Box overflow-hidden = feste Höhe, innere Box scrollt */}
@@ -2787,7 +2793,7 @@ function VAFDashboardContent() {
                                 ws?.send(JSON.stringify({ type: 'get_automations' }));
                             }}
                             className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/settings transition-all justify-start"
-                            title="Settings"
+                            title={tNav('settings')}
                         >
                             <div className="w-6 flex justify-center shrink-0">
                                 <Settings size={20} />
@@ -2988,7 +2994,7 @@ function VAFDashboardContent() {
                                                                     {/* User message: indicator that Document Viewer had attachments when this was sent (only when viewer is closed) */}
                                                                     {!isBot && !documentViewerState.isOpen && msg.sidebarDocs && msg.sidebarDocs.length > 0 && (
                                                                         <div className="flex gap-1.5 flex-wrap mt-1 justify-end items-center">
-                                                                            <span className="text-[10px] text-gray-400">Anhänge:</span>
+                                                                            <span className="text-[10px] text-gray-400">{tMain('attachmentsShort')}:</span>
                                                                             {msg.sidebarDocs.slice(0, 3).map((name, idx) => (
                                                                                 <span
                                                                                     key={idx}
@@ -3076,8 +3082,8 @@ function VAFDashboardContent() {
                                 {messages.length === 0 && (
                                     <div className={cn(chatWidthClass, "mx-auto mb-4 text-center")}>
                                         <Bot size={40} className="text-gray-300 mx-auto mb-3" />
-                                        <h2 className="text-xl font-bold text-gray-800">How can I help you?</h2>
-                                        <p className="text-gray-400 mt-1 text-sm">Start a conversation or choose a workflow</p>
+                                        <h2 className="text-xl font-bold text-gray-800">{tMain('howCanIHelp')}</h2>
+                                        <p className="text-gray-400 mt-1 text-sm">{tMain('startConversationOrWorkflow')}</p>
                                     </div>
                                 )}
                                 {/* Suggestions Popup - Fixed centered, with arrow key navigation */}
@@ -3087,8 +3093,8 @@ function VAFDashboardContent() {
                                         style={{ bottom: '120px' }}
                                     >
                                         <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider flex justify-between">
-                                            <span>{suggestionType === 'tool' ? 'Tools' : 'Workflows'}</span>
-                                            <span className="text-gray-300">↑↓ Navigate · Enter Select</span>
+                                            <span>{suggestionType === 'tool' ? tMain('tools') : tMain('workflows')}</span>
+                                            <span className="text-gray-300">{tMain('navigateSelect')}</span>
                                         </div>
                                         <div className="max-h-64 overflow-y-auto" ref={suggestionListRef}>
                                             {suggestionList.map((item, idx) => (
@@ -3153,10 +3159,10 @@ function VAFDashboardContent() {
                                                 className="text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-help border border-gray-200 bg-transparent leading-none group-hover:text-violet-600 group-hover:opacity-100 group-hover:bg-violet-50 group-hover:border-violet-200 transition-all"
                                                 title="RAG snippets passed to model this turn"
                                             >
-                                                RAG: {ragResults.sources.length} hit{(ragResults.sources.length !== 1) ? 's' : ''}
+                                                {tMain('ragHits', { count: ragResults.sources.length })}
                                             </span>
                                             <div className="hidden group-hover:block absolute right-0 bottom-full mb-0 pb-2 z-[80] w-80 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-xl p-3 text-left">
-                                                <div className="text-xs font-semibold text-gray-700 mb-2">RAG snippets (this turn)</div>
+                                                <div className="text-xs font-semibold text-gray-700 mb-2">{tMain('ragSnippetsThisTurn')}</div>
                                                 <div className="space-y-2">
                                                     {ragResults.sources.slice(0, 10).map((s: { text?: string; full_text?: string; score?: number }, i: number) => (
                                                         <div key={i} className="text-xs text-gray-600 bg-gray-50 p-2 rounded border border-gray-100">
@@ -3173,7 +3179,7 @@ function VAFDashboardContent() {
                                             className="text-[10px] sm:text-xs font-mono text-gray-400 opacity-80 select-none cursor-pointer hover:text-black hover:opacity-100 transition-all leading-none"
                                             onClick={() => setIsContextModalOpen(true)}
                                         >
-                                            Tokens:
+                                            {tMain('tokens')}:
                                             <span className="mx-1 tracking-tighter">
                                                 {"●".repeat(Math.min(10, Math.max(0, Math.round(contextStats.percent / 10))))}
                                                 {"○".repeat(Math.max(0, 10 - Math.min(10, Math.max(0, Math.round(contextStats.percent / 10)))))}
@@ -3216,7 +3222,7 @@ function VAFDashboardContent() {
                                                 "p-4 transition-colors",
                                                 documentViewerState.isOpen ? "text-blue-600" : "text-gray-400 hover:text-gray-900"
                                             )}
-                                            title="Anhänge (Document Viewer) – bleiben im Kontext, solange die Leiste offen ist"
+                                            title={tMain('attachmentsDocumentViewer')}
                                         >
                                             <Paperclip size={20} />
                                         </button>
@@ -3271,7 +3277,7 @@ function VAFDashboardContent() {
                                                 boxShadow: isRecording ? `0 0 0 ${Math.min(volume / 5, 15)}px rgba(239, 68, 68, 0.4)` : 'none',
                                                 transition: 'box-shadow 0.05s ease-out'
                                             }}
-                                            title={isRecording ? "Stop recording (Auto-stop active)" : isProcessingAudio ? "Processing..." : "Voice input"}
+                                            title={isRecording ? tMain('stopRecording') : isProcessingAudio ? tMain('processing') : tMain('voiceInput')}
                                         >
                                             {isProcessingAudio ? (
                                                 <Loader2 size={18} className="mx-2 animate-spin" />
@@ -3301,7 +3307,7 @@ function VAFDashboardContent() {
                                 <DocumentViewer
                                     isOpen={documentViewerState.isOpen}
                                     onClose={handleDocumentViewerClose}
-                                    title="Document Viewer"
+                                    title={tMain('documentViewerTitle')}
                                     mode="dock"
                                     documents={documentViewerState.documents}
                                     onAddFiles={handleDocumentViewerAddFiles}
@@ -3366,7 +3372,7 @@ function VAFDashboardContent() {
                                             Context Window
                                         </h3>
                                         <div className="flex items-center gap-2 px-3 py-1 bg-white rounded-lg border border-gray-200 shadow-sm self-center">
-                                            <span className="text-xs font-mono font-bold text-gray-700">{contextStats.tokens.toLocaleString()} / {contextStats.max_tokens.toLocaleString()} tokens</span>
+                                            <span className="text-xs font-mono font-bold text-gray-700">{contextStats.tokens.toLocaleString()} / {contextStats.max_tokens.toLocaleString()} {tMain('tokens')}</span>
                                             <span className="text-[10px] font-bold text-violet-700 bg-violet-100 px-1.5 py-0.5 rounded">{contextStats.percent}%</span>
                                             <span className="w-px h-3 bg-gray-200 mx-1"></span>
                                             <span className="text-xs font-medium text-gray-500">{contextStats.message_count} messages</span>
@@ -3374,7 +3380,7 @@ function VAFDashboardContent() {
                                         {/* Memory Learning Badge */}
                                         {contextStats.user_turn_count !== undefined && (
                                             <div className="flex items-center gap-2 px-3 py-1 bg-violet-50 rounded-lg border border-violet-200 shadow-sm self-center" title="Memory Learning: After every 15 messages, VAF analyzes the conversation and stores important facts to long-term memory">
-                                                <span className="text-xs font-medium text-violet-700">Memory Learning:</span>
+                                                <span className="text-xs font-medium text-violet-700">{tMain('memoryLearning')}:</span>
                                                 <div className="flex items-center gap-1">
                                                     <div className="h-1.5 w-16 bg-violet-200 rounded-full overflow-hidden">
                                                         <div
@@ -3424,7 +3430,7 @@ function VAFDashboardContent() {
                                 <div className="flex items-start gap-2">
                                     <div className="w-3 h-3 rounded-sm bg-violet-600 mt-1 shrink-0" title="Violet"></div>
                                     <div>
-                                        <div className="font-semibold text-gray-700">Conversation</div>
+                                        <div className="font-semibold text-gray-700">{tMain('conversation')}</div>
                                         <div className="text-xs text-gray-500">Chat history & tool results</div>
                                     </div>
                                 </div>
@@ -3433,14 +3439,14 @@ function VAFDashboardContent() {
                                     <div className="w-3 h-3 rounded-sm bg-gradient-to-b from-gray-700 to-violet-600 mt-1 shrink-0"></div>
                                     <div>
                                         <div className="font-semibold text-gray-700">Used</div>
-                                        <div className="text-xs text-gray-500">Total context consumed</div>
+                                        <div className="text-xs text-gray-500">{tMain('totalContextConsumed')}</div>
                                     </div>
                                 </div>
                                 <div className="flex items-start gap-2">
                                     <div className="w-3 h-3 rounded-sm bg-gray-200 mt-1 shrink-0"></div>
                                     <div>
                                         <div className="font-semibold text-gray-400">Free</div>
-                                        <div className="text-xs text-gray-400">Remaining capacity</div>
+                                        <div className="text-xs text-gray-400">{tMain('remainingCapacity')}</div>
                                     </div>
                                 </div>
                                 {/* Memory Learning Info */}
@@ -3450,7 +3456,7 @@ function VAFDashboardContent() {
                                         <div className="flex items-start gap-2">
                                             <div className="w-3 h-3 rounded-sm bg-violet-600 mt-1 shrink-0"></div>
                                             <div>
-                                                <div className="font-semibold text-violet-700">Memory Learning</div>
+                                                <div className="font-semibold text-violet-700">{tMain('memoryLearning')}</div>
                                                 <div className="text-xs text-gray-500">
                                                     Every {contextStats.compaction_interval || 15} messages, VAF analyzes the chat and stores important facts to long-term memory.
                                                 </div>
@@ -3585,7 +3591,7 @@ function VAFDashboardContent() {
                                                 {/* --- LEFT: Source Components --- */}
                                                 {makeNode(leftX, ySystem, nodeW, hSystem, "#1f2937", "System Prompt", `${Math.round(systemEst).toLocaleString()} tokens`)}
                                                 {makeNode(leftX, yTools, nodeW, hTools, "#a78bfa", "Tool Schemas", `${Math.round(toolsEst).toLocaleString()} tokens`)}
-                                                {makeNode(leftX, yHistory, nodeW, hHistory, "#7c3aed", "Conversation", `${Math.round(historyEst).toLocaleString()} tokens`)}
+                                                {makeNode(leftX, yHistory, nodeW, hHistory, "#7c3aed", tMain('conversation'), `${Math.round(historyEst).toLocaleString()} ${tMain('tokens')}`)}
 
                                                 {/* --- RIGHT: Context Usage --- */}
                                                 <g>

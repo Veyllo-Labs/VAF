@@ -51,6 +51,7 @@ Singleton pattern manager that:
 - Tailwind CSS
 - Lucide React (icons)
 - WebSocket API (native browser WebSocket)
+- next-intl for UI localization (see [I18N.md](I18N.md))
 
 **Main Component**: `app/page.tsx`
 
@@ -100,7 +101,10 @@ Singleton pattern manager that:
 
 ### 6. Settings
 
-Under **Settings → Interface**, the **Date & Time** section lets you set your timezone, date format, and time format (24h/12h). These values are stored in your user identity and used in the system prompt and when the agent shows dates and times.
+Under **Settings → Interface** you can set:
+
+- **Language** — UI language (e.g. German, English). Stored in the browser only (`localStorage`). See [I18N.md](I18N.md) for how translations and new languages are managed.
+- **Date & Time** — Timezone, date format, and time format (24h/12h). Stored in your user identity and used in the system prompt and when the agent shows dates and times.
 
 ### 7. Document Editor
 

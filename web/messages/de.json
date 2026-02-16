@@ -1,0 +1,101 @@
+{
+  "layout": {
+    "title": "VAF Dashboard",
+    "description": "Veyllo Agentic Framework Control Center"
+  },
+  "common": {
+    "ok": "OK",
+    "save": "Speichern",
+    "cancel": "Abbrechen",
+    "loading": "Laden…",
+    "delete": "Löschen",
+    "edit": "Bearbeiten",
+    "close": "Schließen"
+  },
+  "status": {
+    "connected": "Verbunden",
+    "disconnected": "Getrennt",
+    "idle": "Leerlauf"
+  },
+  "nav": {
+    "settings": "Einstellungen",
+    "newSession": "Neue Sitzung",
+    "loadSession": "Sitzung laden",
+    "clearConversation": "Unterhaltung löschen",
+    "stopSpeaking": "Sprachausgabe stoppen",
+    "help": "Hilfe anzeigen"
+  },
+  "main": {
+    "dropFilesHere": "Dateien hier ablegen",
+    "veylloAgenticFramework": "Veyllo Agentic Framework",
+    "howCanIHelp": "Womit kann ich helfen?",
+    "startConversationOrWorkflow": "Starte eine Unterhaltung oder wähle einen Workflow",
+    "tools": "Tools",
+    "workflows": "Workflows",
+    "navigateSelect": "↑↓ Navigieren · Enter Auswählen",
+    "totalContextConsumed": "Verbrauchter Kontext gesamt",
+    "remainingCapacity": "Verbleibende Kapazität",
+    "memoryLearning": "Memory Learning",
+    "ragSnippetsThisTurn": "RAG-Snippets (diese Runde)",
+    "ragHits": "RAG: {count} Treffer",
+    "voiceInput": "Spracheingabe",
+    "stopRecording": "Aufnahme stoppen (Auto-Stop aktiv)",
+    "processing": "Wird verarbeitet…",
+    "attachmentsDocumentViewer": "Anhänge (Document Viewer) – bleiben im Kontext, solange die Leiste offen ist",
+    "chatEndedOnThisDay": "Chat an diesem Tag beendet",
+    "continuedOnThisDay": "An diesem Tag fortgesetzt",
+    "conversation": "Unterhaltung",
+    "tokens": "Tokens",
+    "attachmentsShort": "Anhänge",
+    "documentViewerTitle": "Document Viewer"
+  },
+  "auth": {
+    "checkingSession": "Sitzung wird geprüft…",
+    "redirectingToLogin": "Weiterleitung zur Anmeldung…"
+  },
+  "settings": {
+    "title": "Einstellungen",
+    "general": "Allgemein",
+    "personaAndMemory": "Persona & Memory",
+    "aiAndModel": "AI & Modell",
+    "voiceAndSpeech": "Stimme & Sprache",
+    "interface": "Oberfläche",
+    "connections": "Verbindungen",
+    "advanced": "Erweitert",
+    "automations": "Automationen",
+    "localNetwork": "Lokales Netzwerk",
+    "about": "Über",
+    "loadingVisualization": "Visualisierung wird geladen…",
+    "vafHost": "VAF-Host",
+    "serverDefault": "Server-Standard",
+    "defaultLanguageBased": "Standard (sprachbasiert)",
+    "dateFormat_ddmmyyyy": "TT.MM.JJJJ (z. B. 10.02.2026)",
+    "dateFormat_yyyymmdd": "JJJJ-MM-TT (z. B. 2026-02-10)",
+    "dateFormat_mmddyyyy": "MM/TT/JJJJ (z. B. 02/10/2026)",
+    "dateFormat_ddmmyy": "TT.MM.JJ (z. B. 10.02.26)",
+    "default24h": "Standard (24h)",
+    "timeFormat24h": "24-Stunden",
+    "timeFormat12h": "12-Stunden (AM/PM)",
+    "optionalWhenSet": "Optional. Wenn gesetzt, werden diese APIs für die Websuche vor Fallback (Scrape/DDG) verwendet.",
+    "googleGmailDriveCalendar": "Google (Gmail, Drive, Kalender)",
+    "microsoftOutlookOneDriveCalendar": "Microsoft (Outlook, OneDrive, Kalender)",
+    "appleMailOnly": "Apple (nur Mail)",
+    "dropboxCloudOnly": "Dropbox (nur Cloud)",
+    "definePersonaMarkdown": "Definiere die Persönlichkeit, Regeln und das Verhalten des Agents in Markdown.",
+    "maxRagSnippetsPerQuery": "Max. RAG-Snippets pro Abfrage",
+    "minRelevancePercent": "Min. Relevanz %",
+    "language": "Sprache",
+    "preferredLanguage": "Bevorzugte Sprache",
+    "redirecting": "Weiterleitung…",
+    "redirectingToSettings": "Weiterleitung zu Einstellungen…"
+  },
+  "connections": {
+    "title": "Verbindungen",
+    "telegram": "Telegram",
+    "whatsapp": "WhatsApp",
+    "discord": "Discord",
+    "cloud": "Cloud",
+    "mail": "E-Mail",
+    "contacts": "Kontakte"
+  }
+}

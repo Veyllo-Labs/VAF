@@ -8,7 +8,9 @@ O))         O))       O))))))))
      O))))        O)) O))      
       O))          O))O))     (OO ) 
 ```
-VAF is a comprehensive agent suite designed to transform LLMs like VQ-1 into autonomous powerhouses. It features a modular plug-and-play architecture, allowing you to extend agent capabilities with custom Python workflows. Built for Python 3.10+, VAF offers a terminal UI, cross-platform support (Windows, Linux, macOS), session management, and powerful automation tools.
+VAF is a comprehensive agent suite designed to transform LLMs into autonomous powerhouses. It features a modular plug-and-play architecture, allowing you to extend agent capabilities with custom Python workflows. Built for Python 3.10+, VAF offers a terminal UI, cross-platform support (Windows, Linux, macOS), session management, and powerful automation tools.
+
+**Note on Models:** VAF works with any GGUF model (Llama 3, Mistral, Qwen, etc.).
 
 **New in VAF 2.5:**
 *   **Memory System (RAG):** Encrypted memory storage with semantic search, graph visualization, and AI-powered retrieval.
@@ -210,6 +212,7 @@ Browser-based interface for interacting with VAF. In Desktop Mode (`vaf tray`) i
 - Inline Tool Execution (tools appear in chat stream)
 - WebSocket-based communication
 - Auto-opens in browser on startup
+- UI language selection (Settings → Interface); multiple locales supported (see [docs/I18N.md](docs/I18N.md))
 
 **Access:**
 - Frontend: `http://localhost:3000` (auto-detected port)
@@ -1086,7 +1089,27 @@ For commercial use including hardware embedding, SaaS, or proprietary distributi
 
 ---
 
+## Editions
+
+| Feature | VAF Open Source (This Repo) | Veyllo PRO Appliance (Hardware) |
+|--------|-----------------------------|----------------------------------|
+| **Code Access** | ✅ Source Available | ✅ Source Available |
+| **Setup** | DIY (Docker/Python skills required) |  Plug & Play (Pre-installed) |
+| **Model** | Bring Your Own (Llama/Mistral/Qwen/VQ-1) | Bring Your Own + Pre-installed |
+| **Privacy** | Local |  Local  |
+| **Support** | GitHub Issues |  24/7 Enterprise Support |
+| **Liability** | None |  Included  |
+
+---
+
+# **Support**
+
+> ## **Community Support only via GitHub Issues.**  
+> ## **Guaranteed Support only for Enterprise Customers.**
+
+---
+
 <p align="center">
   <b>VAF</b> - Veyllo Agentic Framework<br>
-  Built with ❤️ (and Cursor Credits) by Veyllo Labs – Mainly one guy named Mert.
+  Built with ❤️ in Berlin by Veyllo Labs.
 </p>

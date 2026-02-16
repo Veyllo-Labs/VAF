@@ -16,11 +16,14 @@ import 'reactflow/dist/style.css';
 import TTSSettings from './settings/TTSSettings';
 
 // Loading fallback for lazy-loaded ReactFlow
-const ReactFlowFallback = () => (
-    <div className="flex items-center justify-center h-full bg-gray-50">
-        <div className="animate-pulse text-gray-400">Loading visualization...</div>
-    </div>
-);
+const ReactFlowFallback = () => {
+    const t = useTranslations('settings');
+    return (
+        <div className="flex items-center justify-center h-full bg-gray-50">
+            <div className="animate-pulse text-gray-400">{t('loadingVisualization')}</div>
+        </div>
+    );
+};
 
 // Constants for collision detection
 const NODE_WIDTH = 220;
@@ -104,8 +107,11 @@ import {
     Brain, Database, Link2, MessageSquare, Network, Users, User, Lock, Server, Laptop, Smartphone,
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar
 } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
+import { useLocaleStore } from '@/lib/localeStore';
+import { languages, type LocaleCode } from '@/lib/languages';
 import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
@@ -199,6 +205,10 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 
 
 export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect }: SettingsModalProps) {
+    const t = useTranslations('settings');
+    const uiLocale = useLocaleStore((s) => s.locale);
+    const setUiLocale = useLocaleStore((s) => s.setLocale);
+    const categoryLabelKey: Record<string, string> = { general: 'general', persona: 'personaAndMemory', ai: 'aiAndModel', voice: 'voiceAndSpeech', interface: 'interface', connections: 'connections', advanced: 'advanced', automations: 'automations', local_network: 'localNetwork', about: 'about' };
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [activeTab, setActiveTab] = useState('general');
     const [changed, setChanged] = useState(false);
@@ -1014,7 +1024,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 {/* Sidebar */}
                 <div className="w-64 bg-gray-50/50 border-r border-gray-200 flex flex-col pt-6 pb-4 px-3 gap-1">
                     <div className="px-3 mb-4">
-                        <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">Settings</h2>
+                        <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">{t('title')}</h2>
                     </div>
 
                     {CATEGORIES.map(cat => {
@@ -1031,7 +1041,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             )}
                         >
                             <cat.icon size={18} />
-                            {cat.label}
+                            {t(categoryLabelKey[cat.id] ?? cat.id)}
                         </button>
                     )})}
 
@@ -1594,6 +1604,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'interface' && (
                             <div className="space-y-6">
+                                <Section title={t('language')}>
+                                    <p className="text-xs text-gray-500 mb-3">{t('preferredLanguage')} (UI)</p>
+                                    <select
+                                        value={uiLocale}
+                                        onChange={(e) => setUiLocale(e.target.value as LocaleCode)}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
+                                    >
+                                        {languages.map((lang) => (
+                                            <option key={lang.code} value={lang.code}>{lang.flag} {lang.name}</option>
+                                        ))}
+                                    </select>
+                                </Section>
                                 <Section title="Date & Time">
                                     <p className="text-xs text-gray-500 mb-4">Used in the system prompt and for showing dates/times to you. Stored in your user identity.</p>
                                     {personaLoading ? (

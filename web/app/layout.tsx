@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import HostnameNormalizer from "@/components/HostnameNormalizer";
+import IntlProviderWrapper from "@/components/IntlProviderWrapper";
 
 export const metadata: Metadata = {
   title: "VAF Dashboard",
@@ -13,10 +14,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="light" suppressHydrationWarning>
+    <html lang="de" className="light" suppressHydrationWarning>
       <body className="antialiased min-h-screen bg-background text-foreground">
         <HostnameNormalizer />
-        {children}
+        <IntlProviderWrapper>{children}</IntlProviderWrapper>
       </body>
     </html>
   );

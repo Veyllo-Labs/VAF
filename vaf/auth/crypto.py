@@ -33,6 +33,10 @@ def _get_jwt_secret() -> str:
     return secret
 
 
+# Public alias used by web_server.py WebSocket handler
+get_jwt_secret = _get_jwt_secret
+
+
 def _get_totp_key() -> bytes:
     """Derive 32-byte key for TOTP encryption from JWT secret."""
     return hashlib.sha256(_get_jwt_secret().encode()).digest()

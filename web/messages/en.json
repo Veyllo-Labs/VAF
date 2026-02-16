@@ -1,0 +1,101 @@
+{
+  "layout": {
+    "title": "VAF Dashboard",
+    "description": "Veyllo Agentic Framework Control Center"
+  },
+  "common": {
+    "ok": "OK",
+    "save": "Save",
+    "cancel": "Cancel",
+    "loading": "Loading…",
+    "delete": "Delete",
+    "edit": "Edit",
+    "close": "Close"
+  },
+  "status": {
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "idle": "Idle"
+  },
+  "nav": {
+    "settings": "Settings",
+    "newSession": "New session",
+    "loadSession": "Load session",
+    "clearConversation": "Clear conversation",
+    "stopSpeaking": "Stop speaking",
+    "help": "Show help"
+  },
+  "main": {
+    "dropFilesHere": "Drop files here",
+    "veylloAgenticFramework": "Veyllo Agentic Framework",
+    "howCanIHelp": "How can I help you?",
+    "startConversationOrWorkflow": "Start a conversation or choose a workflow",
+    "tools": "Tools",
+    "workflows": "Workflows",
+    "navigateSelect": "↑↓ Navigate · Enter Select",
+    "totalContextConsumed": "Total context consumed",
+    "remainingCapacity": "Remaining capacity",
+    "memoryLearning": "Memory Learning",
+    "ragSnippetsThisTurn": "RAG snippets (this turn)",
+    "ragHits": "RAG: {count} hit(s)",
+    "voiceInput": "Voice input",
+    "stopRecording": "Stop recording (Auto-stop active)",
+    "processing": "Processing…",
+    "attachmentsDocumentViewer": "Attachments (Document Viewer) – stay in context while panel is open",
+    "chatEndedOnThisDay": "Chat ended on this day",
+    "continuedOnThisDay": "Continued on this day",
+    "conversation": "Conversation",
+    "tokens": "tokens",
+    "attachmentsShort": "Attachments",
+    "documentViewerTitle": "Document Viewer"
+  },
+  "auth": {
+    "checkingSession": "Checking session…",
+    "redirectingToLogin": "Redirecting to login…"
+  },
+  "settings": {
+    "title": "Settings",
+    "general": "General",
+    "personaAndMemory": "Persona & Memory",
+    "aiAndModel": "AI & Model",
+    "voiceAndSpeech": "Voice & Speech",
+    "interface": "Interface",
+    "connections": "Connections",
+    "advanced": "Advanced",
+    "automations": "Automations",
+    "localNetwork": "Local Network",
+    "about": "About",
+    "loadingVisualization": "Loading visualization…",
+    "vafHost": "VAF Host",
+    "serverDefault": "Server default",
+    "defaultLanguageBased": "Default (language-based)",
+    "dateFormat_ddmmyyyy": "DD.MM.YYYY (e.g. 10.02.2026)",
+    "dateFormat_yyyymmdd": "YYYY-MM-DD (e.g. 2026-02-10)",
+    "dateFormat_mmddyyyy": "MM/DD/YYYY (e.g. 02/10/2026)",
+    "dateFormat_ddmmyy": "DD.MM.YY (e.g. 10.02.26)",
+    "default24h": "Default (24h)",
+    "timeFormat24h": "24-hour",
+    "timeFormat12h": "12-hour (AM/PM)",
+    "optionalWhenSet": "Optional. When set, these APIs are used for web search before fallback (scrape/DDG).",
+    "googleGmailDriveCalendar": "Google (Gmail, Drive, Calendar)",
+    "microsoftOutlookOneDriveCalendar": "Microsoft (Outlook, OneDrive, Calendar)",
+    "appleMailOnly": "Apple (Mail only)",
+    "dropboxCloudOnly": "Dropbox (Cloud only)",
+    "definePersonaMarkdown": "Define your agent's personality, rules, and behavior using Markdown.",
+    "maxRagSnippetsPerQuery": "Max RAG Snippets per Query",
+    "minRelevancePercent": "Min Relevance %",
+    "language": "Language",
+    "preferredLanguage": "Preferred language",
+    "redirecting": "Redirecting…",
+    "redirectingToSettings": "Redirecting to settings…"
+  },
+  "connections": {
+    "title": "Connections",
+    "telegram": "Telegram",
+    "whatsapp": "WhatsApp",
+    "discord": "Discord",
+    "cloud": "Cloud",
+    "mail": "Mail",
+    "contacts": "Contacts"
+  }
+}

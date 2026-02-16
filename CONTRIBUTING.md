@@ -69,6 +69,7 @@ We love your input! We want to make contributing to VAF as easy and transparent 
 - [ ] Update `CHANGELOG.md` if this is a user-facing change
 - [ ] **Verify CI/CD:** Ensure your local tests pass; GitHub Actions will run the same suite.
 - [ ] Re-read your changes - ensure they are clean and well-thought-out
+- [ ] **Web UI text:** If you add or change user-visible strings in the Web UI, use translation keys and update the locale files under `web/messages/` (see [docs/I18N.md](docs/I18N.md)).
 
 ### PR Description Template
 
@@ -175,6 +176,8 @@ Create a python script in `vaf/workflows/workflows/` (e.g., `my_workflow.py`). D
 
 By contributing, you agree that your contributions will be licensed under the project's **MIT License with Commons Clause v1.0**.
 This ensures the project remains open for use but protects the core business model.
+
+**Intellectual Property Grant:** By submitting a pull request, you grant **Veyllo GmbH** an irrevocable, perpetual, worldwide, non-exclusive, royalty-free license to use, modify, distribute, and sublicense your contribution within the VAF project and any derivative works or commercial products (including proprietary Enterprise versions) without restriction.
 
 ---
 **Thank you for building VAF with us!** 🚀

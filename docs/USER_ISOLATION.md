@@ -54,7 +54,19 @@ VAF uses a **`user_scope_id`** (UUID) as the universal isolation key. Every user
 
 ### How `user_scope_id` is established
 
-When network mode is enabled and a user logs in, the auth system issues a JWT containing the user's `user_scope_id` (UUID) and `username`. The WebSocket handler in the gateway extracts this server-side:
+When network mode is enabled and a user logs in, the auth system issues a JWT containing the user's `user_scope_id` (UUID), `username`, and `role`. The `AuthMiddleware` (in `vaf/auth/middleware.py`) validates the JWT on every HTTP request and populates `request.state.user` as a consolidated dict:
+
+```python
+# Set by AuthMiddleware after JWT validation
+request.state.user = {
+    "user_id": "<sub>",
+    "username": "<username>",
+    "role": "<role>",
+    "user_scope_id": "<uuid>",
+}
+```
+
+All API route handlers read `request.state.user` to extract the authenticated user's identity and scope. The WebSocket handler in the gateway accesses the same dict:
 
 ```python
 # In vaf/core/gateway.py — WebSocket handler
@@ -126,7 +138,7 @@ async def get_memory(
 ):
 ```
 
-The `get_current_user_scope` dependency reads from `request.state.user` (set by auth middleware).
+The `get_current_user_scope` dependency reads from `request.state.user` (the consolidated dict set by `AuthMiddleware`). When no user is authenticated (localhost mode), this dict is absent and the dependency falls back to the local admin scope.
 
 ## 3. Cache Isolation (Redis)
 

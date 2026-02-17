@@ -33,6 +33,29 @@ Network clients must authenticate via JWT tokens. The `AuthMiddleware` enforces 
 - **Network Clients**: Must present a valid JWT via `Authorization: Bearer <token>` header or `vaf_token` cookie.
 - **Auth-Exempt Paths**: Login, bootstrap, and static asset endpoints are accessible without a token.
 - **2FA Enforcement**: If `local_network_require_2fa` is enabled, tokens from users who haven't completed 2FA setup are rejected with HTTP 403.
+- **User Context Propagation**: On successful authentication, the middleware populates `request.state` with both individual attributes and a consolidated `user` dict for downstream route handlers (see below).
+
+#### `request.state` Population
+
+After validating the JWT, `AuthMiddleware` attaches the authenticated user's identity to the request in two forms:
+
+**Individual attributes** (legacy, used by some internal utilities):
+- `request.state.user_id` — Subject claim (`sub`) from the JWT
+- `request.state.username` — Authenticated username
+- `request.state.role` — User role (`admin`, `user`, `guest`)
+- `request.state.user_scope_id` — UUID used for data isolation (see [USER_ISOLATION.md](USER_ISOLATION.md))
+
+**Consolidated dict** (used by all API route handlers):
+```python
+request.state.user = {
+    "user_id": "<sub>",
+    "username": "<username>",
+    "role": "<role>",
+    "user_scope_id": "<uuid>",
+}
+```
+
+All API route files (`config_routes`, `email_routes`, `cloud_routes`, `whatsapp_routes`, `telegram_routes`, `contact_routes`, `user_persona_routes`, `memory/routes`) read `request.state.user` as a dict to extract the current user's identity. When running in localhost mode (no authentication), `request.state.user` is not set and routes fall back to the local admin defaults.
 
 Implementation: `vaf/auth/middleware.py` -> `AuthMiddleware`
 
@@ -326,10 +349,10 @@ Uvicorn + FastAPI (https://0.0.0.0:8001)
     +-- SecurityHeadersMiddleware (adds X-Frame-Options, HSTS, etc.)
     +-- RateLimitMiddleware (blocks brute-force on /api/auth/*)
     +-- IPValidationMiddleware (rejects non-RFC1918 IPs)
-    +-- AuthMiddleware (validates JWT for non-localhost clients)
+    +-- AuthMiddleware (validates JWT, populates request.state.user)
     |
     v
-Route Handler (API endpoint or WebSocket)
+Route Handler (reads request.state.user for identity & scoping)
 ```
 
 ---

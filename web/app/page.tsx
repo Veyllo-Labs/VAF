@@ -9,6 +9,7 @@ import {
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
+import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
 import SettingsModal from '@/components/SettingsModal';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import SubAgentWindow from '@/components/SubAgentWindow';
@@ -618,9 +619,14 @@ function VAFDashboardContent() {
     const [authChecking, setAuthChecking] = useState(true);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [currentUser, setCurrentUser] = useState<any>(null);
+    const [authError, setAuthError] = useState<string | null>(null);
+    const [authRetryKey, setAuthRetryKey] = useState(0);
 
     useEffect(() => {
-        fetch(`${getApiBase()}/api/auth/me`, { credentials: 'include' })
+        setAuthError(null);
+        const ac = new AbortController();
+        const timeoutId = setTimeout(() => ac.abort(), 8000);
+        fetch(`${getApiBase()}/api/auth/me`, { credentials: 'include', signal: ac.signal })
             .then(async (res) => {
                 if (res.ok) {
                     const userData = await res.json();
@@ -630,9 +636,22 @@ function VAFDashboardContent() {
                     router.replace('/login');
                 }
             })
-            .catch(() => router.replace('/login'))
-            .finally(() => setAuthChecking(false));
-    }, [router]);
+            .catch((err) => {
+                if (err?.name === 'AbortError') {
+                    setAuthError('timeout');
+                } else {
+                    setAuthError('error');
+                }
+            })
+            .finally(() => {
+                clearTimeout(timeoutId);
+                setAuthChecking(false);
+            });
+        return () => {
+            clearTimeout(timeoutId);
+            ac.abort();
+        };
+    }, [router, authRetryKey]);
 
     // OAuth callback redirect: open Settings with Connections tab when URL has connections=1 or cloud_oauth/email_oauth
     const openedFromOAuthRef = useRef(false);
@@ -1070,17 +1089,14 @@ function VAFDashboardContent() {
     // Cache State
     const sessionCache = useRef<Record<string, Message[]>>({});
     const cacheSaveTimeout = useRef<NodeJS.Timeout | null>(null);
+    const sessionsRef = useRef<Session[]>([]);
+    useEffect(() => {
+        sessionsRef.current = sessions;
+    }, [sessions]);
 
     // Load Cache on Mount
     useEffect(() => {
-        try {
-            const saved = localStorage.getItem('vaf_session_cache_v1');
-            if (saved) {
-                sessionCache.current = JSON.parse(saved);
-            }
-        } catch (e) {
-            console.error("Failed to load session cache", e);
-        }
+        sessionCache.current = loadSessionCache();
     }, []);
 
     // Save Cache on Update (Debounced)
@@ -1093,11 +1109,16 @@ function VAFDashboardContent() {
         // Debounce save to disk
         if (cacheSaveTimeout.current) clearTimeout(cacheSaveTimeout.current);
         cacheSaveTimeout.current = setTimeout(() => {
-            try {
-                localStorage.setItem('vaf_session_cache_v1', JSON.stringify(sessionCache.current));
-            } catch (e) {
-                console.warn("LocalStorage quota exceeded, failed to save session cache.", e);
-            }
+            const sessionIdsInOrder = sessionsRef.current.map((s) => s.id);
+            const trimmed = trimSessionCache(sessionCache.current, {
+                currentSessionId,
+                sessionIdsInOrder,
+            });
+            sessionCache.current = trimmed;
+            saveSessionCache(sessionCache.current, {
+                currentSessionId,
+                sessionIdsInOrder,
+            });
         }, 1000);
     }, [messages, currentSessionId]);
 
@@ -2650,6 +2671,20 @@ function VAFDashboardContent() {
             </main>
         );
     }
+    if (authError) {
+        return (
+            <main className="h-screen flex flex-col items-center justify-center bg-gray-50 px-4">
+                <p className="text-sm text-gray-600 text-center max-w-md">{tAuth('serverUnreachable')}</p>
+                <button
+                    type="button"
+                    onClick={() => { setAuthError(null); setAuthChecking(true); setAuthRetryKey((k) => k + 1); }}
+                    className="mt-4 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800"
+                >
+                    {tAuth('retry')}
+                </button>
+            </main>
+        );
+    }
     if (!isAuthenticated) {
         return (
             <main className="h-screen flex flex-col items-center justify-center bg-gray-50">
@@ -3030,7 +3065,7 @@ function VAFDashboardContent() {
                                                             {isBot ? (
                                                                 <div className="w-full max-w-[85%] flex gap-4">
                                                                     <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
-                                                                    <div className="flex flex-col flex-1 min-w-0 items-start">
+                                                                    <div className="flex flex-col flex-1 min-w-0 shrink-0 items-start w-full">
                                                                         {bubbleContent}
                                                                     </div>
                                                                 </div>

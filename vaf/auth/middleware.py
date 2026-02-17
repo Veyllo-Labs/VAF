@@ -148,6 +148,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.role = payload.get("role")
             request.state.user_scope_id = payload.get("user_scope_id")
 
+            # Consolidated dict for API route handlers (they read request.state.user)
+            request.state.user = {
+                "user_id": payload.get("sub"),
+                "username": payload.get("username"),
+                "role": payload.get("role"),
+                "user_scope_id": payload.get("user_scope_id"),
+            }
+
         except Exception as e:
             logger.warning("Auth middleware error for %s: %s", client_ip, e)
             return JSONResponse(

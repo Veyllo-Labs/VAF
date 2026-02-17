@@ -168,7 +168,7 @@ async def download_file(path: str = Query(..., description="Absolute path to loc
         filename=target.name,
     )
 
-def run_agent_step(agent: Agent, text: str, context: dict, server_user_scope_id: str = None):
+def run_agent_step(agent: Agent, text: str, context: dict, server_user_scope_id: str = None, server_username: str = None):
     """Blocking function to run the agent step.
 
     Args:
@@ -176,6 +176,7 @@ def run_agent_step(agent: Agent, text: str, context: dict, server_user_scope_id:
         text: User input text
         context: Client-sent context (platform, etc. — user_scope_id is IGNORED from here)
         server_user_scope_id: Server-validated user_scope_id from JWT (trusted)
+        server_username: Server-validated username from JWT (trusted)
     """
     from vaf.core.config import Config
 
@@ -186,19 +187,36 @@ def run_agent_step(agent: Agent, text: str, context: dict, server_user_scope_id:
     else:
         agent._current_chat_source = "cli"
 
+    # User context: set username and scope on agent for tool execution
+    # (email, whatsapp, contacts, user_identity, etc. all read _current_username)
+    if server_username:
+        agent._current_username = server_username
+    elif not getattr(agent, "_current_username", None):
+        agent._current_username = (Config.get("local_admin_username") or "admin")
+
+    if server_user_scope_id:
+        from uuid import UUID as _UUID
+        agent._current_user_scope_id = server_user_scope_id
+        # Also store as UUID for memory tools
+        try:
+            agent._current_user_scope_id = _UUID(str(server_user_scope_id))
+        except (ValueError, TypeError):
+            pass
+    elif not getattr(agent, "_current_user_scope_id", None):
+        from uuid import UUID as _UUID
+        local_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
+        try:
+            agent._current_user_scope_id = _UUID(str(local_scope))
+        except (ValueError, TypeError):
+            pass
+
     # RAG: fetch memory context for this turn (pre-injection, before LLM)
     # SECURITY: user_scope_id comes from server-validated JWT, NOT from client context
     memory_context = ""
     try:
         if Config.get("memory_enabled", True):
             from vaf.memory.rag import run_memory_search_sync
-            from uuid import UUID
-            user_scope_id = None
-            if server_user_scope_id:
-                try:
-                    user_scope_id = UUID(str(server_user_scope_id))
-                except (ValueError, TypeError):
-                    pass
+            user_scope_id = getattr(agent, "_current_user_scope_id", None)
             k = int(Config.get("memory_rag_k", 5))
             k = max(1, min(20, k))
             memory_context = run_memory_search_sync(
@@ -218,12 +236,14 @@ def run_agent_step(agent: Agent, text: str, context: dict, server_user_scope_id:
 async def websocket_endpoint(websocket: WebSocket, client_id: str, client_type: str = "cli"):
     await manager.connect(websocket, client_id, client_type)
 
-    # SECURITY: Extract user_scope_id from authenticated session (server-side),
-    # so clients cannot impersonate other users by sending a fake user_scope_id.
+    # SECURITY: Extract user identity from authenticated session (server-side),
+    # so clients cannot impersonate other users by sending fake credentials.
     server_user_scope_id = None
+    server_username = None
     user_state = getattr(websocket.state, "user", None) if hasattr(websocket, "state") else None
     if user_state and isinstance(user_state, dict):
         server_user_scope_id = user_state.get("user_scope_id")
+        server_username = user_state.get("username")
 
     try:
         while True:
@@ -265,7 +285,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, client_type: 
                         agent_instance,
                         text,
                         context,
-                        server_user_scope_id
+                        server_user_scope_id,
+                        server_username,
                     )
                     
                     # Send Completion

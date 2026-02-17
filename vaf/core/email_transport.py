@@ -219,7 +219,12 @@ def apply_sender_rules_to_category(from_str: str, current_category: str, usernam
 
 
 def _get_email_config(username: Optional[str] = None) -> Dict[str, Any]:
-    """Return email config for the given user. When username is None or local admin, use legacy email_config."""
+    """Return email config for the given user. When username is None or local admin, use legacy email_config.
+
+    Fallback: when a non-admin username has no per-user config, the legacy
+    ``email_config`` is returned so that single-user setups work even when
+    the authenticated username differs from ``local_admin_username``.
+    """
     local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
     if not username or username.strip().lower() == local_admin:
         raw = Config.get("email_config")
@@ -228,8 +233,12 @@ def _get_email_config(username: Optional[str] = None) -> Dict[str, Any]:
         return {"accounts": []}
     by_user = Config.get("email_config_by_user") or {}
     ec = by_user.get(username.strip()) if isinstance(by_user, dict) else {}
-    if isinstance(ec, dict):
+    if isinstance(ec, dict) and ec.get("accounts"):
         return ec
+    # Fallback: per-user bucket empty → use legacy config
+    raw = Config.get("email_config")
+    if isinstance(raw, dict):
+        return raw
     return {"accounts": []}
 
 

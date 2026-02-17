@@ -5,10 +5,14 @@ is empty, fetches from the provider and writes to the store so UI and agent stay
 Use read_mail to get the full body of a specific message.
 """
 
+import logging
+
 from vaf.core.email_sync_store import init_store, list_messages as store_list_messages, upsert_messages
 from vaf.core.email_transport import fetch_mail, get_account
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import cred_username_from_kwargs, list_accounts_for_user, store_username_from_kwargs
+
+logger = logging.getLogger("vaf.tools.mail_inbox")
 
 
 def _format_inbox(messages: list, folder: str) -> str:
@@ -103,6 +107,19 @@ class MailInboxTool(BaseTool):
             max_messages = 50
         accounts = list_accounts_for_user(cred_username)
         if not accounts:
+            # Debug: log full context so we can diagnose why accounts are missing
+            from vaf.core.config import Config
+            ec_raw = Config.get("email_config")
+            by_user_keys = list((Config.get("email_config_by_user") or {}).keys())
+            logger.warning(
+                "mail_inbox: No accounts found. cred_username=%r, kwargs_username=%r, "
+                "email_config_type=%s, email_config_accounts=%d, email_config_by_user_keys=%r",
+                cred_username,
+                kwargs.get("username"),
+                type(ec_raw).__name__,
+                len((ec_raw or {}).get("accounts", [])) if isinstance(ec_raw, dict) else -1,
+                by_user_keys,
+            )
             return (
                 "No email accounts connected. The user must add an account in Settings → Connections → Email "
                 "(Google, Microsoft, or other IMAP)."

@@ -1,7 +1,9 @@
 {
   "auth": {
     "checkingSession": "Checking session…",
-    "redirectingToLogin": "Redirecting to login…"
+    "redirectingToLogin": "Redirecting to login…",
+    "serverUnreachable": "Server unreachable. Make sure VAF is running (e.g. \"vaf run\").",
+    "retry": "Retry"
   },
   "status": {
     "connected": "Connected",

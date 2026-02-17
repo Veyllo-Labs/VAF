@@ -1,7 +1,9 @@
 {
   "auth": {
     "checkingSession": "Sitzung wird geprüft…",
-    "redirectingToLogin": "Weiterleitung zur Anmeldung…"
+    "redirectingToLogin": "Weiterleitung zur Anmeldung…",
+    "serverUnreachable": "Server nicht erreichbar. Bitte prüfen, ob VAF läuft (z. B. „vaf run“).",
+    "retry": "Erneut versuchen"
   },
   "status": {
     "connected": "Verbunden",

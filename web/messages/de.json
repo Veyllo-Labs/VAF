@@ -77,6 +77,8 @@
   },
   "settings": {
     "title": "Einstellungen",
+    "redirecting": "Weiterleitung…",
+    "redirectingToSettings": "Weiterleitung zu den Einstellungen…",
     "loadingVisualization": "Visualisierung wird geladen…",
     "tabs": {
       "general": "Allgemein",

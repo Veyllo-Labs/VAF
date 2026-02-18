@@ -9,8 +9,10 @@ const MAX_CACHE_BYTES = 4 * 1024 * 1024; // 4 MB
 const MAX_SESSIONS = 50;
 const MAX_MESSAGES_PER_SESSION = 150;
 
+export type SessionCacheMessageRole = 'user' | 'assistant' | 'system' | 'tool' | 'workflow';
+
 export type SessionCacheMessage = {
-  role: string;
+  role: SessionCacheMessageRole;
   content: string;
   timestamp: number;
   [key: string]: unknown;

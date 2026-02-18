@@ -59,6 +59,40 @@ def list_accounts_for_user(
     return [x["email"] for x in items]
 
 
+def store_candidates_for_mail(
+    store_username: str,
+    user_scope_id: Optional[str],
+) -> List[Tuple[str, Optional[str]]]:
+    """Return (store_username, user_scope_id) candidates for the email sync store, in try order.
+
+    Used so the tool can read from the same DB as the Mail Dashboard when the primary
+    (from WebSocket/task metadata) is empty but accounts/messages live in legacy or a single scope.
+    """
+    from vaf.core.config import get_local_admin_scope_id
+
+    local_admin_scope = get_local_admin_scope_id()
+    candidates: List[Tuple[str, Optional[str]]] = []
+    seen: set = set()
+
+    def add(su: str, sid: Optional[str]) -> None:
+        key = (su or "", (sid or "") or "")
+        if key not in seen:
+            seen.add(key)
+            candidates.append((su, sid))
+
+    add(store_username or "", user_scope_id)
+    add("", local_admin_scope)
+    by_scope = Config.get("email_config_by_scope") or {}
+    if isinstance(by_scope, dict):
+        scopes_with_accounts = [
+            sid for sid, ec in by_scope.items()
+            if isinstance(ec, dict) and (ec.get("accounts") or [])
+        ]
+        if len(scopes_with_accounts) == 1:
+            add("", scopes_with_accounts[0])
+    return candidates
+
+
 def list_accounts_with_labels_for_user(
     cred_username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
@@ -99,7 +133,7 @@ def list_accounts_with_labels_for_user(
         if not (ec.get("accounts") if isinstance(ec, dict) else None):
             ec = Config.get("email_config") or {}
     accounts = ec.get("accounts") or []
-    return [
+    result = [
         {
             "email": a.get("email") or a.get("account_id"),
             "label": (a.get("label") or "").strip(),
@@ -107,3 +141,34 @@ def list_accounts_with_labels_for_user(
         for a in accounts
         if a.get("email") or a.get("account_id")
     ]
+
+    # Fallback so the tool sees the same accounts as the Mail Dashboard (Settings → Connections → Email).
+    # If the primary lookup (by scope or username) found nothing, try legacy email_config and, in
+    # single-scope setups, the only scope in email_config_by_scope that has accounts (e.g. when
+    # the Dashboard saved under JWT scope but the chat WebSocket was connected as local admin).
+    if not result:
+        legacy = Config.get("email_config") or {}
+        legacy_accounts = (legacy.get("accounts") or []) if isinstance(legacy, dict) else []
+        if legacy_accounts:
+            result = [
+                {"email": a.get("email") or a.get("account_id"), "label": (a.get("label") or "").strip()}
+                for a in legacy_accounts
+                if a.get("email") or a.get("account_id")
+            ]
+    if not result:
+        by_scope = Config.get("email_config_by_scope") or {}
+        if isinstance(by_scope, dict):
+            scopes_with_accounts = [
+                (sid, (ec or {}).get("accounts") or [])
+                for sid, ec in by_scope.items()
+                if isinstance(ec, dict) and (ec.get("accounts") or [])
+            ]
+            # Single scope with accounts → use it so Dashboard and tool stay in sync
+            if len(scopes_with_accounts) == 1:
+                _, scope_accounts = scopes_with_accounts[0]
+                result = [
+                    {"email": a.get("email") or a.get("account_id"), "label": (a.get("label") or "").strip()}
+                    for a in scope_accounts
+                    if a.get("email") or a.get("account_id")
+                ]
+    return result

@@ -66,7 +66,8 @@ Key rules:
 - `session_list`: available sessions
 - `history_update`: session history (also sets active session). The frontend does not clear document-panel attachment state for that session, so per-session attachment documents persist across repeated switches.
 - `agent_message_update`: streaming assistant text
-- `new_log`: system/status timeline entries
+- `clear_last_assistant`: request to remove the last assistant message (used before empty-response and false-promise retries so only the retry response is shown).
+- `new_log`: system/status timeline entries. When the agent gives up after API empty-response delayed retries, it sends the final message only via `new_log` (return value `[SYSTEM_LOG_ONLY]...`); the headless runner does **not** send `agent_message_update` for that response, so the UI shows a system timeline entry only.
 - `tool_update`: tool start/end/error
 - `stats`: token/usage metrics
 - `subagent_update`: sub-agent window payload
@@ -143,7 +144,9 @@ If only `stats` or `new_log` arrives:
 
 ### 3b) API Tool Calls Loop / “False promise detected”
 
-If OpenAI/Anthropic/DeepSeek responses loop with `False promise detected`:
+When the agent detects a **false promise** (model claimed to use a tool in text but did not emit a tool call), it forces a retry and sends `clear_last_assistant` so the Web UI removes the faulty assistant message—same behaviour as empty-response retry. The user sees only the system notice and the retry response, not a duplicate bubble.
+
+If responses loop with `False promise detected` without recovery:
 - The API may be emitting tool-call chunks without a function name.
 - The agent should drop invalid tool calls and fail fast instead of retrying.
 - Check `backend.log` for `[CHUNK]` / `[CONTENT]` and `tool_calls` entries where `name` is missing.
@@ -178,4 +181,4 @@ If the tool card expands but the panel does not open:
 - `vaf/core/headless_runner.py` (WebUI agent loop)
 - `web/app/page.tsx` (frontend session filtering & render)
 
-*Last updated: 2026-01-29*
+*Last updated: 2026-02-18*

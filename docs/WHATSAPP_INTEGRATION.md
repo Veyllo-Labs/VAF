@@ -118,6 +118,14 @@ Authentication (Baileys session) is stored per user under `~/.vaf/users/<usernam
 
 The bridge builds the allowed set from the config whitelist plus all WhatsApp/phone channel values from contacts with "Can reach your assistant" enabled.
 
+### Best practices
+
+- **Whitelist format:** Use E.164 for all phone numbers (e.g. `+491761234567`). The bridge normalizes JIDs; leading zeros or missing country codes can cause mismatches.
+- **user_scope_id:** Use the same `user_scope_id` as the Web UI for that user. For the local admin, use `local_admin_scope_id` from config so Web, CLI, and WhatsApp share one identity.
+- **Credentials:** Do not commit `~/.vaf/users/<username>/whatsapp/` (or the platform data dir equivalent) to version control; it contains the Baileys session.
+- **Send-only mode:** Set `inbound_to_agent: false` when you only want the bot to send you content (e.g. reports, voice notes); incoming messages will not trigger the agent.
+- **Front Office:** For contacts who can reach your assistant via WhatsApp, add their number in the contact’s **Channels** (type "phone" or "WhatsApp"). Without a WhatsApp channel, messages from that number are rejected.
+
 ---
 
 ## Voice Message Support

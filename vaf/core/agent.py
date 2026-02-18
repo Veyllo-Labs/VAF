@@ -1074,6 +1074,7 @@ class Agent:
             from vaf.tools.update_contact import UpdateContactTool
             from vaf.tools.delete_contact import DeleteContactTool
             from vaf.tools.whatsapp_call import WhatsAppCallTool
+            from vaf.tools.label_mail import LabelMailTool
             from vaf.tools.mail_inbox import MailInboxTool
             from vaf.tools.read_mail import ReadMailTool
             from vaf.tools.find_mail import FindMailTool
@@ -1099,6 +1100,7 @@ class Agent:
             self.tools["read_mail"] = ReadMailTool()
             self.tools["find_mail"] = FindMailTool()
             self.tools["mark_mail_answered"] = MarkMailAnsweredTool()
+            self.tools["label_mail"] = LabelMailTool()
             self.tools["list_email_accounts"] = ListEmailAccountsTool()
             self.tools["send_mail"] = SendMailTool()
             self.tools["list_contacts"] = ListContactsTool()
@@ -4265,6 +4267,9 @@ class Agent:
         # Retry counter for empty responses
         empty_retry_count = 0
         MAX_EMPTY_RETRIES = 10  # Allow up to 10 attempts before hard stop
+        # API empty guard: delay-retry (3s) up to 4 times before showing system-log error
+        api_empty_delay_retries = 0
+        API_EMPTY_DELAY_RETRIES_MAX = 4
         current_temp = target_temp
         
         # Main chat loop with retries for empty responses
@@ -5040,7 +5045,26 @@ class Agent:
                         # Proceed without blocking
                     else:
                         UI.event("System", f"False promise detected (attempt {self._false_promise_retries}) - forcing retry...", style="warning")
-                        
+                        # Remove faulty assistant message in Web UI so only retry response is shown (same as empty-response retry)
+                        try:
+                            from vaf.core.web_interface import get_web_interface
+                            from vaf.core.subagent_ipc import get_current_session_id
+                            session_id = get_current_session_id()
+                            get_web_interface().log(
+                                f"False promise detected (attempt {self._false_promise_retries}) - forcing retry...",
+                                level="warning",
+                                source="System",
+                                session_id=session_id,
+                            )
+                            get_web_interface().emit_clear_last_assistant(session_id)
+                        except Exception:
+                            pass
+                        # Clear stream buffer so the retry sends only new content (no old + new)
+                        if stream_callback and hasattr(stream_callback, "clear"):
+                            try:
+                                stream_callback.clear()
+                            except Exception:
+                                pass
                         # Add error to history to force correction
                         self.history.append({
                             "role": "assistant",
@@ -5735,12 +5759,42 @@ class Agent:
                 
                 UI.event("Adaptive", f"Tuning creativity: {current_temp:.1f} (attempt {empty_retry_count})", style="info")
 
-                # API guard: avoid infinite silent retries in WebUI
+                # API guard: auto-retry after 3s, max 4 retries; then show error as system log (no assistant bubble)
                 if self.api_backend and empty_retry_count >= 3:
-                    fallback_msg = "[Error] API returned empty responses repeatedly. Please try again."
-                    if stream_callback:
-                        stream_callback(fallback_msg)
-                    return fallback_msg
+                    if api_empty_delay_retries < API_EMPTY_DELAY_RETRIES_MAX:
+                        api_empty_delay_retries += 1
+                        UI.event("System", f"API returned empty repeatedly. Retrying in 3s ({api_empty_delay_retries}/{API_EMPTY_DELAY_RETRIES_MAX})...", style="warning")
+                        try:
+                            from vaf.core.web_interface import get_web_interface
+                            from vaf.core.subagent_ipc import get_current_session_id
+                            session_id = get_current_session_id()
+                            get_web_interface().log(
+                                f"API returned empty repeatedly. Retrying in 3s (attempt {api_empty_delay_retries}/{API_EMPTY_DELAY_RETRIES_MAX})...",
+                                level="warning",
+                                source="System",
+                                session_id=session_id,
+                            )
+                        except Exception:
+                            pass
+                        time.sleep(3)
+                        empty_retry_count = 0
+                        continue
+                    # Max delay retries reached: emit as system log only (no assistant message)
+                    fallback_msg = "API returned empty responses repeatedly. Please try again."
+                    try:
+                        from vaf.core.web_interface import get_web_interface
+                        from vaf.core.subagent_ipc import get_current_session_id
+                        session_id = get_current_session_id()
+                        get_web_interface().log(
+                            fallback_msg,
+                            level="warning",
+                            source="System",
+                            session_id=session_id,
+                        )
+                    except Exception:
+                        pass
+                    # Signal to headless: do not emit as assistant message; UI already got new_log
+                    return "[SYSTEM_LOG_ONLY]" + fallback_msg
                 
                 continue
 
@@ -6120,7 +6174,7 @@ class Agent:
                 if name in ("list_contacts", "get_contact", "create_contact", "update_contact", "delete_contact"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "list_email_accounts", "send_mail"):
+                if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "label_mail", "list_email_accounts", "send_mail"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 # Pre-write intent/goal before sub-agent invocation for validation/retry

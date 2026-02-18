@@ -308,13 +308,12 @@ When the system is in local mode (no auth), the WebSocket assigns `username="adm
 
 ### Problem 4: Email Config Fallback Chain
 
-Currently, email config lookup follows this chain:
-1. `email_config_by_user[username]` (per-user)
-2. `email_config` (legacy/admin fallback)
+Email config lookup follows the chain in Phase 2 below. So that the Mail dashboard and agent tools stay in sync when the chat session identity differs from the HTTP/session identity (e.g. WebSocket as local admin, dashboard as JWT user), the **tools implement fallbacks**:
 
-This means a user who logs in as "Mert" won't find email accounts stored under legacy config unless a fallback is explicitly coded. Every new tool that reads email config must remember to implement this fallback.
+- **Account lookup** (`mail_utils.list_accounts_with_labels_for_user`): If the primary lookup (by `user_scope_id` or `cred_username`) returns no accounts, the code tries legacy `email_config` and, when exactly one scope in `email_config_by_scope` has accounts, that scope’s accounts. So `list_email_accounts`, `mail_inbox`, and `send_mail` see the same accounts as the dashboard.
+- **Sync store** (`mail_inbox`): When listing messages, the tool tries the primary store, then the legacy store, then the single-scope store (when only one scope has accounts), so it reads from the same SQLite DB as the Mail dashboard.
 
-**Fix:** Store under `email_config_by_scope[user_scope_id]`. One lookup, no fallback needed.
+Best practice: Prefer storing under `email_config_by_scope[user_scope_id]`; the fallbacks cover single-user and identity-mismatch cases.
 
 ---
 

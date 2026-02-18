@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Mail, Loader2, UserPlus, RefreshCw, Inbox } from 'lucide-react';
+import { X, Mail, Loader2, UserPlus, RefreshCw, Inbox, Search } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 
 /** Use direct backend (port 8001) to bypass Next.js proxy which can return 500 on sync/body. */
@@ -118,6 +118,8 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
     const [messageBodyError, setMessageBodyError] = useState<string | null>(null);
     const [newLabelInput, setNewLabelInput] = useState('');
     const [patchLoading, setPatchLoading] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchInputValue, setSearchInputValue] = useState('');
     const autoSyncTimersRef = useRef<Record<string, ReturnType<typeof setInterval>>>({});
 
     const fetchAccounts = async () => {
@@ -156,7 +158,12 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
             if (res.ok) {
                 const data = await res.json();
                 const list = data.messages || [];
-                setMessages(prev => append ? [...prev, ...list] : list);
+                setMessages(prev => {
+                    if (append) return [...prev, ...list];
+                    // On refresh: keep previous list if API returned empty (avoids spinner after sync/refetch glitch)
+                    if (list.length === 0 && prev.length > 0) return prev;
+                    return list;
+                });
                 // Auto-sync when store is empty on first load (e.g. after VAF restart) - sync repopulates the store
                 if (!append && offset === 0 && category === 'all' && list.length === 0 && accounts.length > 0 && !autoSyncOnEmptyRef.current && syncLoading === null) {
                     autoSyncOnEmptyRef.current = true;
@@ -165,10 +172,40 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                 }
             }
         } catch {
-            if (!append) setMessages([]);
+            // On error: keep previous list so user still sees mails instead of empty spinner
+            setMessages(prev => (append ? prev : prev.length > 0 ? prev : []));
         } finally {
             setMessagesLoading(false);
         }
+    };
+
+    const fetchSearch = async (query: string) => {
+        const q = (query || '').trim();
+        if (!q) return;
+        setMessagesLoading(true);
+        try {
+            const params = new URLSearchParams({ folder: 'INBOX', limit: '50' });
+            params.set('query', q);
+            const res = await fetch(api(`api/email/messages/search?${params}`), { credentials: 'include' });
+            if (res.ok) {
+                const data = await res.json();
+                setMessages(data.messages || []);
+                setSearchQuery(q);
+            } else {
+                setMessages([]);
+            }
+        } catch {
+            setMessages([]);
+        } finally {
+            setMessagesLoading(false);
+        }
+    };
+
+    const clearSearch = () => {
+        setSearchQuery('');
+        setSearchInputValue('');
+        setMessagesOffset(0);
+        fetchMessages(selectedAccountId, 0, false, selectedCategory);
     };
 
     useEffect(() => {
@@ -182,11 +219,11 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
     }, [isOpen, accounts.length]);
 
     useEffect(() => {
-        if (isOpen && accounts.length > 0) {
+        if (isOpen && accounts.length > 0 && !searchQuery.trim()) {
             setMessagesOffset(0);
             fetchMessages(selectedAccountId, 0, false, selectedCategory);
         }
-    }, [isOpen, selectedAccountId, selectedCategory, accounts.length]);
+    }, [isOpen, selectedAccountId, selectedCategory, accounts.length, searchQuery]);
 
     useEffect(() => {
         if (!selectedMessage) {
@@ -592,31 +629,68 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                         )}
                         {accounts.length > 0 && (
                             <>
-                                <div className="shrink-0 flex items-center justify-between gap-4 px-4 py-3 border-b border-gray-200 bg-gray-50/80">
+                                <div className="shrink-0 flex items-center justify-between gap-4 px-4 py-3 border-b border-gray-200 bg-gray-50/80 flex-wrap">
                                     <div className="flex items-center gap-2 min-w-0">
                                         <Inbox className="w-5 h-5 text-gray-500 shrink-0" />
                                         <span className="text-sm font-medium text-gray-700 truncate">
-                                            {selectedAccountId
-                                                ? (accounts.find(a => (a.account_id || a.email) === selectedAccountId)?.email || selectedAccountId)
-                                                : 'All accounts'}
+                                            {searchQuery
+                                                ? `Search: "${searchQuery}"`
+                                                : selectedAccountId
+                                                    ? (accounts.find(a => (a.account_id || a.email) === selectedAccountId)?.email || selectedAccountId)
+                                                    : 'All accounts'}
                                         </span>
                                     </div>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            const toSync = selectedAccountId || accounts[0]?.account_id || accounts[0]?.email;
-                                            if (toSync) handleSyncAccount(toSync);
-                                        }}
-                                        disabled={accounts.length === 0 || syncLoading !== null}
-                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-100 disabled:opacity-50 disabled:pointer-events-none"
-                                    >
-                                        {syncLoading !== null ? (
-                                            <Loader2 className="w-4 h-4 animate-spin" />
-                                        ) : (
-                                            <RefreshCw className="w-4 h-4" />
+                                    <div className="flex items-center gap-2 flex-1 min-w-0 justify-end">
+                                        <div className="flex items-center gap-1.5">
+                                            <input
+                                                type="text"
+                                                placeholder="Search mail (e.g. lieferando)"
+                                                value={searchInputValue}
+                                                onChange={e => {
+                                                    const v = e.target.value;
+                                                    setSearchInputValue(v);
+                                                    if (!v.trim()) clearSearch();
+                                                }}
+                                                onKeyDown={e => {
+                                                    if (e.key === 'Enter') {
+                                                        const q = searchInputValue.trim();
+                                                        if (q) fetchSearch(q);
+                                                    }
+                                                }}
+                                                className="w-40 px-2.5 py-1.5 rounded-lg text-sm border border-gray-200 focus:outline-none focus:ring-1 focus:ring-gray-400"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => searchInputValue.trim() ? fetchSearch(searchInputValue.trim()) : clearSearch()}
+                                                className="p-1.5 rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                                                title="Search"
+                                            >
+                                                <Search className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                        {(messagesLoading || syncLoading) && messages.length > 0 && (
+                                            <span className="text-xs text-gray-500 inline-flex items-center gap-1">
+                                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                Updating…
+                                            </span>
                                         )}
-                                        Sync now
-                                    </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const toSync = selectedAccountId || accounts[0]?.account_id || accounts[0]?.email;
+                                                if (toSync) handleSyncAccount(toSync);
+                                            }}
+                                            disabled={accounts.length === 0 || syncLoading !== null}
+                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-100 disabled:opacity-50 disabled:pointer-events-none"
+                                        >
+                                            {syncLoading !== null ? (
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                            ) : (
+                                                <RefreshCw className="w-4 h-4" />
+                                            )}
+                                            Sync now
+                                        </button>
+                                    </div>
                                 </div>
                                 <div className="shrink-0 flex flex-wrap items-center gap-1.5 px-4 py-2 border-b border-gray-100 bg-white">
                                     <button
@@ -664,9 +738,16 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                     </div>
                                 </div>
                                 <div className="flex-1 overflow-y-auto">
-                                    {messagesLoading && messages.length === 0 ? (
+                                    {/* While loading messages, show spinner so first load can populate the list; only show "Syncing..." when not loading (sync ran but store was empty). When we have messages, always show them during sync. */}
+                                    {messages.length === 0 && messagesLoading ? (
                                         <div className="flex items-center justify-center py-12">
                                             <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+                                        </div>
+                                    ) : messages.length === 0 && syncLoading ? (
+                                        <div className="flex flex-col items-center justify-center py-12 text-center max-w-sm mx-auto px-4">
+                                            <Loader2 className="w-10 h-10 animate-spin text-gray-400 mb-3" />
+                                            <p className="text-gray-600 font-medium">Syncing your mailbox…</p>
+                                            <p className="text-sm text-gray-500 mt-1">Your messages will appear here when sync finishes.</p>
                                         </div>
                                     ) : messages.length === 0 ? (
                                         <div className="flex flex-col items-center justify-center py-12 text-center max-w-sm mx-auto px-4">

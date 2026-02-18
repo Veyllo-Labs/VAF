@@ -2934,6 +2934,21 @@ function VAFDashboardContent() {
                                                         );
                                                     }
 
+                                                    // API empty error: show as system log (no bot bubble) for consistency
+                                                    const apiEmptyErrorText = 'API returned empty responses repeatedly. Please try again.';
+                                                    const isApiEmptyError = msg.role === 'assistant' && msg.content && (
+                                                        msg.content.includes(apiEmptyErrorText) ||
+                                                        msg.content.replace(/^\[Error\]\s*/i, '').trim() === apiEmptyErrorText
+                                                    );
+                                                    if (isApiEmptyError) {
+                                                        const prevWasSystemApiErr = i > 0 && filteredMessages[i - 1].role === 'system';
+                                                        return (
+                                                            <div key={`system-${trueIndex}`} className={cn("flex justify-center", prevWasSystemApiErr ? "pt-0" : "pt-4")}>
+                                                                <SystemStep message={`System: ${apiEmptyErrorText}`} />
+                                                            </div>
+                                                        );
+                                                    }
+
                                                     // Render Tool Messages (same width as ThinkingDetails / assistant bubble content)
                                                     if (msg.role === 'tool') {
                                                         const toolLower = (msg.toolName || '').toLowerCase();

@@ -41,7 +41,7 @@ In Front Office, only an **allow-list** of tools is available. All other tools (
 - **Contacts:** `list_contacts`, `get_contact`
 - **Reply/send:** `send_whatsapp`, `send_telegram`, `send_discord`, `send_slack`
 - **WhatsApp read:** `read_whatsapp_chat`, `find_whatsapp_messages`, `whatsapp_inbox`
-- **Mail:** `mail_inbox`, `find_mail`, `read_mail`, `send_mail`, `list_email_accounts`, `mark_mail_answered`
+- **Mail:** `mail_inbox`, `find_mail`, `read_mail`, `send_mail`, `list_email_accounts`, `mark_mail_answered`, `label_mail`
 - **Search:** `web_search`
 
 **Not available in Front Office** (among others): `update_user_identity`, `create_contact`, `update_contact`, `delete_contact`, `python` / code execution, file and workspace write tools, `replace_editor_selection`, coder/librarian agents, `update_intent`, `update_working_memory`.

@@ -7,7 +7,13 @@ If exactly one match, returns the full body so the agent can answer in one call.
 from vaf.core.email_sync_store import search_messages
 from vaf.core.email_transport import get_message_body_plain
 from vaf.tools.base import BaseTool
-from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, store_scope_from_kwargs, store_username_from_kwargs
+from vaf.tools.mail_utils import (
+    cred_scope_from_kwargs,
+    cred_username_from_kwargs,
+    store_candidates_for_mail,
+    store_scope_from_kwargs,
+    store_username_from_kwargs,
+)
 
 
 class FindMailTool(BaseTool):
@@ -55,13 +61,18 @@ class FindMailTool(BaseTool):
             limit = 10
         if not query:
             return "query is required (e.g. 'Postman' or 'postman.com')."
-        matches = search_messages(
-            query=query,
-            folder=folder,
-            limit=limit,
-            username=store_username,
-            user_scope_id=user_scope_id,
-        )
+        # Use same store fallback chain as mail_inbox so we search the same DB as the Mail dashboard
+        matches = []
+        for try_username, try_scope_id in store_candidates_for_mail(store_username, user_scope_id):
+            matches = search_messages(
+                query=query,
+                folder=folder,
+                limit=limit,
+                username=try_username,
+                user_scope_id=try_scope_id,
+            )
+            if matches:
+                break
         if not matches:
             return f"No emails matching '{query}' in {folder}. Sync in Settings → Connections → Email if needed."
         lines = []

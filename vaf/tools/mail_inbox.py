@@ -6,61 +6,85 @@ Use read_mail to get the full body of a specific message.
 """
 
 import logging
+from datetime import datetime
 
 from vaf.core.email_sync_store import init_store, list_messages as store_list_messages, upsert_messages
 from vaf.core.email_transport import fetch_mail, get_account
 from vaf.tools.base import BaseTool
-from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_for_user, store_scope_from_kwargs, store_username_from_kwargs
+from vaf.tools.mail_utils import (
+    cred_scope_from_kwargs,
+    cred_username_from_kwargs,
+    list_accounts_for_user,
+    store_candidates_for_mail,
+    store_scope_from_kwargs,
+    store_username_from_kwargs,
+)
 
 logger = logging.getLogger("vaf.tools.mail_inbox")
+
+
+# Max lengths for compact list (keeps output within context, avoids truncation)
+_FROM_MAX = 38
+_SUBJECT_MAX = 50
+_DATE_FMT = "%Y-%m-%d %H:%M"  # compact date
+
+
+def _trunc(s: str, max_len: int) -> str:
+    s = (s or "").strip()
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 1].rstrip() + "…"
+
+
+def _short_date(iso_or_raw: str) -> str:
+    if not iso_or_raw:
+        return ""
+    s = (iso_or_raw or "").strip()
+    if len(s) <= 16:
+        return s
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return dt.strftime(_DATE_FMT)
+    except Exception:
+        return s[:16] + "…" if len(s) > 16 else s
 
 
 def _format_inbox(messages: list, folder: str) -> str:
     if not messages:
         return f"No messages in {folder} (sync first in Settings → Connections → Email if needed)."
-    lines = []
+    list_lines = []
+    id_lines = []
     for i, m in enumerate(messages, 1):
+        from_str = _trunc(m.get("from", "") or "", _FROM_MAX)
+        date_display = _short_date(m.get("message_date_iso") or m.get("date", ""))
+        subj = _trunc(m.get("subject", "") or "", _SUBJECT_MAX)
+        list_lines.append(f"{i}. From: {from_str} | Date: {date_display} | Subject: {subj}")
+        acc = m.get("account_id") or ""
         mid = m.get("message_id") or ""
         pid = m.get("provider_message_id") or ""
-        cat = m.get("category") or "primary"
-        extra = [f"label: {cat}"]
-        if mid:
-            extra.append(f"message_id: {mid}")
-        if pid:
-            extra.append(f"provider_message_id: {pid}")
-        suffix = " | " + " | ".join(extra)
-        # Prefer message_date_iso for unambiguous date; fall back to raw date header
-        date_display = m.get("message_date_iso") or m.get("date", "")
-        lines.append(
-            f"{i}. From: {m.get('from', '')} | Date: {date_display} | Subject: {m.get('subject', '')} | {suffix}"
-        )
-    out = "Recent emails (same as Mail dashboard, newest first by message date):\n" + "\n".join(lines)
-    out += "\n\nTo read the full body of a message, use read_mail with account_id, message_id, folder, and provider_message_id when available."
+        id_lines.append(f"  {i}: account_id={acc} message_id={mid!r} provider_message_id={pid} folder={folder or 'INBOX'}")
+    out = "Recent emails (same as Mail dashboard, newest first):\n" + "\n".join(list_lines)
+    out += "\n\nTo read the full body of a message, use read_mail with the IDs below (by index):\n" + "\n".join(id_lines)
     return out
 
 
 def _format_inbox_all_accounts(messages: list, folder: str) -> str:
-    """Like _format_inbox but each line includes account_id so read_mail can be used."""
+    """Compact list + read_mail IDs by index so the model can show N distinct emails and call read_mail by index."""
     if not messages:
         return f"No messages in {folder} across any connected account. Sync in Settings → Connections → Email if needed."
-    lines = []
+    list_lines = []
+    id_lines = []
     for i, m in enumerate(messages, 1):
+        from_str = _trunc(m.get("from", "") or "", _FROM_MAX)
+        date_display = _short_date(m.get("message_date_iso") or m.get("date", ""))
+        subj = _trunc(m.get("subject", "") or "", _SUBJECT_MAX)
         acc = m.get("account_id") or ""
+        list_lines.append(f"{i}. From: {from_str} | Date: {date_display} | Subject: {subj} | account: {_trunc(acc, 28)}")
         mid = m.get("message_id") or ""
         pid = m.get("provider_message_id") or ""
-        cat = m.get("category") or "primary"
-        extra = [f"account_id: {acc}", f"label: {cat}"]
-        if mid:
-            extra.append(f"message_id: {mid}")
-        if pid:
-            extra.append(f"provider_message_id: {pid}")
-        suffix = " | " + " | ".join(extra)
-        date_display = m.get("message_date_iso") or m.get("date", "")
-        lines.append(
-            f"{i}. From: {m.get('from', '')} | Date: {date_display} | Subject: {m.get('subject', '')} | {suffix}"
-        )
-    out = "Recent emails (all connected accounts, same as Mail dashboard, newest first by message date):\n" + "\n".join(lines)
-    out += "\n\nTo read the full body of a message, use read_mail with account_id, message_id, folder, and provider_message_id from the list."
+        id_lines.append(f"  {i}: account_id={acc} message_id={mid!r} provider_message_id={pid} folder={folder or 'INBOX'}")
+    out = "Recent emails (all connected accounts, newest first):\n" + "\n".join(list_lines)
+    out += "\n\nTo read a message, use read_mail with the IDs below (by index). Do not invent or repeat entries; use this list only.\n" + "\n".join(id_lines)
     return out
 
 
@@ -72,11 +96,11 @@ class MailInboxTool(BaseTool):
     """
     name = "mail_inbox"
     description = (
-        "Show the inbox (list of recent emails). Uses the same mailbox as the Mail dashboard (Settings → Connections → Email). "
-        "When the user asks for a specific number (e.g. 'list 20 mails', 'die anderen 20', 'show 50 emails'), pass max_messages=20 or 50 so that many are listed – do not show only 3. "
-        "When the user asks about mails in general, call without account_id to list from ALL connected accounts. "
-        "Optionally pass account_id, folder, and max_messages (1–200; default 50). "
-        "To read a message's content, use read_mail with account_id, message_id, folder, and provider_message_id from the list."
+        "Show the inbox (list of recent emails). Same mailbox as the Mail dashboard (Settings → Connections → Email). "
+        "When the user asks for a specific number (e.g. 'list 15 mails', 'show 20 emails', 'die letzten 50'), you MUST call mail_inbox with max_messages set to that number (e.g. max_messages=15) and then present the tool output to the user as-is. Do NOT reuse an old list or repeat the same entry to reach the count; always call the tool with the requested max_messages. "
+        "Omit account_id to list from ALL connected accounts. "
+        "Parameters: account_id (optional), folder (default INBOX), max_messages (1–200; default 50). "
+        "To read a message's body, use read_mail with account_id, message_id, folder, and provider_message_id from the 'IDs below (by index)' block in the tool output."
     )
     parameters = {
         "type": "object",
@@ -91,7 +115,7 @@ class MailInboxTool(BaseTool):
             },
             "max_messages": {
                 "type": "integer",
-                "description": "How many mails to list (e.g. 3 for 3, 20 for 20, 50 for 50). When user says 'list 20 mails' or 'die anderen 20', pass 20. Default 50, max 200.",
+                "description": "Number of emails to return. When the user says 'list 15 mails' or 'show 20 emails', pass that exact number (e.g. 15 or 20). Default 50, max 200. Always pass the user-requested count so the tool returns that many distinct entries.",
             },
         },
         "required": [],
@@ -127,16 +151,26 @@ class MailInboxTool(BaseTool):
             )
         if account_id and not get_account(account_id, username=cred_username, user_scope_id=user_scope_id):
             return f"Account '{account_id}' not found. Connected accounts: {', '.join(accounts)}."
-        init_store(store_username, user_scope_id)
-        messages = store_list_messages(
-            account_id=account_id or None,
-            folder=folder,
-            limit=max_messages,
-            offset=0,
-            username=store_username,
-            user_scope_id=user_scope_id,
-            category=None,
-        )
+        # Try primary store first, then legacy and single-scope stores so we match the Mail Dashboard DB
+        store_candidates = store_candidates_for_mail(store_username, user_scope_id)
+        messages: list = []
+        used_store_username = store_username
+        used_scope_id = user_scope_id
+        for try_username, try_scope_id in store_candidates:
+            init_store(try_username, try_scope_id)
+            messages = store_list_messages(
+                account_id=account_id or None,
+                folder=folder,
+                limit=max_messages,
+                offset=0,
+                username=try_username,
+                user_scope_id=try_scope_id,
+                category=None,
+            )
+            if messages:
+                used_store_username = try_username
+                used_scope_id = try_scope_id
+                break
         if messages:
             if account_id:
                 return _format_inbox(messages, folder)

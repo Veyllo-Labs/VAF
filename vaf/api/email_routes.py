@@ -27,11 +27,13 @@ from vaf.core.email_sync_store import (
     list_categories as store_list_categories,
     list_for_sender_relabel,
     list_messages as store_list_messages,
+    search_messages as store_search_messages,
     update_message_answered as store_update_message_answered,
     update_message_category as store_update_message_category,
     upsert_messages,
 )
 from vaf.core.email_transport import apply_sender_rules_to_category, fetch_mail, get_message_body_plain
+from vaf.tools.mail_utils import store_candidates_for_mail
 from vaf.core.oauth_pkce import (
     exchange_code_for_tokens,
     get_authorization_url,
@@ -586,17 +588,61 @@ async def get_synced_messages(
     _user: Dict[str, Any] = Depends(_get_current_user),
 ):
     """
-    List synced messages from the local store (paginated). Scoped to current user.
+    List synced messages from the local store (paginated). Uses same store fallback as mail_inbox
+    (primary → legacy → single-scope) so the dashboard shows mails already in SQLite without waiting for sync.
     account_id: optional; if omitted, returns messages from all accounts for that user.
     category: optional primary|social|promotions (Gmail-style). Spam is never stored or returned.
     """
-    _username = _user.get("username", "admin")
     _user_scope_id = _user.get("user_scope_id")
     limit = min(max(1, limit), 100)
     offset = max(0, offset)
     store_username, _ = _store_and_cred_from_user(_user)
-    items = store_list_messages(account_id=account_id, folder=folder, limit=limit, offset=offset, username=store_username, user_scope_id=_user_scope_id, category=category)
+    items: List[Dict[str, Any]] = []
+    for try_username, try_scope_id in store_candidates_for_mail(store_username, _user_scope_id):
+        items = store_list_messages(
+            account_id=account_id,
+            folder=folder,
+            limit=limit,
+            offset=offset,
+            username=try_username,
+            user_scope_id=try_scope_id,
+            category=category,
+        )
+        if items:
+            break
     return {"messages": items, "folder": folder, "category": category}
+
+
+@router.get("/messages/search")
+async def search_synced_messages(
+    request: Request,
+    query: str = "",
+    folder: str = "INBOX",
+    limit: int = 50,
+    _user: Dict[str, Any] = Depends(_get_current_user),
+):
+    """
+    Search synced messages by subject or sender (case-insensitive). Uses same store fallback as find_mail.
+    query: search term (e.g. "lieferando", "Postman"); matched against subject and from address.
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"messages": [], "query": "", "folder": folder}
+    limit = min(max(1, limit), 100)
+    store_username, _ = _store_and_cred_from_user(_user)
+    _user_scope_id = _user.get("user_scope_id")
+    items: List[Dict[str, Any]] = []
+    for try_username, try_scope_id in store_candidates_for_mail(store_username, _user_scope_id):
+        items = store_search_messages(
+            query=query,
+            folder=folder,
+            limit=limit,
+            username=try_username,
+            user_scope_id=try_scope_id,
+        )
+        if items:
+            break
+    return {"messages": items, "query": query, "folder": folder}
 
 
 @router.get("/categories")

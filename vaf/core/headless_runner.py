@@ -713,6 +713,9 @@ def run_headless_agent():
                                 content=clean_ack,
                                 session_id=task.session_id
                             )
+                    elif response_text.startswith("[SYSTEM_LOG_ONLY]"):
+                        # Agent already sent this as system log; do not add assistant bubble
+                        final_text = response_text.replace("[SYSTEM_LOG_ONLY]", "").strip()
                     else:
                         # Final response broadcast (in case streaming missed the final state)
                         final_text = "".join(response_parts) if response_parts else response_text
@@ -724,17 +727,17 @@ def run_headless_agent():
                             session_id=task.session_id
                         )
 
-                    # Emit message_complete event for Auto-TTS
+                    # Emit message_complete event for Auto-TTS (skip speaking for SYSTEM_LOG_ONLY)
                     try:
                         get_web_interface().emit_message_complete(
-                            content=str(final_text),
+                            content="" if response_text.startswith("[SYSTEM_LOG_ONLY]") else str(final_text),
                             session_id=task.session_id
                         )
                     except Exception:
                         pass
 
                     # When user asked for a text (e.g. "Schreib mir einen Text"), open it in Document Editor
-                    if not response_text.startswith("[ASYNC_ACK]"):
+                    if not response_text.startswith("[ASYNC_ACK]") and not response_text.startswith("[SYSTEM_LOG_ONLY]"):
                         try:
                             _maybe_open_draft_in_editor(
                                 task.session_id or "",

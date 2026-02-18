@@ -342,7 +342,7 @@ def search_messages(
     pattern = f"%{(query or '').strip()}%"
     conn = _get_conn(username, user_scope_id)
     try:
-        sel = "account_id, folder, message_id, category, provider_message_id, subject, from_addr, date_str, body_snippet, synced_at, answered_at"
+        sel = "account_id, folder, message_id, category, provider_message_id, subject, from_addr, date_str, body_snippet, synced_at, answered_at, message_date_iso"
         cur = conn.execute(
             f"""
             SELECT {sel}
@@ -368,6 +368,7 @@ def search_messages(
                 "body_snippet": r["body_snippet"],
                 "synced_at": r["synced_at"],
                 "answered_at": (r["answered_at"] or "").strip() if "answered_at" in r.keys() else "",
+                "message_date_iso": r["message_date_iso"] if "message_date_iso" in r.keys() else None,
             }
             for r in rows
         ]

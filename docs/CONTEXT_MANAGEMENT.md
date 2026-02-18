@@ -241,6 +241,10 @@ When the model returns no user-facing answer (e.g. only `<think>` content or emp
 
 This two-phase approach reduces endless “think-only” loops while still using the first failed attempt as context for one retry.
 
+**API backend – delayed retries and system-log-only fallback:** When using an API backend (e.g. OpenAI, DeepSeek), after 3 consecutive empty responses the agent performs up to 4 delayed retries (3 seconds between each). A system log entry is emitted before each retry. If all 4 retries still yield no answer, the agent sends the message "API returned empty responses repeatedly. Please try again." as a **system log only** (via `new_log`); no assistant message is added. The headless runner detects the `[SYSTEM_LOG_ONLY]` return value and does not emit `agent_message_update`, so the Web UI shows a timeline (system) entry only, not a bot speech bubble.
+
+**False promise retry:** When the model says it will use a tool (e.g. "Let me search…") but does not emit a tool call, the agent treats this as a false promise, appends a correction to history and retries. As with empty-response retry, the backend sends `clear_last_assistant` so the Web UI removes the faulty assistant message; only the retry response is shown.
+
 ### Configuration
 
 - **Default Limit**: 8,192 tokens (configurable via `vaf settings`)

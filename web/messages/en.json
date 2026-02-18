@@ -77,6 +77,8 @@
   },
   "settings": {
     "title": "Settings",
+    "redirecting": "Redirecting…",
+    "redirectingToSettings": "Redirecting to settings…",
     "loadingVisualization": "Loading visualization…",
     "tabs": {
       "general": "General",

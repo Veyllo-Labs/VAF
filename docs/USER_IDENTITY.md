@@ -15,6 +15,7 @@ That data is stored per user and injected into the system prompt each turn.
 ## Storage
 
 - **File**: `~/.vaf/users/<username>/user_identity.json`
+- The path is determined by the **username** of the current session (from JWT when authenticated, or in local mode from `local_admin_username` in config).
 - **Contents**: `name`, `preferred_language`, `city`, `country` (location), `preferences` (list of strings), `dos` (list), `donts` (list), `main_messenger` (optional: `"telegram"` | `"discord"` | `"slack"` | `"whatsapp"`), `timezone` (optional IANA e.g. `Europe/Berlin`), `date_format` (optional e.g. `dd.mm.yyyy`), `time_format` (optional `24h` | `12h`), `change_log` (list of `{ "at": "<ISO8601>", "action": "<summary>" }`).
 - **Created**: When the workspace is first used; default `name` is the username, other fields empty.
 
@@ -76,13 +77,9 @@ The modal size matches the Memory Graph modal (95vw × 90vh).
 
 When **local only** (no network, no auth):
 
-- **RAG / DB (memories)** use a fixed scope so entries are scoped, not global:
-  - Config: `local_admin_scope_id` = `00000000-0000-0000-0000-000000000001` (default).
-  - WebSocket and HTTP Memory API both use this scope when there is no authenticated user.
-- **User identity (user_identity.json)** uses a fixed username so Chat and Settings show the same data:
-  - Config: `local_admin_username` = `admin` (default).
-  - WebSocket (chat) and HTTP API (GET /api/user/persona) both use this username when there is no auth.
-  - File: `~/.vaf/users/admin/user_identity.json`.
+- After the first admin is created via `POST /api/auth/bootstrap`, `local_admin_scope_id` and `local_admin_username` in config are set to that admin's UUID and username so that local mode and CLI use the same identity as that admin (see [UUID.md](UUID.md)).
+- When there is no auth, the HTTP API and WebSocket use `get_local_admin_username()` and the backend uses `get_local_admin_scope_id()` for RAG/DB, so the same `user_identity.json` and scoped data (memories, mail DB, contacts) are used as for the local admin.
+- **RAG / DB (memories)** use that scope; **user identity (user_identity.json)** uses that username (e.g. `~/.vaf/users/<local_admin_username>/user_identity.json`).
 
 So in local mode, one logical “local user” is used everywhere: same `user_scope_id` for RAG/DB and same username for user identity. The WebUI User Identity modal and the model’s `update_user_identity` tool read/write the same file.
 
@@ -90,6 +87,17 @@ When **network is enabled** and users log in:
 
 - Each user has a `user_scope_id` (UUID from auth DB) for RAG/memories and a `username` for `~/.vaf/users/<username>/user_identity.json`.
 - WebSocket sets these from the JWT; HTTP API routes read them from `request.state.user` — a consolidated dict set by `AuthMiddleware` after JWT validation (see [NETWORK_FEATURES.md](NETWORK_FEATURES.md#layer-3-jwt-authentication-middleware)).
+
+## Per-user loading
+
+Each user's `user_identity.json` (and change log) is loaded because the backend uses the **username** from the current request/session (JWT or local admin config) for all persona and user-identity endpoints and for the system prompt; that same username is passed to the `update_user_identity` tool. RAG, mail DB, and contacts are scoped by **user_scope_id** (same session/JWT or config). Together, username + user_scope_id form the effective "user profile" for the request.
+
+| Key | What is keyed by it |
+|-----|---------------------|
+| **username** | `user_identity.json`, change log, `identity.json`, `soul.md`, workspace dir `~/.vaf/users/<username>/` |
+| **user_scope_id** | RAG/memories (PostgreSQL), email_sync.db path (when not legacy admin path), contacts, credentials, cache keys |
+
+As long as both keys are set correctly for the session (from JWT or config), each user gets their own identity file and scoped data.
 
 ## Best practices
 

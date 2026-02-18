@@ -3001,13 +3001,17 @@ function VAFDashboardContent() {
                                                     const cleanAnswer = isBot ? stripToolCallsJSON(answer) : answer;
                                                     // Add top margin if following a system step
                                                     const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
+                                                    // Only show the speech bubble when there is visible content (avoid empty bubbles)
+                                                    const hasBubbleContent = !isBot
+                                                        ? !!(displayAnswer || (displayFiles && displayFiles.length > 0))
+                                                        : !!((cleanAnswer && cleanAnswer.trim() !== '') || parseWorkflowAsync(answer));
 
                                                     const bubbleContent = (
                                                         <>
                                                             {isBot && thought && <ThinkingDetails thought={thought} isComplete={thinkingDone} />}
 
-                                                            {/* Show answer bubble: always for user, for bot if there's an answer OR if there's no thought (fallback) */}
-                                                            {(displayAnswer || !isBot || (isBot && !thought)) && (
+                                                            {/* Show answer bubble only when there is content (never show empty speech bubble) */}
+                                                            {hasBubbleContent && (
                                                                 <div className="flex flex-col gap-3 w-full">
                                                                     {isBot && parseWorkflowAsync(answer) ? (() => {
                                                                         const wf = parseWorkflowAsync(answer)!;

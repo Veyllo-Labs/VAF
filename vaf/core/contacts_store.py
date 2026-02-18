@@ -10,21 +10,20 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from vaf.core.config import Config
+from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
 
 logger = logging.getLogger("vaf.core.contacts_store")
 
 _LOCK = threading.Lock()
-_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
 
 
 def _local_admin() -> str:
-    return (Config.get("local_admin_username") or "admin").strip().lower()
+    return get_local_admin_username().lower()
 
 
 def _local_admin_scope_id() -> str:
-    return str(Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE_ID)).strip()
+    return get_local_admin_scope_id()
 
 
 def _safe_username(username: Optional[str]) -> str:

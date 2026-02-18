@@ -7,22 +7,21 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from vaf.core.config import Config
+from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
 
 logger = logging.getLogger("vaf.core.whatsapp_message_store")
 
 _DB_NAME = "whatsapp_messages.db"
 _DEFAULT_RETENTION_DAYS = 90
-_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
 
 
 def _local_admin() -> str:
-    return (Config.get("local_admin_username") or "admin").strip().lower()
+    return get_local_admin_username().lower()
 
 
 def _local_admin_scope_id() -> str:
-    return str(Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE_ID)).strip()
+    return get_local_admin_scope_id()
 
 
 def _db_path(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Path:

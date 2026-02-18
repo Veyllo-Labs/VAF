@@ -57,19 +57,19 @@ def _get_current_user(request: Request) -> Dict[str, Any]:
     return get_current_user_or_local_admin(request)
 
 
-_LOCAL_ADMIN_SCOPE = "00000000-0000-0000-0000-000000000001"
+from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 
 
 def _store_and_cred_from_user(user: Dict[str, Any]) -> tuple[str, Optional[str]]:
     """Return (store_username, cred_username) for store/credential scope. Uses user_scope_id for local-admin check when available (Phase 6)."""
     username = (user.get("username") or "admin").strip()
     scope = user.get("user_scope_id")
-    local_scope = str(Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE)).strip()
+    local_scope = get_local_admin_scope_id()
     if scope and str(scope).strip() == local_scope:
         return "", None
     if not username:
         return "", None
-    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    local_admin = get_local_admin_username().lower()
     if username.lower() == local_admin:
         return "", None
     return username, username
@@ -111,7 +111,7 @@ def _get_email_config(
 ) -> Dict[str, Any]:
     """Return email config for the given user. When username is None or local admin, use legacy email_config.
     If user_scope_id is set, email_config_by_scope is tried first (Phase 2); otherwise username-based lookup."""
-    local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
+    local_admin_scope = get_local_admin_scope_id()
     if user_scope_id:
         by_scope = Config.get("email_config_by_scope") or {}
         if isinstance(by_scope, dict):
@@ -123,7 +123,7 @@ def _get_email_config(
             if isinstance(raw, dict):
                 return raw
             return {"accounts": []}
-    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    local_admin = get_local_admin_username().lower()
     if not username or username.strip().lower() == local_admin:
         raw = Config.get("email_config")
         if isinstance(raw, dict):
@@ -142,7 +142,7 @@ def _save_email_config(
     """Save email config for the given user. When username is None or local admin, write to legacy email_config.
     If user_scope_id is set, write to email_config_by_scope (Phase 2); otherwise username-based."""
     config = Config.load()
-    local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
+    local_admin_scope = get_local_admin_scope_id()
     if user_scope_id and str(user_scope_id).strip() != str(local_admin_scope).strip():
         by_scope = config.get("email_config_by_scope") or {}
         if not isinstance(by_scope, dict):
@@ -151,7 +151,7 @@ def _save_email_config(
         config["email_config_by_scope"] = by_scope
         Config.save(config)
         return
-    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    local_admin = get_local_admin_username().lower()
     if not username or username.strip().lower() == local_admin:
         config["email_config"] = ec
     else:
@@ -776,7 +776,7 @@ EMAIL_AUTO_SYNC_INTERVAL_SEC = 30 * 60  # 30 minutes
 
 def _collect_auto_sync_accounts() -> List[tuple[str, Dict[str, Any], Dict[str, Any]]]:
     """Return list of (config_username, account_dict, full_ec) for every account with auto_sync_enabled."""
-    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    local_admin = get_local_admin_username().lower()
     result: List[tuple[str, Dict[str, Any], Dict[str, Any]]] = []
     # Legacy / local admin
     ec = _get_email_config(None)
@@ -814,7 +814,7 @@ async def run_auto_sync_all_accounts(max_messages: int = 100) -> Dict[str, Any]:
         account_id = acc.get("account_id") or acc.get("email") or ""
         if not account_id:
             continue
-        cred_username = None if config_username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else config_username
+        cred_username = None if config_username.strip().lower() == get_local_admin_username().lower() else config_username
         store_username = "" if cred_username is None else cred_username
         limit = min(max(1, max_messages), 200)
         try:

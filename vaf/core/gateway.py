@@ -204,7 +204,8 @@ def run_agent_step(agent: Agent, text: str, context: dict, server_user_scope_id:
             pass
     elif not getattr(agent, "_current_user_scope_id", None):
         from uuid import UUID as _UUID
-        local_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
+        from vaf.core.config import get_local_admin_scope_id
+        local_scope = get_local_admin_scope_id()
         try:
             agent._current_user_scope_id = _UUID(str(local_scope))
         except (ValueError, TypeError):

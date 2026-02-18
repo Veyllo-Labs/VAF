@@ -11,14 +11,11 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from vaf.core.config import Config
+from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["config"])
-
-
-_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
 
 
 def get_current_user_or_local_admin(request: Request) -> Dict[str, Any]:
@@ -30,18 +27,18 @@ def get_current_user_or_local_admin(request: Request) -> Dict[str, Any]:
         return {
             "username": user.get("username", "admin"),
             "role": (user.get("role") or "user").lower(),
-            "user_scope_id": str(scope) if scope else Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE_ID),
+            "user_scope_id": str(scope) if scope else get_local_admin_scope_id(),
         }
     return {
-        "username": Config.get("local_admin_username", "admin"),
+        "username": get_local_admin_username(),
         "role": "admin",
-        "user_scope_id": Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE_ID),
+        "user_scope_id": get_local_admin_scope_id(),
     }
 
 
 def get_current_scope_id(request: Request) -> str:
     """Return current user's user_scope_id (for data scoping). Use get_current_user_or_local_admin when you need username/role too."""
-    return get_current_user_or_local_admin(request).get("user_scope_id", _LOCAL_ADMIN_SCOPE_ID)
+    return get_current_user_or_local_admin(request).get("user_scope_id", get_local_admin_scope_id())
 
 
 def get_current_username(request: Request) -> str:

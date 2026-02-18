@@ -155,6 +155,12 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
             db.add(new_user)
             await db.commit()
             await db.refresh(new_user)
+            # Persist admin identity so CLI and localhost without JWT use the same scope (single identity)
+            from vaf.core.config import Config
+            config = Config.load()
+            config["local_admin_scope_id"] = str(new_user.user_scope_id)
+            config["local_admin_username"] = new_user.username
+            Config.save(config)
             UserConfig.ensure_user_dir(username)
 
             access = create_access_token(

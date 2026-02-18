@@ -91,13 +91,15 @@ WhatsApp configuration is stored in `~/.vaf/config.json` (or your platform confi
     "whitelist": [
       {
         "phone_number": "+49123456789",
-        "user_scope_id": "00000000-0000-0000-0000-000000000001",
+        "user_scope_id": "<uuid-from-auth-or-local-admin-scope>",
         "vaf_username": "admin"
       }
     ]
   }
 }
 ```
+
+**Best practice:** Use the same `user_scope_id` as the Web UI for that user. For the local admin, use the value of `local_admin_scope_id` in config (set automatically by bootstrap when the first admin is created, or set manually). The bridge resolves missing `user_scope_id` in whitelist entries via `get_local_admin_scope_id()`, so the local admin's WhatsApp sessions use the same scope as CLI and localhost — one identity across Web, CLI, and WhatsApp.
 
 Authentication (Baileys session) is stored per user under `~/.vaf/users/<username>/whatsapp/` (or the platform-specific data directory). Do not commit these directories to version control.
 

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from vaf.core.config import Config
+from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 from vaf.core.contacts_store import (
     create_contact,
     delete_contact,
@@ -34,8 +34,8 @@ def get_current_vaf_user(request: Request) -> Dict[str, str]:
             "username": user.get("username", "admin"),
         }
     return {
-        "user_scope_id": Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001"),
-        "username": Config.get("local_admin_username", "admin"),
+        "user_scope_id": get_local_admin_scope_id(),
+        "username": get_local_admin_username(),
     }
 
 

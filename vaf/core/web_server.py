@@ -1462,8 +1462,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             return
         # Localhost - allow; if JWT cookie present, decode so we get user_scope_id for RAG
         # Use fixed local_admin_scope_id + local_admin_username so WebSocket and HTTP API use same user (user_identity, RAG)
-        local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
-        local_admin_username = Config.get("local_admin_username", "admin")
+        from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+        local_admin_scope = get_local_admin_scope_id()
+        local_admin_username = get_local_admin_username()
         user_context = {"username": local_admin_username, "role": "admin", "user_scope_id": local_admin_scope}
         if token:
             try:
@@ -1548,8 +1549,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     return
             elif is_localhost_client:
                 # Localhost without token: use fixed scope + username so RAG and user_identity match HTTP API
-                local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
-                local_admin_username = Config.get("local_admin_username", "admin")
+                from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+                local_admin_scope = get_local_admin_scope_id()
+                local_admin_username = get_local_admin_username()
                 user_context = {"username": local_admin_username, "role": "admin", "user_scope_id": local_admin_scope}
             
         except ImportError:
@@ -2074,6 +2076,36 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         })
                     except Exception as e:
                         log("WebServer", f"Artifact update failed: {e}")
+
+                elif type == "contact_reply_decision":
+                    reply_id = cmd.get("replyId")
+                    decision = cmd.get("decision")
+                    if not reply_id or decision not in ("approve", "reject"):
+                        await websocket.send_json({"type": "contact_reply_result", "ok": False, "error": "missing replyId or decision", "replyId": reply_id or ""})
+                    else:
+                        try:
+                            from vaf.core.contact_reply_pending import get_and_remove
+                            payload = get_and_remove(reply_id)
+                            if not payload:
+                                await websocket.send_json({"type": "contact_reply_result", "ok": False, "error": "expired", "replyId": reply_id})
+                            elif decision == "approve":
+                                src = payload.get("source")
+                                text = payload.get("text") or "[No reply text]"
+                                if src == "telegram":
+                                    from vaf.core.telegram_reply import send_telegram_reply
+                                    send_telegram_reply(str(payload["chat_id_or_jid"]), text)
+                                    await websocket.send_json({"type": "contact_reply_result", "ok": True, "decision": "approve", "replyId": reply_id})
+                                elif src == "whatsapp":
+                                    from vaf.core.whatsapp_reply import send_whatsapp_reply
+                                    send_whatsapp_reply(payload.get("username") or "admin", str(payload["chat_id_or_jid"]), text)
+                                    await websocket.send_json({"type": "contact_reply_result", "ok": True, "decision": "approve", "replyId": reply_id})
+                                else:
+                                    await websocket.send_json({"type": "contact_reply_result", "ok": False, "error": "unknown source", "replyId": reply_id})
+                            else:
+                                await websocket.send_json({"type": "contact_reply_result", "ok": True, "decision": "reject", "replyId": reply_id})
+                        except Exception as e:
+                            log("WebServer", f"contact_reply_decision failed: {e}")
+                            await websocket.send_json({"type": "contact_reply_result", "ok": False, "error": str(e)[:200], "replyId": reply_id})
 
                 elif type == "chat":
                     content = cmd.get("content")

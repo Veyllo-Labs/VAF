@@ -718,6 +718,8 @@ function VAFDashboardContent() {
     const [userTimeFormat, setUserTimeFormat] = useState<'24h' | '12h' | undefined>(undefined);
     const [isAutomationPopupOpen, setIsAutomationPopupOpen] = useState(false);
     const [showChangingModelOverlay, setShowChangingModelOverlay] = useState(false);
+    type PendingContactReply = { replyId: string; source: string; contactName: string; preview: string; sessionId?: string };
+    const [pendingContactReplies, setPendingContactReplies] = useState<PendingContactReply[]>([]);
     const [tools, setTools] = useState<Array<{ name: string; description: string; category: string }>>([]);
     const [workflows, setWorkflows] = useState<Array<{ id: string; name: string; description: string; steps: number }>>([]);
     const [trustedSources, setTrustedSources] = useState<{ categories: Array<{ id: string; name: string; description: string; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> }>({ categories: [] });
@@ -1198,8 +1200,8 @@ function VAFDashboardContent() {
                 // If data.sessionId is missing, it's a global update -> Allow
                 // If activeSessionId is missing, we are in initial state -> Allow
                 if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
-                    // Exception: history_update and session_list are handled by their own logic
-                    if (data.type !== 'session_list' && data.type !== 'history_update') {
+                    // Exception: history_update, session_list, contact_reply_pending (show for any session)
+                    if (data.type !== 'session_list' && data.type !== 'history_update' && data.type !== 'contact_reply_pending') {
                         console.log(`🔍 [FILTER] Rejecting ${data.type}: backend=${data.sessionId}, frontend=${activeSessionId}`);
                         return;
                     }
@@ -1344,6 +1346,18 @@ function VAFDashboardContent() {
                     // Update stats if session matches OR if it's a global update (no sessionId)
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
                     setTokenStats(data.stats);
+                }
+                else if (data.type === 'contact_reply_pending') {
+                    setPendingContactReplies(prev => [...prev, {
+                        replyId: data.replyId,
+                        source: data.source || 'whatsapp',
+                        contactName: data.contactName || '',
+                        preview: data.preview || '',
+                        sessionId: data.sessionId,
+                    }]);
+                }
+                else if (data.type === 'contact_reply_result' && data.replyId) {
+                    setPendingContactReplies(prev => prev.filter(p => p.replyId !== data.replyId));
                 }
                 else if (data.type === 'context_status') {
                     setContextStats(data.stats);
@@ -2703,6 +2717,49 @@ function VAFDashboardContent() {
             {isDragOver && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-blue-100/95 pointer-events-none">
                     <span className="text-lg font-medium text-blue-700">{tMain('dropFilesHere')}</span>
+                </div>
+            )}
+            {pendingContactReplies.length > 0 && (
+                <div className="shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-3 flex items-center gap-4 flex-wrap">
+                    {pendingContactReplies.slice(0, 3).map((p) => {
+                        const channel = p.source === 'telegram' ? 'Telegram' : 'WhatsApp';
+                        return (
+                            <div key={p.replyId} className="flex items-center gap-3 bg-white rounded-lg border border-amber-200 p-3 shadow-sm min-w-0 max-w-2xl">
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium text-amber-900">{tMain('contactReplyTitle')}</p>
+                                    <p className="text-xs text-amber-800 mt-0.5">
+                                        {tMain('contactReplyTo', { name: p.contactName || p.source, channel })}
+                                    </p>
+                                    <p className="text-xs text-gray-600 mt-1 truncate" title={p.preview}>{p.preview}</p>
+                                </div>
+                                <div className="flex gap-2 shrink-0">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setPendingContactReplies(prev => prev.filter(x => x.replyId !== p.replyId));
+                                            ws?.send(JSON.stringify({ type: 'contact_reply_decision', replyId: p.replyId, decision: 'approve' }));
+                                        }}
+                                        className="px-3 py-1.5 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-700"
+                                    >
+                                        {tMain('contactReplyApprove')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setPendingContactReplies(prev => prev.filter(x => x.replyId !== p.replyId));
+                                            ws?.send(JSON.stringify({ type: 'contact_reply_decision', replyId: p.replyId, decision: 'reject' }));
+                                        }}
+                                        className="px-3 py-1.5 text-sm font-medium rounded-md bg-gray-200 text-gray-800 hover:bg-gray-300"
+                                    >
+                                        {tMain('contactReplyReject')}
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                    {pendingContactReplies.length > 3 && (
+                        <span className="text-sm text-amber-800">+{pendingContactReplies.length - 3} more</span>
+                    )}
                 </div>
             )}
             <div className="flex-1 flex min-h-0 overflow-hidden">

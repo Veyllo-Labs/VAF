@@ -232,7 +232,8 @@ def _get_email_config(
 ) -> Dict[str, Any]:
     """Return email config for the given user. When username is None or local admin, use legacy email_config.
     If user_scope_id is set, email_config_by_scope is tried first; then legacy for local admin scope."""
-    local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
+    from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+    local_admin_scope = get_local_admin_scope_id()
     if user_scope_id:
         by_scope = Config.get("email_config_by_scope") or {}
         if isinstance(by_scope, dict):
@@ -244,7 +245,7 @@ def _get_email_config(
             if isinstance(raw, dict):
                 return raw
             return {"accounts": []}
-    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    local_admin = get_local_admin_username().lower()
     if not username or username.strip().lower() == local_admin:
         raw = Config.get("email_config")
         if isinstance(raw, dict):

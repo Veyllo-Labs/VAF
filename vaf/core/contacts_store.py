@@ -16,10 +16,15 @@ from vaf.core.platform import Platform
 logger = logging.getLogger("vaf.core.contacts_store")
 
 _LOCK = threading.Lock()
+_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
 
 
 def _local_admin() -> str:
     return (Config.get("local_admin_username") or "admin").strip().lower()
+
+
+def _local_admin_scope_id() -> str:
+    return str(Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE_ID)).strip()
 
 
 def _safe_username(username: Optional[str]) -> str:
@@ -30,13 +35,19 @@ def _safe_username(username: Optional[str]) -> str:
     return safe.lower() if safe else ""
 
 
-def _contacts_path(username: Optional[str] = None) -> Path:
-    u = _safe_username(username)
+def _contacts_path(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Path:
     data_dir = Platform.data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
+    if user_scope_id:
+        scope_str = str(user_scope_id).strip()
+        if scope_str == _local_admin_scope_id():
+            return data_dir / "contacts.json"
+        scope_dir = data_dir / "scopes" / scope_str
+        scope_dir.mkdir(parents=True, exist_ok=True)
+        return scope_dir / "contacts.json"
+    u = _safe_username(username)
     if not u or u == _local_admin():
         return data_dir / "contacts.json"
-    # Per-user isolation: only under data_dir/users/<safe_username>/
     user_dir = data_dir / "users" / u
     user_dir.mkdir(parents=True, exist_ok=True)
     return user_dir / "contacts.json"
@@ -93,8 +104,8 @@ def _sync_legacy_from_channels(contact: Dict[str, Any]) -> None:
     contact["email"] = next((ch["value"] for ch in channels if ch.get("type") == "email" and ch.get("value")), None)
 
 
-def _load_all(username: Optional[str] = None) -> List[Dict[str, Any]]:
-    path = _contacts_path(username)
+def _load_all(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    path = _contacts_path(username, user_scope_id)
     if not path.exists():
         return []
     try:
@@ -111,41 +122,41 @@ def _load_all(username: Optional[str] = None) -> List[Dict[str, Any]]:
         return []
 
 
-def _save_all(contacts: List[Dict[str, Any]], username: Optional[str] = None) -> None:
-    path = _contacts_path(username)
+def _save_all(contacts: List[Dict[str, Any]], username: Optional[str] = None, user_scope_id: Optional[str] = None) -> None:
+    path = _contacts_path(username, user_scope_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(contacts, indent=2), encoding="utf-8")
 
 
-def list_contacts(username: Optional[str] = None) -> List[Dict[str, Any]]:
+def list_contacts(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Return all contacts for the user. Each contact has id, name, channels, personal file fields.
-    Isolation: data is stored per username (local admin: contacts.json; others: users/<username>/contacts.json)."""
+    Isolation: data is stored per username or user_scope_id (local admin: contacts.json; others: users/<username>/ or scopes/<user_scope_id>/contacts.json)."""
     with _LOCK:
-        return list(_load_all(username))
+        return list(_load_all(username, user_scope_id))
 
 
-def get_contact_by_id(contact_id: str, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_contact_by_id(contact_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Return one contact by id, or None."""
     with _LOCK:
-        for c in _load_all(username):
+        for c in _load_all(username, user_scope_id):
             if c.get("id") == contact_id:
                 return dict(c)
     return None
 
 
-def get_contact_by_name(name: str, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_contact_by_name(name: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Return first contact whose name matches (case-insensitive), or None."""
-    matches = get_contacts_by_name(name, username)
+    matches = get_contacts_by_name(name, username, user_scope_id=user_scope_id)
     return matches[0] if matches else None
 
 
-def get_contacts_by_name(name: str, username: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_contacts_by_name(name: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Return all contacts whose name matches (case-insensitive). Use to detect duplicates."""
     name_clean = (name or "").strip()
     if not name_clean:
         return []
     with _LOCK:
-        return [dict(c) for c in _load_all(username) if (c.get("name") or "").strip().lower() == name_clean.lower()]
+        return [dict(c) for c in _load_all(username, user_scope_id) if (c.get("name") or "").strip().lower() == name_clean.lower()]
 
 
 def _normalize_phone_for_match(value: str) -> str:
@@ -153,13 +164,13 @@ def _normalize_phone_for_match(value: str) -> str:
     return "".join(c for c in (value or "") if c.isdigit())
 
 
-def get_contact_by_telegram_user_id(telegram_user_id: str, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_contact_by_telegram_user_id(telegram_user_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Return the contact who has this telegram_user_id and allow_as_assistant_user=True, or None."""
     tid = (telegram_user_id or "").strip()
     if not tid:
         return None
     with _LOCK:
-        for c in _load_all(username):
+        for c in _load_all(username, user_scope_id):
             if not c.get("allow_as_assistant_user"):
                 continue
             for val in _contact_telegram_values(c):
@@ -168,7 +179,7 @@ def get_contact_by_telegram_user_id(telegram_user_id: str, username: Optional[st
     return None
 
 
-def get_contact_by_whatsapp_phone(whatsapp_jid_or_phone: str, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_contact_by_whatsapp_phone(whatsapp_jid_or_phone: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Return the contact who has this WhatsApp number (JID or E.164) and allow_as_assistant_user=True, or None."""
     raw = (whatsapp_jid_or_phone or "").strip()
     if not raw:
@@ -177,7 +188,7 @@ def get_contact_by_whatsapp_phone(whatsapp_jid_or_phone: str, username: Optional
     if not norm:
         return None
     with _LOCK:
-        for c in _load_all(username):
+        for c in _load_all(username, user_scope_id):
             if not c.get("allow_as_assistant_user"):
                 continue
             for p in _contact_whatsapp_values(c):
@@ -205,6 +216,7 @@ def create_contact(
     name: str,
     username: Optional[str] = None,
     *,
+    user_scope_id: Optional[str] = None,
     channels: Optional[List[Dict[str, str]]] = None,
     whatsapp_phone: Optional[str] = None,
     telegram_username: Optional[str] = None,
@@ -243,20 +255,21 @@ def create_contact(
     }
     _sync_legacy_from_channels(contact)
     with _LOCK:
-        contacts = _load_all(username)
+        contacts = _load_all(username, user_scope_id)
         contacts.append(contact)
-        _save_all(contacts, username)
+        _save_all(contacts, username, user_scope_id)
     return _contact_ensure_channels(dict(contact))
 
 
 def update_contact(
     contact_id: str,
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
     **updates: Any,
 ) -> Optional[Dict[str, Any]]:
     """Update contact by id. Only provided fields are updated. 'channels' = list of {type, value}. Returns updated contact or None."""
     with _LOCK:
-        contacts = _load_all(username)
+        contacts = _load_all(username, user_scope_id)
         for i, c in enumerate(contacts):
             if c.get("id") == contact_id:
                 allowed = {
@@ -277,23 +290,23 @@ def update_contact(
                         contacts[i][k] = v.strip() if isinstance(v, str) else v
                 if "channels" in updates:
                     _sync_legacy_from_channels(contacts[i])
-                _save_all(contacts, username)
+                _save_all(contacts, username, user_scope_id)
                 return _contact_ensure_channels(dict(contacts[i]))
     return None
 
 
-def delete_contact(contact_id: str, username: Optional[str] = None) -> bool:
+def delete_contact(contact_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> bool:
     """Delete contact by id. Returns True if deleted."""
     with _LOCK:
-        contacts = _load_all(username)
+        contacts = _load_all(username, user_scope_id)
         new_list = [c for c in contacts if c.get("id") != contact_id]
         if len(new_list) == len(contacts):
             return False
-        _save_all(new_list, username)
+        _save_all(new_list, username, user_scope_id)
         return True
 
 
-def get_contacts_allowing_assistant(username: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_contacts_allowing_assistant(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Return contacts with allow_as_assistant_user=True, for bridge whitelist checks."""
     with _LOCK:
-        return [dict(c) for c in _load_all(username) if c.get("allow_as_assistant_user")]
+        return [dict(c) for c in _load_all(username, user_scope_id) if c.get("allow_as_assistant_user")]

@@ -1,8 +1,8 @@
 # UUID-Based User Identity in VAF
 
-This document defines how user identity **should** work across all layers of the VAF stack. It serves as the authoritative reference for any developer (human or AI) building or refactoring multi-user features.
+This document defines how user identity works across all layers of the VAF stack. It serves as the authoritative reference for any developer (human or AI) building or refactoring multi-user features.
 
-> **Current state:** VAF uses a dual-identity model (`user_scope_id` + `username`). Some subsystems correctly scope by UUID; others rely on username string comparisons. This document describes the **target architecture** and the migration path to get there.
+> **Current state (Phases 1–4 complete):** All user-scoped stores (email, contacts, WhatsApp, credentials) accept `user_scope_id` and use scope-based paths (`scopes/<uuid>/`). The config lookup chain is `email_config_by_scope[uuid]` → `email_config_by_user[username]` → `email_config` (legacy). Username-based paths are kept as backward-compatible fallbacks. Phases 5–6 (remove legacy username scoping, enforce role-based auth) remain future work.
 
 ---
 
@@ -37,52 +37,52 @@ When running in single-user / localhost mode (no network auth):
 ## How Identity Flows Through the Stack
 
 ```
-                     ┌─────────────────────────────────┐
+                     ┌──────────────────────────────────┐
                      │         Auth Database            │
                      │  local_users table               │
                      │  ┌─────────────────────────────┐ │
-                     │  │ id (PK)     : UUID           │ │
-                     │  │ username    : String UNIQUE   │ │
-                     │  │ user_scope_id: UUID UNIQUE    │ │
-                     │  │ role        : String          │ │
-                     │  │ password_hash: String          │ │
+                     │  │ id (PK)     : UUID          │ │
+                     │  │ username    : String UNIQUE │ │
+                     │  │ user_scope_id: UUID UNIQUE  │ │
+                     │  │ role        : String        │ │
+                     │  │ password_hash: String       │ │
                      │  └─────────────────────────────┘ │
-                     └──────────────┬──────────────────┘
+                     └──────────────┬───────────────────┘
                                     │ Login
                                     ▼
                      ┌─────────────────────────────────┐
-                     │            JWT Token             │
-                     │  {                               │
-                     │    "sub": user_id,               │
-                     │    "username": username,          │
-                     │    "role": role,                  │
-                     │    "user_scope_id": scope_uuid,   │
-                     │  }                               │
+                     │            JWT Token            │
+                     │  {                              │
+                     │    "sub": user_id,              │
+                     │    "username": username,        │
+                     │    "role": role,                │
+                     │    "user_scope_id": scope_uuid, │
+                     │  }                              │
                      └──────────────┬──────────────────┘
                                     │
                  ┌──────────────────┼──────────────────┐
-                 │                  │                   │
-                 ▼                  ▼                   ▼
+                 │                  │                  │
+                 ▼                  ▼                  ▼
           ┌─────────────┐   ┌─────────────┐    ┌──────────────┐
-          │  HTTP API    │   │  WebSocket  │    │  Messaging   │
-          │  Middleware  │   │  Connect    │    │  Bridges     │
-          │  sets        │   │  extracts   │    │  (Telegram,  │
-          │  request.    │   │  user from  │    │   WhatsApp,  │
-          │  state.user  │   │  JWT/state  │    │   Discord)   │
+          │  HTTP API   │   │  WebSocket  │    │  Messaging   │
+          │  Middleware │   │  Connect    │    │  Bridges     │
+          │  sets       │   │  extracts   │    │  (Telegram,  │
+          │  request.   │   │  user from  │    │   WhatsApp,  │
+          │  state.user │   │  JWT/state  │    │   Discord)   │
           └──────┬──────┘   └──────┬──────┘    └──────┬───────┘
                  │                  │                   │
                  │    ┌─────────────┘                   │
                  │    │                                 │
                  ▼    ▼                                 ▼
           ┌─────────────────────────────────────────────────┐
-          │              Agent Instance                      │
+          │              Agent Instance                     │
           │  _current_user_scope_id : UUID  ← data scoping  │
           │  _current_username      : str   ← display/paths │
           └──────────────────┬──────────────────────────────┘
                              │ Tool execution
                              ▼
           ┌──────────────────────────────────────────────────┐
-          │                  Tool Layer                       │
+          │                  Tool Layer                      │
           │  tool_args["user_scope_id"] → data operations    │
           │  tool_args["username"]      → filesystem/config  │
           └──────────────────┬───────────────────────────────┘
@@ -91,10 +91,10 @@ When running in single-user / localhost mode (no network auth):
           ▼          ▼       ▼          ▼          ▼
      ┌─────────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────────┐
      │ Memory  │ │Redis │ │Email │ │Files │ │Credential│
-     │ (PG)   │ │Cache │ │Store │ │System│ │  Store   │
-     │ scope  │ │scope │ │scope │ │user  │ │  scope   │
-     │ =UUID  │ │=UUID │ │=UUID │ │dirs  │ │  =UUID   │
-     └────────┘ └──────┘ └──────┘ └──────┘ └──────────┘
+     │  (PG)   │ │Cache │ │Store │ │System│ │  Store   │
+     │  scope  │ │scope │ │scope │ │user  │ │  scope   │
+     │  =UUID  │ │=UUID │ │=UUID │ │dirs  │ │  =UUID   │
+     └─────────┘ └──────┘ └──────┘ └──────┘ └──────────┘
 ```
 
 ---
@@ -318,58 +318,73 @@ This means a user who logs in as "Mert" won't find email accounts stored under l
 
 ## Migration Plan
 
-### Phase 1: Add `user_scope_id` Alongside `username` (Non-Breaking)
+### Phase 1: Add `user_scope_id` Alongside `username` (Non-Breaking) — ✅ Done
 
-Add `user_scope_id` as an additional parameter to all functions that currently only accept `username`. Keep `username` working for backward compatibility.
+All functions that previously accepted only `username` now also accept `user_scope_id: Optional[str] = None`. Legacy `username` parameter is preserved for backward compatibility.
 
-**Files to modify:**
-- `vaf/tools/mail_utils.py` — Add `user_scope_id` to lookup functions
-- `vaf/core/email_sync_store.py` — Accept `user_scope_id` for DB path
-- `vaf/core/whatsapp_message_store.py` — Accept `user_scope_id` for DB path
-- `vaf/core/contacts_store.py` — Accept `user_scope_id` for file path
-- `vaf/core/credential_store.py` — Accept `user_scope_id` for key generation
-- `vaf/core/email_transport.py` — Accept `user_scope_id` for config lookup
-- `vaf/api/email_routes.py` — Pass `user_scope_id` from request state
+**Migrated files:**
+- `vaf/tools/mail_utils.py` — `store_scope_from_kwargs()`, `cred_scope_from_kwargs()`
+- `vaf/core/email_sync_store.py` — All CRUD functions accept `user_scope_id`
+- `vaf/core/whatsapp_message_store.py` — `_db_path()`, `append_message()`, etc.
+- `vaf/core/contacts_store.py` — All CRUD + lookup functions accept `user_scope_id`
+- `vaf/core/credential_store.py` — `_credential_key()`, get/set/delete functions
+- `vaf/core/email_transport.py` — `_get_email_config()`, `fetch_mail()`, `send_mail()`, etc.
+- `vaf/api/email_routes.py` — All endpoints extract `user_scope_id` from `_get_current_user()`
+- `vaf/api/contact_routes.py` — All CRUD endpoints pass `user_scope_id`
+- `vaf/core/oauth_pkce.py` — `get_valid_access_token()` passes scope to credential operations
 
-### Phase 2: Add `email_config_by_scope` Config Key
+### Phase 2: Add `email_config_by_scope` Config Key — ✅ Done
 
 ```json
 {
   "email_config_by_scope": {
     "<uuid>": { "accounts": [...] }
   },
-  "email_config_by_user": { ... },  // Keep for backward compat
-  "email_config": { ... }           // Keep for backward compat
+  "email_config_by_user": { ... },
+  "email_config": { ... }
 }
 ```
 
-Lookup priority: `email_config_by_scope[scope]` > `email_config_by_user[username]` > `email_config`.
+Lookup priority (implemented in `email_transport._get_email_config()` and `mail_utils.list_accounts_with_labels_for_user()`):
 
-### Phase 3: Migrate Filesystem Paths
+1. `email_config_by_scope[user_scope_id]` — preferred, UUID-based
+2. `email_config_by_user[username]` — legacy per-user
+3. `email_config` — legacy global/admin fallback
+
+### Phase 3: Migrate Filesystem Paths — ✅ Done
 
 ```
-~/.vaf/users/<username>/  →  ~/.vaf/scopes/<user_scope_id>/
+~/.vaf/scopes/<user_scope_id>/       # New scope-based paths (preferred)
+~/.vaf/users/<username>/             # Legacy paths (fallback)
 ```
 
-Write a one-time migration script that:
-1. Reads `local_users` table to map `username → user_scope_id`
-2. Renames/copies directories
-3. Updates config keys
-4. Preserves backward-compatible symlinks during transition
+Stores use scope-based paths when `user_scope_id` is provided:
+- `email_sync_store.py` → `scopes/<uuid>/email_sync.db`
+- `whatsapp_message_store.py` → `scopes/<uuid>/whatsapp_messages.db`
+- `contacts_store.py` → `scopes/<uuid>/contacts.json`
 
-### Phase 4: Migrate Credential Store Keys
+Migration script: `scripts/migrate_users_to_scopes.py`
+- Reads `local_users` table to map `username → user_scope_id`
+- Copies directories (does not delete originals)
+- Migrates `email_config_by_user` → `email_config_by_scope`
+- Supports `--dry-run` and `--config-only` flags
+
+### Phase 4: Migrate Credential Store Keys — ✅ Done
 
 ```python
-# Old key format
+# Legacy key format (still supported as fallback)
 "email:email:alice:alice@example.com"
 
-# New key format
+# Scope-based key format (preferred when user_scope_id is set)
 "email:email:b2c3d4e5-...:alice@example.com"
+
+# Local admin key format (no scope prefix, matches legacy)
+"email:email:alice@example.com"
 ```
 
-Write migration in `credential_store.py` that re-keys existing credentials on first access.
+Implemented in `credential_store._credential_key()`. Both formats are supported; scope-based keys take priority when `user_scope_id` is provided.
 
-### Phase 5: Remove Username-Based Scoping
+### Phase 5: Remove Username-Based Scoping — TODO
 
 Once all data is keyed by `user_scope_id`:
 - Remove `_local_admin()` string comparison functions
@@ -377,7 +392,7 @@ Once all data is keyed by `user_scope_id`:
 - Remove `store_username_from_kwargs` / `cred_username_from_kwargs` (replaced by scope-based equivalents)
 - Simplify all `_get_email_config()` functions to single-path lookup
 
-### Phase 6: Enforce Role-Based Authorization
+### Phase 6: Enforce Role-Based Authorization — TODO
 
 Replace all `if username == local_admin_username` checks with:
 ```python
@@ -426,35 +441,39 @@ When building a new feature that handles user data:
 | Agent RAG | `vaf/core/agent.py` | `_current_user_scope_id` for memory_save/search |
 | Sandbox | `vaf/tools/python_sandbox.py` | `/tmp/vaf_{scope_prefix}_{exec_id}` |
 | Automation | `vaf/core/automation.py` | Tasks carry `user_scope_id` |
+| Email Config | `vaf/tools/mail_utils.py` | `email_config_by_scope[scope]` → `email_config_by_user` → `email_config` |
+| Email Transport | `vaf/core/email_transport.py` | `_get_email_config(username, user_scope_id)` with scope-first lookup |
+| Email Sync Store | `vaf/core/email_sync_store.py` | `scopes/{scope_id}/email_sync.db` |
+| Email Routes | `vaf/api/email_routes.py` | `_get_current_user()` returns `user_scope_id`, all endpoints pass it |
+| WhatsApp Store | `vaf/core/whatsapp_message_store.py` | `scopes/{scope_id}/whatsapp_messages.db` |
+| Contact Store | `vaf/core/contacts_store.py` | `scopes/{scope_id}/contacts.json`, all CRUD + lookup functions |
+| Credential Store | `vaf/core/credential_store.py` | `email:{provider}:{scope_id}:{account_id}` |
+| Config Routes | `vaf/api/config_routes.py` | `get_current_scope_id()`, `user_scope_id` in user dict |
+| Contact Routes | `vaf/api/contact_routes.py` | All CRUD endpoints pass `user_scope_id` |
+| OAuth PKCE | `vaf/core/oauth_pkce.py` | `get_valid_access_token(user_scope_id=...)` for token refresh |
+| All Mail Tools | `vaf/tools/mail_inbox.py`, `send_mail.py`, etc. | `cred_scope_from_kwargs()` / `store_scope_from_kwargs()` |
 
-### Files That Need Migration (Username-Based Scoping)
+### Files That Still Need Migration (Phase 5+)
 
 | Component | File | Current Pattern | Target Pattern |
 |-----------|------|-----------------|----------------|
-| Email Config | `vaf/tools/mail_utils.py` | `email_config_by_user[username]` | `email_config_by_scope[scope_id]` |
-| Email Transport | `vaf/core/email_transport.py` | `_get_email_config(username)` | `_get_email_config(scope_id)` |
-| Email Sync Store | `vaf/core/email_sync_store.py` | `users/{username}/email_sync.db` | `scopes/{scope_id}/email_sync.db` |
-| Email Routes | `vaf/api/email_routes.py` | `_get_current_username(request)` | `_get_current_scope(request)` |
-| WhatsApp Store | `vaf/core/whatsapp_message_store.py` | `users/{username}/whatsapp.db` | `scopes/{scope_id}/whatsapp.db` |
-| Contact Store | `vaf/core/contacts_store.py` | `users/{username}/contacts.json` | `scopes/{scope_id}/contacts.json` |
-| Credential Store | `vaf/core/credential_store.py` | `email:{provider}:{username}:{id}` | `email:{provider}:{scope_id}:{id}` |
 | User Workspace | `vaf/auth/user_workspace.py` | `users/{username}/` | `scopes/{scope_id}/` |
-| Config Routes | `vaf/api/config_routes.py` | `get_current_username()` | `get_current_scope()` |
-| Contact Routes | `vaf/api/contact_routes.py` | `username` for store path | `scope_id` for store path |
 | WhatsApp Auth | `vaf/core/whatsapp_auth.py` | `username` for session dir | `scope_id` for session dir |
 
-### Hardcoded Admin String Comparisons to Eliminate
+### Hardcoded Admin String Comparisons (Phase 5 Cleanup)
 
-| File | Line | Current Code | Replacement |
-|------|------|-------------|-------------|
-| `vaf/tools/mail_utils.py` | 8-9 | `Config.get("local_admin_username")` | `Config.get("local_admin_scope_id")` |
-| `vaf/core/email_sync_store.py` | 25-32 | `u.lower() != _local_admin()` | `scope_id != local_admin_scope_id` |
-| `vaf/core/whatsapp_message_store.py` | ~25 | `u.lower() != _local_admin()` | `scope_id != local_admin_scope_id` |
-| `vaf/core/contacts_store.py` | ~30 | `u == _local_admin()` | `scope_id == local_admin_scope_id` |
-| `vaf/core/credential_store.py` | 61-68 | `username.lower() == local_admin` | `scope_id == local_admin_scope_id` |
-| `vaf/core/email_transport.py` | 222-228 | `username.lower() == local_admin` | `scope_id == local_admin_scope_id` |
-| `vaf/api/email_routes.py` | 85-93 | `username.lower() == local_admin` | `scope_id == local_admin_scope_id` |
-| `vaf/api/config_routes.py` | 21-36 | `get_current_username()` | `get_current_scope_id()` |
+> **Note:** The current implementation uses a **hybrid approach** for backward compatibility: each function checks `user_scope_id` first, then falls back to `username` string comparison. This is intentional during the transition period. Pure scope-only checks (eliminating username comparisons entirely) are Phase 5 work.
+
+| File | Current Hybrid Pattern | Phase 5 Target |
+|------|----------------------|----------------|
+| `vaf/tools/mail_utils.py` | Scope check → `local_admin_username` fallback | Scope-only |
+| `vaf/core/email_sync_store.py` | `_is_per_user_db(username, user_scope_id)` | Scope-only |
+| `vaf/core/whatsapp_message_store.py` | `_is_per_user_db(username, user_scope_id)` | Scope-only |
+| `vaf/core/contacts_store.py` | `_contacts_path(username, user_scope_id)` | Scope-only |
+| `vaf/core/credential_store.py` | `_credential_key(…, user_scope_id)` | Scope-only |
+| `vaf/core/email_transport.py` | `_get_email_config(username, user_scope_id)` | Scope-only |
+| `vaf/api/email_routes.py` | `_store_and_cred_from_user()` returns both | Scope-only |
+| `vaf/api/config_routes.py` | `get_current_scope_id()` added | Already scope-aware |
 
 ---
 

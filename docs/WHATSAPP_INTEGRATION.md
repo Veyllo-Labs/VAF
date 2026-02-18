@@ -193,8 +193,15 @@ Whisper returns the detected language in the STT response. VAF uses it to:
 ### Incoming Messages
 
 1. **Node** emits a JSON line: `{ "type": "message", "from": "<jid>", "body": "...", "voice_path": "<path or omit>", "fromE164": "+49...", "selfChat": false, ... }`.
-2. **Python** (`_read_user_process`): Resolves allowed senders (config whitelist + contacts with Front Office and WhatsApp channel). If the sender is not allowed, the message is ignored (no reply).
+2. **Python** (`_read_user_process`): Resolves allowed senders (config whitelist + contacts with Front Office and WhatsApp channel). Messages from the account owner (self-chat, e.g. “saved messages”) are also allowed. If the sender is not allowed, the message is ignored (no reply).
 3. **Voice**: If `voice_path` is set and `body === "<voice>"`, Python transcribes the file and replaces `body` with the transcript (or `<media:audio>` on failure); stores language in `_voice_reply_pending` for TTS reply.
+
+#### Self-chat and LID (Linked ID)
+
+WhatsApp uses **LID** (Linked ID) for some chat identifiers; JIDs may end with `@lid` instead of `@s.whatsapp.net`. LID is used for more than just “saved messages” (self-chat)—it can also identify regular 1:1 contacts. To avoid accepting messages from non-whitelisted contacts:
+
+- **Node (wa-bridge.js)**: For any `@lid` JID, the bridge does *not* assume self-chat. It resolves the LID to E.164 via Baileys’ `lidMapping` and only sets `selfChat: true` when the resolved number matches the linked account owner’s number. For `@s.whatsapp.net` chats, self-chat is determined by comparing the numeric part of the JID with the owner’s JID.
+- **Python**: Uses the Node-emitted `selfChat` and `fromE164` (when present) together with the whitelist and contact list. Only senders in the allowed set or marked as self-chat are accepted; all others are rejected and not forwarded to the agent.
 4. **Activity**: Appends to `chat_activity` (for dashboard) and optionally to the message store.
 5. **Enqueue**: Task is added with `session_id = whatsapp_{username}_{digits}`, `input_text = body`, and metadata: `from_contact`, `whatsapp_chat_jid`, `voice_lang`, `user_scope_id`, `username`. When `inbound_to_agent` is `false`, this enqueue is skipped.
 
@@ -334,7 +341,7 @@ Often related to the VAF machine or network:
 
 ### Whitelist-Only Replies
 
-Only numbers in the config whitelist or in contacts with "Can reach your assistant" and a WhatsApp channel can send messages and receive replies. All other senders are ignored (no reply, no notification).
+Only numbers in the config whitelist or in contacts with "Can reach your assistant" and a WhatsApp channel can send messages and receive replies. The account owner’s own messages (self-chat, e.g. “saved messages”) are also accepted. All other senders are ignored (no reply, no notification). Chats identified by LID (`@lid`) are only treated as self-chat when the resolved E.164 matches the linked account owner’s number; other LID chats are subject to the same whitelist/contact checks as normal JIDs.
 
 ### Per-User Auth and Isolation
 

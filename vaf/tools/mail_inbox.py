@@ -10,7 +10,7 @@ import logging
 from vaf.core.email_sync_store import init_store, list_messages as store_list_messages, upsert_messages
 from vaf.core.email_transport import fetch_mail, get_account
 from vaf.tools.base import BaseTool
-from vaf.tools.mail_utils import cred_username_from_kwargs, list_accounts_for_user, store_username_from_kwargs
+from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_for_user, store_scope_from_kwargs, store_username_from_kwargs
 
 logger = logging.getLogger("vaf.tools.mail_inbox")
 
@@ -100,12 +100,13 @@ class MailInboxTool(BaseTool):
     def run(self, **kwargs) -> str:
         store_username = store_username_from_kwargs(kwargs)
         cred_username = cred_username_from_kwargs(kwargs)
+        user_scope_id = store_scope_from_kwargs(kwargs) or cred_scope_from_kwargs(kwargs)
         account_id = (kwargs.get("account_id") or "").strip()
         folder = (kwargs.get("folder") or "INBOX").strip()
         max_messages = int(kwargs.get("max_messages") or 50)
         if max_messages < 1 or max_messages > 200:
             max_messages = 50
-        accounts = list_accounts_for_user(cred_username)
+        accounts = list_accounts_for_user(cred_username, user_scope_id=user_scope_id)
         if not accounts:
             # Debug: log full context so we can diagnose why accounts are missing
             from vaf.core.config import Config
@@ -124,15 +125,16 @@ class MailInboxTool(BaseTool):
                 "No email accounts connected. The user must add an account in Settings → Connections → Email "
                 "(Google, Microsoft, or other IMAP)."
             )
-        if account_id and not get_account(account_id, username=cred_username):
+        if account_id and not get_account(account_id, username=cred_username, user_scope_id=user_scope_id):
             return f"Account '{account_id}' not found. Connected accounts: {', '.join(accounts)}."
-        init_store(store_username)
+        init_store(store_username, user_scope_id)
         messages = store_list_messages(
             account_id=account_id or None,
             folder=folder,
             limit=max_messages,
             offset=0,
             username=store_username,
+            user_scope_id=user_scope_id,
             category=None,
         )
         if messages:
@@ -145,13 +147,13 @@ class MailInboxTool(BaseTool):
                 "or call mail_inbox with a specific account_id to fetch that account."
             )
         try:
-            messages = fetch_mail(account_id, folder=folder, max_messages=max_messages, username=cred_username)
+            messages = fetch_mail(account_id, folder=folder, max_messages=max_messages, username=cred_username, user_scope_id=user_scope_id)
         except Exception as e:
             return f"Failed to fetch mail: {e}"
         if not messages:
             return f"No messages in {folder}. Sync in Settings → Connections → Email to populate the mailbox."
-        upsert_messages(account_id, folder, messages, username=store_username)
+        upsert_messages(account_id, folder, messages, username=store_username, user_scope_id=user_scope_id)
         messages = store_list_messages(
-            account_id=account_id, folder=folder, limit=max_messages, offset=0, username=store_username, category=None
+            account_id=account_id, folder=folder, limit=max_messages, offset=0, username=store_username, user_scope_id=user_scope_id, category=None
         )
         return _format_inbox(messages, folder)

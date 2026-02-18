@@ -50,6 +50,31 @@ def _get_current_username(request: Request) -> str:
     from vaf.api.config_routes import get_current_username as get_username
     return get_username(request)
 
+
+def _get_current_user(request: Request) -> Dict[str, Any]:
+    """Current user with username, role, and user_scope_id (for UUID-based scoping)."""
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    return get_current_user_or_local_admin(request)
+
+
+_LOCAL_ADMIN_SCOPE = "00000000-0000-0000-0000-000000000001"
+
+
+def _store_and_cred_from_user(user: Dict[str, Any]) -> tuple[str, Optional[str]]:
+    """Return (store_username, cred_username) for store/credential scope. Uses user_scope_id for local-admin check when available (Phase 6)."""
+    username = (user.get("username") or "admin").strip()
+    scope = user.get("user_scope_id")
+    local_scope = str(Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE)).strip()
+    if scope and str(scope).strip() == local_scope:
+        return "", None
+    if not username:
+        return "", None
+    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    if username.lower() == local_admin:
+        return "", None
+    return username, username
+
+
 # Default IMAP/SMTP servers by domain (TLS)
 IMAP_SMTP_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "gmail.com": {"imap_host": "imap.gmail.com", "imap_port": 993, "smtp_host": "smtp.gmail.com", "smtp_port": 587},
@@ -80,8 +105,24 @@ class TestImapRequest(BaseModel):
     imap_port: Optional[int] = None
 
 
-def _get_email_config(username: Optional[str] = None) -> Dict[str, Any]:
-    """Return email config for the given user. When username is None or local admin, use legacy email_config."""
+def _get_email_config(
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return email config for the given user. When username is None or local admin, use legacy email_config.
+    If user_scope_id is set, email_config_by_scope is tried first (Phase 2); otherwise username-based lookup."""
+    local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
+    if user_scope_id:
+        by_scope = Config.get("email_config_by_scope") or {}
+        if isinstance(by_scope, dict):
+            ec = by_scope.get(str(user_scope_id).strip())
+            if isinstance(ec, dict) and ec.get("accounts") is not None:
+                return ec
+        if str(user_scope_id).strip() == str(local_admin_scope).strip():
+            raw = Config.get("email_config")
+            if isinstance(raw, dict):
+                return raw
+            return {"accounts": []}
     local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
     if not username or username.strip().lower() == local_admin:
         raw = Config.get("email_config")
@@ -93,9 +134,23 @@ def _get_email_config(username: Optional[str] = None) -> Dict[str, Any]:
     return ec if isinstance(ec, dict) else {"accounts": []}
 
 
-def _save_email_config(ec: Dict[str, Any], username: Optional[str] = None) -> None:
-    """Save email config for the given user. When username is None or local admin, write to legacy email_config."""
+def _save_email_config(
+    ec: Dict[str, Any],
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> None:
+    """Save email config for the given user. When username is None or local admin, write to legacy email_config.
+    If user_scope_id is set, write to email_config_by_scope (Phase 2); otherwise username-based."""
     config = Config.load()
+    local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
+    if user_scope_id and str(user_scope_id).strip() != str(local_admin_scope).strip():
+        by_scope = config.get("email_config_by_scope") or {}
+        if not isinstance(by_scope, dict):
+            by_scope = {}
+        by_scope[str(user_scope_id).strip()] = ec
+        config["email_config_by_scope"] = by_scope
+        Config.save(config)
+        return
     local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
     if not username or username.strip().lower() == local_admin:
         config["email_config"] = ec
@@ -145,14 +200,21 @@ def _test_imap_login(
         return False, err, hint
 
 
-def _add_account(account_id: str, provider: str, email: str, enabled: bool = True, username: Optional[str] = None) -> None:
-    ec = _get_email_config(username)
+def _add_account(
+    account_id: str,
+    provider: str,
+    email: str,
+    enabled: bool = True,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> None:
+    ec = _get_email_config(username, user_scope_id=user_scope_id)
     accounts: List[Dict[str, Any]] = list(ec.get("accounts") or [])
     for a in accounts:
         if (a.get("account_id") or a.get("email")) == account_id or a.get("email") == email:
             a["provider"] = provider
             a["enabled"] = enabled
-            _save_email_config(ec, username)
+            _save_email_config(ec, username, user_scope_id=user_scope_id)
             return
     accounts.append({
         "account_id": account_id,
@@ -162,7 +224,7 @@ def _add_account(account_id: str, provider: str, email: str, enabled: bool = Tru
         "label": "",
     })
     ec["accounts"] = accounts
-    _save_email_config(ec, username)
+    _save_email_config(ec, username, user_scope_id=user_scope_id)
 
 
 def _oauth_callback_base_url() -> str:
@@ -262,9 +324,11 @@ async def oauth_status():
 
 
 @router.get("/accounts")
-async def list_accounts(_username: str = Depends(_get_current_username)):
+async def list_accounts(_user: Dict[str, Any] = Depends(_get_current_user)):
     """Return list of configured email accounts for the current user (metadata only, no credentials)."""
-    ec = _get_email_config(_username)
+    _username = _user.get("username", "admin")
+    _user_scope_id = _user.get("user_scope_id")
+    ec = _get_email_config(_username, user_scope_id=_user_scope_id)
     accounts = ec.get("accounts") or []
     return {"accounts": accounts}
 
@@ -294,12 +358,14 @@ async def test_imap_connection(body: TestImapRequest):
 
 
 @router.post("/accounts")
-async def add_account(request: Request, body: AddImapAccountRequest, _username: str = Depends(_get_current_username)):
+async def add_account(request: Request, body: AddImapAccountRequest, _user: Dict[str, Any] = Depends(_get_current_user)):
     """
     Add an IMAP/SMTP account (other provider). Password is stored in keyring/encrypted file only.
     Server host/port can be omitted; defaults are used for known domains (Gmail, Outlook, Yahoo, etc.).
     Scoped to current user in multi-user (network) mode.
     """
+    _username = _user.get("username", "admin")
+    _user_scope_id = _user.get("user_scope_id")
     email = (body.email or "").strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Valid email required")
@@ -312,9 +378,9 @@ async def add_account(request: Request, body: AddImapAccountRequest, _username: 
     imap_port = body.imap_port if body.imap_port is not None else defaults.get("imap_port", 993)
     smtp_host = (body.smtp_host or "").strip() or defaults.get("smtp_host", "smtp.gmail.com")
     smtp_port = body.smtp_port if body.smtp_port is not None else defaults.get("smtp_port", 587)
-    cred_username = None if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
-    set_email_imap_password(email, password, cred_username)
-    ec = _get_email_config(_username)
+    _, cred_username = _store_and_cred_from_user(_user)
+    set_email_imap_password(email, password, cred_username, user_scope_id=_user_scope_id)
+    ec = _get_email_config(_username, user_scope_id=_user_scope_id)
     accounts = list(ec.get("accounts") or [])
     now_iso = datetime.now(timezone.utc).isoformat()
     for a in accounts:
@@ -327,7 +393,7 @@ async def add_account(request: Request, body: AddImapAccountRequest, _username: 
             a["smtp_port"] = smtp_port
             ok, _, _ = _test_imap_login(email, password, imap_host, imap_port)
             a["last_verified_at"] = now_iso if ok else None
-            _save_email_config(ec, _username)
+            _save_email_config(ec, _username, user_scope_id=_user_scope_id)
             return {"account_id": email, "email": email, "provider": "imap", "last_verified_at": a.get("last_verified_at")}
     accounts.append({
         "account_id": email,
@@ -342,20 +408,20 @@ async def add_account(request: Request, body: AddImapAccountRequest, _username: 
         "label": "",
     })
     ec["accounts"] = accounts
-    _save_email_config(ec, _username)
+    _save_email_config(ec, _username, user_scope_id=_user_scope_id)
     ok, _, _ = _test_imap_login(email, password, imap_host, imap_port)
     if ok:
         for a in ec.get("accounts") or []:
             if (a.get("email") or "").lower() == email:
                 a["last_verified_at"] = now_iso
                 break
-        _save_email_config(ec, _username)
+        _save_email_config(ec, _username, user_scope_id=_user_scope_id)
     return {"account_id": email, "email": email, "provider": "imap", "last_verified_at": now_iso if ok else None}
 
 
-def _verify_oauth_gmail(account_id: str, username: Optional[str] = None) -> bool:
+def _verify_oauth_gmail(account_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> bool:
     """Verify Gmail OAuth by calling users.getProfile. Returns True if token is valid."""
-    token = get_valid_access_token(account_id, "gmail", username)
+    token = get_valid_access_token(account_id, "gmail", username, user_scope_id=user_scope_id)
     if not token:
         return False
     try:
@@ -369,9 +435,9 @@ def _verify_oauth_gmail(account_id: str, username: Optional[str] = None) -> bool
         return False
 
 
-def _verify_oauth_microsoft(account_id: str, username: Optional[str] = None) -> bool:
+def _verify_oauth_microsoft(account_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> bool:
     """Verify Microsoft OAuth by calling GET /me. Returns True if token is valid."""
-    token = get_valid_access_token(account_id, "microsoft", username)
+    token = get_valid_access_token(account_id, "microsoft", username, user_scope_id=user_scope_id)
     if not token:
         return False
     try:
@@ -387,14 +453,16 @@ def _verify_oauth_microsoft(account_id: str, username: Optional[str] = None) -> 
 
 
 @router.post("/accounts/{account_id}/verify")
-async def verify_account(request: Request, account_id: str, _username: str = Depends(_get_current_username)):
+async def verify_account(request: Request, account_id: str, _user: Dict[str, Any] = Depends(_get_current_user)):
     """
     Re-test connection for an existing account.
     IMAP: NOOP login. OAuth (gmail/microsoft): light API call. Updates last_verified_at on success.
     Scoped to current user in multi-user mode.
     """
-    cred_username = None if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
-    ec = _get_email_config(_username)
+    _username = _user.get("username", "admin")
+    _user_scope_id = _user.get("user_scope_id")
+    _, cred_username = _store_and_cred_from_user(_user)
+    ec = _get_email_config(_username, user_scope_id=_user_scope_id)
     accounts = ec.get("accounts") or []
     acc = None
     for a in accounts:
@@ -405,7 +473,7 @@ async def verify_account(request: Request, account_id: str, _username: str = Dep
         raise HTTPException(status_code=404, detail="Account not found")
     provider = (acc.get("provider") or "imap").lower()
     if provider == "imap":
-        creds = get_email_credentials(account_id, "imap", cred_username)
+        creds = get_email_credentials(account_id, "imap", cred_username, user_scope_id=_user_scope_id)
         if not creds or "password" not in creds:
             raise HTTPException(status_code=400, detail="No stored password for this account")
         ok, err, hint = _test_imap_login(
@@ -416,31 +484,32 @@ async def verify_account(request: Request, account_id: str, _username: str = Dep
         )
         if ok:
             acc["last_verified_at"] = datetime.now(timezone.utc).isoformat()
-            _save_email_config(ec, _username)
+            _save_email_config(ec, _username, user_scope_id=_user_scope_id)
         return {"ok": ok, "error": err if not ok else None, "hint": hint if not ok else None}
     if provider == "gmail":
-        ok = _verify_oauth_gmail(account_id, cred_username)
+        ok = _verify_oauth_gmail(account_id, cred_username, user_scope_id=_user_scope_id)
         if ok:
             acc["last_verified_at"] = datetime.now(timezone.utc).isoformat()
-            _save_email_config(ec, _username)
+            _save_email_config(ec, _username, user_scope_id=_user_scope_id)
         return {"ok": ok, "error": None if ok else "Gmail token invalid or expired", "hint": None}
     if provider == "microsoft":
-        ok = _verify_oauth_microsoft(account_id, cred_username)
+        ok = _verify_oauth_microsoft(account_id, cred_username, user_scope_id=_user_scope_id)
         if ok:
             acc["last_verified_at"] = datetime.now(timezone.utc).isoformat()
-            _save_email_config(ec, _username)
+            _save_email_config(ec, _username, user_scope_id=_user_scope_id)
         return {"ok": ok, "error": None if ok else "Microsoft token invalid or expired", "hint": None}
     raise HTTPException(status_code=400, detail="Verify not supported for this provider")
 
 
 @router.post("/accounts/{account_id}/sync")
-async def sync_account(request: Request, account_id: str, folder: str = "INBOX", max_messages: int = 100, _username: str = Depends(_get_current_username)):
+async def sync_account(request: Request, account_id: str, folder: str = "INBOX", max_messages: int = 100, _user: Dict[str, Any] = Depends(_get_current_user)):
     """
     Fetch messages from provider and store them in the local sync store.
     Updates last_verified_at on success. Returns { ok, count, error? }. Scoped to current user.
     """
-    cred_username = None if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
-    ec = _get_email_config(_username)
+    _username = _user.get("username", "admin")
+    _user_scope_id = _user.get("user_scope_id")
+    ec = _get_email_config(_username, user_scope_id=_user_scope_id)
     accounts = ec.get("accounts") or []
     acc = None
     aid_lower = (account_id or "").strip().lower()
@@ -452,14 +521,14 @@ async def sync_account(request: Request, account_id: str, folder: str = "INBOX",
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     max_messages = min(max(1, max_messages), 200)
-    store_username = "" if cred_username is None else cred_username
+    store_username, cred_username = _store_and_cred_from_user(_user)
     for attempt in range(3):
         try:
-            messages = fetch_mail(account_id, folder=folder, max_messages=max_messages, username=cred_username)
-            count = upsert_messages(account_id, folder, messages, username=store_username)
-            deleted = delete_messages_older_than(username=store_username, days=90)
+            messages = fetch_mail(account_id, folder=folder, max_messages=max_messages, username=cred_username, user_scope_id=_user_scope_id)
+            count = upsert_messages(account_id, folder, messages, username=store_username, user_scope_id=_user_scope_id)
+            deleted = delete_messages_older_than(username=store_username, user_scope_id=_user_scope_id, days=90)
             acc["last_verified_at"] = datetime.now(timezone.utc).isoformat()
-            _save_email_config(ec, _username)
+            _save_email_config(ec, _username, user_scope_id=_user_scope_id)
             return {"ok": True, "count": count, "deleted": deleted}
         except Exception as e:
             err_str = str(e)
@@ -478,19 +547,22 @@ async def get_message_body(
     message_id: str,
     folder: str = "INBOX",
     provider_message_id: Optional[str] = None,
-    _username: str = Depends(_get_current_username),
+    _user: Dict[str, Any] = Depends(_get_current_user),
 ):
     """
     Fetch full message body as plain text only (no HTML). Used when opening a message in the UI.
     provider_message_id is required for Gmail/Microsoft for efficient fetch; optional for IMAP.
     """
     try:
-        store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
+        _username = _user.get("username", "admin")
+        _user_scope_id = _user.get("user_scope_id")
+        store_username, _ = _store_and_cred_from_user(_user)
         body = get_message_body_plain(
             account_id=account_id,
             message_id=message_id,
             folder=folder,
             username=store_username,
+            user_scope_id=_user_scope_id,
             provider_message_id=provider_message_id or None,
         )
         if body is None:
@@ -511,25 +583,29 @@ async def get_synced_messages(
     category: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    _username: str = Depends(_get_current_username),
+    _user: Dict[str, Any] = Depends(_get_current_user),
 ):
     """
     List synced messages from the local store (paginated). Scoped to current user.
     account_id: optional; if omitted, returns messages from all accounts for that user.
     category: optional primary|social|promotions (Gmail-style). Spam is never stored or returned.
     """
+    _username = _user.get("username", "admin")
+    _user_scope_id = _user.get("user_scope_id")
     limit = min(max(1, limit), 100)
     offset = max(0, offset)
-    store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
-    items = store_list_messages(account_id=account_id, folder=folder, limit=limit, offset=offset, username=store_username, category=category)
+    store_username, _ = _store_and_cred_from_user(_user)
+    items = store_list_messages(account_id=account_id, folder=folder, limit=limit, offset=offset, username=store_username, user_scope_id=_user_scope_id, category=category)
     return {"messages": items, "folder": folder, "category": category}
 
 
 @router.get("/categories")
-async def get_categories(_username: str = Depends(_get_current_username)):
+async def get_categories(_user: Dict[str, Any] = Depends(_get_current_user)):
     """List distinct categories for the current user (primary, social, promotions + any custom)."""
-    store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
-    categories = store_list_categories(store_username)
+    _username = _user.get("username", "admin")
+    _user_scope_id = _user.get("user_scope_id")
+    store_username, _ = _store_and_cred_from_user(_user)
+    categories = store_list_categories(store_username, user_scope_id=_user_scope_id)
     return {"categories": categories}
 
 
@@ -557,13 +633,15 @@ def _pattern_from_from_addr(from_addr: str) -> str:
 @router.patch("/messages")
 async def patch_message_category(
     body: PatchMessageBody,
-    _username: str = Depends(_get_current_username),
+    _user: Dict[str, Any] = Depends(_get_current_user),
 ):
     """
     Update a message's category (label). Always adds a sender rule for this message's From
     address and applies it to all synced messages from that sender (existing and future).
     """
-    store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
+    _username = _user.get("username", "admin")
+    _user_scope_id = _user.get("user_scope_id")
+    store_username, _ = _store_and_cred_from_user(_user)
     cat = body.category.strip().lower().replace(" ", "_")[:64] or "primary"
     ok = store_update_message_category(
         store_username,
@@ -571,6 +649,7 @@ async def patch_message_category(
         body.folder,
         body.message_id,
         cat,
+        user_scope_id=_user_scope_id,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Message not found")
@@ -578,26 +657,28 @@ async def patch_message_category(
         store_update_message_answered(
             store_username, body.account_id, body.folder, body.message_id,
             answered_at=(body.answered_at.strip() or None),
+            user_scope_id=_user_scope_id,
         )
     updated = 1
     from_addr = get_message_from_addr(
-        store_username, body.account_id, body.folder, body.message_id
+        store_username, body.account_id, body.folder, body.message_id, user_scope_id=_user_scope_id
     )
     if from_addr:
         pattern = _pattern_from_from_addr(from_addr)
         if pattern:
-            ec = _get_email_config(_username)
+            ec = _get_email_config(_username, user_scope_id=_user_scope_id)
             rules = list(ec.get("sender_category_rules") or [])
             rules = [r for r in rules if isinstance(r, dict) and (r.get("pattern") or "").strip().lower() != pattern]
             rules.append({"pattern": pattern, "category": cat})
             ec["sender_category_rules"] = rules
-            _save_email_config(ec, _username)
-        rows = list_for_sender_relabel(store_username)
+            _save_email_config(ec, _username, user_scope_id=_user_scope_id)
+        rows = list_for_sender_relabel(store_username, user_scope_id=_user_scope_id)
         for row in rows:
             new_cat = apply_sender_rules_to_category(
                 row.get("from_addr") or "",
                 row.get("category") or "primary",
                 store_username if store_username else None,
+                user_scope_id=_user_scope_id,
             )
             new_cat = (new_cat or "primary").strip().lower().replace(" ", "_")[:64] or "primary"
             if new_cat != (row.get("category") or "primary"):
@@ -607,6 +688,7 @@ async def patch_message_category(
                     row["folder"],
                     row["message_id"],
                     new_cat,
+                    user_scope_id=_user_scope_id,
                 ):
                     updated += 1
     return {"ok": True, "category": cat, "updated": updated}
@@ -614,21 +696,24 @@ async def patch_message_category(
 
 @router.post("/messages/apply-sender-rules")
 async def apply_sender_rules(
-    _username: str = Depends(_get_current_username),
+    _user: Dict[str, Any] = Depends(_get_current_user),
 ):
     """
     Re-apply sender→category rules to all synced messages for the current user (backfill).
     Use after adding or changing sender_category_rules in config so existing and new mails get the right label.
     Returns { ok, updated } with the number of messages whose category was changed.
     """
-    store_username = "" if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
-    rows = list_for_sender_relabel(store_username)
+    _username = _user.get("username", "admin")
+    _user_scope_id = _user.get("user_scope_id")
+    store_username, _ = _store_and_cred_from_user(_user)
+    rows = list_for_sender_relabel(store_username, user_scope_id=_user_scope_id)
     updated = 0
     for row in rows:
         new_cat = apply_sender_rules_to_category(
             row.get("from_addr") or "",
             row.get("category") or "primary",
             store_username if store_username else None,
+            user_scope_id=_user_scope_id,
         )
         new_cat = (new_cat or "primary").strip().lower().replace(" ", "_")[:64] or "primary"
         if new_cat != (row.get("category") or "primary"):
@@ -638,6 +723,7 @@ async def apply_sender_rules(
                 row["folder"],
                 row["message_id"],
                 new_cat,
+                user_scope_id=_user_scope_id,
             )
             if ok:
                 updated += 1
@@ -650,9 +736,11 @@ class PatchAccountBody(BaseModel):
 
 
 @router.patch("/accounts/{account_id}")
-async def patch_account(request: Request, account_id: str, body: PatchAccountBody, _username: str = Depends(_get_current_username)):
+async def patch_account(request: Request, account_id: str, body: PatchAccountBody, _user: Dict[str, Any] = Depends(_get_current_user)):
     """Update account settings (e.g. auto_sync_enabled, label). Scoped to current user."""
-    ec = _get_email_config(_username)
+    _username = _user.get("username", "admin")
+    _user_scope_id = _user.get("user_scope_id")
+    ec = _get_email_config(_username, user_scope_id=_user_scope_id)
     accounts = ec.get("accounts") or []
     aid_lower = (account_id or "").strip().lower()
     for a in accounts:
@@ -662,21 +750,23 @@ async def patch_account(request: Request, account_id: str, body: PatchAccountBod
                 a["auto_sync_enabled"] = bool(body.auto_sync_enabled)
             if body.label is not None:
                 a["label"] = (body.label or "").strip()[:64]
-            _save_email_config(ec, _username)
+            _save_email_config(ec, _username, user_scope_id=_user_scope_id)
             return {"ok": True, "account_id": a.get("account_id") or a.get("email")}
     raise HTTPException(status_code=404, detail="Account not found")
 
 
 @router.delete("/accounts/{account_id}")
-async def remove_account(request: Request, account_id: str, _username: str = Depends(_get_current_username)):
+async def remove_account(request: Request, account_id: str, _user: Dict[str, Any] = Depends(_get_current_user)):
     """Remove account from config and delete credentials from keyring. Scoped to current user."""
     from vaf.core.credential_store import delete_email_credentials
-    cred_username = None if _username.strip().lower() == (Config.get("local_admin_username") or "admin").strip().lower() else _username
-    ec = _get_email_config(_username)
+    _username = _user.get("username", "admin")
+    _user_scope_id = _user.get("user_scope_id")
+    _, cred_username = _store_and_cred_from_user(_user)
+    ec = _get_email_config(_username, user_scope_id=_user_scope_id)
     accounts = [a for a in (ec.get("accounts") or []) if a.get("account_id") != account_id and a.get("email") != account_id]
     ec["accounts"] = accounts
-    _save_email_config(ec, _username)
-    delete_email_credentials(account_id, provider=None, username=cred_username)
+    _save_email_config(ec, _username, user_scope_id=_user_scope_id)
+    delete_email_credentials(account_id, provider=None, username=cred_username, user_scope_id=_user_scope_id)
     return {"ok": True}
 
 

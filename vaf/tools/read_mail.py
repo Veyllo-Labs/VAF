@@ -6,7 +6,7 @@ Scoped to the current user in network mode (only that user's connected accounts)
 
 from vaf.core.email_transport import get_account, get_message_body_plain
 from vaf.tools.base import BaseTool
-from vaf.tools.mail_utils import cred_username_from_kwargs, list_accounts_for_user
+from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_for_user
 
 
 class ReadMailTool(BaseTool):
@@ -46,20 +46,22 @@ class ReadMailTool(BaseTool):
 
     def run(self, **kwargs) -> str:
         cred_username = cred_username_from_kwargs(kwargs)
+        user_scope_id = cred_scope_from_kwargs(kwargs)
         account_id = (kwargs.get("account_id") or "").strip()
         message_id = (kwargs.get("message_id") or "").strip()
         folder = (kwargs.get("folder") or "INBOX").strip()
         provider_message_id = (kwargs.get("provider_message_id") or "").strip() or None
         if not account_id or not message_id:
             return "account_id and message_id are required. Use mail_inbox first to list messages and get their message_id (and provider_message_id for Gmail/Microsoft)."
-        acc = get_account(account_id, username=cred_username)
+        acc = get_account(account_id, username=cred_username, user_scope_id=user_scope_id)
         if not acc:
-            return f"Account '{account_id}' not found. Connected accounts: {', '.join(list_accounts_for_user(cred_username))}."
+            return f"Account '{account_id}' not found. Connected accounts: {', '.join(list_accounts_for_user(cred_username, user_scope_id=user_scope_id))}."
         body = get_message_body_plain(
             account_id=account_id,
             message_id=message_id,
             folder=folder,
             username=cred_username,
+            user_scope_id=user_scope_id,
             provider_message_id=provider_message_id,
         )
         if body is None or not body.strip():

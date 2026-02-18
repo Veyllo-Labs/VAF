@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from vaf.core.config import Config
+from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
 
 logger = logging.getLogger("vaf.core.credential_store")
@@ -28,7 +28,6 @@ _FALLBACK_PATH: Optional[Path] = None
 _CREDENTIALS_KEY = "email_credentials_key"
 _KEY_SIZE = 32
 _NONCE_SIZE = 12
-_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
 
 
 def _keyring_available() -> bool:
@@ -51,7 +50,7 @@ def _keyring_available() -> bool:
 
 
 def _local_admin_scope_id() -> str:
-    return str(Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE_ID)).strip()
+    return get_local_admin_scope_id()
 
 
 def _credential_key(
@@ -77,7 +76,7 @@ def _cred_key_username(username: Optional[str]) -> Optional[str]:
     """Normalize username for credential key lookup: None for local admin (matches storage)."""
     if not username or not str(username).strip():
         return None
-    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    local_admin = get_local_admin_username().lower()
     if str(username).strip().lower() == local_admin:
         return None
     return str(username).strip()

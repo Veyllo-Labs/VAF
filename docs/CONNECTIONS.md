@@ -322,7 +322,7 @@ All optional; labels in the UI are in English.
 
 ### Front Office behaviour
 
-When a contact with **Can reach your assistant** enabled sends a message (e.g. via WhatsApp or Telegram), the agent responds in **Front Office** mode: it uses a dedicated system prompt (role + anti-prompt-injection) and a restricted tool set so the contact cannot abuse the system. See [FRONT_OFFICE.md](FRONT_OFFICE.md) for when it activates, which tools are allowed, and how to override the anti-injection text.
+When a contact with **Can reach your assistant** enabled sends a message (e.g. via WhatsApp or Telegram), the agent responds in **Front Office** mode: it uses a dedicated system prompt (role + anti-prompt-injection) and a restricted tool set so the contact cannot abuse the system. **By default, replies to contacts require your approval** in the Web UI before they are sent (see [FRONT_OFFICE.md](FRONT_OFFICE.md) — Reply approval). See [FRONT_OFFICE.md](FRONT_OFFICE.md) for when it activates, which tools are allowed, and how to override the anti-injection text.
 
 ### Agent tools
 

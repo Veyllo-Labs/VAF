@@ -13,22 +13,21 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from vaf.core.config import Config
+from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
 
 logger = logging.getLogger("vaf.core.email_sync_store")
 
 _DB_NAME = "email_sync.db"
 _DEFAULT_RETENTION_DAYS = 90
-_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
 
 
 def _local_admin() -> str:
-    return (Config.get("local_admin_username") or "admin").strip().lower()
+    return get_local_admin_username().lower()
 
 
 def _local_admin_scope_id() -> str:
-    return str(Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE_ID)).strip()
+    return get_local_admin_scope_id()
 
 
 def _is_per_user_db(username: Optional[str], user_scope_id: Optional[str] = None) -> bool:

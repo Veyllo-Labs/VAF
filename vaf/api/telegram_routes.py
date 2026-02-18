@@ -14,7 +14,7 @@ from typing import Optional, Any, Dict, List
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel
 
-from vaf.core.config import Config
+from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 
 logger = logging.getLogger("vaf.api.telegram")
 
@@ -41,8 +41,8 @@ def get_current_vaf_user(request: Request) -> Dict[str, str]:
             "username": user.get("username", "admin"),
         }
     return {
-        "user_scope_id": Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001"),
-        "username": Config.get("local_admin_username", "admin"),
+        "user_scope_id": get_local_admin_scope_id(),
+        "username": get_local_admin_username(),
     }
 
 

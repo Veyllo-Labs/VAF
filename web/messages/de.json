@@ -32,7 +32,12 @@
     "conversation": "Unterhaltung",
     "tokens": "Tokens",
     "attachmentsShort": "Anhänge",
-    "documentViewerTitle": "Document Viewer"
+    "documentViewerTitle": "Document Viewer",
+    "contactReplyTitle": "Antwort an Kontakt freigeben",
+    "contactReplyTo": "Antwort an {name} ({channel})",
+    "contactReplyApprove": "Freigeben",
+    "contactReplyReject": "Ablehnen",
+    "contactReplyPreview": "Vorschau"
   },
   "nav": {
     "settings": "Einstellungen",
@@ -72,6 +77,7 @@
   },
   "settings": {
     "title": "Einstellungen",
+    "loadingVisualization": "Visualisierung wird geladen…",
     "tabs": {
       "general": "Allgemein",
       "persona": "Persona & Gedächtnis",

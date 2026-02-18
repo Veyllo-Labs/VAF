@@ -2,11 +2,11 @@
 
 from typing import List, Optional, Tuple
 
-from vaf.core.config import Config
+from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 
 
 def _local_admin() -> str:
-    return (Config.get("local_admin_username") or "admin").strip().lower()
+    return get_local_admin_username().lower()
 
 
 def store_scope_from_kwargs(kwargs: dict) -> Optional[str]:
@@ -74,7 +74,7 @@ def list_accounts_with_labels_for_user(
       bucket is empty (covers single-user setups where accounts live in
       the legacy location regardless of the active username).
     """
-    local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
+    local_admin_scope = get_local_admin_scope_id()
     if user_scope_id:
         by_scope = Config.get("email_config_by_scope") or {}
         if isinstance(by_scope, dict):

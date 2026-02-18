@@ -4,6 +4,10 @@ from pathlib import Path
 from typing import Optional
 import base64
 
+# Single source of truth for legacy local-admin scope (before bootstrap sets real admin UUID)
+LEGACY_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
+
+
 class Config:
     # In Docker mode, use dedicated config volume (NOT VAF-Space!)
     # VAF-Space = User data (NAS-like storage)
@@ -150,7 +154,7 @@ class Config:
         
         # Local Admin Settings (for localhost without login)
         # user_identity.json and RAG/memory scope use these when no auth (local only)
-        "local_admin_scope_id": "00000000-0000-0000-0000-000000000001",  # Fixed UUID for Local Admin user scope (DB/RAG)
+        "local_admin_scope_id": LEGACY_LOCAL_ADMIN_SCOPE_ID,  # Set to admin UUID by bootstrap; fallback for fresh installs
         "local_admin_username": "admin",  # Username for ~/.vaf/users/<this>/user_identity.json when local (WebSocket + HTTP API)
 
         # Local Network Settings
@@ -176,6 +180,9 @@ class Config:
         "telegram_config": None,                                   # { bot_token, enabled, verified?, whitelist: [...] }
         # Connections: WhatsApp (Baileys via Node, per-user auth, whitelist with phone_number)
         "whatsapp_config": None,                                   # { enabled, whitelist: [{ phone_number, user_scope_id, vaf_username }] }
+
+        # Front Office: when True, replies to contacts (from_contact) require explicit user approval in Web UI before sending
+        "front_office_contact_reply_require_approval": True,
 
         # Email connections: accounts only (no passwords/tokens in config).
         # Credentials stored in OS keyring or encrypted file (see vaf.core.credential_store).
@@ -420,3 +427,12 @@ class Config:
             if old_val != new_val:
                 cls.notify_observers(key, new_val, old_val)
 
+
+def get_local_admin_scope_id() -> str:
+    """Return the local admin user_scope_id (UUID). Use this instead of Config.get('local_admin_scope_id', ...)."""
+    return str(Config.get("local_admin_scope_id", LEGACY_LOCAL_ADMIN_SCOPE_ID) or LEGACY_LOCAL_ADMIN_SCOPE_ID).strip()
+
+
+def get_local_admin_username() -> str:
+    """Return the local admin username. Use for display and paths when no JWT."""
+    return (Config.get("local_admin_username") or "admin").strip()

@@ -6,6 +6,7 @@ import sys
 import gc
 import re
 import logging
+import uuid
 
 # CRITICAL: Disable CUDA for PyTorch BEFORE any torch import to prevent memory explosion
 # PyTorch pre-allocates GPU memory even when using CPU-only models!
@@ -20,6 +21,7 @@ from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
 from vaf.core.platform import Platform
 from vaf.core.log_helper import append_domain_log, is_debug_logging_enabled
+from vaf.core.config import Config
 from pathlib import Path
 
 # Memory management constants - AGGRESSIVE to prevent 25GB situations
@@ -768,7 +770,34 @@ def run_headless_agent():
                                 except Exception:
                                     pass
                                 out = "[No reply text]"
-                            send_telegram_reply(str(chat_id), out)
+                            from_contact = meta.get("from_contact") is True
+                            require_approval = from_contact and Config.get("front_office_contact_reply_require_approval", True)
+                            if require_approval:
+                                reply_id = uuid.uuid4().hex
+                                _username = meta.get("username") or "admin"
+                                _user_scope = meta.get("user_scope_id")
+                                contact_name = None
+                                try:
+                                    from vaf.core.contacts_store import get_contact_by_telegram_user_id
+                                    _tid = meta.get("telegram_user_id")
+                                    if _tid:
+                                        c = get_contact_by_telegram_user_id(_tid, _username, user_scope_id=_user_scope)
+                                        if c:
+                                            contact_name = c.get("name")
+                                except Exception:
+                                    pass
+                                from vaf.core.contact_reply_pending import store_pending
+                                store_pending(reply_id, "telegram", _username, str(chat_id), out, task.session_id or "", contact_name)
+                                get_web_interface()._push_session_update(task.session_id, {
+                                    "type": "contact_reply_pending",
+                                    "replyId": reply_id,
+                                    "source": "telegram",
+                                    "contactName": contact_name or "",
+                                    "preview": (out[:200] + "…") if len(out) > 200 else out,
+                                    "sessionId": task.session_id,
+                                })
+                            else:
+                                send_telegram_reply(str(chat_id), out)
                         elif task_source == "discord":
                             discord_channel_id = meta.get("discord_channel_id")
                             if discord_channel_id:
@@ -812,7 +841,31 @@ def run_headless_agent():
                                 out = re.sub(r'\n{3,}', '\n\n', out).strip()
                                 if not out:
                                     out = "[No reply text]"
-                                send_whatsapp_reply(username, str(chat_jid), out)
+                                from_contact_wa = meta.get("from_contact") is True
+                                require_approval_wa = from_contact_wa and Config.get("front_office_contact_reply_require_approval", True)
+                                if require_approval_wa:
+                                    reply_id_wa = uuid.uuid4().hex
+                                    contact_name_wa = None
+                                    try:
+                                        from vaf.core.contacts_store import get_contact_by_whatsapp_phone
+                                        _user_scope_wa = meta.get("user_scope_id")
+                                        c_wa = get_contact_by_whatsapp_phone(chat_jid, username, user_scope_id=_user_scope_wa)
+                                        if c_wa:
+                                            contact_name_wa = c_wa.get("name")
+                                    except Exception:
+                                        pass
+                                    from vaf.core.contact_reply_pending import store_pending
+                                    store_pending(reply_id_wa, "whatsapp", username, str(chat_jid), out, task.session_id or "", contact_name_wa)
+                                    get_web_interface()._push_session_update(task.session_id, {
+                                        "type": "contact_reply_pending",
+                                        "replyId": reply_id_wa,
+                                        "source": "whatsapp",
+                                        "contactName": contact_name_wa or "",
+                                        "preview": (out[:200] + "…") if len(out) > 200 else out,
+                                        "sessionId": task.session_id,
+                                    })
+                                else:
+                                    send_whatsapp_reply(username, str(chat_jid), out)
                             else:
                                 try:
                                     from vaf.core.log_helper import log_whatsapp_reply
@@ -1073,20 +1126,47 @@ def run_headless_agent():
                         pass
                     # If task came from Telegram or Discord, send error reply so user sees something
                     try:
-                        task_source = getattr(task, "source", None)
-                        meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
-                        if task_source == "telegram" and meta.get("telegram_chat_id"):
-                            from vaf.core.telegram_reply import send_telegram_reply
-                            err_msg = str(e).replace("\n", " ")[:400]
-                            send_telegram_reply(str(meta["telegram_chat_id"]), f"Sorry, something went wrong: {err_msg}")
-                        elif task_source == "discord" and meta.get("discord_channel_id"):
+                        task_source_err = getattr(task, "source", None)
+                        meta_err = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                        err_msg = str(e).replace("\n", " ")[:400]
+                        err_text = f"Sorry, something went wrong: {err_msg}"
+                        from_contact_err = meta_err.get("from_contact") is True
+                        require_approval_err = from_contact_err and Config.get("front_office_contact_reply_require_approval", True)
+                        if task_source_err == "telegram" and meta_err.get("telegram_chat_id"):
+                            if require_approval_err:
+                                reply_id_err = uuid.uuid4().hex
+                                from vaf.core.contact_reply_pending import store_pending
+                                store_pending(reply_id_err, "telegram", meta_err.get("username") or "admin", str(meta_err["telegram_chat_id"]), err_text, task.session_id or "", None)
+                                get_web_interface()._push_session_update(task.session_id, {
+                                    "type": "contact_reply_pending",
+                                    "replyId": reply_id_err,
+                                    "source": "telegram",
+                                    "contactName": "",
+                                    "preview": err_text[:200],
+                                    "sessionId": task.session_id,
+                                })
+                            else:
+                                from vaf.core.telegram_reply import send_telegram_reply
+                                send_telegram_reply(str(meta_err["telegram_chat_id"]), err_text)
+                        elif task_source_err == "discord" and meta_err.get("discord_channel_id"):
                             from vaf.core.discord_reply import send_discord_reply
-                            err_msg = str(e).replace("\n", " ")[:400]
-                            send_discord_reply(str(meta["discord_channel_id"]), f"Sorry, something went wrong: {err_msg}")
-                        elif task_source == "whatsapp" and meta.get("whatsapp_chat_jid"):
-                            from vaf.core.whatsapp_reply import send_whatsapp_reply
-                            err_msg = str(e).replace("\n", " ")[:400]
-                            send_whatsapp_reply(meta.get("username") or "admin", str(meta["whatsapp_chat_jid"]), f"Sorry, something went wrong: {err_msg}")
+                            send_discord_reply(str(meta_err["discord_channel_id"]), err_text)
+                        elif task_source_err == "whatsapp" and meta_err.get("whatsapp_chat_jid"):
+                            if require_approval_err:
+                                reply_id_err_wa = uuid.uuid4().hex
+                                from vaf.core.contact_reply_pending import store_pending
+                                store_pending(reply_id_err_wa, "whatsapp", meta_err.get("username") or "admin", str(meta_err["whatsapp_chat_jid"]), err_text, task.session_id or "", None)
+                                get_web_interface()._push_session_update(task.session_id, {
+                                    "type": "contact_reply_pending",
+                                    "replyId": reply_id_err_wa,
+                                    "source": "whatsapp",
+                                    "contactName": "",
+                                    "preview": err_text[:200],
+                                    "sessionId": task.session_id,
+                                })
+                            else:
+                                from vaf.core.whatsapp_reply import send_whatsapp_reply
+                                send_whatsapp_reply(meta_err.get("username") or "admin", str(meta_err["whatsapp_chat_jid"]), err_text)
                     except Exception:
                         pass
                 finally:

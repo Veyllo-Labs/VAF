@@ -23,12 +23,14 @@ This document defines how user identity works across all layers of the VAF stack
 
 ### Local Admin Defaults
 
-When running in single-user / localhost mode (no network auth):
+When running in single-user / localhost mode (no network auth), or when using the CLI (no JWT), the system uses `local_admin_scope_id` and `local_admin_username` from config:
 
 | Config Key | Default | Purpose |
 |------------|---------|---------|
-| `local_admin_scope_id` | `00000000-0000-0000-0000-000000000001` | Fixed UUID for the local admin user |
+| `local_admin_scope_id` | `00000000-0000-0000-0000-000000000001` | UUID for the local admin user (fallback for fresh installs) |
 | `local_admin_username` | `admin` | Display name for the local admin |
+
+**After bootstrap:** When the first admin is created via `POST /api/auth/bootstrap`, the backend writes that user's `user_scope_id` and `username` into config as `local_admin_scope_id` and `local_admin_username`. CLI and localhost without JWT then use the same identity as the logged-in admin (one identity, no split). Use `get_local_admin_scope_id()` / `get_local_admin_username()` from `vaf.core.config` instead of reading config directly.
 
 **Important:** The local admin is identified by `local_admin_scope_id`, NOT by the string `"admin"`. A network user whose username happens to be `"admin"` is a different user with a different `user_scope_id`.
 
@@ -302,7 +304,7 @@ If a user's username is changed, all of the following break:
 
 When the system is in local mode (no auth), the WebSocket assigns `username="admin"`. But when network mode is enabled with the same user, the JWT provides the real username (e.g., "Mert"). Now the same person has data split across two identities.
 
-**Fix:** Always use `user_scope_id` for data lookup. Local admin has a fixed `user_scope_id` (`00000000-0000-0000-0000-000000000001`) that maps correctly regardless of username.
+**Fix:** Bootstrap writes the first admin's `user_scope_id` and `username` into config (`local_admin_scope_id`, `local_admin_username`). CLI and localhost without JWT then use that same scope, so there is a single identity for the admin. For existing installations that had data under the legacy UUID, set `local_admin_scope_id` in config to the admin UUID (and optionally run a one-time DB update to move memories to that scope); or run bootstrap once so config is set automatically.
 
 ### Problem 4: Email Config Fallback Chain
 

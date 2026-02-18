@@ -19,7 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
-from vaf.core.config import Config
+from vaf.core.config import Config, get_local_admin_scope_id
 from vaf.core.messaging_connections import save_whatsapp_chat_jid
 from vaf.core.task_queue import TaskQueue
 from vaf.core.whatsapp_auth import get_whatsapp_auth_dir, whatsapp_auth_exists
@@ -246,7 +246,7 @@ def _get_users_to_run() -> List[Tuple[str, str, Path]]:
         if not entry.get("phone_number"):
             continue
         username = (entry.get("vaf_username") or "admin").strip()
-        scope = entry.get("user_scope_id") or Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
+        scope = entry.get("user_scope_id") or get_local_admin_scope_id()
         if not whatsapp_auth_exists(username):
             continue
         auth_dir = get_whatsapp_auth_dir(username)

@@ -261,7 +261,7 @@ export default function TTSSettings({
                     onClick={() => onTtsEnabledChange(!ttsEnabled)}
                     className={cn(
                         "w-11 h-6 rounded-full transition-colors relative",
-                        ttsEnabled ? "bg-green-500" : "bg-gray-300"
+                        ttsEnabled ? "bg-gray-800" : "bg-gray-300"
                     )}
                 >
                     <div className={cn(
@@ -455,7 +455,7 @@ export default function TTSSettings({
                                         onClick={() => updateConfig({ auto_detect: !config?.auto_detect })}
                                         className={cn(
                                             "w-10 h-5 rounded-full transition-colors relative",
-                                            config?.auto_detect ? "bg-green-500" : "bg-gray-300"
+                                            config?.auto_detect ? "bg-gray-800" : "bg-gray-300"
                                         )}
                                     >
                                         <div className={cn(
@@ -474,7 +474,7 @@ export default function TTSSettings({
                                         onClick={() => onAutoSpeakChange(!autoSpeak)}
                                         className={cn(
                                             "w-10 h-5 rounded-full transition-colors relative",
-                                            autoSpeak ? "bg-green-500" : "bg-gray-300"
+                                            autoSpeak ? "bg-gray-800" : "bg-gray-300"
                                         )}
                                     >
                                         <div className={cn(

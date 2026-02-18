@@ -1510,7 +1510,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <button
                                                 onClick={() => handleChange('temperature_auto', !localConfig.temperature_auto)}
                                                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                                                    localConfig.temperature_auto ? 'bg-blue-500' : 'bg-gray-300'
+                                                    localConfig.temperature_auto ? 'bg-gray-800' : 'bg-gray-300'
                                                 }`}
                                             >
                                                 <span
@@ -3451,7 +3451,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     onClick={() => setNewUser({...newUser, createDb: !newUser.createDb})}
                                     className={cn(
                                         "relative w-11 h-6 rounded-full transition-colors",
-                                        newUser.createDb ? "bg-green-500" : "bg-gray-300"
+                                        newUser.createDb ? "bg-gray-800" : "bg-gray-300"
                                     )}
                                 >
                                     <div className={cn(
@@ -4044,7 +4044,7 @@ const Switch = ({ label, description, checked, onChange }: SwitchProps) => (
             onClick={() => onChange(!checked)}
             className={cn(
                 "w-11 h-6 rounded-full transition-colors relative shrink-0",
-                checked ? "bg-green-500" : "bg-gray-200"
+                checked ? "bg-gray-800" : "bg-gray-200"
             )}
         >
             <div className={cn(

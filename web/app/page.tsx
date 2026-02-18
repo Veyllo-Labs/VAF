@@ -3005,6 +3005,11 @@ function VAFDashboardContent() {
                                                     const hasBubbleContent = !isBot
                                                         ? !!(displayAnswer || (displayFiles && displayFiles.length > 0))
                                                         : !!((cleanAnswer && cleanAnswer.trim() !== '') || parseWorkflowAsync(answer));
+                                                    // When there is nothing to show (no bubble, no thinking), don't render the row at all (no avatar, no timestamp, no empty space)
+                                                    const hasVisibleContent = isBot
+                                                        ? (hasBubbleContent || !!(thought && thought.trim() !== ''))
+                                                        : hasBubbleContent;
+                                                    if (!hasVisibleContent) return null;
 
                                                     const bubbleContent = (
                                                         <>

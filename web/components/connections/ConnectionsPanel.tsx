@@ -605,7 +605,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                         onClick={() => handleToggleConnection(app.id, !enabled)}
                                                         className={cn(
                                                             "relative w-11 h-6 rounded-full transition-colors",
-                                                            enabled ? "bg-green-500" : "bg-gray-300"
+                                                            enabled ? "bg-gray-800" : "bg-gray-300"
                                                         )}
                                                     >
                                                         <div className={cn(

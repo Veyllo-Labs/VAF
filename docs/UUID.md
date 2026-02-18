@@ -72,10 +72,10 @@ When running in single-user / localhost mode (no network auth), or when using th
           │  request.   │   │  user from  │    │   WhatsApp,  │
           │  state.user │   │  JWT/state  │    │   Discord)   │
           └──────┬──────┘   └──────┬──────┘    └──────┬───────┘
-                 │                  │                   │
-                 │    ┌─────────────┘                   │
-                 │    │                                 │
-                 ▼    ▼                                 ▼
+                 │                 │                  │
+                 │    ┌────────────┘                  │
+                 │    │                               │
+                 ▼    ▼                               ▼
           ┌─────────────────────────────────────────────────┐
           │              Agent Instance                     │
           │  _current_user_scope_id : UUID  ← data scoping  │

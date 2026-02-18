@@ -554,7 +554,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                             onClick={() => setForm(f => ({ ...f, allow_as_assistant_user: !(f.allow_as_assistant_user ?? false) }))}
                                             className={cn(
                                                 'relative w-11 h-6 rounded-full transition-colors',
-                                                (form.allow_as_assistant_user ?? false) ? 'bg-green-500' : 'bg-gray-300'
+                                                (form.allow_as_assistant_user ?? false) ? 'bg-gray-800' : 'bg-gray-300'
                                             )}
                                         >
                                             <div

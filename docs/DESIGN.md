@@ -144,10 +144,11 @@ bg-gray-100 text-gray-400 cursor-not-allowed
 ```
 
 #### Toggle Switch
+Use the dark accent color (same as primary buttons and settings nav) for the "on" state.
 ```jsx
 <button className={cn(
   "relative w-11 h-6 rounded-full transition-colors",
-  enabled ? "bg-green-500" : "bg-gray-300"
+  enabled ? "bg-gray-800" : "bg-gray-300"
 )}>
   <div className={cn(
     "absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform",

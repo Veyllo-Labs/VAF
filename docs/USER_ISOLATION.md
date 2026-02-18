@@ -197,9 +197,23 @@ CREATE POLICY user_isolation_memories ON memories
 
 ## 5. Filesystem Isolation
 
-### User workspace
+### Scope-based paths (preferred)
 
-Each user has an isolated directory tree:
+User-scoped data stores use UUID-based directories. This is the preferred path for all data isolation:
+
+```
+~/.vaf/scopes/<user_scope_id>/
+├── email_sync.db              # Synced email messages (SQLite)
+├── contacts.json              # User's contact list
+├── whatsapp_messages.db       # WhatsApp message history (SQLite)
+└── ...
+```
+
+The local admin's data remains at the legacy root paths (`~/.vaf/email_sync.db`, `~/.vaf/contacts.json`) since `local_admin_scope_id` maps to the global location.
+
+### User workspace (legacy)
+
+Each user also has a username-based directory tree. This is the legacy layout, preserved for backward compatibility. New features should prefer scope-based paths above.
 
 ```
 ~/.vaf/users/<username>/
@@ -214,6 +228,8 @@ Each user has an isolated directory tree:
 │   └── email/
 └── ...
 ```
+
+A one-time migration script (`scripts/migrate_users_to_scopes.py`) copies data from `users/<username>/` to `scopes/<user_scope_id>/`. The old directories are preserved for verification and can be removed manually.
 
 ### Automations (`vaf/core/automation.py`)
 
@@ -246,7 +262,14 @@ Currently **single-admin only** — one Discord bot per VAF instance. Not multi-
 
 ### Email
 
-Uses **per-user keyring credentials** encrypted with AES-256-GCM. Each user's IMAP/SMTP sessions use their own stored credentials.
+Uses **per-user keyring credentials** encrypted with AES-256-GCM. Each user's IMAP/SMTP sessions use their own stored credentials. Credential keys include the `user_scope_id` when set (format: `email:{provider}:{scope_id}:{account_id}`), falling back to username-based keys for legacy data.
+
+Email config lookup follows a three-tier chain:
+1. `email_config_by_scope[user_scope_id]` — preferred, UUID-based
+2. `email_config_by_user[username]` — legacy per-user
+3. `email_config` — legacy global/admin fallback
+
+Synced messages are stored per-scope in `scopes/<user_scope_id>/email_sync.db`.
 
 ## Isolation Summary Table
 
@@ -257,11 +280,11 @@ Uses **per-user keyring credentials** encrypted with AES-256-GCM. Each user's IM
 | Gateway | Server-side scope extraction, client scope stripped | Transport |
 | Redis cache | Scope-prefixed cache keys | Caching |
 | PostgreSQL | Row-Level Security policy | Database |
-| Filesystem | Per-user directory tree (`~/.vaf/users/<username>/`) | OS |
+| Filesystem | Scope-based paths (`~/.vaf/scopes/<user_scope_id>/`) preferred; legacy `~/.vaf/users/<username>/` as fallback | OS |
 | Sandbox | Per-user working directory in Docker | Container |
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |
-| Email | Per-user encrypted credentials | Application |
+| Email | Per-user encrypted credentials + scope-based config lookup chain | Application |
 | Automations | Per-user task storage and scoped RAG access | Application |
 
 ## Developer Guidelines: Building New Features

@@ -32,6 +32,7 @@ class GetContactTool(BaseTool):
 
     def run(self, **kwargs) -> str:
         username = (kwargs.get("username") or "admin").strip()
+        user_scope_id = kwargs.get("user_scope_id")
         name = (kwargs.get("name") or "").strip()
         if not name:
             return "name is required (e.g. get_contact(name='Max'))."
@@ -41,7 +42,7 @@ class GetContactTool(BaseTool):
         except ImportError as e:
             return f"Contacts unavailable: {e}"
 
-        matches = get_contacts_by_name(name, username)
+        matches = get_contacts_by_name(name, username, user_scope_id=user_scope_id)
         if not matches:
             return f"No contact found with name '{name}'. Use list_contacts to see existing contacts."
         if len(matches) > 1:

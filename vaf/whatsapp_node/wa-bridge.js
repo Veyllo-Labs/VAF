@@ -156,12 +156,23 @@ async function resolveLidToE164(sock, jid) {
   }
 }
 
-/** Check if remoteJid is the self-chat (messages to yourself). Baileys uses @lid for self-chat on newer sessions. */
+/** Digits only for phone comparison (E.164 / JID). */
+function digitsOnly(str) {
+  return (str || "").replace(/\D/g, "");
+}
+
+/**
+ * Check if remoteJid is the self-chat (messages to yourself).
+ * For @s.whatsapp.net we compare numeric parts. For @lid we do NOT assume self-chat:
+ * WhatsApp uses LID for multiple 1:1 chats (not only saved messages), so we must resolve
+ * LID to E.164 and compare to self; only then treat as self-chat. Caller must handle @lid
+ * via resolveLidToE164 + compare (see messages.upsert).
+ */
 function isSelfChat(remoteJid, selfJid, fromMe) {
   if (!remoteJid || typeof remoteJid !== "string") return false;
-  // LID format: @lid chat is ALWAYS self-chat (saved messages); fromMe can be true or false on linked device
-  if (remoteJid.endsWith("@lid")) return true;
   if (!selfJid || typeof selfJid !== "string") return false;
+  // Do NOT treat all @lid as self-chat – LID is used for other 1:1 chats too
+  if (remoteJid.endsWith("@lid")) return false;
   const r = remoteJid.split("@")[0].split(":")[0].trim();
   const s = selfJid.split("@")[0].split(":")[0].trim();
   return r && s && r === s && remoteJid.includes("@s.whatsapp.net");
@@ -325,7 +336,7 @@ async function connect(authDir) {
         });
         if (n) chatStore.set(remoteJid, n);
       }
-      const selfChat = isSelfChat(remoteJid, selfJid, !!msg.key?.fromMe);
+      let selfChat = isSelfChat(remoteJid, selfJid, !!msg.key?.fromMe);
       if (msg.key?.fromMe && !selfChat) continue; // skip own msgs except in self-chat
       if (isGroup) continue; // Phase 1: DMs only
       const senderJid = msg.key.participant ?? msg.key.remoteJid;
@@ -353,12 +364,17 @@ async function connect(authDir) {
         body = `<media:${contentType}>`;
       }
       if (!body) continue;
-      if (selfChat && msg.key?.fromMe && isEcho(body)) continue; // ignore our own reply (echo)
-      // Resolve @lid to E.164 via Baileys lidMapping (clawdbot pattern) for whitelist/session
+      // Resolve @lid to E.164 first (for fromE164 and for correct self-chat detection)
       let fromE164 = jidToPhone(remoteJid);
       if (!fromE164 && remoteJid.endsWith("@lid")) {
         fromE164 = (await resolveLidToE164(sock, remoteJid)) || null;
       }
+      // Only treat @lid as self-chat if resolved E.164 matches the account owner's number
+      if (remoteJid.endsWith("@lid")) {
+        const selfPhone = jidToPhone(selfJid);
+        selfChat = !!(fromE164 && selfPhone && digitsOnly(fromE164) === digitsOnly(selfPhone));
+      }
+      if (selfChat && msg.key?.fromMe && isEcho(body)) continue; // ignore our own reply (echo)
       const payload = {
         type: "message",
         from: remoteJid,

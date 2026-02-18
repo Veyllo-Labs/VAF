@@ -20,20 +20,43 @@ logger = logging.getLogger("vaf.core.email_sync_store")
 
 _DB_NAME = "email_sync.db"
 _DEFAULT_RETENTION_DAYS = 90
+_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
 
 
 def _local_admin() -> str:
     return (Config.get("local_admin_username") or "admin").strip().lower()
 
 
-def _is_per_user_db(username: Optional[str]) -> bool:
+def _local_admin_scope_id() -> str:
+    return str(Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE_ID)).strip()
+
+
+def _is_per_user_db(username: Optional[str], user_scope_id: Optional[str] = None) -> bool:
     """True if this user gets their own DB file (network user, not local admin)."""
+    if user_scope_id and str(user_scope_id).strip() != _local_admin_scope_id():
+        return True
     u = (username or "").strip()
     return bool(u and u.lower() != _local_admin())
 
 
-def _db_path(username: Optional[str] = None) -> Path:
-    """SQLite path. For local admin / single-user: env or data_dir/email_sync.db. For other users: data_dir/users/{username}/email_sync.db."""
+def _db_path(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Path:
+    """SQLite path. When user_scope_id is set: scopes/<user_scope_id>/email_sync.db or legacy for local admin.
+    Otherwise: per-username path (users/<username>/email_sync.db) or legacy for local admin."""
+    if user_scope_id:
+        scope_str = str(user_scope_id).strip()
+        if scope_str == _local_admin_scope_id():
+            env_path = os.environ.get("VAF_EMAIL_SYNC_DB", "").strip()
+            if env_path:
+                p = Path(env_path)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                return p
+            data_dir = Platform.data_dir()
+            data_dir.mkdir(parents=True, exist_ok=True)
+            return data_dir / _DB_NAME
+        data_dir = Platform.data_dir()
+        scope_dir = data_dir / "scopes" / scope_str
+        scope_dir.mkdir(parents=True, exist_ok=True)
+        return scope_dir / _DB_NAME
     u = (username or "").strip()
     if not u or u.lower() == _local_admin():
         env_path = os.environ.get("VAF_EMAIL_SYNC_DB", "").strip()
@@ -50,24 +73,24 @@ def _db_path(username: Optional[str] = None) -> Path:
     return user_dir / _DB_NAME
 
 
-def _user_for_query(username: Optional[str]) -> str:
+def _user_for_query(username: Optional[str], user_scope_id: Optional[str] = None) -> str:
     """Value for WHERE username = ? In per-user DB we store with ''; in shared DB we use the actual username."""
-    if _is_per_user_db(username):
+    if _is_per_user_db(username, user_scope_id):
         return ""
     return (username or "").strip() or ""
 
 
-def _get_conn(username: Optional[str] = None) -> sqlite3.Connection:
-    path = _db_path(username)
+def _get_conn(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> sqlite3.Connection:
+    path = _db_path(username, user_scope_id)
     conn = sqlite3.connect(str(path), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
-def init_store(username: Optional[str] = None) -> None:
-    """Create table if not exists. Idempotent. Uses per-user DB when username is a network user."""
-    conn = _get_conn(username)
+def init_store(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> None:
+    """Create table if not exists. Idempotent. Uses per-user DB when username/user_scope_id is a network user."""
+    conn = _get_conn(username, user_scope_id)
     try:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS email_messages (
@@ -163,17 +186,18 @@ def upsert_messages(
     folder: str,
     messages: List[Dict[str, Any]],
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
 ) -> int:
     """
     Insert or update messages for an account/folder. Preserves answered_at on update.
     Each message dict: subject, from, date, message_id, body_snippet.
-    username: when set (multi-user), messages are scoped to that user.
+    username/user_scope_id: when set (multi-user), messages are scoped to that user.
     """
     if not messages:
         return 0
-    init_store(username)
-    user = _user_for_query(username)
-    conn = _get_conn(username)
+    init_store(username, user_scope_id)
+    user = _user_for_query(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
     synced_at = datetime.now(timezone.utc).isoformat()
     count = 0
     try:
@@ -218,18 +242,19 @@ def list_messages(
     limit: int = 50,
     offset: int = 0,
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
     category: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     List synced messages, newest first. Paginated.
     If account_id is None, returns messages from all accounts (still filtered by folder).
-    username: when set (multi-user), only that user's messages are returned.
+    username/user_scope_id: when set (multi-user), only that user's messages are returned.
     category: when set, only that category (primary|social|promotions or custom). Spam is never stored.
     """
-    init_store(username)
-    user = _user_for_query(username)
+    init_store(username, user_scope_id)
+    user = _user_for_query(username, user_scope_id)
     cat = (category or "").strip().lower().replace(" ", "_")[:64] if category else None
-    conn = _get_conn(username)
+    conn = _get_conn(username, user_scope_id)
     try:
         # Order by actual message date (newest first) so sync shows real newest mails; NULL date last, then synced_at
         order_by = "ORDER BY message_date_iso DESC NULLS LAST, synced_at DESC"
@@ -305,17 +330,18 @@ def search_messages(
     folder: str = "INBOX",
     limit: int = 20,
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Search synced messages by subject or sender (from_addr). Case-insensitive LIKE.
-    username: when set (multi-user), only that user's messages are searched.
+    username/user_scope_id: when set (multi-user), only that user's messages are searched.
     """
     if not (query or "").strip():
         return []
-    init_store(username)
-    user = _user_for_query(username)
+    init_store(username, user_scope_id)
+    user = _user_for_query(username, user_scope_id)
     pattern = f"%{(query or '').strip()}%"
-    conn = _get_conn(username)
+    conn = _get_conn(username, user_scope_id)
     try:
         sel = "account_id, folder, message_id, category, provider_message_id, subject, from_addr, date_str, body_snippet, synced_at, answered_at"
         cur = conn.execute(
@@ -350,12 +376,12 @@ def search_messages(
         conn.close()
 
 
-def count_messages(account_id: Optional[str] = None, folder: str = "INBOX", username: Optional[str] = None, category: Optional[str] = None) -> int:
-    """Return total count for account (or all) and folder. Optional category filter. username scopes to that user when set."""
-    init_store(username)
-    user = _user_for_query(username)
+def count_messages(account_id: Optional[str] = None, folder: str = "INBOX", username: Optional[str] = None, user_scope_id: Optional[str] = None, category: Optional[str] = None) -> int:
+    """Return total count for account (or all) and folder. Optional category filter. username/user_scope_id scopes to that user when set."""
+    init_store(username, user_scope_id)
+    user = _user_for_query(username, user_scope_id)
     cat = (category or "").strip().lower().replace(" ", "_")[:64] if category else None
-    conn = _get_conn(username)
+    conn = _get_conn(username, user_scope_id)
     try:
         if account_id and cat:
             cur = conn.execute(
@@ -389,12 +415,13 @@ def update_message_category(
     folder: str,
     message_id: str,
     category: str,
+    user_scope_id: Optional[str] = None,
 ) -> bool:
     """Update one message's category. Returns True if a row was updated. Category is normalized (lowercase, spaces to underscore, max 64 chars)."""
-    init_store(username)
-    user = _user_for_query(username)
+    init_store(username, user_scope_id)
+    user = _user_for_query(username, user_scope_id)
     cat = (category or "primary").strip().lower().replace(" ", "_")[:64] or "primary"
-    conn = _get_conn(username)
+    conn = _get_conn(username, user_scope_id)
     try:
         cur = conn.execute(
             "UPDATE email_messages SET category = ? WHERE username = ? AND account_id = ? AND folder = ? AND message_id = ?",
@@ -411,11 +438,12 @@ def get_message_from_addr(
     account_id: str,
     folder: str,
     message_id: str,
+    user_scope_id: Optional[str] = None,
 ) -> Optional[str]:
     """Return from_addr for one message, or None if not found. Used to add sender rule from UI."""
-    init_store(username)
-    user = _user_for_query(username)
-    conn = _get_conn(username)
+    init_store(username, user_scope_id)
+    user = _user_for_query(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
     try:
         cur = conn.execute(
             "SELECT from_addr FROM email_messages WHERE username = ? AND account_id = ? AND folder = ? AND message_id = ?",
@@ -433,12 +461,13 @@ def update_message_answered(
     folder: str,
     message_id: str,
     answered_at: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
 ) -> bool:
     """Set answered_at (ISO timestamp) when the agent has processed/answered this mail. Returns True if updated."""
-    init_store(username)
-    user = _user_for_query(username)
+    init_store(username, user_scope_id)
+    user = _user_for_query(username, user_scope_id)
     ts = (answered_at or "").strip() or datetime.now(timezone.utc).isoformat()
-    conn = _get_conn(username)
+    conn = _get_conn(username, user_scope_id)
     try:
         cur = conn.execute(
             "UPDATE email_messages SET answered_at = ? WHERE username = ? AND account_id = ? AND folder = ? AND message_id = ?",
@@ -452,13 +481,14 @@ def update_message_answered(
 
 def delete_messages_older_than(
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
     days: int = _DEFAULT_RETENTION_DAYS,
 ) -> int:
     """Delete messages older than `days` (by message date or synced_at fallback). Returns count deleted."""
-    init_store(username)
-    user = _user_for_query(username)
+    init_store(username, user_scope_id)
+    user = _user_for_query(username, user_scope_id)
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    conn = _get_conn(username)
+    conn = _get_conn(username, user_scope_id)
     try:
         cur = conn.execute(
             """
@@ -480,11 +510,11 @@ def delete_messages_older_than(
         conn.close()
 
 
-def list_for_sender_relabel(username: Optional[str] = None) -> List[Dict[str, Any]]:
+def list_for_sender_relabel(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Return all messages for the user with account_id, folder, message_id, from_addr, category for sender-rule backfill."""
-    init_store(username)
-    user = _user_for_query(username)
-    conn = _get_conn(username)
+    init_store(username, user_scope_id)
+    user = _user_for_query(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
     try:
         cur = conn.execute(
             "SELECT account_id, folder, message_id, from_addr, category FROM email_messages WHERE username = ?",
@@ -505,11 +535,11 @@ def list_for_sender_relabel(username: Optional[str] = None) -> List[Dict[str, An
         conn.close()
 
 
-def list_categories(username: Optional[str] = None) -> List[str]:
+def list_categories(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[str]:
     """Return distinct category values for this user. Standard (primary, social, promotions) first, then rest alphabetically."""
-    init_store(username)
-    user = _user_for_query(username)
-    conn = _get_conn(username)
+    init_store(username, user_scope_id)
+    user = _user_for_query(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
     try:
         cur = conn.execute(
             "SELECT DISTINCT category FROM email_messages WHERE username = ? ORDER BY category",

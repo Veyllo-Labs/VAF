@@ -18,18 +18,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["config"])
 
 
+_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
+
+
 def get_current_user_or_local_admin(request: Request) -> Dict[str, Any]:
-    """Return current user from request.state (set by auth middleware) or treat as local admin."""
+    """Return current user from request.state (set by auth middleware) or treat as local admin.
+    Includes user_scope_id for UUID-based data isolation."""
     user = getattr(request.state, "user", None)
     if user and isinstance(user, dict):
+        scope = user.get("user_scope_id")
         return {
             "username": user.get("username", "admin"),
             "role": (user.get("role") or "user").lower(),
+            "user_scope_id": str(scope) if scope else Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE_ID),
         }
     return {
         "username": Config.get("local_admin_username", "admin"),
         "role": "admin",
+        "user_scope_id": Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE_ID),
     }
+
+
+def get_current_scope_id(request: Request) -> str:
+    """Return current user's user_scope_id (for data scoping). Use get_current_user_or_local_admin when you need username/role too."""
+    return get_current_user_or_local_admin(request).get("user_scope_id", _LOCAL_ADMIN_SCOPE_ID)
 
 
 def get_current_username(request: Request) -> str:

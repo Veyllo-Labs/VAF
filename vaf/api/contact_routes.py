@@ -72,7 +72,8 @@ async def get_contacts_list(request: Request) -> List[Dict[str, Any]]:
     """List all contacts for the current user."""
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
-    return list_contacts(username)
+    user_scope_id = user_info.get("user_scope_id")
+    return list_contacts(username, user_scope_id=user_scope_id)
 
 
 @router.get("/{contact_id}")
@@ -80,7 +81,8 @@ async def get_contact(contact_id: str, request: Request) -> Dict[str, Any]:
     """Get one contact by id."""
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
-    contact = get_contact_by_id(contact_id, username)
+    user_scope_id = user_info.get("user_scope_id")
+    contact = get_contact_by_id(contact_id, username, user_scope_id=user_scope_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     return contact
@@ -93,9 +95,11 @@ async def post_contact(request: Request, body: ContactCreate) -> Dict[str, Any]:
     username = user_info["username"]
     if not (body.name or "").strip():
         raise HTTPException(status_code=400, detail="name is required")
+    user_scope_id = user_info.get("user_scope_id")
     contact = create_contact(
         (body.name or "").strip(),
         username,
+        user_scope_id=user_scope_id,
         channels=body.channels,
         whatsapp_phone=body.whatsapp_phone,
         telegram_username=body.telegram_username,
@@ -116,12 +120,13 @@ async def patch_contact(contact_id: str, request: Request, body: ContactUpdate) 
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+    user_scope_id = user_info.get("user_scope_id")
     if not updates:
-        contact = get_contact_by_id(contact_id, username)
+        contact = get_contact_by_id(contact_id, username, user_scope_id=user_scope_id)
         if not contact:
             raise HTTPException(status_code=404, detail="Contact not found")
         return contact
-    contact = update_contact(contact_id, username, **updates)
+    contact = update_contact(contact_id, username, user_scope_id=user_scope_id, **updates)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     return contact
@@ -132,6 +137,7 @@ async def remove_contact(contact_id: str, request: Request) -> Dict[str, str]:
     """Delete a contact."""
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
-    if delete_contact(contact_id, username):
+    user_scope_id = user_info.get("user_scope_id")
+    if delete_contact(contact_id, username, user_scope_id=user_scope_id):
         return {"status": "deleted", "message": "Contact deleted."}
     raise HTTPException(status_code=404, detail="Contact not found")

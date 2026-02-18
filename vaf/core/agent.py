@@ -6116,10 +6116,13 @@ class Agent:
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("list_contacts", "get_contact", "create_contact", "update_contact", "delete_contact"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "list_email_accounts", "send_mail"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 # Pre-write intent/goal before sub-agent invocation for validation/retry
                 SUBAGENT_TOOLS = ("librarian_agent", "coding_agent", "research_agent", "document_agent")
                 if name in SUBAGENT_TOOLS and hasattr(self, "main_persistence") and self.main_persistence:

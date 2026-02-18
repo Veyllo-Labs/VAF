@@ -318,14 +318,14 @@ def get_oauth_callback_redirect_uri(request_base_url: str) -> str:
     return f"{base}/api/email/oauth/callback"
 
 
-def get_valid_access_token(account_id: str, provider: str, username: Optional[str] = None) -> Optional[str]:
+def get_valid_access_token(account_id: str, provider: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[str]:
     """
     Return a valid access token for the account, refreshing if expired.
     Only gmail and microsoft support refresh; apple returns current token or None.
     Returns None if credentials missing, invalid, or refresh fails.
-    Optional username for multi-user credential scope.
+    Optional username/user_scope_id for multi-user credential scope.
     """
-    creds = get_email_credentials(account_id, provider, username)
+    creds = get_email_credentials(account_id, provider, username, user_scope_id=user_scope_id)
     if not creds or creds.get("type") != "oauth":
         return None
     access = creds.get("access_token")
@@ -361,7 +361,7 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
             return access
         expires_in = data.get("expires_in")
         new_expires_at = time.time() + int(expires_in) if expires_in else None
-        set_email_oauth_tokens(account_id, provider, new_access, refresh, new_expires_at, username)
+        set_email_oauth_tokens(account_id, provider, new_access, refresh, new_expires_at, username, user_scope_id=user_scope_id)
         return new_access
     except Exception as e:
         logger.warning("Token refresh error for %s: %s", provider, e)

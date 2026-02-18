@@ -191,9 +191,12 @@ def _ensure_plain_text(body: Optional[str]) -> Optional[str]:
     return s if s else body.strip()
 
 
-def _get_sender_rules(username: Optional[str] = None) -> List[Dict[str, str]]:
+def _get_sender_rules(
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> List[Dict[str, str]]:
     """Return sender→category rules from config. Each rule: {"pattern": "twitch.tv", "category": "social"}. First match wins."""
-    ec = _get_email_config(username)
+    ec = _get_email_config(username, user_scope_id=user_scope_id)
     rules = ec.get("sender_category_rules")
     if not isinstance(rules, list):
         return []
@@ -204,12 +207,17 @@ def _get_sender_rules(username: Optional[str] = None) -> List[Dict[str, str]]:
     return out
 
 
-def apply_sender_rules_to_category(from_str: str, current_category: str, username: Optional[str] = None) -> str:
+def apply_sender_rules_to_category(
+    from_str: str,
+    current_category: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> str:
     """
     Apply sender rules: if any rule's pattern is contained in from_str (case-insensitive), return that category.
     Used on sync (new mails) and on backfill (existing mails). Returns current_category if no rule matches.
     """
-    rules = _get_sender_rules(username)
+    rules = _get_sender_rules(username, user_scope_id=user_scope_id)
     from_lower = (from_str or "").lower()
     for r in rules:
         pattern = (r.get("pattern") or "").lower()
@@ -218,13 +226,24 @@ def apply_sender_rules_to_category(from_str: str, current_category: str, usernam
     return current_category
 
 
-def _get_email_config(username: Optional[str] = None) -> Dict[str, Any]:
+def _get_email_config(
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Return email config for the given user. When username is None or local admin, use legacy email_config.
-
-    Fallback: when a non-admin username has no per-user config, the legacy
-    ``email_config`` is returned so that single-user setups work even when
-    the authenticated username differs from ``local_admin_username``.
-    """
+    If user_scope_id is set, email_config_by_scope is tried first; then legacy for local admin scope."""
+    local_admin_scope = Config.get("local_admin_scope_id", "00000000-0000-0000-0000-000000000001")
+    if user_scope_id:
+        by_scope = Config.get("email_config_by_scope") or {}
+        if isinstance(by_scope, dict):
+            ec = by_scope.get(str(user_scope_id).strip())
+            if isinstance(ec, dict) and ec.get("accounts") is not None:
+                return ec
+        if str(user_scope_id).strip() == str(local_admin_scope).strip():
+            raw = Config.get("email_config")
+            if isinstance(raw, dict):
+                return raw
+            return {"accounts": []}
     local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
     if not username or username.strip().lower() == local_admin:
         raw = Config.get("email_config")
@@ -242,42 +261,56 @@ def _get_email_config(username: Optional[str] = None) -> Dict[str, Any]:
     return {"accounts": []}
 
 
-def get_account(account_id: str, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Return account metadata for account_id (email or account_id). Optional username for multi-user scope."""
-    ec = _get_email_config(username)
+def get_account(
+    account_id: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return account metadata for account_id (email or account_id). Optional username/user_scope_id for multi-user scope."""
+    ec = _get_email_config(username, user_scope_id=user_scope_id)
     for a in ec.get("accounts") or []:
         if (a.get("account_id") or a.get("email") or "").strip().lower() == (account_id or "").strip().lower():
             return a
     return None
 
 
-def get_credentials(account_id: str, provider: Optional[str] = None, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_credentials(
+    account_id: str,
+    provider: Optional[str] = None,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Load credentials from credential_store. For OAuth uses provider from account metadata.
     Returns dict with either password (IMAP) or access_token/refresh_token (OAuth).
-    Optional username for multi-user scope.
+    Optional username/user_scope_id for multi-user scope.
     """
-    acc = get_account(account_id, username)
+    acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
         return None
     prov = provider or acc.get("provider") or "imap"
     if prov == "imap":
-        creds = get_email_credentials(account_id, "imap", username)
+        creds = get_email_credentials(account_id, "imap", username, user_scope_id=user_scope_id)
         if creds and creds.get("type") == "imap":
             return creds
         return None
-    creds = get_email_credentials(account_id, prov, username)
+    creds = get_email_credentials(account_id, prov, username, user_scope_id=user_scope_id)
     if creds and creds.get("type") == "oauth":
         return creds
     return None
 
 
-def _imap_connect(account_id: str, use_oauth: bool = False, username: Optional[str] = None) -> Optional[imaplib.IMAP4_SSL]:
+def _imap_connect(
+    account_id: str,
+    use_oauth: bool = False,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Optional[imaplib.IMAP4_SSL]:
     """
     Connect to IMAP with TLS using account credentials. Returns connected IMAP4_SSL or None.
     For OAuth (Gmail XOAUTH2) we would use a different auth mechanism; for Phase 3 we only do password.
     """
-    acc = get_account(account_id, username)
+    acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
         logger.warning("Account not found: %s", account_id[:8] + "***")
         return None
@@ -288,7 +321,7 @@ def _imap_connect(account_id: str, use_oauth: bool = False, username: Optional[s
         return None
     host = acc.get("imap_host") or "imap.gmail.com"
     port = int(acc.get("imap_port") or 993)
-    creds = get_credentials(account_id, "imap", username)
+    creds = get_credentials(account_id, "imap", username, user_scope_id=user_scope_id)
     if not creds or "password" not in creds:
         logger.warning("No IMAP credentials for account %s", account_id[:8] + "***")
         return None
@@ -301,9 +334,13 @@ def _imap_connect(account_id: str, use_oauth: bool = False, username: Optional[s
         return None
 
 
-def _smtp_connect(account_id: str, username: Optional[str] = None) -> Optional[smtplib.SMTP]:
+def _smtp_connect(
+    account_id: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Optional[smtplib.SMTP]:
     """Connect to SMTP with STARTTLS using account credentials. Returns connected SMTP or None."""
-    acc = get_account(account_id, username)
+    acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
         return None
     provider = acc.get("provider") or "imap"
@@ -311,7 +348,7 @@ def _smtp_connect(account_id: str, username: Optional[str] = None) -> Optional[s
         return None
     host = acc.get("smtp_host") or "smtp.gmail.com"
     port = int(acc.get("smtp_port") or 587)
-    creds = get_credentials(account_id, "imap", username)
+    creds = get_credentials(account_id, "imap", username, user_scope_id=user_scope_id)
     if not creds or "password" not in creds:
         return None
     try:
@@ -324,9 +361,13 @@ def _smtp_connect(account_id: str, username: Optional[str] = None) -> Optional[s
         return None
 
 
-def verify_imap_connection(account_id: str, username: Optional[str] = None) -> bool:
-    """Verify IMAP login for an account. Returns True if NOOP succeeds. Optional username for multi-user scope."""
-    conn = _imap_connect(account_id, username=username)
+def verify_imap_connection(
+    account_id: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> bool:
+    """Verify IMAP login for an account. Returns True if NOOP succeeds. Optional username/user_scope_id for multi-user scope."""
+    conn = _imap_connect(account_id, username=username, user_scope_id=user_scope_id)
     if not conn:
         return False
     try:
@@ -714,9 +755,15 @@ def _send_mail_microsoft(
         return False
 
 
-def _get_body_imap(account_id: str, message_id: str, folder: str, username: Optional[str] = None) -> Optional[str]:
+def _get_body_imap(
+    account_id: str,
+    message_id: str,
+    folder: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Optional[str]:
     """Fetch full message body via IMAP. Search by Message-ID then fetch body as plain text."""
-    conn = _imap_connect(account_id, username=username)
+    conn = _imap_connect(account_id, username=username, user_scope_id=user_scope_id)
     if not conn or not message_id:
         return None
     try:
@@ -784,13 +831,15 @@ def get_message_body_plain(
     message_id: str,
     folder: str = "INBOX",
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
     provider_message_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Fetch full message body as plain text only (no HTML). Uses provider_message_id for Gmail/Graph when available.
     All return paths go through _ensure_plain_text so fancy HTML/QP never reaches the UI.
+    Optional username/user_scope_id for multi-user scope.
     """
-    acc = get_account(account_id, username)
+    acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
         return None
     provider = (acc.get("provider") or "imap").lower()
@@ -800,7 +849,7 @@ def get_message_body_plain(
     elif provider == "microsoft" and provider_message_id:
         result = _get_body_microsoft(account_id, provider_message_id, username)
     elif provider == "imap":
-        result = _get_body_imap(account_id, message_id, folder, username)
+        result = _get_body_imap(account_id, message_id, folder, username, user_scope_id=user_scope_id)
     elif provider == "microsoft" and message_id:
         token = get_valid_access_token(account_id, "microsoft", username)
         if token:
@@ -836,13 +885,14 @@ def fetch_mail(
     since: Optional[str] = None,
     max_messages: int = 50,
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Fetch messages from folder. Returns list of dicts with subject, from, date, body_snippet.
     Dispatches to IMAP (imap), Gmail API (gmail), or Microsoft Graph (microsoft).
-    Optional username for multi-user scope.
+    Optional username/user_scope_id for multi-user scope.
     """
-    acc = get_account(account_id, username)
+    acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
         return []
     provider = (acc.get("provider") or "imap").lower()
@@ -850,7 +900,7 @@ def fetch_mail(
         return _fetch_mail_gmail(account_id, folder, since, max_messages, username)
     if provider == "microsoft":
         return _fetch_mail_microsoft(account_id, folder, since, max_messages, username)
-    conn = _imap_connect(account_id, username=username)
+    conn = _imap_connect(account_id, username=username, user_scope_id=user_scope_id)
     if not conn:
         return []
     result: List[Dict[str, Any]] = []
@@ -875,7 +925,7 @@ def fetch_mail(
                     continue
                 msg = message_from_bytes(payload)
                 from_str = msg.get("From", "")
-                category = apply_sender_rules_to_category(from_str, "primary", username)
+                category = apply_sender_rules_to_category(from_str, "primary", username, user_scope_id=user_scope_id)
                 result.append({
                     "subject": msg.get("Subject", ""),
                     "from": from_str,
@@ -905,12 +955,13 @@ def send_mail(
     body: str,
     subtype: str = "plain",
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
     attachments: Optional[List[Dict[str, str]]] = None,
 ) -> bool:
     """Send one email. Returns True on success. Dispatches to Gmail API, Graph, or SMTP by provider.
     attachments: optional list of [{"path": "/full/path/to/file", "filename": "optional_name.pdf"}].
-    Optional username for multi-user scope."""
-    acc = get_account(account_id, username)
+    Optional username/user_scope_id for multi-user scope."""
+    acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
         return False
     provider = (acc.get("provider") or "imap").lower()
@@ -918,7 +969,7 @@ def send_mail(
         return _send_mail_gmail(account_id, to, subject, body, subtype, username, attachments)
     if provider == "microsoft":
         return _send_mail_microsoft(account_id, to, subject, body, subtype, username, attachments)
-    conn = _smtp_connect(account_id, username)
+    conn = _smtp_connect(account_id, username, user_scope_id=user_scope_id)
     if not conn:
         return False
     try:

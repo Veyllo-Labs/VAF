@@ -9,7 +9,7 @@ from pathlib import Path
 from vaf.core.email_transport import send_mail, get_account
 from vaf.tools.base import BaseTool
 from vaf.tools.filesystem import is_safe_path
-from vaf.tools.mail_utils import cred_username_from_kwargs, list_accounts_for_user
+from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_for_user
 
 
 def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
@@ -69,6 +69,7 @@ class SendMailTool(BaseTool):
 
     def run(self, **kwargs) -> str:
         cred_username = cred_username_from_kwargs(kwargs)
+        user_scope_id = cred_scope_from_kwargs(kwargs)
         account_id = (kwargs.get("account_id") or "").strip()
         to = (kwargs.get("to") or "").strip()
         subject = (kwargs.get("subject") or "").strip()
@@ -78,22 +79,22 @@ class SendMailTool(BaseTool):
             attachment_paths = []
 
         if not to:
-            accounts = list_accounts_for_user(cred_username)
+            accounts = list_accounts_for_user(cred_username, user_scope_id=user_scope_id)
             if not accounts:
                 return (
                     "No email accounts connected. The user must add an account in Settings → Connections → Email."
                 )
             return f"Pass to, subject, and body. Optionally account_id. Connected accounts: {', '.join(accounts)}."
         if not account_id:
-            accounts = list_accounts_for_user(cred_username)
+            accounts = list_accounts_for_user(cred_username, user_scope_id=user_scope_id)
             if not accounts:
                 return (
                     "No email accounts connected. The user must add an account in Settings → Connections → Email."
                 )
             account_id = accounts[0]
-        acc = get_account(account_id, username=cred_username)
+        acc = get_account(account_id, username=cred_username, user_scope_id=user_scope_id)
         if not acc:
-            return f"Account '{account_id}' not found. Connected: {', '.join(list_accounts_for_user(cred_username))}."
+            return f"Account '{account_id}' not found. Connected: {', '.join(list_accounts_for_user(cred_username, user_scope_id=user_scope_id))}."
         if not subject:
             subject = "(No subject)"
 
@@ -115,6 +116,7 @@ class SendMailTool(BaseTool):
                 body=body or "",
                 attachments=attachments if attachments else None,
                 username=cred_username,
+                user_scope_id=user_scope_id,
             )
         except Exception as e:
             return f"Failed to send email: {e}"

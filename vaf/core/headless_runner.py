@@ -601,6 +601,7 @@ def run_headless_agent():
                     if _meta.get("from_contact"):
                         contact = None
                         _username = _meta.get("username") or "admin"
+                        _user_scope = _meta.get("user_scope_id")
                         try:
                             from vaf.core.contacts_store import (
                                 get_contact_by_telegram_user_id,
@@ -610,11 +611,11 @@ def run_headless_agent():
                             if task_source == "telegram":
                                 _tid = _meta.get("telegram_user_id")
                                 if _tid:
-                                    contact = get_contact_by_telegram_user_id(_tid, _username)
+                                    contact = get_contact_by_telegram_user_id(_tid, _username, user_scope_id=_user_scope)
                             elif task_source == "whatsapp":
                                 _jid = _meta.get("whatsapp_chat_jid")
                                 if _jid:
-                                    contact = get_contact_by_whatsapp_phone(_jid, _username)
+                                    contact = get_contact_by_whatsapp_phone(_jid, _username, user_scope_id=_user_scope)
                         except Exception:
                             pass
                         contact_block = ""

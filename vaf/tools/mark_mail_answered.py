@@ -7,7 +7,7 @@ Scoped to the current user in network mode.
 from vaf.core.email_sync_store import init_store, update_message_answered
 from vaf.core.email_transport import get_account
 from vaf.tools.base import BaseTool
-from vaf.tools.mail_utils import cred_username_from_kwargs, list_accounts_for_user, store_username_from_kwargs
+from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_for_user, store_scope_from_kwargs, store_username_from_kwargs
 
 
 class MarkMailAnsweredTool(BaseTool):
@@ -43,20 +43,22 @@ class MarkMailAnsweredTool(BaseTool):
     def run(self, **kwargs) -> str:
         store_username = store_username_from_kwargs(kwargs)
         cred_username = cred_username_from_kwargs(kwargs)
+        user_scope_id = store_scope_from_kwargs(kwargs) or cred_scope_from_kwargs(kwargs)
         account_id = (kwargs.get("account_id") or "").strip()
         message_id = (kwargs.get("message_id") or "").strip()
         folder = (kwargs.get("folder") or "INBOX").strip()
         if not account_id or not message_id:
             return "account_id and message_id are required. Use mail_inbox to get message_id."
-        if not get_account(account_id, username=cred_username):
-            return f"Account '{account_id}' not found. Connected accounts: {', '.join(list_accounts_for_user(cred_username))}."
-        init_store(store_username)
+        if not get_account(account_id, username=cred_username, user_scope_id=user_scope_id):
+            return f"Account '{account_id}' not found. Connected accounts: {', '.join(list_accounts_for_user(cred_username, user_scope_id=user_scope_id))}."
+        init_store(store_username, user_scope_id)
         ok = update_message_answered(
             username=store_username,
             account_id=account_id,
             folder=folder,
             message_id=message_id,
             answered_at=None,  # use now
+            user_scope_id=user_scope_id,
         )
         if ok:
             return "Message marked as answered. It will show 'Benatwortet am ...' in the Mail UI."

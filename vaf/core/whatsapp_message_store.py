@@ -14,16 +14,28 @@ logger = logging.getLogger("vaf.core.whatsapp_message_store")
 
 _DB_NAME = "whatsapp_messages.db"
 _DEFAULT_RETENTION_DAYS = 90
+_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
 
 
 def _local_admin() -> str:
     return (Config.get("local_admin_username") or "admin").strip().lower()
 
 
-def _db_path(username: Optional[str] = None) -> Path:
-    u = (username or "").strip()
+def _local_admin_scope_id() -> str:
+    return str(Config.get("local_admin_scope_id", _LOCAL_ADMIN_SCOPE_ID)).strip()
+
+
+def _db_path(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Path:
     data_dir = Platform.data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
+    if user_scope_id:
+        scope_str = str(user_scope_id).strip()
+        if scope_str == _local_admin_scope_id():
+            return data_dir / _DB_NAME
+        scope_dir = data_dir / "scopes" / scope_str
+        scope_dir.mkdir(parents=True, exist_ok=True)
+        return scope_dir / _DB_NAME
+    u = (username or "").strip()
     if not u or u.lower() == _local_admin():
         return data_dir / _DB_NAME
     user_dir = data_dir / "users" / u
@@ -31,18 +43,18 @@ def _db_path(username: Optional[str] = None) -> Path:
     return user_dir / _DB_NAME
 
 
-def _get_conn(username: Optional[str] = None):
+def _get_conn(username: Optional[str] = None, user_scope_id: Optional[str] = None):
     import sqlite3
-    path = _db_path(username)
+    path = _db_path(username, user_scope_id)
     conn = sqlite3.connect(str(path), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
-def init_store(username: Optional[str] = None) -> None:
+def init_store(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> None:
     """Create table if not exists."""
-    conn = _get_conn(username)
+    conn = _get_conn(username, user_scope_id)
     try:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS whatsapp_messages (
@@ -74,12 +86,13 @@ def append_message(
     sender_jid: Optional[str] = None,
     message_id: Optional[str] = None,
     content_type: str = "text",
+    user_scope_id: Optional[str] = None,
 ) -> None:
     """Append one message to the store."""
     import time
     import sqlite3
-    init_store(username)
-    conn = _get_conn(username)
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
     try:
         ts = time.time()
         # Use chat_id+ts+direction as fallback unique key when message_id missing
@@ -114,11 +127,12 @@ def search_messages(
     query: str,
     chat_id: Optional[str] = None,
     limit: int = 20,
+    user_scope_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Search messages by query (matches body, chat_name, sender)."""
     import sqlite3
-    init_store(username)
-    conn = _get_conn(username)
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
     try:
         u = (username or "").strip() or ""
         q = f"%{(query or '').strip()}%"
@@ -145,11 +159,12 @@ def get_chat_messages(
     username: str,
     chat_id: str,
     limit: int = 50,
+    user_scope_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Get messages for a chat, newest first."""
     import sqlite3
-    init_store(username)
-    conn = _get_conn(username)
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
     try:
         cur = conn.execute(
             """

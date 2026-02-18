@@ -7,7 +7,7 @@ If exactly one match, returns the full body so the agent can answer in one call.
 from vaf.core.email_sync_store import search_messages
 from vaf.core.email_transport import get_message_body_plain
 from vaf.tools.base import BaseTool
-from vaf.tools.mail_utils import cred_username_from_kwargs, store_username_from_kwargs
+from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, store_scope_from_kwargs, store_username_from_kwargs
 
 
 class FindMailTool(BaseTool):
@@ -47,6 +47,7 @@ class FindMailTool(BaseTool):
     def run(self, **kwargs) -> str:
         store_username = store_username_from_kwargs(kwargs)
         cred_username = cred_username_from_kwargs(kwargs)
+        user_scope_id = store_scope_from_kwargs(kwargs) or cred_scope_from_kwargs(kwargs)
         query = (kwargs.get("query") or "").strip()
         folder = (kwargs.get("folder") or "INBOX").strip()
         limit = int(kwargs.get("limit") or 10)
@@ -59,6 +60,7 @@ class FindMailTool(BaseTool):
             folder=folder,
             limit=limit,
             username=store_username,
+            user_scope_id=user_scope_id,
         )
         if not matches:
             return f"No emails matching '{query}' in {folder}. Sync in Settings → Connections → Email if needed."
@@ -79,6 +81,7 @@ class FindMailTool(BaseTool):
                 message_id=m.get("message_id") or "",
                 folder=m.get("folder") or "INBOX",
                 username=cred_username,
+                user_scope_id=user_scope_id,
                 provider_message_id=(m.get("provider_message_id") or "").strip() or None,
             )
             if body and body.strip():

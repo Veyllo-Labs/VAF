@@ -180,6 +180,8 @@ class Config:
         # Email connections: accounts only (no passwords/tokens in config).
         # Credentials stored in OS keyring or encrypted file (see vaf.core.credential_store).
         "email_config": None,  # { "accounts": [ { "account_id", "provider", "email", "enabled", "imap_host?", "imap_port?", "smtp_host?", "smtp_port?" } ] }
+        "email_config_by_scope": None,  # { "<user_scope_id_uuid>": { "accounts": [...] } } — UUID-based per-user config (preferred)
+        "email_config_by_user": None,  # { "<username>": { "accounts": [...] } } — legacy per-username config
         "email_credentials_key": "",  # AES key (Base64) for fallback encrypted file; auto-generated if empty
         # OAuth2: callback base URL must point to this backend (default http://127.0.0.1:8001). Set if behind proxy or different port.
         "email_oauth_callback_base_url": "",

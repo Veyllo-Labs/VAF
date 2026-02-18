@@ -4,7 +4,7 @@ Use before send_mail when the user asks to send an email without specifying whic
 """
 
 from vaf.tools.base import BaseTool
-from vaf.tools.mail_utils import cred_username_from_kwargs, list_accounts_with_labels_for_user
+from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_with_labels_for_user
 
 
 class ListEmailAccountsTool(BaseTool):
@@ -28,7 +28,8 @@ class ListEmailAccountsTool(BaseTool):
 
     def run(self, **kwargs) -> str:
         cred_username = cred_username_from_kwargs(kwargs)
-        accounts = list_accounts_with_labels_for_user(cred_username)
+        user_scope_id = cred_scope_from_kwargs(kwargs)
+        accounts = list_accounts_with_labels_for_user(cred_username, user_scope_id=user_scope_id)
         if not accounts:
             return (
                 "No email accounts connected. The user must add an account in Settings → Connections → Email "

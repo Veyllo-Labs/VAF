@@ -30,6 +30,7 @@ logger = logging.getLogger("vaf.api.whatsapp_bridge")
 
 _bridge_thread: Optional[threading.Thread] = None
 _sender_thread: Optional[threading.Thread] = None
+_chat_sync_thread: Optional[threading.Thread] = None
 _bridge_stop = threading.Event()
 _processes: Dict[str, subprocess.Popen] = {}
 _process_lock = threading.Lock()
@@ -37,6 +38,11 @@ _outgoing_queue: Optional[queue.Queue] = None
 _chat_lists: Dict[str, List[Dict[str, Any]]] = {}
 _chat_list_events: Dict[str, threading.Event] = {}
 _chat_lists_lock = threading.Lock()
+
+# LID→E.164 from Node (Baileys lidMapping), so UI can show "this LID = this number" when WhatsApp resolved it
+_lid_mappings: Dict[str, List[Dict[str, str]]] = {}
+_lid_mappings_events: Dict[str, threading.Event] = {}
+_lid_mappings_lock = threading.Lock()
 
 # Connection check: ping/pong from Node to verify socket is connected
 _connection_status: Dict[str, bool] = {}
@@ -574,7 +580,7 @@ def _read_user_process(
                     pass
                 continue
             typ = obj.get("type")
-            if typ in ("message", "chats", "connected", "connection_closed"):
+            if typ in ("message", "chats", "connected", "connection_closed", "lid_mappings"):
                 try:
                     from vaf.core.log_helper import log_whatsapp_qr
                     log_whatsapp_qr(f"[Python] got type={typ!r}")
@@ -723,12 +729,26 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             return
         # Self-chat: trust Node's selfChat (Node resolves @lid to E.164 and compares to self; do NOT treat all @lid as self – LID is used for other 1:1 chats too, e.g. baba)
         is_self_chat = obj.get("selfChat") is True
-        # Allow only when JID or resolved fromE164 matches whitelist/FO. Do NOT accept unresolved @lid (LID numeric part is not a phone; would let strangers through).
+        # Resolve unresolved @lid via manual config (lid_to_e164) so known contacts like Bob can still be accepted when Node doesn't send fromE164
+        resolved_e164_from_config: Optional[str] = None
+        if (from_jid or "").endswith("@lid") and not from_e164:
+            try:
+                wc = Config.get("whatsapp_config") or {}
+                if isinstance(wc, dict):
+                    lid_map = wc.get("lid_to_e164") or {}
+                    if isinstance(lid_map, dict):
+                        resolved_e164_from_config = (lid_map.get(str(from_jid)) or "").strip()
+                        if resolved_e164_from_config and not resolved_e164_from_config.startswith("+"):
+                            resolved_e164_from_config = "+" + resolved_e164_from_config
+            except Exception:
+                pass
+        # Allow when: JID or fromE164 matches whitelist/FO, or unresolved @lid is manually mapped (lid_to_e164) to an allowed number
         allow_match = bool(allowed_phones) and (
             _allow_from_match(from_jid or "", allowed_phones)
             or (from_e164 and _allow_from_match(from_e164, allowed_phones))
+            or (resolved_e164_from_config and _allow_from_match(resolved_e164_from_config, allowed_phones))
         )
-        if (from_jid or "").endswith("@lid") and not from_e164 and not allow_match:
+        if (from_jid or "").endswith("@lid") and not from_e164 and not resolved_e164_from_config and not allow_match:
             try:
                 from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
                 log_whatsapp_inbound(f"REJECT unresolved @lid from={from_jid} (not in whitelist/contacts; LID is not a phone number)")
@@ -743,6 +763,10 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                 log_whatsapp_qr(f"[inbound] REJECT from={from_jid} from_digits={from_digits or '?'} allowed_count={len(allowed_phones)}")
             except Exception:
                 pass
+            # Record activity so dashboard still shows this chat (as Read-only) even when Node chat list omits it after reconnect
+            _reject_chat_id = _to_e164_display(_jid_to_e164(from_jid or "")) if _jid_to_e164(from_jid or "") else str(from_jid or "")
+            if _reject_chat_id:
+                _append_chat_activity(_reject_chat_id, None, "in")
             logger.warning(
                 "WhatsApp: rejected message from %s (not in allowFrom). allowed_phones count=%s; check Front Office contact phone format (use +49… or 0…).",
                 from_jid,
@@ -758,8 +782,8 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         except Exception:
             pass
         save_whatsapp_chat_jid(user_scope_id, username, from_jid)
-        # Use fromE164 when available (resolved @lid from Node); else derive from JID. For unresolved @lid use JID as chat_id and LID part for session.
-        raw = from_e164 or _jid_to_e164(from_jid) or ""
+        # Use fromE164 when available (resolved @lid from Node); else manual lid_to_e164 mapping; else derive from JID. For unresolved @lid without mapping use JID as chat_id and LID part for session.
+        raw = from_e164 or resolved_e164_from_config or _jid_to_e164(from_jid) or ""
         chat_id = _to_e164_display(raw) if raw else str(from_jid or "")
         if not chat_id:
             chat_id = str(from_jid or "")
@@ -786,7 +810,12 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         _append_chat_activity(chat_id, user_scope_id, "in")
         try:
             from vaf.core.whatsapp_message_store import append_message
-            append_message(username, chat_id, body, direction="in", sender_jid=from_jid, message_id=obj.get("messageId") or obj.get("message_id"), content_type="voice" if was_voice else "text")
+            append_message(
+                username, chat_id, body, direction="in", sender_jid=from_jid,
+                message_id=obj.get("messageId") or obj.get("message_id"),
+                content_type="voice" if was_voice else "text",
+                user_scope_id=user_scope_id,
+            )
         except Exception:
             pass
         whatsapp_config = Config.get("whatsapp_config") or {}
@@ -852,6 +881,14 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             ev = _chat_list_events.get(username)
             if ev:
                 ev.set()
+    elif typ == "lid_mappings":
+        mappings = obj.get("mappings")
+        if isinstance(mappings, list):
+            with _lid_mappings_lock:
+                _lid_mappings[username] = [{"lid": str(m.get("lid", "")), "e164": str(m.get("e164", "")).strip() or ""} for m in mappings if m.get("lid")]
+            ev = _lid_mappings_events.get(username)
+            if ev:
+                ev.set()
             with _connection_lock:
                 _connection_status[username] = True
                 conn_ev = _connection_events.get(username)
@@ -883,6 +920,37 @@ def _forward_bridge_stderr(username: str, proc: subprocess.Popen) -> None:
                 logger.debug("[wa-bridge] %s", s)
     except Exception:
         pass
+
+
+def _chat_sync_loop() -> None:
+    """Periodically request full chat list from Node (getChats) so _chat_lists stays in sync. Runs until _bridge_stop."""
+    interval = 600  # default 10 min
+    try:
+        wc = Config.get("whatsapp_config") or {}
+        if isinstance(wc, dict) and "chat_sync_interval_sec" in wc:
+            interval = int(wc.get("chat_sync_interval_sec") or 0)
+        if interval <= 0:
+            return
+    except Exception:
+        pass
+    # Give bridge time to start and populate _processes
+    for _ in range(6):
+        if _bridge_stop.is_set():
+            return
+        time.sleep(10)
+    while not _bridge_stop.is_set():
+        with _process_lock:
+            usernames = list(_processes.keys())
+        for username in usernames:
+            if _bridge_stop.is_set():
+                return
+            _request_chats(username)
+        # Sleep in small steps so we can exit quickly when stop is set
+        for _ in range(interval):
+            if _bridge_stop.is_set():
+                return
+            time.sleep(1)
+    logger.debug("WhatsApp chat sync loop exited")
 
 
 def _run_bridge() -> None:
@@ -928,7 +996,7 @@ def _run_bridge() -> None:
 
 def start_bridge() -> bool:
     """Start the WhatsApp bridge. Returns True if started."""
-    global _bridge_thread, _sender_thread, _outgoing_queue, _bridge_stop
+    global _bridge_thread, _sender_thread, _chat_sync_thread, _outgoing_queue, _bridge_stop
 
     whatsapp_config = Config.get("whatsapp_config") or {}
     if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("enabled"):
@@ -949,6 +1017,15 @@ def start_bridge() -> bool:
     _sender_thread.start()
     _bridge_thread = threading.Thread(target=_run_bridge, daemon=True)
     _bridge_thread.start()
+    # Periodic chat list sync (default every 10 min) so bot has latest chats
+    try:
+        sync_interval = int((whatsapp_config.get("chat_sync_interval_sec") or 600))
+        if sync_interval > 0:
+            _chat_sync_thread = threading.Thread(target=_chat_sync_loop, daemon=True)
+            _chat_sync_thread.start()
+            logger.info("WhatsApp chat sync started (interval=%ds)", sync_interval)
+    except Exception:
+        pass
     logger.info("WhatsApp bridge started")
     return True
 
@@ -1018,6 +1095,27 @@ def _request_chats(username: str) -> Optional[str]:
     return None
 
 
+def _request_sync_chats(username: str) -> Optional[str]:
+    """Send syncChats to the Node (triggers Baileys fetchMessageHistory so full chat list is synced). Returns username used, or None."""
+    with _process_lock:
+        proc = _processes.get(username)
+        target_username = username
+        if not proc or proc.poll() is not None or not proc.stdin:
+            if len(_processes) == 1:
+                target_username = next(iter(_processes.keys()))
+                proc = _processes.get(target_username)
+            else:
+                proc = None
+    if proc and proc.poll() is None and proc.stdin:
+        try:
+            proc.stdin.write(json.dumps({"cmd": "syncChats"}) + "\n")
+            proc.stdin.flush()
+            return target_username
+        except Exception as e:
+            logger.warning("WhatsApp syncChats failed for %s: %s", username, e)
+    return None
+
+
 def get_whatsapp_chats(username: str, force_refresh: bool = False, wait_timeout: float = 3.0) -> List[Dict[str, Any]]:
     """Return the list of all WhatsApp chats. Requests from bridge when running."""
     if not is_bridge_running():
@@ -1035,6 +1133,65 @@ def get_whatsapp_chats(username: str, force_refresh: bool = False, wait_timeout:
     ev.wait(timeout=wait_timeout)
     with _chat_lists_lock:
         return list(_chat_lists.get(used_username, []))
+
+
+def sync_whatsapp_chats(username: str, wait_timeout: float = 25.0) -> List[Dict[str, Any]]:
+    """Request full chat list sync from WhatsApp (Node calls Baileys fetchMessageHistory), then return the updated list. Use when the left-side list is incomplete."""
+    if not is_bridge_running():
+        with _chat_lists_lock:
+            return list(_chat_lists.get(username, []))
+    used_username = _request_sync_chats(username)
+    if not used_username:
+        with _chat_lists_lock:
+            return list(_chat_lists.get(username, []))
+    with _chat_lists_lock:
+        if used_username not in _chat_list_events:
+            _chat_list_events[used_username] = threading.Event()
+        ev = _chat_list_events[used_username]
+        ev.clear()
+    ev.wait(timeout=wait_timeout)
+    with _chat_lists_lock:
+        return list(_chat_lists.get(used_username, []))
+
+
+def _request_lid_mappings(username: str) -> Optional[str]:
+    """Ask Node for LID→E.164 from Baileys lidMapping. Returns username used for lookup."""
+    with _process_lock:
+        proc = _processes.get(username)
+        target_username = username
+        if not proc or proc.poll() is not None or not proc.stdin:
+            if len(_processes) == 1:
+                target_username = next(iter(_processes.keys()))
+                proc = _processes.get(target_username)
+            else:
+                proc = None
+    if proc and proc.poll() is None and proc.stdin:
+        try:
+            proc.stdin.write(json.dumps({"cmd": "getLidMappings"}) + "\n")
+            proc.stdin.flush()
+            return target_username
+        except Exception as e:
+            logger.warning("WhatsApp getLidMappings failed for %s: %s", username, e)
+    return None
+
+
+def get_lid_mappings(username: str, wait_timeout: float = 2.5) -> List[Dict[str, str]]:
+    """Return LID→E.164 known by Node (Baileys). Requests from bridge when running. Empty if not available."""
+    if not is_bridge_running():
+        with _lid_mappings_lock:
+            return list(_lid_mappings.get(username, []))
+    used_username = _request_lid_mappings(username)
+    if not used_username:
+        with _lid_mappings_lock:
+            return list(_lid_mappings.get(username, []))
+    with _lid_mappings_lock:
+        if used_username not in _lid_mappings_events:
+            _lid_mappings_events[used_username] = threading.Event()
+        ev = _lid_mappings_events[used_username]
+        ev.clear()
+    ev.wait(timeout=wait_timeout)
+    with _lid_mappings_lock:
+        return list(_lid_mappings.get(used_username, []))
 
 
 def get_connection_status(username: str, wait_timeout: float = 5.0) -> bool:

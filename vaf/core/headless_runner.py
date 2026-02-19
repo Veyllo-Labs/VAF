@@ -53,6 +53,58 @@ def _get_debug_log_dir():
     return Path.cwd()
 
 
+def _strip_tool_calls_json(text: str) -> str:
+    """Remove raw tool_calls JSON blobs from reply text so bridges/TTS never send them to users."""
+    if not text or ("tool_calls" not in text):
+        return text
+    out = []
+    i = 0
+    while i < len(text):
+        start = text.find('{"tool_calls"', i)
+        if start == -1:
+            start = text.find("{'tool_calls'", i)
+        if start == -1:
+            out.append(text[i:])
+            break
+        out.append(text[i:start])
+        # Match closing brace, skipping content inside double-quoted strings
+        depth = 0
+        j = start
+        in_dq = False
+        escape = False
+        while j < len(text):
+            c = text[j]
+            if escape:
+                escape = False
+                j += 1
+                continue
+            if c == "\\" and in_dq:
+                escape = True
+                j += 1
+                continue
+            if c == '"' and not in_dq:
+                in_dq = True
+                j += 1
+                continue
+            if c == '"' and in_dq:
+                in_dq = False
+                j += 1
+                continue
+            if in_dq:
+                j += 1
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    j += 1
+                    break
+            j += 1
+        i = j
+    return "".join(out)
+
+
 def _user_asked_for_text(user_input: str) -> bool:
     """True if the user prompt looks like a request to write/compose text (for opening in Document Editor)."""
     if not (user_input and user_input.strip()):
@@ -808,9 +860,10 @@ def run_headless_agent():
                             pass
                         if task_source == "telegram" and chat_id:
                             from vaf.core.telegram_reply import send_telegram_reply
-                            # Strip <think>...</think> so Telegram gets clean text only (no reasoning block)
+                            # Strip <think>...</think> and raw tool_calls JSON so user never sees internal payloads
                             out = str(final_text)
                             out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
+                            out = _strip_tool_calls_json(out)
                             out = re.sub(r'\n{3,}', '\n\n', out).strip()
                             if not out:
                                 try:
@@ -835,6 +888,7 @@ def run_headless_agent():
                                     pass
                                 out = str(final_text)
                                 out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
+                                out = _strip_tool_calls_json(out)
                                 out = re.sub(r'\n{3,}', '\n\n', out).strip()
                                 if not out:
                                     out = "[No reply text]"
@@ -862,6 +916,7 @@ def run_headless_agent():
                                     pass
                                 out = str(final_text)
                                 out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
+                                out = _strip_tool_calls_json(out)
                                 out = re.sub(r'\n{3,}', '\n\n', out).strip()
                                 if not out:
                                     out = "[No reply text]"

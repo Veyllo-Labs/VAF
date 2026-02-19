@@ -1,6 +1,6 @@
 """
 List WhatsApp chats (like mail_inbox for email).
-Uses chat list from the bridge; same data as WhatsApp Dashboard.
+Uses bridge chat list plus persistent message store so all chats with messages appear (sync = live store).
 """
 
 from vaf.tools.base import BaseTool
@@ -8,14 +8,14 @@ from vaf.tools.base import BaseTool
 
 class WhatsAppInboxTool(BaseTool):
     """
-    List WhatsApp chats (conversations). Uses the same chat list as the WhatsApp Dashboard.
-    Call find_whatsapp_messages to search for messages, or read_whatsapp_chat to read a specific chat.
+    List WhatsApp chats (inbox). Same data as the WhatsApp Dashboard: bridge list plus chats from the message store.
+    Every received/sent message is stored; chats that have messages appear here even after a bridge reconnect.
+    Call find_whatsapp_messages to search, or read_whatsapp_chat to read a chat.
     """
     name = "whatsapp_inbox"
     description = (
-        "List WhatsApp chats (conversations). Same list as the WhatsApp Dashboard. "
-        "Returns chat_id, name, last_ts. Use find_whatsapp_messages to search by name or text; "
-        "use read_whatsapp_chat with chat_id to read messages in a chat."
+        "List WhatsApp chats (inbox). Bridge list plus all chats that have messages in the store (like mail/Telegram). "
+        "Returns chat_id, name, last_ts. Use find_whatsapp_messages to search; read_whatsapp_chat(chat_id=...) to read."
     )
     parameters = {
         "type": "object",
@@ -35,15 +35,12 @@ class WhatsAppInboxTool(BaseTool):
 
         try:
             from vaf.api.whatsapp_bridge import get_whatsapp_chats, is_bridge_running
+            from vaf.core.whatsapp_message_store import list_chats_from_store
         except ImportError as e:
             return f"WhatsApp unavailable: {e}"
 
         if not is_bridge_running():
             return "WhatsApp bridge not running. Enable it in Settings → Connections → WhatsApp."
-
-        raw_chats = get_whatsapp_chats(username, wait_timeout=3.0)
-        if not raw_chats:
-            return "No WhatsApp chats found. The chat list may be empty (link WhatsApp and wait for messages)."
 
         def _jid_to_phone(jid: str) -> str:
             if not jid or not isinstance(jid, str):
@@ -55,20 +52,43 @@ class WhatsAppInboxTool(BaseTool):
                 return ""
             return f"+{part}"
 
-        lines = []
-        for i, c in enumerate(raw_chats[:max_chats], 1):
+        # Merge bridge chats + store chats (by chat_id), keep latest last_ts and best name
+        by_cid: dict = {}
+        raw_chats = get_whatsapp_chats(username, wait_timeout=3.0) or []
+        for c in raw_chats:
             jid = c.get("jid") or c.get("phone") or ""
             phone = c.get("phone") or _jid_to_phone(jid)
             chat_id = phone if phone and phone.startswith("+") else _jid_to_phone(jid) if jid else jid
-            name = c.get("name") or phone or jid
-            last_ts = c.get("last_ts") or 0
-            if last_ts:
-                from datetime import datetime
-                dt = datetime.fromtimestamp(last_ts)
-                ts_str = dt.strftime("%Y-%m-%d %H:%M")
-            else:
-                ts_str = "—"
-            lines.append(f"{i}. {name} | {chat_id} | last: {ts_str}")
-        out = f"WhatsApp chats (first {len(lines)}):\n" + "\n".join(lines)
-        out += "\n\nTo search messages, use find_whatsapp_messages(query='...', chat_id=...). To read a chat, use read_whatsapp_chat(chat_id='+49...')."
+            if not chat_id and str(jid).endswith("@lid"):
+                chat_id = str(jid)
+            if not chat_id:
+                continue
+            last_ts = int(c.get("last_ts") or 0)
+            name = (c.get("name") or "").strip() or phone or jid
+            if chat_id not in by_cid or last_ts > (by_cid[chat_id].get("last_ts") or 0):
+                by_cid[chat_id] = {"chat_id": chat_id, "name": name, "last_ts": last_ts}
+        for row in list_chats_from_store(username, limit=500, user_scope_id=user_scope_id):
+            cid = (row.get("chat_id") or "").strip()
+            if not cid:
+                continue
+            last_ts = int(row.get("last_ts") or 0)
+            name = (row.get("chat_name") or "").strip() or cid
+            if cid not in by_cid or last_ts > (by_cid[cid].get("last_ts") or 0):
+                by_cid[cid] = {"chat_id": cid, "name": name or cid, "last_ts": last_ts}
+            elif not (by_cid[cid].get("name") or "").strip() and name:
+                by_cid[cid]["name"] = name
+        chats = sorted(by_cid.values(), key=lambda x: -(x.get("last_ts") or 0))[:max_chats]
+
+        if not chats:
+            return "No WhatsApp chats found. Link WhatsApp, wait for messages, or check Settings → Connections."
+
+        from datetime import datetime
+        lines = []
+        for i, item in enumerate(chats, 1):
+            name = item.get("name") or item.get("chat_id") or "—"
+            last_ts = item.get("last_ts") or 0
+            ts_str = datetime.fromtimestamp(last_ts).strftime("%Y-%m-%d %H:%M") if last_ts else "—"
+            lines.append(f"{i}. {name} | {item.get('chat_id')} | last: {ts_str}")
+        out = f"WhatsApp inbox ({len(lines)} chats):\n" + "\n".join(lines)
+        out += "\n\nTo search: find_whatsapp_messages(query='...'). To read: read_whatsapp_chat(chat_id='+49...')."
         return out

@@ -9,5 +9,8 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.19"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.1"
   }
 }

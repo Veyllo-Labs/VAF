@@ -106,6 +106,8 @@ Under **Settings → Interface** you can set:
 - **Language** — UI language (e.g. German, English). Stored in the browser only (`localStorage`). See [I18N.md](I18N.md) for how translations and new languages are managed.
 - **Date & Time** — Timezone, date format, and time format (24h/12h). Stored in your user identity and used in the system prompt and when the agent shows dates and times.
 
+**Settings → Automations:** View scheduled automations (user-scoped when multi-user is used). To create one manually: click **Create New** (or use the **Automation** button in the main footer) to open the calendar; choose month, then day, then an hour slot. A popup lets you set repeat (once, daily, weekly, monthly, hourly), time, a detailed prompt, and an optional name. Creation is sent via WebSocket (`create_automation`); the list refreshes on success. The agent can also create automations via the `create_automation` tool in chat.
+
 ### 7. Document Editor
 
 The Document Editor is a rich-text editor in the right panel (dock or overlay). It supports opening files (HTML, DOCX, etc.), editing, and exporting.

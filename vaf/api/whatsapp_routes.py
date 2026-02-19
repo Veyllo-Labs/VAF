@@ -262,6 +262,63 @@ async def get_whatsapp_dashboard(request: Request):
                 pass
     except Exception:
         pass
+    # Apply LID→E.164 mapping so FO contacts show the correct session (with history) when chat came via @lid
+    lid_to_e164 = dict((whatsapp_config.get("lid_to_e164") or {}) if isinstance(whatsapp_config, dict) else {})
+    for lid_jid, e164 in list(lid_to_e164.items()):
+        if not lid_jid or not e164 or "@lid" not in str(lid_jid):
+            continue
+        lid_digits = "".join(c for c in str(lid_jid).split("@")[0] if c.isdigit())
+        if not lid_digits:
+            continue
+        canonical = _normalize_chat_id(e164)
+        if not canonical:
+            continue
+        sid_lid = f"whatsapp_{username}_{lid_digits}"
+        if canonical in sessions_by_chat:
+            sessions_by_chat[canonical]["session_id"] = sid_lid
+    # Infer LID→E.164 when we have one FO contact with no messages and one LID-style session with messages (same user)
+    try:
+        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
+        fo_phones = set()
+        for contact in get_contacts_allowing_assistant(username):
+            for phone in _contact_whatsapp_values(contact):
+                if phone and phone.strip():
+                    fo_phones.add(_normalize_chat_id(phone.strip()) or (phone.strip() if phone.strip().startswith("+") else f"+{phone.strip()}"))
+        lid_sessions_with_messages = [
+            rec for rec in sessions_by_chat.values()
+            if (rec.get("message_count") or 0) > 0
+            and str(rec.get("session_id") or "").startswith("whatsapp_")
+            and rec.get("chat_id") not in whitelist_by_phone
+            and _normalize_chat_id(rec.get("chat_id") or "") not in fo_phones
+        ]
+        fo_without_messages = [
+            rec for rec in sessions_by_chat.values()
+            if (rec.get("message_count") or 0) == 0
+            and _normalize_chat_id(rec.get("chat_id") or "") in fo_phones
+        ]
+        if len(lid_sessions_with_messages) == 1 and len(fo_without_messages) == 1:
+            lid_rec = lid_sessions_with_messages[0]
+            fo_rec = fo_without_messages[0]
+            sid = lid_rec.get("session_id") or ""
+            chat_id_lid = lid_rec.get("chat_id") or ""
+            lid_digits = "".join(c for c in str(chat_id_lid) if c.isdigit())
+            if len(lid_digits) >= 10 and sid:
+                e164_fo = _normalize_chat_id(fo_rec.get("chat_id") or "") or (fo_rec.get("chat_id") or "").strip()
+                lid_jid = f"{lid_digits}@lid"
+                if e164_fo and lid_jid not in lid_to_e164:
+                    lid_to_e164[lid_jid] = e164_fo
+                    try:
+                        cfg = Config.load()
+                        wc = (cfg.get("whatsapp_config") or {}) if isinstance(cfg.get("whatsapp_config"), dict) else {}
+                        wc = dict(wc)
+                        wc["lid_to_e164"] = dict(lid_to_e164)
+                        cfg["whatsapp_config"] = wc
+                        Config.save(cfg)
+                    except Exception:
+                        pass
+                    fo_rec["session_id"] = sid
+    except Exception:
+        pass
     sessions = sorted(sessions_by_chat.values(), key=lambda s: (s.get("last_ts") or 0), reverse=True)
 
     bucket_seconds = 4 * 3600

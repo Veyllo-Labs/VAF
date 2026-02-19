@@ -143,17 +143,21 @@ function jidToPhone(jid) {
   return "+" + part;
 }
 
-/** Resolve @lid JID to E.164 via Baileys lidMapping (like clawdbot). Returns null if unresolved. */
+/** Resolve @lid JID to E.164 via Baileys lidMapping. Returns null if unresolved. Retries once after delay (mapping can arrive late). */
 async function resolveLidToE164(sock, jid) {
   if (!jid || !/(@lid|@hosted\.lid)$/.test(jid)) return null;
   const mapping = sock?.signalRepository?.lidMapping;
   if (!mapping?.getPNForLID || typeof mapping.getPNForLID !== "function") return null;
-  try {
-    const pnJid = await mapping.getPNForLID(jid);
-    return pnJid ? jidToPhone(pnJid) : null;
-  } catch (_) {
-    return null;
+  for (const waitMs of [0, 400]) {
+    if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
+    try {
+      const pnJid = await mapping.getPNForLID(jid);
+      if (pnJid) return jidToPhone(pnJid);
+    } catch (_) {
+      /* ignore */
+    }
   }
+  return null;
 }
 
 /** Digits only for phone comparison (E.164 / JID). */
@@ -341,7 +345,10 @@ async function connect(authDir) {
         if (n) chatStore.set(remoteJid, n);
       }
       let selfChat = isSelfChat(remoteJid, selfJid, !!msg.key?.fromMe);
-      if (msg.key?.fromMe && !selfChat) continue; // skip own msgs except in self-chat
+      if (msg.key?.fromMe && !selfChat) {
+        if (!isGroup) emit({ type: "owner_sent", from: remoteJid, ts: Math.floor(Date.now() / 1000) });
+        continue; // skip own msgs except in self-chat
+      }
       if (isGroup) continue; // Phase 1: DMs only
       const senderJid = msg.key.participant ?? msg.key.remoteJid;
       const contentType = getContentType(msg);
@@ -373,6 +380,9 @@ async function connect(authDir) {
         fromE164 = jidToPhone(remoteJid);
         if (!fromE164 && remoteJid.endsWith("@lid")) {
           fromE164 = (await resolveLidToE164(sock, remoteJid)) || null;
+          if (!fromE164) {
+            try { fs.writeSync(2, `${LOG_PREFIX} LID unresolved (no fromE164): ${remoteJid} – add number to whitelist or ask contact to send again after sync\n`); } catch (_) {}
+          }
         }
         if (remoteJid.endsWith("@lid")) {
           const selfPhone = jidToPhone(selfJid);

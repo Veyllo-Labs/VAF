@@ -2425,18 +2425,22 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": str(e)})
 
                 elif type == "get_automations":
-                    # Return list of saved automations
+                    # Return list of saved automations (user-scoped when user_scope_id present)
                     try:
                         from vaf.core.automation import AutomationManager
-                        mgr = AutomationManager()
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
                         tasks = mgr.list()
                         automations_list = [
                             {
                                 "id": task.id,
                                 "name": task.name,
                                 "description": task.description,
+                                "prompt": getattr(task, "prompt", "") or task.description,
                                 "frequency": task.frequency,
                                 "time": task.time,
+                                "weekday": task.weekday,
+                                "day": task.day,
                                 "enabled": task.enabled,
                                 "next_run": task.next_run_iso,
                                 "last_run": task.last_run
@@ -2453,7 +2457,143 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "automations": [],
                             "error": str(e)
                         })
-                
+
+                elif type == "create_automation":
+                    try:
+                        from vaf.core.automation import AutomationManager, AutomationTask
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
+                        prompt = (cmd.get("prompt") or "").strip()
+                        if not prompt:
+                            await websocket.send_json({
+                                "type": "create_automation_result",
+                                "ok": False,
+                                "error": "prompt is required"
+                            })
+                            continue
+                        frequency = (cmd.get("frequency") or "daily").lower()
+                        time_str = (cmd.get("time") or "06:00").strip()
+                        if ":" not in time_str:
+                            time_str = f"{int(time_str or 0) % 24:02d}:00"
+                        name = (cmd.get("name") or "").strip() or (prompt[:50] + ("..." if len(prompt) > 50 else ""))
+                        description = (cmd.get("description") or "").strip() or prompt[:200]
+                        weekday = (cmd.get("weekday") or "").strip().lower() or None
+                        day = cmd.get("day")
+                        if frequency == "weekly" and weekday:
+                            pass
+                        elif frequency == "monthly" and day is not None:
+                            day = max(1, min(31, int(day)))
+                        else:
+                            if frequency == "weekly":
+                                weekday = None
+                            if frequency == "monthly":
+                                day = None
+                        task = AutomationTask(
+                            name=name,
+                            description=description,
+                            prompt=prompt,
+                            frequency=frequency,
+                            time=time_str,
+                            weekday=weekday if frequency == "weekly" else None,
+                            day=day if frequency == "monthly" else None,
+                            enabled=True,
+                            user_scope_id=user_scope_id,
+                        )
+                        can_create, err_msg = mgr.check_can_create_automation(new_time=time_str, new_frequency=frequency)
+                        if not can_create and err_msg:
+                            await websocket.send_json({
+                                "type": "create_automation_result",
+                                "ok": False,
+                                "error": err_msg[:500]
+                            })
+                            continue
+                        mgr.create(task)
+                        await websocket.send_json({
+                            "type": "create_automation_result",
+                            "ok": True,
+                            "automation": {
+                                "id": task.id,
+                                "name": task.name,
+                                "description": task.description,
+                                "frequency": task.frequency,
+                                "time": task.time,
+                                "enabled": task.enabled,
+                                "next_run": task.next_run_iso,
+                                "last_run": task.last_run,
+                            }
+                        })
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "create_automation_result",
+                            "ok": False,
+                            "error": str(e)
+                        })
+
+                elif type == "delete_automation":
+                    try:
+                        from vaf.core.automation import AutomationManager
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
+                        task_id = (cmd.get("task_id") or cmd.get("id") or "").strip()
+                        if not task_id:
+                            await websocket.send_json({"type": "delete_automation_result", "ok": False, "error": "task_id required"})
+                            continue
+                        ok = mgr.delete(task_id, permanent=True)
+                        await websocket.send_json({"type": "delete_automation_result", "ok": ok})
+                    except Exception as e:
+                        await websocket.send_json({"type": "delete_automation_result", "ok": False, "error": str(e)})
+
+                elif type == "update_automation":
+                    try:
+                        from vaf.core.automation import AutomationManager
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
+                        task_id = (cmd.get("task_id") or cmd.get("id") or "").strip()
+                        if not task_id:
+                            await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "task_id required"})
+                            continue
+                        task = mgr.get(task_id)
+                        if not task:
+                            await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "Automation not found"})
+                            continue
+                        update_params = {}
+                        for key in ("name", "description", "prompt", "frequency", "time", "weekday", "day", "enabled"):
+                            if key in cmd and cmd[key] is not None:
+                                if key == "enabled":
+                                    update_params[key] = bool(cmd[key])
+                                elif key == "day":
+                                    try:
+                                        update_params[key] = max(1, min(31, int(cmd[key])))
+                                    except (TypeError, ValueError):
+                                        pass
+                                elif key == "weekday" and isinstance(cmd.get(key), str):
+                                    update_params[key] = (cmd[key] or "").strip().lower() or None
+                                else:
+                                    update_params[key] = cmd[key]
+                        if not update_params:
+                            await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "No fields to update"})
+                            continue
+                        updated = mgr.update(task_id, **update_params)
+                        if not updated:
+                            await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "Update failed"})
+                            continue
+                        await websocket.send_json({
+                            "type": "update_automation_result",
+                            "ok": True,
+                            "automation": {
+                                "id": updated.id,
+                                "name": updated.name,
+                                "description": updated.description,
+                                "frequency": updated.frequency,
+                                "time": updated.time,
+                                "enabled": updated.enabled,
+                                "next_run": updated.next_run_iso,
+                                "last_run": updated.last_run,
+                            }
+                        })
+                    except Exception as e:
+                        await websocket.send_json({"type": "update_automation_result", "ok": False, "error": str(e)})
+
                 elif type == "process_audio":
                     # Process audio for STT: Docker (HTTP) or local (faster-whisper)
                     import base64

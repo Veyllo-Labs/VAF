@@ -10,8 +10,9 @@ import {
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
-import SettingsModal from '@/components/SettingsModal';
+import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
+import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
 import SubAgentWindow from '@/components/SubAgentWindow';
 import DocumentEditor from '@/components/DocumentEditor';
 import DocumentViewer, { CHIP_BG_CLASSES, type InsertedSelectionRange } from '@/components/DocumentViewer';
@@ -704,6 +705,37 @@ function VAFDashboardContent() {
     const [loading, setLoading] = useState(false);
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
 
+    const pendingCreateAutomationResolveRef = useRef<((r: { ok: boolean; error?: string }) => void) | null>(null);
+    const pendingUpdateAutomationResolveRef = useRef<((r: { ok: boolean; error?: string }) => void) | null>(null);
+
+    const refreshAutomations = useCallback(() => {
+        ws?.send(JSON.stringify({ type: 'get_automations' }));
+    }, [ws]);
+
+    const createAutomationSubmit = useCallback((payload: CreateAutomationPayload & { task_id?: string }) => {
+        return new Promise<{ ok: boolean; error?: string }>((resolve) => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                resolve({ ok: false, error: 'Not connected' });
+                return;
+            }
+            const taskId = payload.task_id;
+            if (taskId) {
+                pendingUpdateAutomationResolveRef.current = resolve;
+                const { task_id, ...rest } = payload;
+                ws.send(JSON.stringify({ type: 'update_automation', task_id, ...rest }));
+            } else {
+                pendingCreateAutomationResolveRef.current = resolve;
+                ws.send(JSON.stringify({ type: 'create_automation', ...payload }));
+            }
+        });
+    }, [ws]);
+
+    const deleteAutomation = useCallback((taskId: string) => {
+        if (ws?.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'delete_automation', task_id: taskId }));
+        }
+    }, [ws]);
+
     // Per-Session Animation State Tracking
     // Tracks which sessions are actively loading so we can restore animation state on session switch
     const sessionLoadingStates = useRef<Record<string, { loading: boolean; statusMessage: string; loadingMessageId: number | null }>>({});
@@ -717,6 +749,7 @@ function VAFDashboardContent() {
     /** User's preferred time format from Settings → Interface (24h | 12h). Used for message timestamps. */
     const [userTimeFormat, setUserTimeFormat] = useState<'24h' | '12h' | undefined>(undefined);
     const [isAutomationPopupOpen, setIsAutomationPopupOpen] = useState(false);
+    const [editingAutomationFromCalendar, setEditingAutomationFromCalendar] = useState<EditAutomationTask | null>(null);
     const [showChangingModelOverlay, setShowChangingModelOverlay] = useState(false);
     type PendingContactReply = { replyId: string; source: string; contactName: string; preview: string; sessionId?: string };
     const [pendingContactReplies, setPendingContactReplies] = useState<PendingContactReply[]>([]);
@@ -724,7 +757,7 @@ function VAFDashboardContent() {
     const [workflows, setWorkflows] = useState<Array<{ id: string; name: string; description: string; steps: number }>>([]);
     const [trustedSources, setTrustedSources] = useState<{ categories: Array<{ id: string; name: string; description: string; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> }>({ categories: [] });
     const [trustedSourcesError, setTrustedSourcesError] = useState<string | null>(null);
-    const [automations, setAutomations] = useState<Array<{ id: string; name: string; description: string; frequency: string; time: string; enabled: boolean }>>([]);
+    const [automations, setAutomations] = useState<Array<{ id: string; name: string; description: string; prompt?: string; frequency: string; time: string; weekday?: string | null; day?: number | null; enabled: boolean; next_run?: string }>>([]);
     // const [activeTools, setActiveTools] = useState<ToolState[]>([]); // REPLACED BY INLINE MESSAGES
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1889,6 +1922,20 @@ function VAFDashboardContent() {
                 else if (data.type === 'automations_list') {
                     setAutomations(data.automations || []);
                 }
+                else if (data.type === 'create_automation_result') {
+                    const resolve = pendingCreateAutomationResolveRef.current;
+                    pendingCreateAutomationResolveRef.current = null;
+                    resolve?.({ ok: data.ok === true, error: data.error });
+                }
+                else if (data.type === 'update_automation_result') {
+                    const resolve = pendingUpdateAutomationResolveRef.current;
+                    pendingUpdateAutomationResolveRef.current = null;
+                    resolve?.({ ok: data.ok === true, error: data.error });
+                    if (data.ok === true) ws?.send(JSON.stringify({ type: 'get_automations' }));
+                }
+                else if (data.type === 'delete_automation_result') {
+                    if (data.ok === true) ws?.send(JSON.stringify({ type: 'get_automations' }));
+                }
                 else if (data.type === 'model_state') {
                     if (typeof data.loaded === 'boolean') {
                         setModelLoaded(data.loaded);
@@ -2866,7 +2913,10 @@ function VAFDashboardContent() {
                     <div className="shrink-0 p-3 mt-auto mb-2 flex flex-col gap-1 w-full overflow-hidden">
 
                         <div
-                            onClick={() => setIsAutomationPopupOpen(true)}
+                            onClick={() => {
+                                setIsAutomationPopupOpen(true);
+                                ws?.send(JSON.stringify({ type: 'get_automations' }));
+                            }}
                             className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/automation transition-all justify-start"
                             title="Automation"
                         >
@@ -3784,12 +3834,39 @@ function VAFDashboardContent() {
                 isConnected={isConnected}
                 showIdleState={showIdleState}
                 onReconnect={() => { if (!isConnected) { setStatus('connecting'); setReconnectAttempt((a) => a + 1); } }}
+                onCreateAutomationSubmit={createAutomationSubmit as SettingsModalProps['onCreateAutomationSubmit']}
+                onAutomationCreated={refreshAutomations}
+                onDeleteAutomation={deleteAutomation}
             />
             <AutomationCalendarModal
                 isOpen={isAutomationPopupOpen}
                 onClose={() => setIsAutomationPopupOpen(false)}
                 currentUser={currentUser}
+                automations={automations}
+                onSubmitCreateAutomation={createAutomationSubmit}
+                onAutomationCreated={refreshAutomations}
+                onEditAutomation={(auto) => setEditingAutomationFromCalendar({
+                    id: auto.id,
+                    name: auto.name,
+                    prompt: auto.prompt ?? auto.description ?? '',
+                    frequency: auto.frequency,
+                    time: auto.time,
+                    weekday: auto.weekday ?? undefined,
+                    day: auto.day ?? undefined,
+                })}
             />
+            {editingAutomationFromCalendar && (
+                <CreateAutomationPopup
+                    isOpen={true}
+                    onClose={() => setEditingAutomationFromCalendar(null)}
+                    initialDate={new Date()}
+                    initialHour={(() => { const p = (editingAutomationFromCalendar.time || '06:00').split(':'); return Math.max(0, Math.min(23, parseInt(p[0], 10) || 0)); })()}
+                    editTask={editingAutomationFromCalendar}
+                    onCreated={() => { setEditingAutomationFromCalendar(null); refreshAutomations(); }}
+                    onSubmit={createAutomationSubmit}
+                    onDelete={(taskId) => { deleteAutomation(taskId); setEditingAutomationFromCalendar(null); refreshAutomations(); }}
+                />
+            )}
         </main>
     );
 }

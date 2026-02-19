@@ -15,6 +15,7 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import TTSSettings from './settings/TTSSettings';
+import type { CreateAutomationPayload } from './CreateAutomationPopup';
 
 // Loading fallback for lazy-loaded ReactFlow
 const ReactFlowFallback = () => {
@@ -115,6 +116,7 @@ import { languages } from '@/lib/languages';
 import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
+import CreateAutomationPopup, { type EditAutomationTask } from './CreateAutomationPopup';
 
 export interface SettingsModalProps {
     isOpen: boolean;
@@ -134,7 +136,7 @@ export interface SettingsModalProps {
     onRequestTrustedSources?: () => void;
     onCreateTrustedCategory?: (name: string) => void;
     trustedSourcesError?: string | null;
-    automations?: Array<{ id: string; name: string; description: string; frequency: string; time: string; enabled: boolean }>;
+    automations?: Array<{ id: string; name: string; description: string; prompt?: string; frequency: string; time: string; weekday?: string | null; day?: number | null; enabled: boolean }>;
     currentUser?: { id: string; username: string; role: string };
     onLogout?: () => void;
     apiBase?: string;
@@ -147,6 +149,12 @@ export interface SettingsModalProps {
     isConnected?: boolean;
     showIdleState?: boolean;
     onReconnect?: () => void;
+    /** Submit create-automation from calendar popup (WebSocket). */
+    onCreateAutomationSubmit?: (payload: CreateAutomationPayload) => Promise<{ ok: boolean; error?: string }>;
+    /** Called after an automation was created (e.g. refresh list). */
+    onAutomationCreated?: () => void;
+    /** Delete automation by id (WebSocket). */
+    onDeleteAutomation?: (taskId: string) => void;
 }
 
 const CATEGORIES = [
@@ -204,7 +212,7 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 ];
 
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -248,6 +256,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [cloudWizardProvider, setCloudWizardProvider] = useState<string | undefined>(undefined);
     const [mailDashboardRefresh, setMailDashboardRefresh] = useState(0);
     const [showCreateAutomationModal, setShowCreateAutomationModal] = useState(false);
+    const [editingAutomation, setEditingAutomation] = useState<EditAutomationTask | null>(null);
 
     const [toolsSearch, setToolsSearch] = useState('');
     const [workflowsSearch, setWorkflowsSearch] = useState('');
@@ -2114,10 +2123,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <Section title={tAutomations('scheduled')}>
                                         <div className="space-y-3">
                                             {automations.map((auto, idx) => (
-                                                <div key={idx} className="p-4 bg-white border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
-                                                    <div className="flex items-start justify-between">
-                                                        <div className="flex-1">
-                                                            <div className="flex items-center gap-2">
+                                                <div key={auto.id} className="p-4 bg-white border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-2 flex-wrap">
                                                                 <div className="font-medium text-gray-900">{auto.name}</div>
                                                                 <div className={cn(
                                                                     "px-2 py-0.5 rounded text-xs font-medium",
@@ -2126,7 +2135,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                     {auto.enabled ? tCommon('active') : tCommon('disabled')}
                                                                 </div>
                                                             </div>
-                                                            <div className="text-sm text-gray-600 mt-1">{auto.description}</div>
+                                                            <div className="text-sm text-gray-600 mt-1 line-clamp-2">{auto.description}</div>
                                                             <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
                                                                 <div className="flex items-center gap-1">
                                                                     <span className="font-medium">{tAutomations('frequency')}:</span>
@@ -2137,6 +2146,24 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                     <span>{auto.time}</span>
                                                                 </div>
                                                             </div>
+                                                        </div>
+                                                        <div className="flex items-center gap-1 shrink-0">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setEditingAutomation({ id: auto.id, name: auto.name, prompt: auto.prompt ?? auto.description, frequency: auto.frequency, time: auto.time, weekday: auto.weekday ?? undefined, day: auto.day ?? undefined })}
+                                                                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                                                                title={tAutomations('edit')}
+                                                            >
+                                                                <Edit className="w-4 h-4" />
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => { if (window.confirm(tAutomations('confirmDelete'))) onDeleteAutomation?.(auto.id); }}
+                                                                className="p-2 rounded-lg text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors"
+                                                                title={tAutomations('delete')}
+                                                            >
+                                                                <Trash2 className="w-4 h-4" />
+                                                            </button>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -2974,7 +3001,32 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 isOpen={showCreateAutomationModal}
                 onClose={() => setShowCreateAutomationModal(false)}
                 currentUser={currentUser}
+                automations={automations}
+                onSubmitCreateAutomation={onCreateAutomationSubmit}
+                onAutomationCreated={onAutomationCreated}
+                onEditAutomation={(auto) => setEditingAutomation({
+                    id: auto.id,
+                    name: auto.name,
+                    prompt: auto.prompt ?? auto.description ?? '',
+                    frequency: auto.frequency,
+                    time: auto.time,
+                    weekday: auto.weekday ?? undefined,
+                    day: auto.day ?? undefined,
+                })}
             />
+
+            {editingAutomation && (
+                <CreateAutomationPopup
+                    isOpen={true}
+                    onClose={() => setEditingAutomation(null)}
+                    initialDate={new Date()}
+                    initialHour={(() => { const p = (editingAutomation.time || '06:00').split(':'); return Math.max(0, Math.min(23, parseInt(p[0], 10) || 0)); })()}
+                    editTask={editingAutomation}
+                    onCreated={() => { setEditingAutomation(null); onAutomationCreated?.(); }}
+                    onSubmit={onCreateAutomationSubmit}
+                    onDelete={(taskId) => { onDeleteAutomation?.(taskId); setEditingAutomation(null); onAutomationCreated?.(); }}
+                />
+            )}
 
             {/* User Identity Modal */}
             {showUserIdentityModal && (

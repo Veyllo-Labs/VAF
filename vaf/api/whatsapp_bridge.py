@@ -648,6 +648,36 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             log_whatsapp_qr(f"[Python] connection_closed statusCode={code} → UI will show orange")
         except Exception:
             pass
+    elif typ == "owner_sent":
+        from_jid = (obj.get("from") or "").strip()
+        ts = obj.get("ts")
+        if from_jid and isinstance(ts, (int, float)) and ts > 0:
+            try:
+                cfg = Config.load()
+                wc = cfg.get("whatsapp_config") or {}
+                if not isinstance(wc, dict):
+                    wc = {}
+                else:
+                    wc = dict(wc)
+                owner_control = dict(wc.get("owner_control") or {})
+                owner_control[from_jid] = int(ts)
+                now = int(time.time())
+                max_age = 24 * 3600
+                owner_control = {k: v for k, v in owner_control.items() if (now - v) <= max_age}
+                if len(owner_control) > 50:
+                    by_ts = sorted(owner_control.items(), key=lambda x: -x[1])
+                    owner_control = dict(by_ts[:50])
+                wc["owner_control"] = owner_control
+                cfg["whatsapp_config"] = wc
+                Config.save(cfg)
+                try:
+                    from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
+                    log_whatsapp_inbound(f"owner_sent chat={from_jid} → owner has control")
+                    log_whatsapp_qr(f"[inbound] owner_sent chat={from_jid} → owner has control")
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning("WhatsApp: failed to save owner_control: %s", e)
     elif typ == "message":
         from_jid = obj.get("from") or obj.get("senderJid")
         try:
@@ -693,8 +723,11 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             return
         # Self-chat: trust Node's selfChat (Node resolves @lid to E.164 and compares to self; do NOT treat all @lid as self – LID is used for other 1:1 chats too, e.g. baba)
         is_self_chat = obj.get("selfChat") is True
+        # Allow when: JID or fromE164 matches whitelist/FO, or when sender is @lid with no fromE164 (LID unresolved by Node) but we have allowed_phones – so FO/whitelist contacts can still get through
         allow_match = bool(allowed_phones) and (
-            _allow_from_match(from_jid or "", allowed_phones) or (from_e164 and _allow_from_match(from_e164, allowed_phones))
+            _allow_from_match(from_jid or "", allowed_phones)
+            or (from_e164 and _allow_from_match(from_e164, allowed_phones))
+            or ((from_jid or "").endswith("@lid") and not from_e164)
         )
         if not is_self_chat and not allow_match:
             from_digits = _phone_digits_canonical(from_jid or "") or (_phone_digits_canonical(from_e164 or "") if from_e164 else "")
@@ -714,15 +747,36 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
             log_whatsapp_inbound(f"ACCEPT from={from_jid} self_chat={is_self_chat} body_len={len(body)}")
             log_whatsapp_qr(f"[inbound] ACCEPT from={from_jid} body_len={len(body)}")
+            if (from_jid or "").endswith("@lid") and not from_e164:
+                log_whatsapp_qr(f"[inbound] ACCEPT unresolved @lid (LID→E.164 not available); reply will go to this chat")
         except Exception:
             pass
         save_whatsapp_chat_jid(user_scope_id, username, from_jid)
-        # Use fromE164 when available (resolved @lid from Node); else derive from JID.
+        # Use fromE164 when available (resolved @lid from Node); else derive from JID. For unresolved @lid use JID as chat_id and LID part for session.
         raw = from_e164 or _jid_to_e164(from_jid) or ""
         chat_id = _to_e164_display(raw) if raw else str(from_jid or "")
         if not chat_id:
             chat_id = str(from_jid or "")
-        resolved_digits = _normalize_phone(raw) if raw else ""
+        if raw:
+            resolved_digits = _normalize_phone(raw)
+        elif (from_jid or "").endswith("@lid"):
+            resolved_digits = (from_jid or "").split("@")[0].strip() or "lid"
+        else:
+            resolved_digits = ""
+        # Persist LID→E.164 so dashboard can show this chat under the contact's phone (Web UI session/history)
+        if from_e164 and (from_jid or "").endswith("@lid"):
+            try:
+                cfg = Config.load()
+                wc = cfg.get("whatsapp_config") or {}
+                if isinstance(wc, dict):
+                    wc = dict(wc)
+                    lid_map = dict(wc.get("lid_to_e164") or {})
+                    lid_map[str(from_jid)] = _to_e164_display(from_e164)
+                    wc["lid_to_e164"] = lid_map
+                    cfg["whatsapp_config"] = wc
+                    Config.save(cfg)
+            except Exception:
+                pass
         _append_chat_activity(chat_id, user_scope_id, "in")
         try:
             from vaf.core.whatsapp_message_store import append_message
@@ -731,37 +785,57 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             pass
         whatsapp_config = Config.get("whatsapp_config") or {}
         inbound_to_agent = whatsapp_config.get("inbound_to_agent", True) if isinstance(whatsapp_config, dict) else True
-        if inbound_to_agent:
-            session_id = f"whatsapp_{username}_{resolved_digits or 'self'}"
-            in_config = _allow_from_match(from_jid or "", config_phones) or (
-                from_e164 and _allow_from_match(from_e164, config_phones)
-            )
-            from_contact = not is_self_chat and allow_match and not in_config
-            metadata: Dict[str, Any] = {
-                "user_scope_id": user_scope_id,
-                "username": username,
-                "whatsapp_chat_jid": from_jid,
-            }
-            if from_contact:
-                metadata["from_contact"] = True
-            if voice_lang:
-                metadata["voice_lang"] = voice_lang
-                with _voice_reply_lock:
-                    _voice_reply_pending[f"{username}|{from_jid}"] = voice_lang
-            tq = TaskQueue()
-            tq.add(
-                session_id=session_id,
-                input_text=body,
-                source="whatsapp",
-                metadata=metadata,
-            )
+        # Self-chat (admin number = bridge/linked number): do not reply; store as note/backlog only so the agent doesn't talk to itself
+        if is_self_chat:
             try:
                 from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
-                log_whatsapp_inbound(f"ENQUEUED session={session_id} user={username}")
-                log_whatsapp_qr(f"[inbound] ENQUEUED session={session_id} from={from_jid}")
+                log_whatsapp_inbound(f"SELF_CHAT note from={from_jid} body_len={len(body)} (stored, no reply)")
+                log_whatsapp_qr(f"[inbound] SELF_CHAT stored as note from={from_jid} (admin=bridge number, no agent reply)")
             except Exception:
                 pass
-            logger.info("WhatsApp message enqueued from %s for user %s", from_jid, username)
+            logger.info("WhatsApp self-chat from %s stored as note (no agent reply); user %s", from_jid, username)
+        elif inbound_to_agent:
+            owner_control = (whatsapp_config.get("owner_control") or {}) if isinstance(whatsapp_config, dict) else {}
+            last_owner_ts = owner_control.get(from_jid) if from_jid else None
+            if last_owner_ts is not None and (time.time() - last_owner_ts) < 600:
+                try:
+                    from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
+                    log_whatsapp_inbound(f"owner_control skip from={from_jid} (owner has control, 10 min not elapsed)")
+                    log_whatsapp_qr(f"[inbound] owner_control: skip reply from={from_jid} (owner has control, 10 min not elapsed)")
+                except Exception:
+                    pass
+                logger.info("WhatsApp: skip agent reply for %s (owner has control, 10 min not elapsed)", from_jid)
+            else:
+                session_id = f"whatsapp_{username}_{resolved_digits or 'self'}"
+                in_config = _allow_from_match(from_jid or "", config_phones) or (
+                    from_e164 and _allow_from_match(from_e164, config_phones)
+                )
+                from_contact = allow_match and not in_config
+                metadata: Dict[str, Any] = {
+                    "user_scope_id": user_scope_id,
+                    "username": username,
+                    "whatsapp_chat_jid": from_jid,
+                }
+                if from_contact:
+                    metadata["from_contact"] = True
+                if voice_lang:
+                    metadata["voice_lang"] = voice_lang
+                    with _voice_reply_lock:
+                        _voice_reply_pending[f"{username}|{from_jid}"] = voice_lang
+                tq = TaskQueue()
+                tq.add(
+                    session_id=session_id,
+                    input_text=body,
+                    source="whatsapp",
+                    metadata=metadata,
+                )
+                try:
+                    from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
+                    log_whatsapp_inbound(f"ENQUEUED session={session_id} user={username}")
+                    log_whatsapp_qr(f"[inbound] ENQUEUED session={session_id} from={from_jid}")
+                except Exception:
+                    pass
+                logger.info("WhatsApp message enqueued from %s for user %s", from_jid, username)
         else:
             logger.debug("WhatsApp inbound not forwarded to agent (inbound_to_agent=false); user still reachable for sends.")
     elif typ == "chats":

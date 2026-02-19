@@ -13,11 +13,10 @@ class AutomationTool(BaseTool):
     
     name = "create_automation"
     description = """Create a scheduled automation task that runs at specified times.
-Use this when user wants to schedule recurring tasks like:
-- Daily news/weather reports
-- Periodic backups
-- Scheduled reminders
-- Regular document generation
+Use this when user wants to schedule recurring tasks or a one-time task:
+- Once (einmalig): single run, scheduled for the next day
+- Daily (täglich), weekly (wöchentlich, use weekday e.g. monday), monthly (monatlich, use day 1-31), hourly (stündlich)
+- Daily news/weather reports, periodic backups, scheduled reminders, regular document generation
 
 **CRITICAL RULES - READ CAREFULLY:**
 
@@ -63,12 +62,20 @@ Use this when user wants to schedule recurring tasks like:
             },
             "frequency": {
                 "type": "string",
-                "enum": ["hourly", "daily", "weekly", "monthly"],
-                "description": "How often to run the task"
+                "enum": ["once", "hourly", "daily", "weekly", "monthly"],
+                "description": "How often to run: once (single run), hourly, daily, weekly, monthly"
             },
             "time": {
                 "type": "string",
                 "description": "Time to run in HH:MM format (e.g., '06:00', '18:30')"
+            },
+            "weekday": {
+                "type": "string",
+                "description": "For frequency 'weekly': which weekday (e.g. 'monday', 'tuesday'). Use English lowercase."
+            },
+            "day": {
+                "type": "integer",
+                "description": "For frequency 'monthly': day of month (1-31)"
             },
             "output_path": {
                 "type": "string",
@@ -85,8 +92,26 @@ Use this when user wants to schedule recurring tasks like:
     def run(self, **kwargs) -> str:
         name = kwargs.get("name", "untitled")
         prompt = kwargs.get("prompt", "")
-        frequency = kwargs.get("frequency", "daily")
+        frequency = (kwargs.get("frequency") or "daily").lower()
         schedule_time = kwargs.get("time", "06:00")
+        weekday_arg = kwargs.get("weekday")
+        day_arg = kwargs.get("day")
+        # Normalize weekday to English lowercase (e.g. Montag -> monday)
+        weekday_map = {
+            "montag": "monday", "dienstag": "tuesday", "mittwoch": "wednesday",
+            "donnerstag": "thursday", "freitag": "friday", "samstag": "saturday", "sonntag": "sunday",
+            "monday": "monday", "tuesday": "tuesday", "wednesday": "wednesday",
+            "thursday": "thursday", "friday": "friday", "saturday": "saturday", "sunday": "sunday",
+        }
+        weekday = None
+        if weekday_arg and isinstance(weekday_arg, str):
+            weekday = weekday_map.get(weekday_arg.strip().lower(), weekday_arg.strip().lower())
+        day = None
+        if day_arg is not None:
+            try:
+                day = max(1, min(31, int(day_arg)))
+            except (TypeError, ValueError):
+                pass
         # IMPORTANT: Distinguish between "not provided" (None) and "default value"
         # This allows us to detect if user explicitly passed a path or not
         output_path_arg = kwargs.get("output_path")
@@ -362,6 +387,8 @@ Use this when user wants to schedule recurring tasks like:
                 workflow_steps=workflow_steps if workflow_steps else [],  # NEW: Structured workflow
                 frequency=frequency,
                 time=schedule_time,
+                weekday=weekday if frequency == "weekly" else None,
+                day=day if frequency == "monthly" else None,
                 output_path=output_path,
                 output_format=format_type,  # IMPORTANT: Set the output format!
                 parameters=params
@@ -947,12 +974,20 @@ class UpdateAutomationTool(BaseTool):
             },
             "frequency": {
                 "type": "string",
-                "enum": ["hourly", "daily", "weekly", "monthly"],
-                "description": "New frequency (optional)"
+                "enum": ["once", "hourly", "daily", "weekly", "monthly"],
+                "description": "New frequency (optional): once, hourly, daily, weekly, monthly"
             },
             "time": {
                 "type": "string",
                 "description": "New time in HH:MM format (optional)"
+            },
+            "weekday": {
+                "type": "string",
+                "description": "For frequency 'weekly': weekday in English lowercase (e.g. 'monday')"
+            },
+            "day": {
+                "type": "integer",
+                "description": "For frequency 'monthly': day of month (1-31)"
             },
             "output_path": {
                 "type": "string",
@@ -1009,6 +1044,14 @@ class UpdateAutomationTool(BaseTool):
                 update_params["frequency"] = kwargs["frequency"]
             if "time" in kwargs and kwargs["time"]:
                 update_params["time"] = kwargs["time"]
+            if "weekday" in kwargs:
+                w = kwargs.get("weekday")
+                update_params["weekday"] = w.strip().lower() if isinstance(w, str) and w.strip() else None
+            if "day" in kwargs and kwargs["day"] is not None:
+                try:
+                    update_params["day"] = max(1, min(31, int(kwargs["day"])))
+                except (TypeError, ValueError):
+                    pass
             if "output_path" in kwargs and kwargs["output_path"]:
                 update_params["output_path"] = kwargs["output_path"]
             if "parameters" in kwargs and kwargs["parameters"]:

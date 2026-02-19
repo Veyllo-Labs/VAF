@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState, useRef, Fragment, Sus
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import {
-    Send, Menu, Plus, MessageSquare, Bot, User, Trash2, Edit2, Paperclip,
+    Send, Menu, Plus, MessageSquare, Brain, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar
 } from 'lucide-react';
@@ -2897,7 +2897,9 @@ function VAFDashboardContent() {
                                     )}
 
                                     {(s as Session).source === 'thinking' ? (
-                                        <span title="Thinking mode" className="text-base leading-none">🧠</span>
+                                        <span title="Thinking mode">
+                                            <Brain size={16} className={cn("shrink-0", currentSessionId === s.id ? "text-gray-900" : "text-gray-400")} />
+                                        </span>
                                     ) : (
                                         <MessageSquare size={16} className={cn("shrink-0", currentSessionId === s.id ? "text-gray-900" : "text-gray-400")} />
                                     )}
@@ -2929,7 +2931,8 @@ function VAFDashboardContent() {
                                                     <Edit2 size={12} className="text-gray-400 hover:text-gray-900" onClick={(e) => { e.stopPropagation(); startEditing(s); }} />
                                                     <Trash2 size={12} className="text-gray-400 hover:text-red-600" onClick={(e) => {
                                                         e.stopPropagation();
-                                                        ws?.send(JSON.stringify({ type: 'delete_session', id: s.id }));
+                                                        const isThinking = (s as { source?: string }).source === 'thinking';
+                                                        ws?.send(JSON.stringify({ type: isThinking ? 'hide_session' : 'delete_session', id: s.id }));
                                                         if (currentSessionId === s.id) {
                                                             const remaining = sessions.filter(sess => sess.id !== s.id);
                                                             const empty = remaining.find(sess => (sess.messageCount || 0) === 0);

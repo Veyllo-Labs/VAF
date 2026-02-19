@@ -510,6 +510,14 @@ async def startup_event():
                 log("WebServer", "Firewall setup failed - may need elevated privileges")
         except Exception as e:
             log("WebServer", f"Firewall setup error: {e}")
+
+    # Start garbage collector (logs, temp, cache, old thinking sessions) when running without tray
+    try:
+        from vaf.core.garbage_collector import GarbageCollector
+        GarbageCollector.get_instance().start()
+        log("WebServer", "Garbage collector started")
+    except Exception as e:
+        log("WebServer", f"Garbage collector start warning: {e}")
     
     # Email auto-sync: run every 30 min for accounts with "Auto sync every 30 min" enabled
     async def _email_auto_sync_loop():
@@ -1619,6 +1627,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             log("API", f"Connection updated: {connection_id}")
         except Exception as e:
             log("API", f"Could not track connection: {e}")
+
+        # Count Web UI open as activity so thinking mode does not start immediately (idle timer starts after connect)
+        try:
+            from vaf.core.last_interaction import update_last_interaction
+            scope_id = (user_context.get("user_scope_id") or user_context.get("user_id")) if user_context else None
+            update_last_interaction(user_scope_id=scope_id, source="web", preview="")
+        except Exception:
+            pass
         
         try:
             provider = Config.get("provider", "local")
@@ -1710,13 +1726,34 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "user")
                     content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
                     timestamp = msg.get("timestamp") if isinstance(msg, dict) else getattr(msg, "timestamp", None)
+                    meta = msg.get("metadata") if isinstance(msg, dict) else getattr(msg, "metadata", None) or {}
                     if role == "assistant":
                         content = clean_history_text(content)
-                    frontend_messages.append({
-                        "role": role,
-                        "content": content,
-                        "timestamp": timestamp
-                    })
+                    entry = {"role": role, "content": content, "timestamp": timestamp}
+                    if role == "tool" and meta:
+                        if meta.get("toolName") is not None:
+                            entry["toolName"] = meta["toolName"]
+                        if meta.get("toolId") is not None:
+                            entry["toolId"] = meta["toolId"]
+                        if meta.get("toolStatus") is not None:
+                            entry["toolStatus"] = meta["toolStatus"]
+                    frontend_messages.append(entry)
+
+                # If this is a thinking session and we have a stored user reply, append it once
+                if sid and str(sid).startswith("thinking_"):
+                    try:
+                        from vaf.core.thinking_mode import pop_user_reply_for_session
+                        reply_data = pop_user_reply_for_session(sid)
+                        if reply_data:
+                            preview = (reply_data.get("reply") or "").strip()
+                            if preview:
+                                frontend_messages.append({
+                                    "role": "user",
+                                    "content": f"User replied: {preview}",
+                                    "timestamp": reply_data.get("at"),
+                                })
+                    except Exception:
+                        pass
 
                 is_active = False
                 try:
@@ -1789,22 +1826,41 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             return text
                         
                         # 3. Send history to Frontend
-                        # Serialize messages for JSON
+                        # Serialize messages for JSON (include tool metadata so UI shows tool names, not "Unknown Tool")
                         frontend_messages = []
                         for msg in loaded.messages:
                             role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "user")
                             content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
                             timestamp = msg.get("timestamp") if isinstance(msg, dict) else getattr(msg, "timestamp", None)
-                            
+                            meta = msg.get("metadata") if isinstance(msg, dict) else getattr(msg, "metadata", None) or {}
                             # Clean content if it's from assistant (remove legacy artifacts)
                             if role == "assistant":
                                 content = clean_history_text(content)
-                            
-                            frontend_messages.append({
-                                "role": role,
-                                "content": content,
-                                "timestamp": timestamp
-                            })
+                            entry = {"role": role, "content": content, "timestamp": timestamp}
+                            if role == "tool" and meta:
+                                if meta.get("toolName") is not None:
+                                    entry["toolName"] = meta["toolName"]
+                                if meta.get("toolId") is not None:
+                                    entry["toolId"] = meta["toolId"]
+                                if meta.get("toolStatus") is not None:
+                                    entry["toolStatus"] = meta["toolStatus"]
+                            frontend_messages.append(entry)
+
+                        # If this is a thinking session and we have a stored user reply, append it once
+                        if sid and str(sid).startswith("thinking_"):
+                            try:
+                                from vaf.core.thinking_mode import pop_user_reply_for_session
+                                reply_data = pop_user_reply_for_session(sid)
+                                if reply_data:
+                                    preview = (reply_data.get("reply") or "").strip()
+                                    if preview:
+                                        frontend_messages.append({
+                                            "role": "user",
+                                            "content": f"User replied: {preview}",
+                                            "timestamp": reply_data.get("at"),
+                                        })
+                            except Exception:
+                                pass
 
                         # Check if this session is currently active in the agent
                         is_active = False
@@ -1873,6 +1929,19 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             for s in web_sessions
                         ]
                     })
+
+                elif type == "hide_session":
+                    sid = cmd.get("id")
+                    if sid and session_mgr.hide(sid):
+                        sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
+                        web_sessions = _web_ui_sessions(sessions)
+                        await manager.broadcast({
+                            "type": "session_list",
+                            "sessions": [
+                                {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
+                                for s in web_sessions
+                            ]
+                        })
 
                 elif type == "new_session":
                     # Push command to main loop to create new session
@@ -2236,8 +2305,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         except Exception:
                             pass
                         try:
-                            from vaf.core.thinking_mode import clear_waiting_for_reply
-                            clear_waiting_for_reply(user_scope_id)
+                            from vaf.core.thinking_mode import clear_waiting_for_reply, get_waiting_for_reply
+                            reply_text = (content or "").strip() if get_waiting_for_reply(user_scope_id) else None
+                            clear_waiting_for_reply(user_scope_id, user_reply_text=reply_text)
                         except Exception:
                             pass
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)

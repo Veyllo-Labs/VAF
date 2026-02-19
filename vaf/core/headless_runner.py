@@ -802,9 +802,11 @@ def run_headless_agent():
                     except Exception:
                         pass
                     try:
-                        from vaf.core.thinking_mode import clear_waiting_for_reply
+                        from vaf.core.thinking_mode import clear_waiting_for_reply, get_waiting_for_reply
                         meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
-                        clear_waiting_for_reply(meta.get("user_scope_id"))
+                        scope_id = meta.get("user_scope_id")
+                        reply_text = (task.input_text or "").strip() if get_waiting_for_reply(scope_id) else None
+                        clear_waiting_for_reply(scope_id, user_reply_text=reply_text)
                     except Exception:
                         pass
 

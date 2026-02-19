@@ -52,7 +52,11 @@ All tools receive `user_scope_id` and `username` from the agent (injected by the
 
 ## Tool Router
 
-The Tool Router in `vaf/core/agent.py` includes calendar heuristics: when the user message contains words such as "calendar", "kalender", "event", "termin", "meeting", "reminder", "erinnerung", "appointment", "verabredung", "schedule", "termine", "was steht an", "upcoming", "meine termine", the router adds `list_calendar_events` and `create_calendar_event` to the selected tools so the agent can answer calendar requests reliably.
+The Tool Router in `vaf/core/agent.py` includes calendar heuristics so the agent can read, create, update, and delete calendar events reliably:
+
+- **List & create:** When the user message contains words such as "calendar", "kalender", "event", "termin", "meeting", "reminder", "erinnerung", "appointment", "verabredung", "schedule", "termine", "was steht an", "upcoming", "meine termine", the router adds `list_calendar_events` and `create_calendar_event`.
+- **Update:** For "termin ändern", "termin verschieben", "event update", "termin updaten", "meeting verschieben", "appointment change", "reschedule", the router adds `update_calendar_event`.
+- **Delete:** For "termin löschen", "termin absagen", "event löschen", "event delete", "termin entfernen", "meeting absagen", "appointment cancel", the router adds `delete_calendar_event`.
 
 ## Implementation notes
 

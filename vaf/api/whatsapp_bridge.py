@@ -723,12 +723,18 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             return
         # Self-chat: trust Node's selfChat (Node resolves @lid to E.164 and compares to self; do NOT treat all @lid as self – LID is used for other 1:1 chats too, e.g. baba)
         is_self_chat = obj.get("selfChat") is True
-        # Allow when: JID or fromE164 matches whitelist/FO, or when sender is @lid with no fromE164 (LID unresolved by Node) but we have allowed_phones – so FO/whitelist contacts can still get through
+        # Allow only when JID or resolved fromE164 matches whitelist/FO. Do NOT accept unresolved @lid (LID numeric part is not a phone; would let strangers through).
         allow_match = bool(allowed_phones) and (
             _allow_from_match(from_jid or "", allowed_phones)
             or (from_e164 and _allow_from_match(from_e164, allowed_phones))
-            or ((from_jid or "").endswith("@lid") and not from_e164)
         )
+        if (from_jid or "").endswith("@lid") and not from_e164 and not allow_match:
+            try:
+                from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
+                log_whatsapp_inbound(f"REJECT unresolved @lid from={from_jid} (not in whitelist/contacts; LID is not a phone number)")
+                log_whatsapp_qr(f"[inbound] REJECT unresolved @lid from={from_jid} (not in whitelist/contacts)")
+            except Exception:
+                pass
         if not is_self_chat and not allow_match:
             from_digits = _phone_digits_canonical(from_jid or "") or (_phone_digits_canonical(from_e164 or "") if from_e164 else "")
             try:

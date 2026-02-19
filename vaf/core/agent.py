@@ -3739,6 +3739,18 @@ class Agent:
                 forced_tools.add("list_calendar_events")
             if "create_calendar_event" in self.tools:
                 forced_tools.add("create_calendar_event")
+        if any(kw in u_lower for kw in [
+            "termin ändern", "termin verschieben", "event ändern", "event update",
+            "termin updaten", "meeting verschieben", "appointment change", "reschedule"
+        ]):
+            if "update_calendar_event" in self.tools:
+                forced_tools.add("update_calendar_event")
+        if any(kw in u_lower for kw in [
+            "termin löschen", "termin absagen", "event löschen", "event delete",
+            "termin entfernen", "meeting absagen", "appointment cancel"
+        ]):
+            if "delete_calendar_event" in self.tools:
+                forced_tools.add("delete_calendar_event")
         
         # Research Heuristics
         if any(kw in u_lower for kw in ["research", "recherche", "analyse", "report", "comprehensive", "umfassend", "deep"]):

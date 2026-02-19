@@ -80,7 +80,7 @@ Pass the full file path. The document appears in the right-hand Document Viewer 
             return f"Error: Could not read file: {e}"
 
         name = path.name
-        new_doc = {"name": name, "content": content}
+        new_doc = {"name": name, "content": content, "path": str(path)}
         try:
             with open(path, "rb") as f:
                 raw = f.read()

@@ -67,6 +67,18 @@ def _user_asked_for_text(user_input: str) -> bool:
     return any(t in lower for t in triggers)
 
 
+def _format_sidebar_doc(d: dict) -> str:
+    """Format one sidebar document for the agent: --- FILE: name (Speicherort: path) ---\\ncontent\\n----------------"""
+    name = d.get("name", "")
+    content = d.get("content", "")
+    path = d.get("path")
+    header = f"--- FILE: {name}"
+    if path:
+        header += f" (Speicherort: {path})"
+    header += " ---"
+    return f"{header}\n{content}\n----------------"
+
+
 def _maybe_open_draft_in_editor(session_id: str, user_input: str, response_text: str, source: str) -> None:
     """
     If the user asked for a text (e.g. "Schreib mir einen Text") and the response is substantial,
@@ -687,8 +699,7 @@ def run_headless_agent():
                         sidebar_docs = (getattr(session_for_sidebar, "runtime_state", None) or {}).get("sidebar_documents") or []
                         if sidebar_docs:
                             sidebar_block = "\n\n".join(
-                                f"--- FILE: {d.get('name', '')} ---\n{d.get('content', '')}\n----------------"
-                                for d in sidebar_docs
+                                _format_sidebar_doc(d) for d in sidebar_docs
                             )
                             if _meta.get("from_contact"):
                                 effective_input = effective_input + "\n\n" + sidebar_block

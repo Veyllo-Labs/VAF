@@ -1,7 +1,8 @@
 import json
 import os
 import time
-from typing import Dict, List, Optional, Any
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -15,6 +16,11 @@ SUBAGENT_VALIDATION_FILE = "subagent_validation.json"
 
 # Team state: entries older than this are pruned (per session / recent-only in prompt)
 TEAM_STATE_TTL_SECONDS = 3 * 3600  # 3 hours
+
+# Working memory: max entries per list (notes, plan, tasks); oldest dropped when exceeded
+WORKING_MEMORY_MAX_ENTRIES = 500
+# Tasks with status "done" are removed after this many seconds
+WORKING_MEMORY_TASKS_DONE_TTL_SECONDS = 12 * 3600  # 12 hours
 
 @dataclass
 class SubAgentState:
@@ -84,7 +90,7 @@ class MainPersistenceManager:
         # Working Memory (The Scratchpad)
         mem_path = self.context_dir / WORKING_MEMORY_FILE
         if not mem_path.exists():
-            self._save_json(mem_path, {"notes": [], "plan": []})
+            self._save_json(mem_path, {"notes": [], "plan": [], "tasks": []})
 
     def _save_json(self, path: Path, data: Dict):
         with open(path, 'w', encoding='utf-8') as f:
@@ -220,30 +226,164 @@ class MainPersistenceManager:
         return str(path.relative_to(self.base_dir))
 
     # --- WORKING MEMORY ---
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    @staticmethod
+    def _normalize_wm_entry(entry: Union[str, Dict], now_iso: str) -> Dict:
+        """Normalize a note/plan entry to {t, text}. Accepts string (legacy) or dict."""
+        if isinstance(entry, dict) and "text" in entry:
+            t = entry.get("t") or now_iso
+            return {"t": t, "text": str(entry["text"])}
+        return {"t": now_iso, "text": str(entry)}
+
+    @staticmethod
+    def _format_wm_list(entries: List) -> str:
+        """Format notes/plan list for prompt display: 'YYYY-MM-DD HH:MM - text' or '(ohne Datum) - text'."""
+        lines = []
+        for entry in entries:
+            if isinstance(entry, dict) and "text" in entry:
+                text = entry["text"]
+                t = entry.get("t")
+                if t:
+                    try:
+                        dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
+                        lines.append(f"{dt.strftime('%Y-%m-%d %H:%M')} - {text}")
+                    except (ValueError, TypeError):
+                        lines.append(f"(ohne Datum) - {text}")
+                else:
+                    lines.append(f"(ohne Datum) - {text}")
+            else:
+                lines.append(f"(ohne Datum) - {entry}")
+        return "\n".join(lines) if lines else "(leer)"
+
+    @staticmethod
+    def _parse_iso_to_ts(iso_str: Any) -> float:
+        """Parse ISO timestamp to Unix timestamp for comparison. Returns 0 on failure."""
+        if not iso_str:
+            return 0.0
+        try:
+            s = str(iso_str).replace("Z", "+00:00")
+            return datetime.fromisoformat(s).timestamp()
+        except (ValueError, TypeError):
+            return 0.0
+
+    def _prune_done_tasks(self, mem: Dict) -> bool:
+        """Remove tasks with status 'done' and ts older than 12h. Mutates mem. Returns True if changed."""
+        tasks = mem.get("tasks", [])
+        if not tasks:
+            return False
+        now_ts = time.time()
+        cutoff = now_ts - WORKING_MEMORY_TASKS_DONE_TTL_SECONDS
+        kept = []
+        for t in tasks:
+            if not isinstance(t, dict):
+                kept.append(t)
+                continue
+            status = (t.get("status") or "pending").lower()
+            if status != "done":
+                kept.append(t)
+                continue
+            ts = self._parse_iso_to_ts(t.get("ts"))
+            if ts >= cutoff:
+                kept.append(t)
+        if len(kept) != len(tasks):
+            mem["tasks"] = kept
+            return True
+        return False
+
     def get_working_memory(self) -> Dict:
-        return self._load_json(self.context_dir / WORKING_MEMORY_FILE, {})
+        mem = self._load_json(self.context_dir / WORKING_MEMORY_FILE, {})
+        if not isinstance(mem, dict):
+            mem = {}
+        if self._prune_done_tasks(mem):
+            self._save_json(self.context_dir / WORKING_MEMORY_FILE, mem)
+        return mem
 
     def update_working_memory(
         self,
-        notes: Optional[List[str]] = None,
-        plan: Optional[List[str]] = None,
+        notes: Optional[List[Any]] = None,
+        plan: Optional[List[Any]] = None,
         add_notes: Optional[List[str]] = None,
         add_plan: Optional[List[str]] = None,
+        tasks: Optional[List[Dict]] = None,
+        add_task: Optional[str] = None,
+        mark_task_done: Optional[int] = None,
     ):
         mem = self.get_working_memory()
-        notes_list = mem.get("notes", [])
-        plan_list = mem.get("plan", [])
+        now_iso = self._now_iso()
+
+        notes_list = list(mem.get("notes", []))
+        plan_list = list(mem.get("plan", []))
+        tasks_list = list(mem.get("tasks", []))
+
         if add_notes:
-            notes_list = notes_list + list(add_notes)
+            for item in add_notes:
+                notes_list.append({"t": now_iso, "text": str(item)})
         if add_plan:
-            plan_list = plan_list + list(add_plan)
+            for item in add_plan:
+                plan_list.append({"t": now_iso, "text": str(item)})
         if notes is not None:
-            notes_list = notes
+            notes_list = [self._normalize_wm_entry(e, now_iso) for e in notes]
         if plan is not None:
-            plan_list = plan
+            plan_list = [self._normalize_wm_entry(e, now_iso) for e in plan]
+
+        if add_task is not None and str(add_task).strip():
+            tasks_list.append({
+                "text": str(add_task).strip(),
+                "status": "pending",
+                "ts": now_iso,
+            })
+        if mark_task_done is not None and 0 <= mark_task_done < len(tasks_list):
+            t = tasks_list[mark_task_done]
+            if isinstance(t, dict):
+                t = dict(t)
+                t["status"] = "done"
+                t["ts"] = now_iso
+                tasks_list[mark_task_done] = t
+        if tasks is not None:
+            tasks_list = []
+            for e in tasks:
+                if isinstance(e, dict) and e.get("text") is not None:
+                    st = (e.get("status") or "pending").lower()
+                    tasks_list.append({
+                        "text": str(e["text"]),
+                        "status": "done" if st == "done" else "pending",
+                        "ts": e.get("ts") or now_iso,
+                    })
+                else:
+                    tasks_list.append({"text": str(e), "status": "pending", "ts": now_iso})
+
+        notes_list = notes_list[-WORKING_MEMORY_MAX_ENTRIES:]
+        plan_list = plan_list[-WORKING_MEMORY_MAX_ENTRIES:]
+        tasks_list = tasks_list[-WORKING_MEMORY_MAX_ENTRIES:]
+
         mem["notes"] = notes_list
         mem["plan"] = plan_list
+        mem["tasks"] = tasks_list
         self._save_json(self.context_dir / WORKING_MEMORY_FILE, mem)
+
+    def _format_tasks_list(self, tasks: List) -> str:
+        """Format tasks for prompt: 'YYYY-MM-DD HH:MM [pending] text' or '[done] text'."""
+        lines = []
+        for t in tasks:
+            if not isinstance(t, dict):
+                lines.append(f"(ohne Datum) [pending] - {t}")
+                continue
+            text = t.get("text", "")
+            status = (t.get("status") or "pending").lower()
+            ts = t.get("ts")
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    lines.append(f"{dt.strftime('%Y-%m-%d %H:%M')} [{status}] {text}")
+                except (ValueError, TypeError):
+                    lines.append(f"(ohne Datum) [{status}] {text}")
+            else:
+                lines.append(f"(ohne Datum) [{status}] {text}")
+        return "\n".join(lines) if lines else "(leer)"
 
     # --- CONTEXT INJECTION HELPER ---
     def build_context_injection(self) -> str:
@@ -267,6 +407,10 @@ class MainPersistenceManager:
                 if v.result_summary: line += f"\n   Result: {v.result_summary[:100]}..."
                 lines.append(line)
             team_str = "\n".join(lines)
+
+        notes_fmt = self._format_wm_list(memory.get("notes", []))
+        plan_fmt = self._format_wm_list(memory.get("plan", []))
+        tasks_fmt = self._format_tasks_list(memory.get("tasks", []))
             
         return f"""
 # 🧠 MAIN AGENT CONTEXT (Live System State)
@@ -280,11 +424,19 @@ class MainPersistenceManager:
 </team_state>
 
 <working_memory>
-Notes: {json.dumps(memory.get('notes', []), ensure_ascii=False)}
-Plan: {json.dumps(memory.get('plan', []), ensure_ascii=False)}
+Notes:
+{notes_fmt}
+
+Plan:
+{plan_fmt}
+
+Tasks (pending/done; done removed after 12h):
+{tasks_fmt}
 </working_memory>
 
-Use the update_working_memory tool to save notes and plan; they persist across turns and appear here. Use notes/plan to set the full list, or add_notes/add_plan to append without replacing.
+Use the update_working_memory tool to save notes, plan, and tasks; they persist across turns and appear here.
+- Use notes/plan to set the full list (replaces existing), or add_notes/add_plan to append. On a new user task or after completing a task, replace or clear notes/plan so working memory does not grow without bound (e.g. update_working_memory(notes=[], plan=[]) when done).
+- Tasks: add_task to add a step (pending), mark_task_done(index) to mark done; done tasks are automatically removed after 12 hours. Pending = in progress or waiting on something.
 
 Long-term memories about the user/system (from memory_save/RAG) are injected as "Memory context" when relevant to the query; use them to answer questions like "what do you remember about me?" and use memory_save to save new facts.
 """

@@ -71,12 +71,13 @@ class UpdateWorkingMemoryTool(BaseTool):
     """
     Update the Main Agent's Working Memory (Scratchpad).
     Persists across turns and appears in <working_memory> in your context.
-    Use for multi-step tasks: save your plan and notes so they are visible on the next turn.
+    Use for multi-step tasks: save your plan, notes, and checkable tasks (pending/done; done removed after 12h).
     """
     name = "update_working_memory"
     description = (
-        "Update working memory (notes and plan) that persists across turns and appears in <working_memory>. "
-        "Use notes/plan to set the full list (replaces existing). Use add_notes/add_plan to append without replacing."
+        "Update working memory (notes, plan, tasks) that persists across turns and appears in <working_memory>. "
+        "Use notes/plan to set the full list (replaces existing). Use add_notes/add_plan to append. "
+        "Tasks: add_task to add a step (pending), mark_task_done(index) to mark done; done tasks are auto-removed after 12h. Pending = in progress or waiting on something."
     )
     
     parameters = {
@@ -101,6 +102,27 @@ class UpdateWorkingMemoryTool(BaseTool):
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Plan steps to append (does not replace existing)."
+            },
+            "tasks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "status": {"type": "string", "enum": ["pending", "done"]},
+                        "ts": {"type": "string", "description": "ISO timestamp (optional)."}
+                    },
+                    "required": ["text"]
+                },
+                "description": "Full list of tasks (replaces existing). Each: text, optional status (pending/done), optional ts."
+            },
+            "add_task": {
+                "type": "string",
+                "description": "Add one task (status pending)."
+            },
+            "mark_task_done": {
+                "type": "integer",
+                "description": "0-based index of the task to mark as done."
             }
         },
         "required": []
@@ -112,10 +134,16 @@ class UpdateWorkingMemoryTool(BaseTool):
         plan = kwargs.get('plan')
         add_notes = kwargs.get('add_notes')
         add_plan = kwargs.get('add_plan')
+        tasks = kwargs.get('tasks')
+        add_task = kwargs.get('add_task')
+        mark_task_done = kwargs.get('mark_task_done')
         
         try:
             mpm = MainPersistenceManager(base_dir)
-            mpm.update_working_memory(notes=notes, plan=plan, add_notes=add_notes, add_plan=add_plan)
+            mpm.update_working_memory(
+                notes=notes, plan=plan, add_notes=add_notes, add_plan=add_plan,
+                tasks=tasks, add_task=add_task, mark_task_done=mark_task_done,
+            )
             return "✅ Working Memory updated."
         except Exception as e:
             return f"❌ Error updating working memory: {e}"

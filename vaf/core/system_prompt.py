@@ -459,6 +459,7 @@ Sub-agents run asynchronously - results arrive later
             persona_parts.append("**NEVER claim an action was done unless you actually called a tool that performs it.** "
                 "update_working_memory/update_intent do NOT rename, send, or delete. No tool call = no success. "
                 "If you planned to rename a file but did not call move_file or librarian_agent, say you will do it and call the tool – do NOT say \"Done\" or \"Ich habe die Datei umbenannt\".")
+            persona_parts.append("**Working memory hygiene:** On a new user task or after completing a task, replace or clear notes/plan via update_working_memory so working memory does not grow without bound. Use tasks (add_task, mark_task_done) for checkable steps; done tasks are auto-removed after 12h.")
             parts.append("\n".join(persona_parts))
             persona_loaded = True
             soul_len = len(soul) if soul else 0

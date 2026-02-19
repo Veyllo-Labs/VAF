@@ -208,7 +208,7 @@ In addition to the RAM-based context above, VAF now employs a **Persistent Hybri
 **Files managed by `MainPersistenceManager`:**
 - **`user_intent.md`**: Stores the original user request. Read-only for sub-agents, updated only by user input. Acts as an "Intent Lock".
 - **`team_state.json`**: Tracks the status of all sub-agents (`running`, `completed`, `needs_clarification`).
-- **`working_memory.json`**: Persists notes and plans across sessions.
+- **`working_memory.json`**: Persists notes, plan, and tasks across sessions. Each list is limited to 500 entries (oldest dropped when exceeded). Notes and plan entries store an optional timestamp (date/time) for time context. **Tasks** have two states: `pending` (in progress or waiting on something) and `done`; tasks marked done are automatically removed 12 hours after being marked. The agent should replace or clear notes/plan on a new user task or after completion so working memory does not grow without bound; use `add_task` / `mark_task_done` for checkable steps.
 - **`subagent_validation.json`**: Stores the retry count for sub-agent result validation (resets on new user message; see Sub-Agent Result Validation).
 
 ### Workspace Awareness

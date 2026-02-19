@@ -42,7 +42,7 @@ The Memory System provides persistent, encrypted memory storage with RAG (Retrie
 │  │              POSTGRESQL + PGVECTOR (Docker)             │    │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐   │    │
 │  │  │ memories │  │  chunks  │  │     connections      │   │    │
-│  │  │(encrypted)│  │(vectors) │  │   (graph edges)     │   │    │
+│  │  │(encrypted)│ │(vectors) │  │   (graph edges)      │   │    │
 │  │  └──────────┘  └──────────┘  └──────────────────────┘   │    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
@@ -51,6 +51,8 @@ The Memory System provides persistent, encrypted memory storage with RAG (Retrie
 ### Chat integration (pre-generation injection)
 
 In chat, retrieval runs in the **input phase** before the LLM is called: the user message is used to run a memory search, and the result is injected as the "Memory context (relevant to this query)" block in the first prompt. When `memory_rag_refine_query` is enabled (default), short queries that look like user-profile questions (e.g. "who am I", "what do you remember") are expanded before search so that profile and compaction memories match more often. The `memory_search` tool is for follow-up short queries only; it must not be given model output (e.g. `<think>` content). See [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md#rag-and-memory-context-pre-generation-injection) for details.
+
+**Note:** This Memory System (RAG) is separate from the main agent’s **working memory** (scratchpad: notes, plan, tasks in `.vaf/main/working_memory.json`). Working memory is per-session state with limits and optional timestamps; see [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md) for the persistent layer and working memory behaviour.
 
 ## Requirements
 

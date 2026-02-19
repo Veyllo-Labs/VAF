@@ -495,6 +495,7 @@ def _action_show_in_viewer(username: str, account_id: str, provider: str, file_i
             "content": content,
             "data": base64.b64encode(raw).decode("ascii"),
             "mimeType": mime_type,
+            "path": f"Cloud ({provider}): {meta.name}",
         }
 
         try:

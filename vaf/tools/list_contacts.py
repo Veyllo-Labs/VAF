@@ -27,12 +27,13 @@ class ListContactsTool(BaseTool):
 
     def run(self, **kwargs) -> str:
         username = (kwargs.get("username") or "admin").strip()
+        user_scope_id = kwargs.get("user_scope_id")
         try:
             from vaf.core.contacts_store import list_contacts
         except ImportError as e:
             return f"Contacts unavailable: {e}"
 
-        contacts = list_contacts(username)
+        contacts = list_contacts(username, user_scope_id=user_scope_id)
         if not contacts:
             return "No contacts yet. Add contacts in Settings → Connections → Contacts."
 

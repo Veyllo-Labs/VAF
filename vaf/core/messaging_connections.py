@@ -65,29 +65,47 @@ def save_telegram_chat_id(
         _save_endpoints(data)
 
 
+def _telegram_whitelist_entry_matches(
+    entry: Dict[str, Any],
+    scope_str: Optional[str],
+    vaf_username: str,
+) -> bool:
+    """True if this whitelist entry matches the request (loose: case-insensitive username, normalized scope)."""
+    if not isinstance(entry, dict):
+        return False
+    entry_scope = entry.get("user_scope_id")
+    entry_scope_str = str(entry_scope).strip() if entry_scope is not None else None
+    entry_name = (entry.get("vaf_username") or "").strip() or "admin"
+    scope_ok = (not scope_str and not entry_scope_str) or (
+        scope_str and entry_scope_str and scope_str.strip() == entry_scope_str
+    )
+    name_ok = (vaf_username or "admin").lower() == (entry_name or "admin").lower()
+    if scope_str and entry_scope_str:
+        return scope_ok and name_ok
+    return name_ok
+
+
 def get_telegram_chat_id_from_whitelist(
     user_scope_id: Optional[Any],
     username: Optional[str],
 ) -> Optional[str]:
     """
     Resolve Telegram chat_id from the Telegram whitelist (connected bot config).
-    For private chats (DM), chat_id equals telegram_user_id, so we can use the whitelist
-    to reach the user even if they have not sent a message yet.
+    For private chats (DM), chat_id equals telegram_user_id.
+    Matching is loose: case-insensitive username, normalized scope, so the verified
+    account owner (who linked their Telegram) is found even if session identity differs slightly.
     Returns telegram_user_id as string, or None if no matching whitelist entry.
     """
     telegram_config = Config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict) or not telegram_config.get("whitelist"):
         return None
     whitelist = telegram_config.get("whitelist") or []
-    scope_str = str(user_scope_id) if user_scope_id is not None else None
+    scope_str = str(user_scope_id).strip() if user_scope_id is not None else None
     vaf_username = (username or "").strip() or "admin"
     for entry in whitelist:
         if not isinstance(entry, dict):
             continue
-        if scope_str and str(entry.get("user_scope_id")) == scope_str:
-            tid = entry.get("telegram_user_id")
-            return str(tid) if tid is not None else None
-        if entry.get("vaf_username") == vaf_username:
+        if _telegram_whitelist_entry_matches(entry, scope_str, vaf_username):
             tid = entry.get("telegram_user_id")
             return str(tid) if tid is not None else None
     return None
@@ -99,24 +117,46 @@ def get_telegram_chat_id(
 ) -> Optional[str]:
     """
     Return telegram_chat_id for this user. Used by send_telegram tool.
-    Lookup order: 1) persisted endpoints (from past Telegram message), 2) Telegram whitelist
-    (for private chats, chat_id = telegram_user_id, so we can resolve from whitelist).
+    Lookup: 1) persisted endpoints (from past Telegram message), 2) Telegram whitelist
+    (loose match: case-insensitive username, normalized scope). The verified account owner
+    (who linked their Telegram with the bot) does not need to be manually re-added to the
+    whitelist – the bot recognizes them by the existing link.
     """
+    uname = (username or "").strip() or "admin"
+    scope_str = str(user_scope_id).strip() if user_scope_id is not None else None
+
     with _ENDPOINTS_LOCK:
         data = _load_endpoints()
         if user_scope_id is not None:
             cid = data["by_scope"].get(str(user_scope_id))
             if cid:
                 return cid
-        uname = (username or "").strip() or "admin"
         cid = data["by_username"].get(uname)
         if cid:
             return cid
-    # Fallback: resolve from Telegram whitelist (DM chat_id = telegram_user_id)
+        # Case-insensitive username lookup (session may send different casing)
+        for key, val in (data.get("by_username") or {}).items():
+            if (key or "").strip().lower() == uname.lower():
+                return val
+    # Fallback: Telegram whitelist (verified/linked user; loose match)
     chat_id = get_telegram_chat_id_from_whitelist(user_scope_id, username)
     if chat_id:
         save_telegram_chat_id(user_scope_id, username, chat_id)
-    return chat_id
+        return chat_id
+    # Single verified user: exactly one whitelist entry = the account that linked the bot;
+    # they don't need to be manually on the whitelist – match them loosely.
+    telegram_config = Config.get("telegram_config") or {}
+    if isinstance(telegram_config, dict):
+        whitelist = telegram_config.get("whitelist") or []
+        if len(whitelist) == 1 and isinstance(whitelist[0], dict):
+            entry = whitelist[0]
+            if _telegram_whitelist_entry_matches(entry, scope_str, uname):
+                tid = entry.get("telegram_user_id")
+                chat_id = str(tid) if tid is not None else None
+                if chat_id:
+                    save_telegram_chat_id(user_scope_id, username, chat_id)
+                    return chat_id
+    return None
 
 
 def save_whatsapp_chat_jid(

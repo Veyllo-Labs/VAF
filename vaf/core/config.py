@@ -181,8 +181,9 @@ class Config:
         # Connections: WhatsApp (Baileys via Node, per-user auth, whitelist with phone_number)
         "whatsapp_config": None,                                   # { enabled, whitelist: [{ phone_number, user_scope_id, vaf_username }] }
 
-        # Front Office: when True, replies to contacts (from_contact) require explicit user approval in Web UI before sending
-        "front_office_contact_reply_require_approval": True,
+        # Front Office: when True, replies to contacts (from_contact) require explicit approval in Web UI before sending.
+        # Default False: contacts you added with "Can reach your assistant" get replies directly; set True to review each reply first.
+        "front_office_contact_reply_require_approval": False,
 
         # Email connections: accounts only (no passwords/tokens in config).
         # Credentials stored in OS keyring or encrypted file (see vaf.core.credential_store).

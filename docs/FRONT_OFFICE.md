@@ -54,7 +54,7 @@ At runtime, the headless runner sets `agent._active_tools` to the intersection o
 2. Headless runner sets `agent._front_office_mode = True` and `agent._active_tools = <allow-list ∩ agent.tools>`.
 3. User message is prefixed with the existing front-office hint and contact data (name, language, how to address, notes).
 4. Agent runs; `build_prompt(..., front_office=True)` adds the Front Office role and Security blocks; only allow-listed tools are used.
-5. Reply is sent back to the contact (WhatsApp/Telegram), or stored as pending for your approval when reply approval is enabled (see **Reply approval** below).
+5. Reply is sent back to the contact (WhatsApp/Telegram) immediately by default. If you enable reply approval, replies are stored as pending until you approve (see **Reply approval** below).
 6. **Owner notification (if applicable):** If the contact had a request, answer, or important info for the owner, the agent calls `send_telegram` or `send_whatsapp` (based on the owner's `main_messenger` from User Identity) to notify the owner with a short summary. These tools always send to the owner, not the contact.
 7. In a `finally` block, headless sets `agent._front_office_mode = False` and `agent._active_tools = None`.
 
@@ -62,11 +62,9 @@ The **owner’s** user identity (name, language, preferences, do’s/don’ts) i
 
 ## Reply approval (contact replies)
 
-By default, **replies to contacts** (from_contact) do **not** get sent automatically. They require your explicit approval in the Web UI first (fail-safe).
+**Default:** Replies to contacts are **sent directly** (WhatsApp/Telegram). If you added someone as a contact with **Can reach your assistant**, the bot is allowed to reply to them without an extra approval step.
 
-- **Config:** `front_office_contact_reply_require_approval` in the main config (default: `true`). When `true`, every Front Office reply is stored as "pending" and the Web UI shows a banner with the contact name, channel (WhatsApp/Telegram), a short preview of the reply, and two actions: **Approve** (send) and **Reject** (drop).
-- **Flow:** Headless runner does not call `send_telegram_reply` / `send_whatsapp_reply` for from_contact when approval is required; it stores the reply in an in-memory pending store and emits `contact_reply_pending` to the Web UI. When you click Approve, the client sends `contact_reply_decision` with `decision: "approve"`; the Web server then looks up the pending reply and sends it via the bridge. Reject removes the pending reply without sending.
-- **Setting approval off:** Set `front_office_contact_reply_require_approval` to `false` in config if you want the previous behaviour (replies to contacts sent immediately). This is stored in the same config file as other VAF settings (e.g. `~/.vaf/config.json` or your platform config path).
+**Optional – review before sending:** If you want to review every reply to a contact before it is sent, set `front_office_contact_reply_require_approval` to `true` in the main config (e.g. `~/.vaf/config.json` or your platform config path). When `true`, every Front Office reply is stored as "pending" and the Web UI shows a banner with the contact name, channel (WhatsApp/Telegram), a short preview of the reply, and two actions: **Approve** (send) and **Reject** (drop). The headless runner does not call `send_telegram_reply` / `send_whatsapp_reply` for from_contact when approval is required; it stores the reply and emits `contact_reply_pending` to the Web UI. When you click Approve, the reply is sent via the bridge. Reject drops it without sending.
 
 Pending replies are kept in memory only (no persistence). They expire after 10 minutes if not approved or rejected. See [WEBUI_WEBSOCKET_FLOW.md](WEBUI_WEBSOCKET_FLOW.md) for the WebSocket message types `contact_reply_pending` and `contact_reply_decision`.
 

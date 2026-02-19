@@ -226,9 +226,42 @@ async def get_whatsapp_dashboard(request: Request):
                     }
     except Exception:
         pass
+    # When the bridge didn't send a name (e.g. activity-only session), use VAF contact name if stored
+    user_scope_id = user_info.get("user_scope_id")
+    try:
+        from vaf.core.contacts_store import get_contact_name_by_phone
+        # Try current scope, then None, then local admin scope so we find names regardless of where contacts were saved
+        scope_candidates = [user_scope_id, None, get_local_admin_scope_id()]
+        for rec in sessions_by_chat.values():
+            if not (rec.get("name") or "").strip():
+                phone = rec.get("phone_number") or rec.get("chat_id") or ""
+                for scope in scope_candidates:
+                    contact_name = get_contact_name_by_phone(phone, username, scope)
+                    if contact_name:
+                        rec["name"] = contact_name
+                        break
+    except Exception:
+        pass
     for rec in sessions_by_chat.values():
         rec.setdefault("last_ts", 0)
         rec.setdefault("message_count", 0)
+    # Overwrite message_count with actual session size so list and session view match (no "3 msgs" vs "0 Nachrichten")
+    try:
+        from vaf.core.session import SessionManager
+        session_mgr = SessionManager()
+        for rec in sessions_by_chat.values():
+            sid = rec.get("session_id")
+            if not sid or not str(sid).startswith("whatsapp_"):
+                continue
+            try:
+                session = session_mgr.load(sid)
+                rec["message_count"] = len(session.messages or [])
+            except FileNotFoundError:
+                rec["message_count"] = 0
+            except Exception:
+                pass
+    except Exception:
+        pass
     sessions = sorted(sessions_by_chat.values(), key=lambda s: (s.get("last_ts") or 0), reverse=True)
 
     bucket_seconds = 4 * 3600
@@ -245,13 +278,28 @@ async def get_whatsapp_dashboard(request: Request):
     stats_4h = [{"bucket_ts": ts, "count": c} for ts, c in sorted(buckets.items())]
 
     running = is_bridge_running()
-    connected = get_connection_status(username, wait_timeout=2.0) if running else False
+    connected = get_connection_status(username, wait_timeout=5.0) if running else False
 
     try:
         from vaf.core.log_helper import get_app_log_dir
         log_path = str(get_app_log_dir() / "whatsapp_qr.log")
     except Exception:
         log_path = "logs/whatsapp_qr.log"
+
+    # Front Office contacts (Can reach your assistant) with WhatsApp number – for dashboard display
+    front_office_contacts: list = []
+    try:
+        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
+        user_scope_id = user_info.get("user_scope_id")
+        for contact in get_contacts_allowing_assistant(username, user_scope_id=user_scope_id):
+            name = (contact.get("name") or "").strip() or None
+            for phone in _contact_whatsapp_values(contact):
+                if not phone or not phone.strip():
+                    continue
+                chat_id = phone.strip() if phone.strip().startswith("+") else f"+{phone.strip()}"
+                front_office_contacts.append({"name": name, "phone_number": chat_id})
+    except Exception:
+        pass
 
     return {
         "configured": bool(whitelist) and linked,
@@ -268,6 +316,7 @@ async def get_whatsapp_dashboard(request: Request):
             {"phone_number": e.get("phone_number", ""), "vaf_username": e.get("vaf_username")}
             for e in whitelist
         ],
+        "front_office_contacts": front_office_contacts,
     }
 
 

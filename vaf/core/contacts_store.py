@@ -34,12 +34,25 @@ def _safe_username(username: Optional[str]) -> str:
     return safe.lower() if safe else ""
 
 
+def _normalize_scope(scope: Any) -> str:
+    """Canonical string for scope (UUID normalized so different string formats match)."""
+    if scope is None:
+        return ""
+    s = str(scope).strip()
+    if not s:
+        return ""
+    try:
+        return str(uuid.UUID(s))
+    except (ValueError, TypeError):
+        return s
+
+
 def _contacts_path(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Path:
     data_dir = Platform.data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     if user_scope_id:
         scope_str = str(user_scope_id).strip()
-        if scope_str == _local_admin_scope_id():
+        if _normalize_scope(scope_str) == _normalize_scope(_local_admin_scope_id()):
             return data_dir / "contacts.json"
         scope_dir = data_dir / "scopes" / scope_str
         scope_dir.mkdir(parents=True, exist_ok=True)
@@ -50,6 +63,35 @@ def _contacts_path(username: Optional[str] = None, user_scope_id: Optional[str] 
     user_dir = data_dir / "users" / u
     user_dir.mkdir(parents=True, exist_ok=True)
     return user_dir / "contacts.json"
+
+
+def _contacts_path_candidates(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Path]:
+    """Return candidate paths to try (primary first, then fallbacks) so we find contacts whether saved by scope or username."""
+    data_dir = Platform.data_dir()
+    primary = _contacts_path(username, user_scope_id)
+    candidates = [primary]
+    if user_scope_id:
+        scope_str = str(user_scope_id).strip()
+        alt = data_dir / "scopes" / scope_str / "contacts.json"
+        if alt != primary and alt not in candidates:
+            candidates.append(alt)
+        try:
+            canonical = str(uuid.UUID(scope_str))
+            if canonical != scope_str:
+                alt2 = data_dir / "scopes" / canonical / "contacts.json"
+                if alt2 not in candidates:
+                    candidates.append(alt2)
+        except (ValueError, TypeError):
+            pass
+    if username:
+        u = _safe_username(username)
+        if u and u != _local_admin():
+            alt_user = data_dir / "users" / u / "contacts.json"
+            if alt_user not in candidates:
+                candidates.append(alt_user)
+    if data_dir / "contacts.json" not in candidates:
+        candidates.append(data_dir / "contacts.json")
+    return candidates
 
 
 CHANNEL_TYPES = ("phone", "whatsapp", "telegram", "email", "discord")
@@ -104,21 +146,23 @@ def _sync_legacy_from_channels(contact: Dict[str, Any]) -> None:
 
 
 def _load_all(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    path = _contacts_path(username, user_scope_id)
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, list):
-            raw = data
-        elif isinstance(data, dict) and "contacts" in data:
-            raw = data["contacts"] if isinstance(data["contacts"], list) else []
-        else:
-            raw = []
-        return [_contact_ensure_channels(c) for c in raw]
-    except Exception as e:
-        logger.warning("contacts_store load failed: %s", e)
-        return []
+    """Load contacts; try candidate paths (scope, username, local) so we find them regardless of save path."""
+    for path in _contacts_path_candidates(username, user_scope_id):
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                raw = data
+            elif isinstance(data, dict) and "contacts" in data:
+                raw = data["contacts"] if isinstance(data["contacts"], list) else []
+            else:
+                raw = []
+            if raw:
+                return [_contact_ensure_channels(c) for c in raw]
+        except Exception as e:
+            logger.warning("contacts_store load failed for %s: %s", path, e)
+    return []
 
 
 def _save_all(contacts: List[Dict[str, Any]], username: Optional[str] = None, user_scope_id: Optional[str] = None) -> None:
@@ -163,6 +207,16 @@ def _normalize_phone_for_match(value: str) -> str:
     return "".join(c for c in (value or "") if c.isdigit())
 
 
+def _phone_digits_canonical(value: str) -> str:
+    """Same as normalize but 0-prefix German (10 or 11 digits) -> 49... so +49 and 0-prefix match."""
+    digits = _normalize_phone_for_match((value or "").split("@")[0] if "@" in (value or "") else (value or ""))
+    if not digits:
+        return ""
+    if digits.startswith("0") and len(digits) in (10, 11):
+        return "49" + digits[1:]
+    return digits
+
+
 def get_contact_by_telegram_user_id(telegram_user_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Return the contact who has this telegram_user_id and allow_as_assistant_user=True, or None."""
     tid = (telegram_user_id or "").strip()
@@ -193,6 +247,21 @@ def get_contact_by_whatsapp_phone(whatsapp_jid_or_phone: str, username: Optional
             for p in _contact_whatsapp_values(c):
                 if _normalize_phone_for_match(p) == norm:
                     return _contact_ensure_channels(dict(c))
+    return None
+
+
+def get_contact_name_by_phone(phone: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[str]:
+    """Return the display name of the first contact that has this phone (any channel). Used to show names in chat lists.
+    Uses canonical digits (0-prefix German mobile -> 49) so +49152... matches contact 0152...."""
+    norm = _phone_digits_canonical(phone or "")
+    if not norm:
+        return None
+    with _LOCK:
+        for c in _load_all(username, user_scope_id):
+            for p in _contact_whatsapp_values(c):
+                if _phone_digits_canonical(p) == norm:
+                    name = (c.get("name") or "").strip()
+                    return name if name else None
     return None
 
 

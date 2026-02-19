@@ -118,7 +118,7 @@ Authentication (Baileys session) is stored per user under `~/.vaf/users/<usernam
 
 The bridge builds the allowed set from the config whitelist plus all WhatsApp/phone channel values from contacts with "Can reach your assistant" enabled.
 
-- **@lid (Linked ID)**: WhatsApp sometimes sends 1:1 chats as `…@lid` instead of `…@s.whatsapp.net`. The Node bridge resolves LID→E.164 via Baileys when possible. If resolution fails (e.g. mapping not yet synced), incoming messages from that JID are still **accepted** when you have whitelist or Front Office contacts configured, so contacts like baba can reach the assistant; replies go to the same chat. In logs you may see `ACCEPT unresolved @lid`. When the bridge later resolves LID→E.164 (or the dashboard infers it from one FO contact with no history and one LID session with history), the mapping is stored so the **Web UI** shows that conversation under the contact’s phone (Connections → WhatsApp → click contact): session history and Memory Learning then match the real chat.
+- **@lid (Linked ID)**: WhatsApp sometimes sends 1:1 chats as `…@lid` instead of `…@s.whatsapp.net`. The Node bridge resolves LID→E.164 via Baileys when possible. **Inbound rule:** A message is accepted only when the sender JID or the resolved `fromE164` matches the whitelist or a Front Office contact. The numeric part of a `…@lid` JID (e.g. a long digit string like `12345678901234`) is **not** a phone number; it is an internal WhatsApp LID. **Unresolved @lid** (no `fromE164` from Node) are **rejected** so that strangers cannot reach the assistant. In logs you will see `REJECT unresolved @lid from=… (not in whitelist/contacts)` for those. When the bridge later resolves LID→E.164 (or the dashboard infers it from one FO contact with no history and one LID session with history), the mapping is stored so the **Web UI** shows that conversation under the contact’s phone (Connections → WhatsApp → click contact): session history and Memory Learning then match the real chat.
 
 - **Self-chat (admin = bridge number)**: When the linked WhatsApp number (the one that scanned the QR code) is the same as the admin’s number (e.g. you message yourself or use “Saved Messages”), the bridge does **not** hand the message to the agent. It is stored as a note/backlog only (message store + activity), so the agent does not “talk to itself”. In logs you will see `SELF_CHAT stored as note (no agent reply)`.
 
@@ -131,6 +131,28 @@ The bridge builds the allowed set from the config whitelist plus all WhatsApp/ph
 - **Credentials:** Do not commit `~/.vaf/users/<username>/whatsapp/` (or the platform data dir equivalent) to version control; it contains the Baileys session.
 - **Send-only mode:** Set `inbound_to_agent: false` when you only want the bot to send you content (e.g. reports, voice notes); incoming messages will not trigger the agent.
 - **Front Office:** For contacts who can reach your assistant via WhatsApp, add their number in the contact’s **Channels** (type "phone" or "WhatsApp"). Without a WhatsApp channel, messages from that number are rejected.
+
+### Troubleshooting: Number shown as "admin" but I never added it
+
+In the dashboard (Settings → Connections → WhatsApp), sessions are shown as **admin** only when the phone number is in the **config whitelist** (`whatsapp_config.whitelist`). Numbers that come only from a Front Office contact (with "Can reach your assistant") appear as **contact**, not admin.
+
+If a number you did not add appears as admin and the agent writes to it:
+
+1. **Remove from whitelist:** In the Web UI (Settings → Connections → WhatsApp), remove that number if the UI offers it, or call `POST /api/whatsapp/whitelist/remove` with body `{"phone_number": "+49…"}` (use the full E.164 number).
+2. **Or edit config:** Open your VAF config (e.g. `~/.vaf/config.json` or `%APPDATA%\\vaf\\config.json` on Windows), find `whatsapp_config.whitelist`, and delete the entry with that `phone_number`. Save and restart the WhatsApp bridge if needed.
+
+The whitelist is the only source for the "admin" label; removing the entry stops that number from being treated as admin and from being allowed to receive/send via the bridge.
+
+### Troubleshooting: Strange number or LID – agent replied to someone I didn't add
+
+If the agent wrote to a "number" that is a long digit string and not a real phone number (e.g. `+12345678901234` or similar), it is likely a **WhatsApp LID** (the numeric part of a `…@lid` chat). Previously, the bridge accepted **any** unresolved @lid when any whitelist/contact existed, so unknown senders could get through. That is fixed: unresolved @lid are now **rejected** unless the sender is matched by resolved E.164 or whitelist/contact.
+
+**Logs to check:** Under the VAF log directory (e.g. `logs/` in the project, or `Platform.data_dir()/logs`), see:
+
+- **whatsapp_inbound.log** – each inbound message: `ACCEPT`, `REJECT`, `REJECT unresolved @lid`, `SELF_CHAT`, etc.
+- **whatsapp_qr.log** – QR flow and bridge events.
+
+Search for `from=…@lid` or `REJECT unresolved @lid` to confirm rejections. After the fix, new messages from unknown LIDs will no longer be accepted.
 
 ---
 

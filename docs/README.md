@@ -18,7 +18,10 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 
 ### Messaging & Integration
 - **TELEGRAM_INTEGRATION.md**: Telegram bot with voice message support and user whitelisting.
+- **WHATSAPP_INTEGRATION.md**: WhatsApp bridge (Baileys), voice, documents, whitelist, and best practices.
 - **CONNECTIONS.md**: External service connections and authentication.
+- **AUTOMATIONS.md**: Scheduled automations (create_automation), automation calendar, and planner (notes/todos).
+- **CALENDAR_INTEGRATION.md**: Google/Microsoft calendar tools and Calendar Dashboard.
 - **API_INTEGRATION.md**: Integration with various LLM providers and APIs.
 - **WEBUI_WEBSOCKET_FLOW.md**: WebSocket flow, session scoping, and debugging.
 

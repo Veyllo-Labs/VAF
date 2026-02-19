@@ -13,6 +13,7 @@ The WhatsApp bridge allows users to interact with VAF through WhatsApp, supporti
 - **Whitelist**: Only configured phone numbers (E.164) and contacts with "Can reach your assistant" (Front Office) can send messages and receive replies
 - **Agent Tools**: `whatsapp_inbox`, `find_whatsapp_messages`, `read_whatsapp_chat`, `send_whatsapp` for listing, searching, reading, and sending
 - **WhatsApp Inbox (message store)**: Like mail/Telegram, every message that passes through the bridge is stored in a local SQLite DB (`whatsapp_messages.db`). The chat list (dashboard and `whatsapp_inbox`) is built from the **bridge** list + **activity** (including rejected senders) + **store** (chats that have at least one stored message). So all chats with messages stay visible and searchable even after a reconnect or when WhatsApp sends only a subset of chats.
+- **Chat history download**: When WhatsApp sends **messaging-history.set** (on connect, with `syncFullHistory: true`), the Node forwards those messages to Python and they are written to the message store. So after linking or reconnecting, the inbox can be filled with history that WhatsApp provides (DMs only for now; groups are skipped). The **periodic sync every 10 minutes** (`chat_sync_interval_sec`, default 600) refreshes the **chat list** (getChats); it does not re-request full message history (that only happens on connect via messaging-history.set).
 - **Optional Send-Only Mode**: When `inbound_to_agent` is `false`, incoming messages do not trigger the agent; the bot can still send content to you
 
 ---

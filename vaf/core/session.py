@@ -323,14 +323,14 @@ class SessionManager:
         messages_list: List[Dict[str, Any]],
     ) -> None:
         """
-        Save a Denkmodus (thinking mode) run as a session so it appears in the Web UI chat list.
+        Save a thinking-mode run as a session so it appears in the Web UI chat list.
         user_scope_id: scope key (string); started_at/ended_at: ISO datetime strings.
         messages_list: list of {"role", "content", "tool_calls": [names]} (e.g. from run log).
         """
         scope_key = str(user_scope_id).strip() if user_scope_id else "default"
         safe_key = "".join(c if c.isalnum() or c in "-_" else "_" for c in scope_key)[:32]
         sid = f"thinking_{safe_key}_{run_id}"
-        name = f"Denkmodus {started_at[:16].replace('T', ' ')}"
+        name = f"Thinking mode {started_at[:16].replace('T', ' ')}"
         messages = []
         for m in messages_list or []:
             role = m.get("role") or "assistant"

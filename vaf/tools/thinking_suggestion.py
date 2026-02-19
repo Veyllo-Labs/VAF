@@ -1,5 +1,5 @@
 """
-Save thinking suggestion - Used by the agent during Thinking Mode (Denkmodus) to persist ideas.
+Save thinking suggestion – used by the agent during thinking mode to persist ideas.
 Per-user storage; user_scope_id is injected by the agent from the current session.
 """
 from typing import Optional
@@ -19,10 +19,10 @@ VALID_ACTION_TYPES = ("create_automation", "ask_user", "todo_note", "")
 
 
 class SaveThinkingSuggestionTool(BaseTool):
-    """Save a suggestion produced during Thinking Mode. User can review in Denkmodus/Vorschläge."""
+    """Save a suggestion produced during thinking mode. User can review in settings/suggestions."""
 
     name = "save_thinking_suggestion"
-    description = """Save a thinking suggestion for the user to review later. Use during Thinking Mode (Denkmodus) when you identify something to suggest: new automation, question to ask the user, proactive help idea, or system health note. category: automation | user_knowledge | proactive_help | system_health | todo_note. action_type (optional): e.g. create_automation | ask_user."""
+    description = """Save a thinking suggestion for the user to review later. Use during thinking mode when you identify something to suggest: new automation, question to ask the user, proactive help idea, or system health note. category: automation | user_knowledge | proactive_help | system_health | todo_note. action_type (optional): e.g. create_automation | ask_user."""
 
     parameters = {
         "type": "object",
@@ -63,6 +63,6 @@ class SaveThinkingSuggestionTool(BaseTool):
                 thinking_run_id=None,
                 action_type=action_type,
             )
-            return f"Suggestion saved (id: {entry['id']}, category: {entry['category']}). User can review in Denkmodus/Vorschläge."
+            return f"Suggestion saved (id: {entry['id']}, category: {entry['category']}). User can review in settings/suggestions."
         except Exception as e:
             return f"Error saving suggestion: {e}"

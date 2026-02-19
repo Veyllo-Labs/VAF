@@ -40,6 +40,11 @@ from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, Mov
 import atexit
 import signal
 
+def _emit_to_web_ui() -> bool:
+    """False when running in thinking mode (background) – do not push tool/log updates into any chat session."""
+    return os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes")
+
+
 def _get_debug_log_dir():
     candidates = []
     env_dir = os.environ.get("VAF_LOG_DIR")
@@ -1029,9 +1034,9 @@ class Agent:
                             instance.name in MAIN_AGENT_EXCLUDED_TOOLS or 
                             getattr(instance, 'coder_only', False)
                         )
-                        # Denkmodus: no Git commits – background runs must not change the repo
+                        # Thinking mode: no Git – VAF is the user's project, not for the agent to inspect or change
                         if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
-                            if instance.name == "git_add_commit":
+                            if instance.name in ("git_add_commit", "git_status", "git_log"):
                                 continue
                         if is_coder_only:
                             continue
@@ -2718,24 +2723,25 @@ class Agent:
             except Exception:
                 user_turn_count = sum(1 for m in self.history if m.get("role") == "user")
 
-            get_web_interface().push_update({
-                "type": "context_status",
-                "stats": {
-                    "tokens": tokens,
-                    "max_tokens": max_tokens,
-                    "percent": round((tokens / max_tokens) * 100, 1) if max_tokens else 0,
-                    "message_count": len(self.history),
-                    "rag_preview": system_content,
-                    # Detailed breakdown for X-Ray visualization
-                    "system_tokens": system_tokens,
-                    "history_tokens": history_tokens,
-                    "tools_tokens": tools_tokens,
-                    # Compaction tracking
-                    "user_turn_count": user_turn_count,
-                    "compaction_interval": compaction_interval,
-                    "compaction_progress": round((user_turn_count % compaction_interval) / compaction_interval * 100)
-                }
-            })
+            if _emit_to_web_ui():
+                get_web_interface().push_update({
+                    "type": "context_status",
+                    "stats": {
+                        "tokens": tokens,
+                        "max_tokens": max_tokens,
+                        "percent": round((tokens / max_tokens) * 100, 1) if max_tokens else 0,
+                        "message_count": len(self.history),
+                        "rag_preview": system_content,
+                        # Detailed breakdown for X-Ray visualization
+                        "system_tokens": system_tokens,
+                        "history_tokens": history_tokens,
+                        "tools_tokens": tools_tokens,
+                        # Compaction tracking
+                        "user_turn_count": user_turn_count,
+                        "compaction_interval": compaction_interval,
+                        "compaction_progress": round((user_turn_count % compaction_interval) / compaction_interval * 100)
+                    }
+                })
         except Exception:
             pass
     
@@ -4224,23 +4230,24 @@ class Agent:
             # ALWAYS show final tools as system message for debugging consistency
             final_list = ", ".join(selected_tools) if selected_tools else "None (Safety Net -> ALL)"
             UI.event("Router", f"Final tools: {final_list}", style="dim")
-            # Push to Web UI directly so it is never dropped by log throttle
-            try:
-                from vaf.core.web_interface import get_web_interface
-                from vaf.core.subagent_ipc import get_current_session_id
-                from datetime import datetime
-                session_id = get_current_session_id()
-                get_web_interface()._push_session_update(session_id, {
-                    "type": "new_log",
-                    "entry": {
-                        "timestamp": datetime.now().isoformat(),
-                        "message": f"Final tools: {final_list}",
-                        "level": "info",
-                        "source": "Router"
-                    }
-                })
-            except Exception:
-                pass
+            # Push to Web UI directly so it is never dropped by log throttle (skip in thinking mode)
+            if _emit_to_web_ui():
+                try:
+                    from vaf.core.web_interface import get_web_interface
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    from datetime import datetime
+                    session_id = get_current_session_id()
+                    get_web_interface()._push_session_update(session_id, {
+                        "type": "new_log",
+                        "entry": {
+                            "timestamp": datetime.now().isoformat(),
+                            "message": f"Final tools: {final_list}",
+                            "level": "info",
+                            "source": "Router"
+                        }
+                    })
+                except Exception:
+                    pass
 
             # SAFETY NET: If router returns empty list, fallback to ALL tools
             # Otherwise the model gets 0 tools and hallucinates using them.
@@ -4635,14 +4642,15 @@ class Agent:
                                 if len(parts) > 1:
                                     rag_part = parts[1].split("##")[0].strip()
 
-                            get_web_interface().push_update({
-                                "type": "real_context_payload",
-                                "system": sys_prompt,
-                                "rag_preview": rag_part,
-                                "history": hist_msgs,
-                                # We can't get exact tokens easily here without a tokenizer, 
-                                # but we can send the raw text so the frontend can display it perfectly.
-                            })
+                            if _emit_to_web_ui():
+                                get_web_interface().push_update({
+                                    "type": "real_context_payload",
+                                    "system": sys_prompt,
+                                    "rag_preview": rag_part,
+                                    "history": hist_msgs,
+                                    # We can't get exact tokens easily here without a tokenizer,
+                                    # but we can send the raw text so the frontend can display it perfectly.
+                                })
                         except Exception:
                             pass
 
@@ -5071,19 +5079,20 @@ class Agent:
                     else:
                         UI.event("System", f"False promise detected (attempt {self._false_promise_retries}) - forcing retry...", style="warning")
                         # Remove faulty assistant message in Web UI so only retry response is shown (same as empty-response retry)
-                        try:
-                            from vaf.core.web_interface import get_web_interface
-                            from vaf.core.subagent_ipc import get_current_session_id
-                            session_id = get_current_session_id()
-                            get_web_interface().log(
-                                f"False promise detected (attempt {self._false_promise_retries}) - forcing retry...",
-                                level="warning",
-                                source="System",
-                                session_id=session_id,
-                            )
-                            get_web_interface().emit_clear_last_assistant(session_id)
-                        except Exception:
-                            pass
+                        if _emit_to_web_ui():
+                            try:
+                                from vaf.core.web_interface import get_web_interface
+                                from vaf.core.subagent_ipc import get_current_session_id
+                                session_id = get_current_session_id()
+                                get_web_interface().log(
+                                    f"False promise detected (attempt {self._false_promise_retries}) - forcing retry...",
+                                    level="warning",
+                                    source="System",
+                                    session_id=session_id,
+                                )
+                                get_web_interface().emit_clear_last_assistant(session_id)
+                            except Exception:
+                                pass
                         # Clear stream buffer so the retry sends only new content (no old + new)
                         if stream_callback and hasattr(stream_callback, "clear"):
                             try:
@@ -5318,13 +5327,14 @@ class Agent:
 
                     UI.event("Tool", f"{function_name}", style="highlight")
                     
-                    # Web UI Event: Tool Start
-                    try:
-                        from vaf.core.web_interface import get_web_interface
-                        from vaf.core.subagent_ipc import get_current_session_id
-                        # tc['id'] is available here 
-                        get_web_interface().emit_tool_update('start', function_name, tc['id'], data=json.dumps(arguments), session_id=get_current_session_id())
-                    except Exception: pass
+                    # Web UI Event: Tool Start (skip in thinking mode – no UI in chat session)
+                    if _emit_to_web_ui():
+                        try:
+                            from vaf.core.web_interface import get_web_interface
+                            from vaf.core.subagent_ipc import get_current_session_id
+                            get_web_interface().emit_tool_update('start', function_name, tc['id'], data=json.dumps(arguments), session_id=get_current_session_id())
+                        except Exception:
+                            pass
                     
                     # Tool fillers are not spoken on host TTS (avoid announcing every tool use).
                     # Extract user question for web_search to enable per-page analysis
@@ -5379,25 +5389,20 @@ class Agent:
                         # API Spam Prevention: Wait 2s on error
                         time.sleep(2)
                         
-                    # Web UI Event: Tool End
-                    try:
-                        from vaf.core.web_interface import get_web_interface
-                        from vaf.core.subagent_ipc import get_current_session_id
-                        r_str = str(result) if result else ""
-                        is_err = "error" in r_str.lower() or "failed" in r_str.lower()
-                        
-                        # Use is_err to trigger delay if not already triggered by exception
-                        # (e.g. tool returned "Error: ..." string without crashing)
-                        if is_err and not isinstance(result, str): # Simple check, exact logic varies
-                             # But simpler: just check if we haven't slept yet. 
-                             # Actually, let's just make sure we slow down loops on ANY error status
-                             pass 
-                             
-                        get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=r_str, session_id=get_current_session_id())
-                        
-                        if is_err and "Error executing tool" not in r_str: # Avoid double sleep if exception already slept
-                             time.sleep(2)
-                    except Exception: pass
+                    # Web UI Event: Tool End (skip in thinking mode – no UI in chat session)
+                    if _emit_to_web_ui():
+                        try:
+                            from vaf.core.web_interface import get_web_interface
+                            from vaf.core.subagent_ipc import get_current_session_id
+                            r_str = str(result) if result else ""
+                            is_err = "error" in r_str.lower() or "failed" in r_str.lower()
+                            get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=r_str, session_id=get_current_session_id())
+                            if is_err and "Error executing tool" not in r_str:
+                                time.sleep(2)
+                        except Exception:
+                            pass
+                    elif result and ("error" in str(result).lower() or "failed" in str(result).lower()) and "Error executing tool" not in str(result):
+                        time.sleep(2)
 
                     # Check if this is an async sub-agent task BEFORE adding to history
                     result_str = str(result) if result else ""
@@ -5630,19 +5635,20 @@ class Agent:
                 except Exception:
                     pass
                 # Ensure Web UI shows retry message and remove the faulty assistant bubble
-                try:
-                    from vaf.core.web_interface import get_web_interface
-                    from vaf.core.subagent_ipc import get_current_session_id
-                    session_id = get_current_session_id()
-                    get_web_interface().log(
-                        "Empty response detected. Applying snapshot and retry...",
-                        level="warning",
-                        source="System",
-                        session_id=session_id,
-                    )
-                    get_web_interface().emit_clear_last_assistant(session_id)
-                except Exception:
-                    pass
+                if _emit_to_web_ui():
+                    try:
+                        from vaf.core.web_interface import get_web_interface
+                        from vaf.core.subagent_ipc import get_current_session_id
+                        session_id = get_current_session_id()
+                        get_web_interface().log(
+                            "Empty response detected. Applying snapshot and retry...",
+                            level="warning",
+                            source="System",
+                            session_id=session_id,
+                        )
+                        get_web_interface().emit_clear_last_assistant(session_id)
+                    except Exception:
+                        pass
                 # Clear stream buffer so the retry sends only new content (no old + new)
                 if stream_callback and hasattr(stream_callback, "clear"):
                     try:
@@ -5789,35 +5795,37 @@ class Agent:
                     if api_empty_delay_retries < API_EMPTY_DELAY_RETRIES_MAX:
                         api_empty_delay_retries += 1
                         UI.event("System", f"API returned empty repeatedly. Retrying in 3s ({api_empty_delay_retries}/{API_EMPTY_DELAY_RETRIES_MAX})...", style="warning")
+                        if _emit_to_web_ui():
+                            try:
+                                from vaf.core.web_interface import get_web_interface
+                                from vaf.core.subagent_ipc import get_current_session_id
+                                session_id = get_current_session_id()
+                                get_web_interface().log(
+                                    f"API returned empty repeatedly. Retrying in 3s (attempt {api_empty_delay_retries}/{API_EMPTY_DELAY_RETRIES_MAX})...",
+                                    level="warning",
+                                    source="System",
+                                    session_id=session_id,
+                                )
+                            except Exception:
+                                pass
+                        time.sleep(3)
+                        empty_retry_count = 0
+                        continue
+                    # Max delay retries reached: emit as system log only (no assistant message)
+                    fallback_msg = "API returned empty responses repeatedly. Please try again."
+                    if _emit_to_web_ui():
                         try:
                             from vaf.core.web_interface import get_web_interface
                             from vaf.core.subagent_ipc import get_current_session_id
                             session_id = get_current_session_id()
                             get_web_interface().log(
-                                f"API returned empty repeatedly. Retrying in 3s (attempt {api_empty_delay_retries}/{API_EMPTY_DELAY_RETRIES_MAX})...",
+                                fallback_msg,
                                 level="warning",
                                 source="System",
                                 session_id=session_id,
                             )
                         except Exception:
                             pass
-                        time.sleep(3)
-                        empty_retry_count = 0
-                        continue
-                    # Max delay retries reached: emit as system log only (no assistant message)
-                    fallback_msg = "API returned empty responses repeatedly. Please try again."
-                    try:
-                        from vaf.core.web_interface import get_web_interface
-                        from vaf.core.subagent_ipc import get_current_session_id
-                        session_id = get_current_session_id()
-                        get_web_interface().log(
-                            fallback_msg,
-                            level="warning",
-                            source="System",
-                            session_id=session_id,
-                        )
-                    except Exception:
-                        pass
                     # Signal to headless: do not emit as assistant message; UI already got new_log
                     return "[SYSTEM_LOG_ONLY]" + fallback_msg
                 

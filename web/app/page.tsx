@@ -49,7 +49,7 @@ type Session = {
     id: string;
     title: string;
     messageCount?: number;
-    /** Denkmodus run shown in chat list with speech-bubble icon */
+    /** Thinking-mode run shown in chat list with brain icon */
     source?: 'thinking';
 };
 
@@ -2897,7 +2897,7 @@ function VAFDashboardContent() {
                                     )}
 
                                     {(s as Session).source === 'thinking' ? (
-                                        <span title="Denkmodus" className="text-base leading-none">🧠</span>
+                                        <span title="Thinking mode" className="text-base leading-none">🧠</span>
                                     ) : (
                                         <MessageSquare size={16} className={cn("shrink-0", currentSessionId === s.id ? "text-gray-900" : "text-gray-400")} />
                                     )}
@@ -2969,6 +2969,11 @@ function VAFDashboardContent() {
                             onClick={() => {
                                 setIsAutomationPopupOpen(true);
                                 ws?.send(JSON.stringify({ type: 'get_automations' }));
+                                // If calendar is connected, ensure "Daily calendar check" exists so it appears in the list
+                                fetch(`${getApiBase()}/api/calendar/ensure-daily-check-automation`, { method: 'POST', credentials: 'include' })
+                                    .then((r) => r.json())
+                                    .then((data) => { if (data?.ok && ws?.readyState === WebSocket.OPEN) ws?.send(JSON.stringify({ type: 'get_automations' })); })
+                                    .catch(() => {});
                             }}
                             className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/automation transition-all justify-start"
                             title="Automation"

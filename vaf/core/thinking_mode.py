@@ -1,5 +1,5 @@
 """
-Thinking Mode (Denkmodus) - Background reflection when user is idle.
+Thinking mode – background reflection when user is idle.
 Starts one run per user when idle for thinking_idle_minutes; respects automation schedule;
 cancels when user becomes active. Run logs (tool calls, history) are saved for inspection.
 """
@@ -99,7 +99,7 @@ def is_locked(user_scope_id: Optional[str], max_duration_minutes: int = 30) -> b
         return True
 
 
-# --- Waiting for user reply (after agent asked a question in Denkmodus) ---
+# --- Waiting for user reply (after agent asked a question in thinking mode) ---
 WAITING_REPLY_FILENAME = "thinking_waiting_reply.json"
 
 
@@ -292,7 +292,7 @@ def should_skip_for_automation(user_scope_id: Optional[str], buffer_minutes: int
 
 
 def _get_last_thinking_summary(user_scope_id: Optional[str], max_chars: int = 1200) -> str:
-    """Load the most recent Denkmodus run log for this user and return the last assistant reply (context for next run)."""
+    """Load the most recent thinking-mode run log for this user and return the last assistant reply (context for next run)."""
     try:
         log_dir = Platform.vaf_dir() / "thinking_mode_logs" / _key(user_scope_id)
         if not log_dir.exists():
@@ -361,11 +361,11 @@ def _save_run_log(
     return (started_iso, ended_iso, messages)
 
 
-THINKING_PROMPT = """You are the main agent in **Thinking Mode** (Denkmodus). The user has been idle; use this time to **act** on their behalf. Work through the steps below, then summarize in a short reply in the user's language. When you have finished, reply with what you did – that concludes this pass.
+THINKING_PROMPT = """You are the main agent in **Thinking Mode**. The user has been idle; use this time to **act** on their behalf. Work through the steps below, then summarize in a short reply in the user's language. When you have finished, reply with what you did – that concludes this pass.
 
 **Priority: act first.** Create automations, process todos/notes. If you need the user's decision (e.g. "Should I do X?"), ask them **once** via main_messenger (Telegram/WhatsApp/etc. according to their main_messenger). The system will wait for their reply: if they don't answer within a few minutes, they get a short nudge; if they still don't answer, we skip that question and do other things in a later run. So you only need to ask once and then end your pass.
 
-**Messages to the user (critical):** You may send **at most one** message to the user in this entire run. Write it like a normal human would: natural, friendly, no meta-talk. Never say "I'm in Denkmodus", "thinking mode", "I'm running in the background" or that you're an agent – just write the message (e.g. "I've set up the weekly report for tomorrow" or "Quick question: should I do X?"). If you already sent one message, do not send another in this run. After you ask something, the system waits for their reply in the background; you end this pass and they can answer later.
+**Messages to the user (critical):** You may send **at most one** message to the user in this entire run. Write it like a normal human would: natural, friendly, no meta-talk. Never say "I'm in thinking mode", "I'm running in the background" or that you're an agent – just write the message (e.g. "I've set up the weekly report for tomorrow" or "Quick question: should I do X?"). If you already sent one message, do not send another in this run. After you ask something, the system waits for their reply in the background; you end this pass and they can answer later.
 
 1. **System health:** Unread important emails, upcoming reminders – note briefly in your final reply if relevant.
 
@@ -411,14 +411,14 @@ def _run_thinking_for_user(
         # Append thinking mode notice and last run summary (context so we don't repeat or re-ask)
         if agent.history and agent.history[0].get("role") == "system":
             notice = (
-                "\n\n## THINKING MODE (Denkmodus)\n"
+                "\n\n## THINKING MODE\n"
                 "You are the **main agent** in a background pass while the user is idle. "
-                "Act: create automations, process todos. When you send a message, write like a normal human – never say you're in Denkmodus or thinking mode. At most one message per run. If you ask something, the system will wait for their reply (nudge after 3 min, skip after 10 min); end this pass after your one message."
+                "Act: create automations, process todos. When you send a message, write like a normal human – never say you're in thinking mode or running in the background. At most one message per run. If you ask something, the system will wait for their reply (nudge after 3 min, skip after 10 min); end this pass after your one message."
             )
             last_summary = _get_last_thinking_summary(user_scope_id)
             if last_summary:
                 notice += (
-                    "\n\n**Last Denkmodus run (for context only – do not repeat these actions or ask the same again):**\n"
+                    "\n\n**Last thinking-mode run (for context only – do not repeat these actions or ask the same again):**\n"
                     + last_summary
                 )
             agent.history[0]["content"] = (agent.history[0]["content"] or "") + notice

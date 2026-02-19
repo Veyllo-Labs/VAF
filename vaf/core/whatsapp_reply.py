@@ -15,8 +15,14 @@ def set_whatsapp_reply_callback(cb: Optional[Callable[..., None]]) -> None:
     _send_callback = cb
 
 
-def send_whatsapp_reply(username: str, chat_jid: str, text: str, voice_path: Optional[str] = None) -> None:
-    """If a WhatsApp reply callback is registered, invoke it. Use voice_path for voice messages."""
+def send_whatsapp_reply(
+    username: str,
+    chat_jid: str,
+    text: str,
+    voice_path: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> None:
+    """If a WhatsApp reply callback is registered, invoke it. Use voice_path for voice messages. user_scope_id helps resolve Front Office contacts (scoped storage)."""
     try:
         from vaf.core.log_helper import log_whatsapp_reply
         log_whatsapp_reply(
@@ -36,6 +42,8 @@ def send_whatsapp_reply(username: str, chat_jid: str, text: str, voice_path: Opt
     if not text and not voice_path:
         return
     try:
+        _send_callback(username, chat_jid, text or "", voice_path, user_scope_id)
+    except TypeError:
         _send_callback(username, chat_jid, text or "", voice_path)
     except Exception:
         pass

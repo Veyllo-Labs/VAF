@@ -64,7 +64,7 @@ WhatsApp User (text, voice, or document reply)
 Key components:
 
 - **Node (vaf/whatsapp_node/wa-bridge.js)**: Started by Python with `node wa-bridge.js --auth-dir <path>`. Reads JSON commands from stdin (`send`, `send_voice`, `send_document`, `getChats`), writes events to stdout (`message`, `send_result`, `qr`, `connected`, etc.).
-- **Python (vaf/api/whatsapp_bridge.py)**: Spawns and manages the Node process, maintains `_outgoing_queue`, implements STT/TTS for voice, and enqueues incoming messages to the VAF task queue with session ID `whatsapp_{username}_{digits}`.
+- **Python (vaf/api/whatsapp_bridge.py)**: Spawns and manages the Node process with **stdout/stderr opened as UTF-8** so JSON lines (including transcribed text with non-ASCII) decode correctly on all platforms. Maintains `_outgoing_queue`, implements STT/TTS for voice, and enqueues incoming messages to the VAF task queue with session ID `whatsapp_{username}_{digits}`.
 
 ---
 
@@ -121,7 +121,7 @@ The bridge builds the allowed set from the config whitelist plus all WhatsApp/ph
 ### Best practices
 
 - **Whitelist format:** Use E.164 for all phone numbers (e.g. `+491761234567`). The bridge normalizes JIDs; leading zeros or missing country codes can cause mismatches.
-- **user_scope_id:** Use the same `user_scope_id` as the Web UI for that user. For the local admin, use `local_admin_scope_id` from config so Web, CLI, and WhatsApp share one identity.
+- **user_scope_id and username:** Use the same `user_scope_id` and username as the Web UI for that user. For the local admin, use `local_admin_scope_id` and the configured local admin username so Web, CLI, WhatsApp, and other tools (e.g. `list_contacts`, `get_contact`, `send_whatsapp`) resolve the same identity. Consistent identity avoids "no contacts" or "no Telegram/WhatsApp contact" when the agent runs from the Web UI or from a bridge.
 - **Credentials:** Do not commit `~/.vaf/users/<username>/whatsapp/` (or the platform data dir equivalent) to version control; it contains the Baileys session.
 - **Send-only mode:** Set `inbound_to_agent: false` when you only want the bot to send you content (e.g. reports, voice notes); incoming messages will not trigger the agent.
 - **Front Office:** For contacts who can reach your assistant via WhatsApp, add their number in the contact’s **Channels** (type "phone" or "WhatsApp"). Without a WhatsApp channel, messages from that number are rejected.
@@ -211,7 +211,7 @@ Whisper returns the detected language in the STT response. VAF uses it to:
 WhatsApp uses **LID** (Linked ID) for some chat identifiers; JIDs may end with `@lid` instead of `@s.whatsapp.net`. LID is used for more than just “saved messages” (self-chat)—it can also identify regular 1:1 contacts. To avoid accepting messages from non-whitelisted contacts:
 
 - **Node (wa-bridge.js)**: For any `@lid` JID, the bridge does *not* assume self-chat. It resolves the LID to E.164 via Baileys’ `lidMapping` and only sets `selfChat: true` when the resolved number matches the linked account owner’s number. For `@s.whatsapp.net` chats, self-chat is determined by comparing the numeric part of the JID with the owner’s JID.
-- **Python**: Uses the Node-emitted `selfChat` and `fromE164` (when present) together with the whitelist and contact list. Only senders in the allowed set or marked as self-chat are accepted; all others are rejected and not forwarded to the agent.
+- **Python**: Uses the Node-emitted `selfChat` flag only (must not treat a JID as self-chat solely because it ends with `@lid`). Together with `fromE164` (when present) and the whitelist/contact list, only senders in the allowed set or with `selfChat: true` are accepted; all others are rejected and not forwarded to the agent.
 4. **Activity**: Appends to `chat_activity` (for dashboard) and optionally to the message store.
 5. **Enqueue**: Task is added with `session_id = whatsapp_{username}_{digits}`, `input_text = body`, and metadata: `from_contact`, `whatsapp_chat_jid`, `voice_lang`, `user_scope_id`, `username`. When `inbound_to_agent` is `false`, this enqueue is skipped.
 
@@ -251,7 +251,7 @@ Node responds with `{ "type": "send_result", "req_id": "...", "success": true|fa
 The WhatsApp dashboard is available under **Settings → Connections → WhatsApp** (or the Dashboard tab). Implemented in `web/components/connections/WhatsAppDashboard.tsx`; data is provided by `GET /api/whatsapp/dashboard`.
 
 - **Connection status**: Indicator next to "Chats": green = WhatsApp connected, amber = bridge running but not connected, grey = bridge not started. Status is determined by ping/pong with the Node process.
-- **Chat list**: Built from (1) Node’s chat list (Baileys), (2) `chat_activity` (incoming/outgoing activity), and (3) Front Office contacts (contacts with "Can reach your assistant" and a WhatsApp channel) so that chats appear even before Baileys has synced them. Phone numbers are normalized to a single leading `+` to avoid duplicate entries (e.g. `++49...`).
+- **Chat list**: Built from (1) Node’s chat list (Baileys), (2) `chat_activity` (incoming/outgoing activity), and (3) Front Office contacts (contacts with "Can reach your assistant" and a WhatsApp channel) so that chats appear even before Baileys has synced them. Phone numbers are normalized to a single leading `+` to avoid duplicate entries (e.g. `++49...`). The **message count** shown per chat is the **session message count** (number of messages in that chat’s session file), so it matches the session history and "Memory Learning" view when you open the chat. **Contact names** are resolved from the contact list; matching uses canonical phone form (0-prefix German numbers, e.g. `0152...`, are treated as `+49...`) so names appear even if the contact was stored as `0152...` and the session uses `+49152...`.
 - **Refresh**: Re-fetches chat list and pings the bridge.
 - **Reconnection**: If the bridge is running but WhatsApp is not connected, VAF periodically restarts the bridge. You can also use "Restart bridge" or Settings → Stop then Start.
 
@@ -292,11 +292,45 @@ curl -X POST http://localhost:5002/synthesize \
 
 ## Troubleshooting
 
+### Bridge running, WhatsApp not connected (amber status)
+
+The dashboard shows **Bridge running, WhatsApp not connected** when the Node process is alive but the Baileys socket has not reached `connection=open`. The Python bridge sends a **ping** to Node; Node replies with **pong** and `connected: true` only when `connectionState === "open"`. So amber means either the socket never opened or it closed.
+
+**Common causes:**
+
+| Cause | What you see in `logs/whatsapp_qr.log` | Action |
+|-------|----------------------------------------|--------|
+| Still connecting | `connection=connecting` or no `connection=open` yet | Wait 10–30 s and click Refresh. |
+| **Bad MAC / session keys** | `Failed to decrypt message with any known session` and `Session error: Error: Bad MAC` | **Reset & get new QR code**, scan again. Stored Signal/session keys are invalid or out of sync; only a fresh link fixes it. |
+| Session invalid | `connection=close status=401` or `device_removed` | **Reset & get new QR code**, scan again. |
+| Restart required | `connection=close status=515` or `516` | Baileys auto-reconnects; wait 20–30 s or use **Restart bridge**. |
+| Logged out | `connection=close` with loggedOut | Reset and scan a new QR code. |
+| Network/firewall | Repeated `connection=close` or timeout | Test [web.whatsapp.com](https://web.whatsapp.com) on the same PC; disable VPN; avoid VPS if WhatsApp blocks the IP. |
+
+**Best practice:** When the status stays amber, open `logs/whatsapp_qr.log`. Search for `connection.update: connection=close` (for status codes) or for **`Bad MAC`** / **`Failed to decrypt`** – in that case the session keys are broken; reset and scan a new QR code. The **status code** (e.g. 401, 515, 516) tells you whether to Reset (401, device_removed, loggedOut) or wait/restart (515/516). VAF automatically restarts the bridge periodically when it detects this state; if reconnection still fails, use **Restart bridge** in the dashboard or Settings → Stop then Start.
+
 ### Bridge Not Responding / No Reply
 
 1. **Check bridge is enabled:** `whatsapp_config.enabled` should be `true` in config.
 2. **Ensure bridge process is running:** Settings → Connections → WhatsApp toggle on; after VAF restart the bridge starts automatically when enabled.
 3. **Verify sender is whitelisted:** Your phone number (E.164) must be in the config whitelist or in a contact with "Can reach your assistant" and that contact must have the WhatsApp number in Channels. Check `logs/whatsapp_inbound.log` for `ACCEPT` vs `REJECT not_whitelist`.
+4. **Diagnose in `logs/whatsapp_qr.log`:** Python logs each received event as `[Python] got type='message'` (or `chats`, `connected`, etc.). If Node logs `emitting message to Python` but you never see `[Python] got type='message'`, the read loop may have failed (e.g. encoding). The bridge uses UTF-8 for Node stdout/stderr; restart the **full VAF application** and try again. Look for `[Python] JSON decode error` or `[Python] FATAL read loop` if the loop crashed.
+
+### Diagnostic logs (`logs/whatsapp_qr.log`)
+
+Both Node stderr and Python bridge logs are written here. Use it to verify that messages reach Python and how they are handled.
+
+| Source | Log line | Meaning |
+|--------|----------|---------|
+| Node | `emitting message to Python from=<jid>` | Node sent a message event to stdout. |
+| Node | `message resolve error: ...` / `message emit failed: ...` | LID resolution or stdout write failed; message may still be sent. |
+| Python | `[Python] got type='message'` (or `chats`, `connected`, `connection_closed`) | Python received and parsed this event type from Node stdout. |
+| Python | `[inbound] MESSAGE from=<jid>` | Incoming message is being processed. |
+| Python | `[inbound] REJECT` / `ACCEPT` / `ENQUEUED` | Sender not allowed / allowed / task enqueued. |
+| Python | `[Python] JSON decode error: ...` | A non-JSON or empty line was read (e.g. stray output); that line is skipped. |
+| Python | `[Python] FATAL read loop: ...` | The stdout read loop crashed; restart VAF. |
+
+Best practice: if the bot does not reply, check that you see `[Python] got type='message'` and then `[inbound] ACCEPT` or `ENQUEUED` after Node’s `emitting message to Python`. If not, see "Bridge Not Responding / No Reply" and "Front Office Contact Does Not Get a Reply" above.
 
 ### QR Code / Linking
 
@@ -329,7 +363,7 @@ curl -X POST http://localhost:5002/synthesize \
 
 ### Front Office Contact Does Not Get a Reply
 
-The contact must have their **WhatsApp number** stored in the contact’s **Channels** (type "phone" or "WhatsApp", value E.164). If "Can reach your assistant" is enabled but the contact has no WhatsApp channel, incoming messages from that number are rejected (not in the allowed set). Add the number in Settings → Connections → Contacts → edit contact → Channels.
+The contact must have their **WhatsApp number** stored in the contact’s **Channels** (type "phone" or "WhatsApp", value E.164). If "Can reach your assistant" is enabled but the contact has no WhatsApp channel, incoming messages are rejected. Add the number in Settings → Connections → Contacts → edit contact → Channels. **Diagnose:** Check `logs/whatsapp_qr.log` for `[inbound] MESSAGE`, `[inbound] REJECT` (with `allowed_count`), or `[inbound] ACCEPT`/`ENQUEUED`. Python also logs each received event as `[Python] got type='message'` and any `[Python] JSON decode error` or `[Python] FATAL read loop` in the same file. If you see "voice downloaded" but no `[inbound]` or `[Python] got type='message'` lines, restart the **full VAF application** (not only the bridge) so the bridge runs with UTF-8 encoding for Node pipes, then try again.
 
 ### Chat List Empty or Duplicate Number (e.g. ++49...)
 

@@ -83,6 +83,16 @@ def _normalize_phone(phone: str) -> str:
     return "".join(c for c in (phone or "") if c.isdigit())
 
 
+def _phone_digits_canonical(phone_or_jid: str) -> str:
+    """Digits for matching: E.164-style. Converts 0176... (10 digits) to 49176... so WhatsApp JID 49176... matches contact 0176...."""
+    digits = _normalize_phone(phone_or_jid if not (phone_or_jid or "").strip().endswith(".net") else _jid_to_e164(phone_or_jid))
+    if not digits:
+        return ""
+    if len(digits) == 10 and digits.startswith("0"):
+        return "49" + digits[1:]
+    return digits
+
+
 def _to_e164_display(phone_or_jid: str) -> str:
     """Return E.164 display form with exactly one leading + (e.g. +491761234567). Avoids double plus."""
     if not phone_or_jid or not isinstance(phone_or_jid, str):
@@ -222,14 +232,50 @@ def _deliver_send_result(req_id: str, success: bool, error: Optional[str] = None
 
 
 def _allow_from_match(sender_jid: str, allowed_phones: List[str]) -> bool:
-    """Check if sender JID matches any allowed phone number."""
-    sender_digits = _normalize_phone(_jid_to_e164(sender_jid))
-    if not sender_digits:
+    """Check if sender JID matches any allowed phone number. Normalizes 0176... and +49176... to same form."""
+    sender_canonical = _phone_digits_canonical(sender_jid)
+    if not sender_canonical:
         return False
     for p in allowed_phones:
-        if _normalize_phone(p) == sender_digits:
+        if _phone_digits_canonical(p) == sender_canonical:
             return True
     return False
+
+
+def _get_allowed_phones_for_user(username: str, user_scope_id: str) -> Tuple[List[str], List[str]]:
+    """Return (config_phones, allowed_phones) for inbound checks. config_phones = whitelist only; allowed_phones = whitelist + Front Office contacts. Called per message so new FO contacts work without bridge restart."""
+    config_phones: List[str] = []
+    allowed_phones: List[str] = []
+    whatsapp_config = Config.get("whatsapp_config") or {}
+    if not isinstance(whatsapp_config, dict):
+        return config_phones, allowed_phones
+    for entry in (whatsapp_config.get("whitelist") or []):
+        if not isinstance(entry, dict) or not entry.get("phone_number"):
+            continue
+        p = str(entry.get("phone_number", "")).strip()
+        if not p:
+            continue
+        if entry.get("vaf_username") == username or str(entry.get("user_scope_id")) == user_scope_id:
+            if p not in config_phones:
+                config_phones.append(p)
+            if p not in allowed_phones:
+                allowed_phones.append(p)
+    try:
+        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
+        seen_phones: set = set()
+        for scope_arg in (user_scope_id, None, get_local_admin_scope_id()):
+            scope_str = str(scope_arg) if scope_arg else ""
+            for c in get_contacts_allowing_assistant(username, user_scope_id=scope_arg or None):
+                for p in _contact_whatsapp_values(c):
+                    if p and str(p).strip():
+                        pn = str(p).strip()
+                        key = _phone_digits_canonical(pn)
+                        if key and key not in seen_phones:
+                            seen_phones.add(key)
+                            allowed_phones.append(pn)
+    except Exception:
+        pass
+    return config_phones, allowed_phones
 
 
 def _get_users_to_run() -> List[Tuple[str, str, Path]]:
@@ -271,6 +317,8 @@ def _run_user_process(username: str, auth_dir: Path) -> Optional[subprocess.Pope
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
         "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
         "bufsize": 1,
     }
     if sys.platform == "win32":
@@ -388,6 +436,8 @@ def _sender_loop() -> None:
                     body = text
                     ctype = "text"
                 append_message(username, chat_id or chat_jid, body, direction="out", content_type=ctype)
+                if chat_id:
+                    _append_chat_activity(chat_id, None, "out")
             except Exception:
                 pass
         except queue.Empty:
@@ -396,35 +446,20 @@ def _sender_loop() -> None:
             logger.exception("WhatsApp sender error: %s", e)
 
 
-def _is_jid_whitelisted(username: str, chat_jid: str) -> bool:
-    """Verify chat_jid is in whitelist for this user (config whitelist or contact with allow_as_assistant_user). @lid = self-chat, always allowed."""
+def _is_jid_whitelisted(username: str, chat_jid: str, user_scope_id: Optional[str] = None) -> bool:
+    """Verify chat_jid is in whitelist for this user (config whitelist or contact with allow_as_assistant_user). @lid = self-chat, always allowed. Pass user_scope_id when replying to a contact so FO contacts in scoped storage are found."""
     if (chat_jid or "").strip().endswith("@lid"):
         return True  # Self-chat: reply to own saved messages
-    whatsapp_config = Config.get("whatsapp_config") or {}
-    if not isinstance(whatsapp_config, dict):
-        return False
-    allowed_phones: List[str] = []
     uname = (username or "").strip() or "admin"
-    for entry in (whatsapp_config.get("whitelist") or []):
-        if isinstance(entry, dict) and (entry.get("vaf_username") or "admin").strip() == uname:
-            p = entry.get("phone_number")
-            if p:
-                allowed_phones.append(str(p))
-    try:
-        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
-        for c in get_contacts_allowing_assistant(uname):
-            for p in _contact_whatsapp_values(c):
-                if p:
-                    allowed_phones.append(str(p))
-    except Exception:
-        pass
+    scope = str(user_scope_id).strip() if user_scope_id else None
+    _, allowed_phones = _get_allowed_phones_for_user(uname, scope or get_local_admin_scope_id())
     return _allow_from_match(chat_jid, allowed_phones)
 
 
-def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional[str] = None) -> None:
+def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional[str] = None, user_scope_id: Optional[str] = None) -> None:
     """Callback for headless_runner: enqueue reply. If voice_path, send as voice message.
-    When user sent a voice message, auto-reply with voice (TTS) when possible."""
-    if not _is_jid_whitelisted(username, chat_jid):
+    When user sent a voice message, auto-reply with voice (TTS) when possible. user_scope_id helps resolve FO contacts (scoped storage)."""
+    if not _is_jid_whitelisted(username, chat_jid, user_scope_id=user_scope_id):
         logger.warning("WhatsApp: blocked reply to non-whitelisted JID %s for user %s", chat_jid, username)
         return
     # If no voice_path but user sent voice, try to synthesize TTS (like Telegram)
@@ -521,173 +556,238 @@ def _read_user_process(
     auth_dir: Path,
     proc: subprocess.Popen,
 ) -> None:
-    """Read JSON lines from process stdout, handle events."""
-    config_phones: List[str] = []  # Whitelist only (for from_contact detection)
-    allowed_phones: List[str] = []
-    whatsapp_config = Config.get("whatsapp_config") or {}
-    if isinstance(whatsapp_config, dict):
-        for entry in (whatsapp_config.get("whitelist") or []):
-            if isinstance(entry, dict) and entry.get("vaf_username") == username:
-                p = entry.get("phone_number")
-                if p:
-                    config_phones.append(str(p))
-                    allowed_phones.append(str(p))
-    if not allowed_phones:
-        for entry in (whatsapp_config.get("whitelist") or []):
-            if isinstance(entry, dict) and str(entry.get("user_scope_id")) == user_scope_id:
-                p = entry.get("phone_number")
-                if p:
-                    config_phones.append(str(p))
-                    allowed_phones.append(str(p))
-    # Contact whitelist: all WhatsApp numbers from contacts with allow_as_assistant_user
+    """Read JSON lines from process stdout, handle events. allowed_phones are fetched per message so new Front Office contacts work without bridge restart."""
     try:
-        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
-        for c in get_contacts_allowing_assistant(username):
-            for p in _contact_whatsapp_values(c):
-                if p and p not in allowed_phones:
-                    allowed_phones.append(str(p))
-    except Exception:
-        pass
-    if not allowed_phones:
-        logger.warning("WhatsApp: no allowFrom for user %s, rejecting inbound", username)
-
-    for line in proc.stdout:
-        if _bridge_stop.is_set():
-            break
-        line = (line or "").strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        typ = obj.get("type")
-        if typ == "pong":
-            with _connection_lock:
-                _connection_status[username] = bool(obj.get("connected", False))
-                ev = _connection_events.get(username)
-                if ev:
-                    ev.set()
-        elif typ == "send_result":
-            req_id = obj.get("req_id")
-            if req_id:
-                _deliver_send_result(req_id, bool(obj.get("success")), obj.get("error", ""))
-        elif typ == "qr":
-            logger.warning("WhatsApp session expired for %s – bridge needs QR but cannot show it. Stopping bridge and disabling.", username)
+        for line in proc.stdout:
+            if _bridge_stop.is_set():
+                break
+            line = (line or "").strip()
+            if not line:
+                continue
             try:
-                cfg = Config.load()
-                wc = cfg.get("whatsapp_config") or {}
-                if isinstance(wc, dict):
-                    wc = dict(wc)
-                    wc["enabled"] = False
-                    cfg["whatsapp_config"] = wc
-                    Config.save(cfg)
-                stop_bridge()
+                obj = json.loads(line)
+            except json.JSONDecodeError as e:
+                try:
+                    from vaf.core.log_helper import log_whatsapp_qr
+                    log_whatsapp_qr(f"[Python] JSON decode error: {e}")
+                except Exception:
+                    pass
+                continue
+            typ = obj.get("type")
+            if typ in ("message", "chats", "connected", "connection_closed"):
+                try:
+                    from vaf.core.log_helper import log_whatsapp_qr
+                    log_whatsapp_qr(f"[Python] got type={typ!r}")
+                except Exception:
+                    pass
+            try:
+                _dispatch_bridge_event(username, user_scope_id, typ, obj)
             except Exception as e:
-                logger.exception("Failed to disable WhatsApp on session expiry: %s", e)
-        elif typ == "connected":
-            logger.info("WhatsApp connected for user %s", username)
-        elif typ == "message":
-            from_jid = obj.get("from") or obj.get("senderJid")
-            from_e164 = obj.get("fromE164")  # Resolved via Baileys lidMapping when @lid
-            body = (obj.get("body") or "").strip()
-            voice_path = obj.get("voice_path")
-            voice_lang: Optional[str] = None
-            was_voice = bool(voice_path)
-            if voice_path and body == "<voice>":
+                logger.exception("WhatsApp bridge event handler failed for type=%s: %s", typ, e)
+                try:
+                    from vaf.core.log_helper import log_whatsapp_qr
+                    log_whatsapp_qr(f"[Python] ERROR handling type={typ!r}: {e}")
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.exception("WhatsApp bridge stdout read loop failed: %s", e)
+        try:
+            from vaf.core.log_helper import log_whatsapp_qr
+            log_whatsapp_qr(f"[Python] FATAL read loop: {type(e).__name__}: {e}")
+        except Exception:
+            pass
+
+
+def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dict[str, Any]) -> None:
+    """Handle one JSON event from the bridge (pong, message, chats, etc.)."""
+    if typ == "pong":
+        connected = bool(obj.get("connected", False))
+        with _connection_lock:
+            _connection_status[username] = connected
+            ev = _connection_events.get(username)
+            if ev:
+                ev.set()
+        if not connected:
+            try:
+                from vaf.core.log_helper import log_whatsapp_qr
+                log_whatsapp_qr(f"[Python] pong connected=false → UI shows orange (bridge running, WhatsApp not connected)")
+            except Exception:
+                pass
+    elif typ == "send_result":
+        req_id = obj.get("req_id")
+        if req_id:
+            _deliver_send_result(req_id, bool(obj.get("success")), obj.get("error", ""))
+    elif typ == "qr":
+        logger.warning("WhatsApp session expired for %s – bridge needs QR but cannot show it. Stopping bridge and disabling.", username)
+        try:
+            cfg = Config.load()
+            wc = cfg.get("whatsapp_config") or {}
+            if isinstance(wc, dict):
+                wc = dict(wc)
+                wc["enabled"] = False
+                cfg["whatsapp_config"] = wc
+                Config.save(cfg)
+            stop_bridge()
+        except Exception as e:
+            logger.exception("Failed to disable WhatsApp on session expiry: %s", e)
+    elif typ == "connected":
+        with _connection_lock:
+            _connection_status[username] = True
+        try:
+            from vaf.core.log_helper import log_whatsapp_qr
+            log_whatsapp_qr(f"[Python] connected → status=open for {username}")
+        except Exception:
+            pass
+        logger.info("WhatsApp connected for user %s", username)
+    elif typ == "connection_closed":
+        with _connection_lock:
+            _connection_status[username] = False
+        try:
+            from vaf.core.log_helper import log_whatsapp_qr
+            code = obj.get("statusCode")
+            log_whatsapp_qr(f"[Python] connection_closed statusCode={code} → UI will show orange")
+        except Exception:
+            pass
+    elif typ == "message":
+        from_jid = obj.get("from") or obj.get("senderJid")
+        try:
+            from vaf.core.log_helper import log_whatsapp_qr
+            log_whatsapp_qr(f"[inbound] MESSAGE from={from_jid}")
+        except Exception:
+            pass
+        try:
+            config_phones, allowed_phones = _get_allowed_phones_for_user(username, user_scope_id)
+        except Exception as e:
+            logger.warning("WhatsApp: get_allowed_phones_for_user failed: %s", e)
+            try:
+                from vaf.core.log_helper import log_whatsapp_qr
+                log_whatsapp_qr(f"[inbound] ERROR get_allowed_phones: {e}")
+            except Exception:
+                pass
+            return
+        if not allowed_phones:
+            logger.debug("WhatsApp: no allowFrom for user %s, rejecting inbound from %s", username, obj.get("from"))
+        from_e164 = obj.get("fromE164")  # Resolved via Baileys lidMapping when @lid
+        body = (obj.get("body") or "").strip()
+        voice_path = obj.get("voice_path")
+        voice_lang: Optional[str] = None
+        was_voice = bool(voice_path)
+        if voice_path and body == "<voice>":
+            try:
                 transcript, voice_lang = _transcribe_voice_file(voice_path)
                 body = transcript if transcript else "<media:audio>"
-            if not body:
+            except Exception as e:
+                logger.warning("WhatsApp: transcription failed: %s", e)
                 try:
-                    from vaf.core.log_helper import log_whatsapp_inbound
-                    log_whatsapp_inbound(f"SKIP no_body from={from_jid}")
+                    from vaf.core.log_helper import log_whatsapp_qr
+                    log_whatsapp_qr(f"[inbound] ERROR transcribe: {e}")
                 except Exception:
                     pass
-                continue
-            # Self-chat (@lid): message to yourself – allow (linked account is user's)
-            # Also allow when fromE164 matches whitelist (clawdbot: resolved @lid)
-            is_self_chat = obj.get("selfChat") is True or (from_jid or "").strip().endswith("@lid")
-            allow_match = _allow_from_match(from_jid or "", allowed_phones) or (
-                from_e164 and _allow_from_match(from_e164, allowed_phones)
-            )
-            if not is_self_chat and not allow_match:
-                try:
-                    from vaf.core.log_helper import log_whatsapp_inbound
-                    log_whatsapp_inbound(f"REJECT not_whitelist from={from_jid}")
-                except Exception:
-                    pass
-                logger.debug("WhatsApp: rejected message from %s (not in allowFrom)", from_jid)
-                continue
+                body = "<media:audio>"
+        if not body:
             try:
                 from vaf.core.log_helper import log_whatsapp_inbound
-                log_whatsapp_inbound(f"ACCEPT from={from_jid} self_chat={is_self_chat} body_len={len(body)}")
+                log_whatsapp_inbound(f"SKIP no_body from={from_jid}")
             except Exception:
                 pass
-            save_whatsapp_chat_jid(user_scope_id, username, from_jid)
-            # Use fromE164 when available (resolved @lid from Node); else derive from JID.
-            # Normalize to single leading + so we never get ++ (Node may send fromE164 with +).
-            raw = from_e164 or _jid_to_e164(from_jid) or ""
-            chat_id = _to_e164_display(raw) if raw else str(from_jid or "")
-            if not chat_id:
-                chat_id = str(from_jid or "")
-            resolved_digits = _normalize_phone(raw) if raw else ""
-            _append_chat_activity(chat_id, user_scope_id, "in")
+            return
+        # Self-chat: trust Node's selfChat (Node resolves @lid to E.164 and compares to self; do NOT treat all @lid as self – LID is used for other 1:1 chats too, e.g. baba)
+        is_self_chat = obj.get("selfChat") is True
+        allow_match = bool(allowed_phones) and (
+            _allow_from_match(from_jid or "", allowed_phones) or (from_e164 and _allow_from_match(from_e164, allowed_phones))
+        )
+        if not is_self_chat and not allow_match:
+            from_digits = _phone_digits_canonical(from_jid or "") or (_phone_digits_canonical(from_e164 or "") if from_e164 else "")
             try:
-                from vaf.core.whatsapp_message_store import append_message
-                append_message(username, chat_id, body, direction="in", sender_jid=from_jid, message_id=obj.get("messageId") or obj.get("message_id"), content_type="voice" if was_voice else "text")
+                from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
+                log_whatsapp_inbound(f"REJECT not_whitelist from={from_jid} allowed_count={len(allowed_phones)}")
+                log_whatsapp_qr(f"[inbound] REJECT from={from_jid} from_digits={from_digits or '?'} allowed_count={len(allowed_phones)}")
             except Exception:
                 pass
-            # When inbound_to_agent is False, WhatsApp is send-only: bot can send to user (audio, PDF, reports),
-            # but incoming messages do not trigger the agent (no two-way chat).
-            inbound_to_agent = whatsapp_config.get("inbound_to_agent", True)
-            if inbound_to_agent:
-                session_id = f"whatsapp_{username}_{resolved_digits or 'self'}"
-                in_config = _allow_from_match(from_jid or "", config_phones) or (
-                    from_e164 and _allow_from_match(from_e164, config_phones)
-                )
-                from_contact = not is_self_chat and allow_match and not in_config
-                metadata: Dict[str, Any] = {
-                    "user_scope_id": user_scope_id,
-                    "username": username,
-                    "whatsapp_chat_jid": from_jid,
-                }
-                if from_contact:
-                    metadata["from_contact"] = True
-                if voice_lang:
-                    metadata["voice_lang"] = voice_lang
-                    with _voice_reply_lock:
-                        _voice_reply_pending[f"{username}|{from_jid}"] = voice_lang
-                tq = TaskQueue()
-                tq.add(
-                    session_id=session_id,
-                    input_text=body,
-                    source="whatsapp",
-                    metadata=metadata,
-                )
-                try:
-                    from vaf.core.log_helper import log_whatsapp_inbound
-                    log_whatsapp_inbound(f"ENQUEUED session={session_id} user={username}")
-                except Exception:
-                    pass
-                logger.info("WhatsApp message enqueued from %s for user %s", from_jid, username)
-            else:
-                logger.debug("WhatsApp inbound not forwarded to agent (inbound_to_agent=false); user still reachable for sends.")
-        elif typ == "chats":
-            chats = obj.get("chats")
-            if isinstance(chats, list):
-                with _chat_lists_lock:
-                    _chat_lists[username] = chats
-                ev = _chat_list_events.get(username)
-                if ev:
-                    ev.set()
-        elif typ == "error":
-            err_msg = obj.get("message", "")
-            logger.warning("WhatsApp error for %s: %s", username, err_msg)
+            logger.warning(
+                "WhatsApp: rejected message from %s (not in allowFrom). allowed_phones count=%s; check Front Office contact phone format (use +49… or 0…).",
+                from_jid,
+                len(allowed_phones),
+            )
+            return
+        try:
+            from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
+            log_whatsapp_inbound(f"ACCEPT from={from_jid} self_chat={is_self_chat} body_len={len(body)}")
+            log_whatsapp_qr(f"[inbound] ACCEPT from={from_jid} body_len={len(body)}")
+        except Exception:
+            pass
+        save_whatsapp_chat_jid(user_scope_id, username, from_jid)
+        # Use fromE164 when available (resolved @lid from Node); else derive from JID.
+        raw = from_e164 or _jid_to_e164(from_jid) or ""
+        chat_id = _to_e164_display(raw) if raw else str(from_jid or "")
+        if not chat_id:
+            chat_id = str(from_jid or "")
+        resolved_digits = _normalize_phone(raw) if raw else ""
+        _append_chat_activity(chat_id, user_scope_id, "in")
+        try:
+            from vaf.core.whatsapp_message_store import append_message
+            append_message(username, chat_id, body, direction="in", sender_jid=from_jid, message_id=obj.get("messageId") or obj.get("message_id"), content_type="voice" if was_voice else "text")
+        except Exception:
+            pass
+        whatsapp_config = Config.get("whatsapp_config") or {}
+        inbound_to_agent = whatsapp_config.get("inbound_to_agent", True) if isinstance(whatsapp_config, dict) else True
+        if inbound_to_agent:
+            session_id = f"whatsapp_{username}_{resolved_digits or 'self'}"
+            in_config = _allow_from_match(from_jid or "", config_phones) or (
+                from_e164 and _allow_from_match(from_e164, config_phones)
+            )
+            from_contact = not is_self_chat and allow_match and not in_config
+            metadata: Dict[str, Any] = {
+                "user_scope_id": user_scope_id,
+                "username": username,
+                "whatsapp_chat_jid": from_jid,
+            }
+            if from_contact:
+                metadata["from_contact"] = True
+            if voice_lang:
+                metadata["voice_lang"] = voice_lang
+                with _voice_reply_lock:
+                    _voice_reply_pending[f"{username}|{from_jid}"] = voice_lang
+            tq = TaskQueue()
+            tq.add(
+                session_id=session_id,
+                input_text=body,
+                source="whatsapp",
+                metadata=metadata,
+            )
             try:
-                from vaf.core.log_helper import log_whatsapp_reply
-                log_whatsapp_reply(f"ERROR username={username} msg={err_msg}")
+                from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
+                log_whatsapp_inbound(f"ENQUEUED session={session_id} user={username}")
+                log_whatsapp_qr(f"[inbound] ENQUEUED session={session_id} from={from_jid}")
             except Exception:
                 pass
+            logger.info("WhatsApp message enqueued from %s for user %s", from_jid, username)
+        else:
+            logger.debug("WhatsApp inbound not forwarded to agent (inbound_to_agent=false); user still reachable for sends.")
+    elif typ == "chats":
+        chats = obj.get("chats")
+        if isinstance(chats, list):
+            with _chat_lists_lock:
+                _chat_lists[username] = chats
+            ev = _chat_list_events.get(username)
+            if ev:
+                ev.set()
+            with _connection_lock:
+                _connection_status[username] = True
+                conn_ev = _connection_events.get(username)
+                if conn_ev:
+                    conn_ev.set()
+    elif typ == "error":
+        err_msg = obj.get("message", "")
+        logger.warning("WhatsApp error for %s: %s", username, err_msg)
+        try:
+            from vaf.core.log_helper import log_whatsapp_reply, log_whatsapp_qr
+            log_whatsapp_reply(f"ERROR username={username} msg={err_msg}")
+            log_whatsapp_qr(f"[Python] bridge error: {err_msg}")
+        except Exception:
+            pass
+        with _connection_lock:
+            _connection_status[username] = False
 
 
 def _forward_bridge_stderr(username: str, proc: subprocess.Popen) -> None:
@@ -857,8 +957,8 @@ def get_whatsapp_chats(username: str, force_refresh: bool = False, wait_timeout:
         return list(_chat_lists.get(used_username, []))
 
 
-def get_connection_status(username: str, wait_timeout: float = 2.0) -> bool:
-    """Check if the WhatsApp socket is connected (Node has currentSock). Runs ping/pong with the bridge."""
+def get_connection_status(username: str, wait_timeout: float = 5.0) -> bool:
+    """Check if the WhatsApp socket is connected (Node has currentSock). Runs ping/pong with the bridge. Timeout 5s so read loop can be busy (e.g. transcribing)."""
     if not is_bridge_running():
         return False
     uname = (username or "").strip() or "admin"

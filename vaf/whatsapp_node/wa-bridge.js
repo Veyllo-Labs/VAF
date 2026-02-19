@@ -235,6 +235,10 @@ async function connect(authDir) {
     }
     if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode ?? lastDisconnect?.error?.status;
+      try {
+        fs.writeSync(2, `${LOG_PREFIX} connection=close statusCode=${statusCode ?? "null"} – see WHATSAPP_INTEGRATION.md for 401/515/516\n`);
+      } catch (_) {}
+      emit({ type: "connection_closed", statusCode: statusCode ?? null });
       const conflict = lastDisconnect?.error?.output?.content?.[0];
       const conflictType = conflict?.attrs?.type;
       if (statusCode === DisconnectReason.loggedOut) {
@@ -364,29 +368,37 @@ async function connect(authDir) {
         body = `<media:${contentType}>`;
       }
       if (!body) continue;
-      // Resolve @lid to E.164 first (for fromE164 and for correct self-chat detection)
-      let fromE164 = jidToPhone(remoteJid);
-      if (!fromE164 && remoteJid.endsWith("@lid")) {
-        fromE164 = (await resolveLidToE164(sock, remoteJid)) || null;
-      }
-      // Only treat @lid as self-chat if resolved E.164 matches the account owner's number
-      if (remoteJid.endsWith("@lid")) {
-        const selfPhone = jidToPhone(selfJid);
-        selfChat = !!(fromE164 && selfPhone && digitsOnly(fromE164) === digitsOnly(selfPhone));
+      let fromE164 = null;
+      try {
+        fromE164 = jidToPhone(remoteJid);
+        if (!fromE164 && remoteJid.endsWith("@lid")) {
+          fromE164 = (await resolveLidToE164(sock, remoteJid)) || null;
+        }
+        if (remoteJid.endsWith("@lid")) {
+          const selfPhone = jidToPhone(selfJid);
+          selfChat = !!(fromE164 && selfPhone && digitsOnly(fromE164) === digitsOnly(selfPhone));
+        }
+      } catch (err) {
+        try { fs.writeSync(2, `${LOG_PREFIX} message resolve error: ${err?.message ?? err}\n`); } catch (_) {}
       }
       if (selfChat && msg.key?.fromMe && isEcho(body)) continue; // ignore our own reply (echo)
-      const payload = {
-        type: "message",
-        from: remoteJid,
-        senderJid,
-        body: body.trim(),
-        chatType: "dm",
-        messageId: msg.key?.id,
-        selfChat: selfChat,
-      };
-      if (fromE164) payload.fromE164 = fromE164;
-      if (voicePath) payload.voice_path = voicePath;
-      emit(payload);
+      try {
+        const payload = {
+          type: "message",
+          from: remoteJid,
+          senderJid,
+          body: body.trim(),
+          chatType: "dm",
+          messageId: msg.key?.id,
+          selfChat: selfChat,
+        };
+        if (fromE164) payload.fromE164 = fromE164;
+        if (voicePath) payload.voice_path = voicePath;
+        try { fs.writeSync(2, `${LOG_PREFIX} emitting message to Python from=${remoteJid}\n`); } catch (_) {}
+        emit(payload);
+      } catch (err) {
+        try { fs.writeSync(2, `${LOG_PREFIX} message emit failed: ${err?.message ?? err}\n`); } catch (_) {}
+      }
     }
   });
 

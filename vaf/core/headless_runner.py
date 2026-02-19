@@ -640,9 +640,14 @@ def run_headless_agent():
                             "The following message was sent by a contact to your front office. "
                             "You must respond directly TO this contact (they will receive your reply). "
                             "Do NOT report to the account owner (e.g. do not say 'I sent X to the contact' or 'I have sent Alice...'). "
-                            "Answer the contact's question or request as if they were in front of you."
+                            "Do NOT repeat or echo the contact's message back; give a helpful reply."
                             + contact_block
                             + "\n\nMessage from the contact:\n\n"
+                            + effective_input
+                        )
+                    elif getattr(task, "source", None) == "whatsapp":
+                        effective_input = (
+                            "[WhatsApp message.] Respond helpfully; do not repeat or echo the user's message back.\n\n"
                             + effective_input
                         )
                     try:
@@ -773,34 +778,7 @@ def run_headless_agent():
                                 except Exception:
                                     pass
                                 out = "[No reply text]"
-                            from_contact = meta.get("from_contact") is True
-                            require_approval = from_contact and Config.get("front_office_contact_reply_require_approval", True)
-                            if require_approval:
-                                reply_id = uuid.uuid4().hex
-                                _username = meta.get("username") or "admin"
-                                _user_scope = meta.get("user_scope_id")
-                                contact_name = None
-                                try:
-                                    from vaf.core.contacts_store import get_contact_by_telegram_user_id
-                                    _tid = meta.get("telegram_user_id")
-                                    if _tid:
-                                        c = get_contact_by_telegram_user_id(_tid, _username, user_scope_id=_user_scope)
-                                        if c:
-                                            contact_name = c.get("name")
-                                except Exception:
-                                    pass
-                                from vaf.core.contact_reply_pending import store_pending
-                                store_pending(reply_id, "telegram", _username, str(chat_id), out, task.session_id or "", contact_name)
-                                get_web_interface()._push_session_update(task.session_id, {
-                                    "type": "contact_reply_pending",
-                                    "replyId": reply_id,
-                                    "source": "telegram",
-                                    "contactName": contact_name or "",
-                                    "preview": (out[:200] + "…") if len(out) > 200 else out,
-                                    "sessionId": task.session_id,
-                                })
-                            else:
-                                send_telegram_reply(str(chat_id), out)
+                            send_telegram_reply(str(chat_id), out)
                         elif task_source == "discord":
                             discord_channel_id = meta.get("discord_channel_id")
                             if discord_channel_id:
@@ -844,31 +822,7 @@ def run_headless_agent():
                                 out = re.sub(r'\n{3,}', '\n\n', out).strip()
                                 if not out:
                                     out = "[No reply text]"
-                                from_contact_wa = meta.get("from_contact") is True
-                                require_approval_wa = from_contact_wa and Config.get("front_office_contact_reply_require_approval", True)
-                                if require_approval_wa:
-                                    reply_id_wa = uuid.uuid4().hex
-                                    contact_name_wa = None
-                                    try:
-                                        from vaf.core.contacts_store import get_contact_by_whatsapp_phone
-                                        _user_scope_wa = meta.get("user_scope_id")
-                                        c_wa = get_contact_by_whatsapp_phone(chat_jid, username, user_scope_id=_user_scope_wa)
-                                        if c_wa:
-                                            contact_name_wa = c_wa.get("name")
-                                    except Exception:
-                                        pass
-                                    from vaf.core.contact_reply_pending import store_pending
-                                    store_pending(reply_id_wa, "whatsapp", username, str(chat_jid), out, task.session_id or "", contact_name_wa)
-                                    get_web_interface()._push_session_update(task.session_id, {
-                                        "type": "contact_reply_pending",
-                                        "replyId": reply_id_wa,
-                                        "source": "whatsapp",
-                                        "contactName": contact_name_wa or "",
-                                        "preview": (out[:200] + "…") if len(out) > 200 else out,
-                                        "sessionId": task.session_id,
-                                    })
-                                else:
-                                    send_whatsapp_reply(username, str(chat_jid), out)
+                                send_whatsapp_reply(username, str(chat_jid), out, user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None)
                             else:
                                 try:
                                     from vaf.core.log_helper import log_whatsapp_reply
@@ -1036,7 +990,7 @@ def run_headless_agent():
                         except Exception:
                             pass
 
-                    # 3. Session compaction: queue durable memories (ONLY if previous steps succeeded)
+                    # 3. Session compaction: only for main user (Web UI). Never for contact chats (Telegram/WhatsApp/Discord) – DSGVO.
                     if _post_chat_ok:
                         try:
                             if is_debug_logging_enabled():
@@ -1049,15 +1003,22 @@ def run_headless_agent():
                             from uuid import UUID
                             from vaf.memory.rag import run_session_compaction_sync
                             from vaf.core.config import Config
-                            if Config.get("memory_enabled", True) and Config.get("memory_compaction_enabled", True):
+                            _chat_source = getattr(task, "source", "web")
+                            if _chat_source != "web":
+                                if is_debug_logging_enabled():
+                                    from datetime import datetime as _dt
+                                    try:
+                                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                            f.write(f"{_dt.now().isoformat()} COMPACTION_SKIP session_id={task.session_id} source={_chat_source!r} (main_user_only)\n")
+                                    except Exception:
+                                        pass
+                            elif Config.get("memory_enabled", True) and Config.get("memory_compaction_enabled", True):
                                 # CRITICAL: Use PERSISTENT turn_count from session.runtime_state
-                                # NOT from agent.history (which can be compressed/truncated)
                                 try:
                                     _session_for_count = session_mgr.load(task.session_id)
                                     _runtime = getattr(_session_for_count, 'runtime_state', None) or {}
                                     turn_count = _runtime.get("user_turn_count", 0)
                                 except Exception:
-                                    # Fallback to agent.history count if session load fails
                                     turn_count = len([m for m in agent.history if _msg_role(m) == "user"])
                                 _scope = (task.metadata or {}).get("user_scope_id") if getattr(task, "metadata", None) else None
                                 if _scope is not None and not isinstance(_scope, UUID):
@@ -1065,8 +1026,6 @@ def run_headless_agent():
                                         _scope = UUID(str(_scope))
                                     except (ValueError, TypeError):
                                         _scope = None
-                                # Always queue compaction as low-priority task (priority=15)
-                                # This ensures new user messages (priority=10) are processed first
                                 tq.add(
                                     task.session_id,
                                     "__COMPACTION__",
@@ -1133,43 +1092,20 @@ def run_headless_agent():
                         meta_err = (task.metadata or {}) if getattr(task, "metadata", None) else {}
                         err_msg = str(e).replace("\n", " ")[:400]
                         err_text = f"Sorry, something went wrong: {err_msg}"
-                        from_contact_err = meta_err.get("from_contact") is True
-                        require_approval_err = from_contact_err and Config.get("front_office_contact_reply_require_approval", True)
                         if task_source_err == "telegram" and meta_err.get("telegram_chat_id"):
-                            if require_approval_err:
-                                reply_id_err = uuid.uuid4().hex
-                                from vaf.core.contact_reply_pending import store_pending
-                                store_pending(reply_id_err, "telegram", meta_err.get("username") or "admin", str(meta_err["telegram_chat_id"]), err_text, task.session_id or "", None)
-                                get_web_interface()._push_session_update(task.session_id, {
-                                    "type": "contact_reply_pending",
-                                    "replyId": reply_id_err,
-                                    "source": "telegram",
-                                    "contactName": "",
-                                    "preview": err_text[:200],
-                                    "sessionId": task.session_id,
-                                })
-                            else:
-                                from vaf.core.telegram_reply import send_telegram_reply
-                                send_telegram_reply(str(meta_err["telegram_chat_id"]), err_text)
+                            from vaf.core.telegram_reply import send_telegram_reply
+                            send_telegram_reply(str(meta_err["telegram_chat_id"]), err_text)
                         elif task_source_err == "discord" and meta_err.get("discord_channel_id"):
                             from vaf.core.discord_reply import send_discord_reply
                             send_discord_reply(str(meta_err["discord_channel_id"]), err_text)
                         elif task_source_err == "whatsapp" and meta_err.get("whatsapp_chat_jid"):
-                            if require_approval_err:
-                                reply_id_err_wa = uuid.uuid4().hex
-                                from vaf.core.contact_reply_pending import store_pending
-                                store_pending(reply_id_err_wa, "whatsapp", meta_err.get("username") or "admin", str(meta_err["whatsapp_chat_jid"]), err_text, task.session_id or "", None)
-                                get_web_interface()._push_session_update(task.session_id, {
-                                    "type": "contact_reply_pending",
-                                    "replyId": reply_id_err_wa,
-                                    "source": "whatsapp",
-                                    "contactName": "",
-                                    "preview": err_text[:200],
-                                    "sessionId": task.session_id,
-                                })
-                            else:
-                                from vaf.core.whatsapp_reply import send_whatsapp_reply
-                                send_whatsapp_reply(meta_err.get("username") or "admin", str(meta_err["whatsapp_chat_jid"]), err_text)
+                            from vaf.core.whatsapp_reply import send_whatsapp_reply
+                            send_whatsapp_reply(
+                                meta_err.get("username") or "admin",
+                                str(meta_err["whatsapp_chat_jid"]),
+                                err_text,
+                                user_scope_id=meta_err.get("user_scope_id") and str(meta_err["user_scope_id"]) or None,
+                            )
                     except Exception:
                         pass
                 finally:
@@ -1375,7 +1311,12 @@ def run_headless_agent():
                                                 whatsapp_chat_jid = session.metadata.get("whatsapp_chat_jid")
                                                 if whatsapp_chat_jid:
                                                     from vaf.core.whatsapp_reply import send_whatsapp_reply
-                                                    send_whatsapp_reply(session.metadata.get("username") or "admin", str(whatsapp_chat_jid), out)
+                                                    send_whatsapp_reply(
+                                                        session.metadata.get("username") or "admin",
+                                                        str(whatsapp_chat_jid),
+                                                        out,
+                                                        user_scope_id=session.metadata.get("user_scope_id") and str(session.metadata["user_scope_id"]) or None,
+                                                    )
                                 except Exception as e:
                                     logging.getLogger(__name__).warning(
                                         "Failed to send subagent summary to Telegram/Discord: %s", e

@@ -39,6 +39,7 @@ interface DashboardData {
     stats_4h: Stats4hBucket[];
     admin_whitelist: Array<{ phone_number: string; vaf_username?: string | null }>;
     relay_whitelist: Array<{ phone_number: string; vaf_username?: string | null }>;
+    front_office_contacts: Array<{ name: string | null; phone_number: string }>;
     activity: Array<{ chat_id: string; user_scope_id: string | null; ts: number; direction: string }>;
     connected?: boolean;
     running?: boolean;
@@ -123,6 +124,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             stats_4h: Array.isArray(json?.stats_4h) ? json.stats_4h : [],
             admin_whitelist: whitelist,
             relay_whitelist: [],
+            front_office_contacts: Array.isArray(json?.front_office_contacts) ? json.front_office_contacts : [],
             activity: Array.isArray(json?.activity) ? json.activity : [],
             connected: json?.connected === true,
             running: json?.running === true,
@@ -278,7 +280,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                                             data.connected
                                                 ? 'WhatsApp connected'
                                                 : data.running
-                                                    ? 'Bridge running, WhatsApp not connected'
+                                                    ? 'Bridge running, WhatsApp not connected. Check logs/whatsapp_qr.log for connection=close and status code (401 → Reset + QR; 515/516 → wait or Restart bridge).'
                                                     : 'Bridge not started'
                                         }
                                     />
@@ -430,13 +432,32 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                                     </ul>
                                 </div>
 
-                                {/* Relay whitelist (message-only, no tools) */}
+                                {/* Front Office contacts (Can reach your assistant – full agent via WhatsApp) */}
+                                {(data.front_office_contacts?.length ?? 0) > 0 && (
+                                    <div className="rounded-lg border border-gray-200 p-4">
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <UserCheck className="w-4 h-4 text-gray-600" />
+                                            <p className="text-sm font-medium text-gray-800">Front Office contacts (WhatsApp)</p>
+                                        </div>
+                                        <p className="text-xs text-gray-500 mb-3">These contacts can message you with the full assistant (Settings → Connections → Contacts, &quot;Can reach your assistant&quot;).</p>
+                                        <ul className="space-y-2">
+                                            {data.front_office_contacts.map((c, i) => (
+                                                <li key={i} className="text-sm py-1.5 px-2 rounded bg-gray-50 text-gray-700">
+                                                    {c.name ? <span className="font-medium">{c.name}</span> : null}
+                                                    {c.name ? ' · ' : null}
+                                                    <span className="text-gray-600">{c.phone_number}</span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+                                {/* Relay whitelist (message-only, no tools) – add phone to main whitelist */}
                                 <div className="rounded-lg border border-gray-200 p-4">
                                     <div className="flex items-center gap-2 mb-3">
                                         <UserPlus className="w-4 h-4 text-gray-600" />
-                                        <p className="text-sm font-medium text-gray-800">Relay contacts</p>
+                                        <p className="text-sm font-medium text-gray-800">Add to whitelist</p>
                                     </div>
-                                    <p className="text-xs text-gray-500 mb-3">These contacts can only send messages to you. No tools; replies are fixed (e.g. "I'll pass that on").</p>
+                                    <p className="text-xs text-gray-500 mb-3">Add a phone number so they can send and receive messages. For relay-only (fixed reply, no tools) use Telegram relay in Settings → Telegram.</p>
                                     <ul className="space-y-2 mb-3">
                                         {(data.relay_whitelist || []).map((e, i) => (
                                             <li key={i} className="flex items-center justify-between text-sm py-1.5 px-2 rounded bg-gray-50">

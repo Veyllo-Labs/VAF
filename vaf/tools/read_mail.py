@@ -6,7 +6,14 @@ Scoped to the current user in network mode (only that user's connected accounts)
 
 from vaf.core.email_transport import get_account, get_message_body_plain
 from vaf.tools.base import BaseTool
-from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_for_user
+from vaf.tools.mail_utils import (
+    cred_scope_from_kwargs,
+    cred_username_from_kwargs,
+    list_accounts_for_user,
+    store_candidates_for_mail,
+    store_scope_from_kwargs,
+    store_username_from_kwargs,
+)
 
 
 class ReadMailTool(BaseTool):
@@ -45,25 +52,34 @@ class ReadMailTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
+        store_username = store_username_from_kwargs(kwargs)
+        user_scope_id = store_scope_from_kwargs(kwargs) or cred_scope_from_kwargs(kwargs)
         cred_username = cred_username_from_kwargs(kwargs)
-        user_scope_id = cred_scope_from_kwargs(kwargs)
         account_id = (kwargs.get("account_id") or "").strip()
         message_id = (kwargs.get("message_id") or "").strip()
         folder = (kwargs.get("folder") or "INBOX").strip()
         provider_message_id = (kwargs.get("provider_message_id") or "").strip() or None
         if not account_id or not message_id:
             return "account_id and message_id are required. Use mail_inbox first to list messages and get their message_id (and provider_message_id for Gmail/Microsoft)."
-        acc = get_account(account_id, username=cred_username, user_scope_id=user_scope_id)
-        if not acc:
-            return f"Account '{account_id}' not found. Connected accounts: {', '.join(list_accounts_for_user(cred_username, user_scope_id=user_scope_id))}."
-        body = get_message_body_plain(
-            account_id=account_id,
-            message_id=message_id,
-            folder=folder,
-            username=cred_username,
-            user_scope_id=user_scope_id,
-            provider_message_id=provider_message_id,
-        )
-        if body is None or not body.strip():
-            return "Could not load the message body (message not found or empty)."
-        return body.strip()
+        # Try same store/cred fallback as mail_inbox/find_mail so we find account and body when they live in legacy/single-scope
+        body = None
+        found_account = False
+        for try_username, try_scope_id in store_candidates_for_mail(store_username, user_scope_id):
+            acc = get_account(account_id, username=try_username, user_scope_id=try_scope_id)
+            if not acc:
+                continue
+            found_account = True
+            body = get_message_body_plain(
+                account_id=account_id,
+                message_id=message_id,
+                folder=folder,
+                username=try_username,
+                user_scope_id=try_scope_id,
+                provider_message_id=provider_message_id,
+            )
+            if body and body.strip():
+                return body.strip()
+        if not found_account:
+            accounts = list_accounts_for_user(cred_username, user_scope_id=user_scope_id)
+            return f"Account '{account_id}' not found. Connected accounts: {', '.join(accounts) or 'none'}."
+        return "Could not load the message body (message not found or empty)."

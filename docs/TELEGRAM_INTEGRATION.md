@@ -106,6 +106,10 @@ Each whitelist entry maps a Telegram user to a VAF user scope:
 
 In addition, any Telegram user whose ID is stored in a VAF user's **Contacts** with **Can reach your assistant** enabled can send messages to that user's assistant (handled in the user's context, like a front office). The bridge checks the config whitelist first, then the relay whitelist, then contacts.
 
+### Proactive send (send_telegram)
+
+The agent can send you messages via Telegram (e.g. "send me the result via Telegram") using the `send_telegram` tool. Resolution uses: (1) persisted chat IDs (from a message you sent), (2) whitelist match (case-insensitive username, normalized scope), or (3) when there is exactly one whitelist entry, that verified account owner is used so they do not need a separate manual whitelist step. The bot recognizes the account that linked Telegram and can reach them without re-adding them to the whitelist.
+
 ---
 
 ## Voice Message Support

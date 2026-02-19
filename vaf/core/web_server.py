@@ -2666,6 +2666,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "delete_automation_result", "ok": False, "error": "task_id required"})
                             continue
                         ok = mgr.delete(task_id, permanent=True)
+                        if not ok and user_scope_id:
+                            root_mgr = AutomationManager()
+                            ok = root_mgr.delete(task_id, permanent=True)
                         await websocket.send_json({"type": "delete_automation_result", "ok": ok})
                     except Exception as e:
                         await websocket.send_json({"type": "delete_automation_result", "ok": False, "error": str(e)})
@@ -2680,6 +2683,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "task_id required"})
                             continue
                         task = mgr.get(task_id)
+                        if not task and user_scope_id:
+                            root_mgr = AutomationManager()
+                            task = root_mgr.get(task_id)
+                            if task:
+                                mgr = root_mgr
                         if not task:
                             await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "Automation not found"})
                             continue

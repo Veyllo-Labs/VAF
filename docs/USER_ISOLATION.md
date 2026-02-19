@@ -232,7 +232,7 @@ A one-time migration script (`scripts/migrate_users_to_scopes.py`) copies data f
 
 ### Automations (`vaf/core/automation.py`)
 
-Each `AutomationManager` instance is created with a `user_scope_id` and stores tasks in a per-user subdirectory. Tasks carry their `user_scope_id` so that scheduled RAG searches only access the owner's memories.
+Each `AutomationManager` instance can be created with a `user_scope_id`; tasks are stored in `automations/` (global) or `automations/<user_scope_id>/` (per-user). Tasks carry `user_scope_id` so that when an automation runs (prompt-based or workflow-based), the agent and workflow engine use that scope: RAG/memory, calendar, messaging, contacts, mail, and automation notes/todos all run with the owner's credentials and data. The agent injects `user_scope_id` into automation tools (`create_automation`, `list_automations`, etc.) so new tasks are stored in the correct user directory. The CLI/scheduler uses an aggregated manager that loads from all scope dirs and saves/deletes/restores via the task's scope path.
 
 ### Automation planner – notes and todos (`vaf/core/automation_planner.py`)
 

@@ -2982,6 +2982,11 @@ function VAFDashboardContent() {
                                 ws?.send(JSON.stringify({ type: 'get_workflows' }));
                                 ws?.send(JSON.stringify({ type: 'get_trusted_sources' }));
                                 ws?.send(JSON.stringify({ type: 'get_automations' }));
+                                // If calendar is connected, ensure "Daily calendar check" automation exists, then refresh list
+                                fetch(`${getApiBase()}/api/calendar/ensure-daily-check-automation`, { method: 'POST', credentials: 'include' })
+                                    .then((r) => r.json())
+                                    .then((data) => { if (data?.ok && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_automations' })); })
+                                    .catch(() => {});
                             }}
                             className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/settings transition-all justify-start"
                             title={tNav('settings')}

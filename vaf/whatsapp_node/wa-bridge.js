@@ -106,6 +106,10 @@ const lidToE164Map = new Map();
 const echoSent = new Map(); // text -> timestamp
 const ECHO_TTL_MS = 90_000;
 
+/** Per-jid: last message we (the bridge) sent, so we don't treat our own echo as owner_sent. */
+const lastSentByUs = new Map(); // jid -> { text?: string, voiceTs?: number, ts: number }
+const SENT_BY_US_TTL_MS = 95_000;
+
 /** Normalize for echo match: trim and collapse repeated whitespace so minor differences don't break matching. */
 function normalizeForEcho(text) {
   if (!text || typeof text !== "string") return "";
@@ -135,6 +139,37 @@ function isEcho(text) {
   }
   echoSent.delete(t);
   return true;
+}
+
+/** Record that we sent a text message to jid (so we don't emit owner_sent when the echo arrives). */
+function rememberSentToJid(jid, text) {
+  if (!jid) return;
+  const now = Date.now();
+  lastSentByUs.set(jid, { text: normalizeForEcho(text || ""), ts: now });
+  for (const [k, v] of lastSentByUs.entries()) {
+    if (now - v.ts > SENT_BY_US_TTL_MS) lastSentByUs.delete(k);
+  }
+}
+
+/** Record that we sent a voice message to jid. */
+function rememberSentVoiceToJid(jid) {
+  if (!jid) return;
+  const now = Date.now();
+  const existing = lastSentByUs.get(jid) || { ts: 0 };
+  lastSentByUs.set(jid, { ...existing, voiceTs: now, ts: now });
+  for (const [k, v] of lastSentByUs.entries()) {
+    if (now - v.ts > SENT_BY_US_TTL_MS) lastSentByUs.delete(k);
+  }
+}
+
+/** True if this fromMe message is our own echo (we recently sent this to this jid). */
+function isOurEchoToJid(remoteJid, body, contentType) {
+  const rec = lastSentByUs.get(remoteJid);
+  if (!rec || (Date.now() - rec.ts) > SENT_BY_US_TTL_MS) return false;
+  const normBody = normalizeForEcho(body || "");
+  if (normBody && rec.text && normBody === rec.text) return true;
+  if ((!normBody || normBody === "<voice>" || normBody === "<media:audio>") && rec.voiceTs && (Date.now() - rec.voiceTs) < SENT_BY_US_TTL_MS) return true;
+  return false;
 }
 
 function jidToPhone(jid) {
@@ -407,7 +442,12 @@ async function connect(authDir) {
       }
       let selfChat = isSelfChat(remoteJid, selfJid, !!msg.key?.fromMe);
       if (msg.key?.fromMe && !selfChat) {
-        if (!isGroup) emit({ type: "owner_sent", from: remoteJid, ts: Math.floor(Date.now() / 1000) });
+        const bodyForEcho = extractText(msg);
+        const ct = getContentType(msg);
+        const bodyOrVoice = (bodyForEcho && bodyForEcho.trim()) || (ct === "audio" ? "<voice>" : "");
+        if (!isGroup && !isOurEchoToJid(remoteJid, bodyOrVoice, ct)) {
+          emit({ type: "owner_sent", from: remoteJid, ts: Math.floor(Date.now() / 1000) });
+        }
         continue; // skip own msgs except in self-chat
       }
       if (isGroup) continue; // Phase 1: DMs only
@@ -505,6 +545,7 @@ async function main() {
           const text = obj.text;
           // Mark as sent NOW so when the echo arrives (often before sendMessage resolves) we skip it
           rememberSentText(text);
+          rememberSentToJid(obj.to, text);
           const sendPromise = currentSock.sendMessage(obj.to, { text });
           const timeoutMs = 12000;
           const timeoutPromise = new Promise((_, reject) => {
@@ -528,6 +569,7 @@ async function main() {
           if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
           else emit({ type: "error", message: msg });
         } else {
+          rememberSentVoiceToJid(obj.to);
           const p = obj.path;
           const buf = fs.readFileSync(p);
           try { fs.unlinkSync(p); } catch (_) {}

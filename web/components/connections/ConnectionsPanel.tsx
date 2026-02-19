@@ -443,10 +443,16 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             const res = await fetch(api('api/calendar/status'), { credentials: 'include' });
             if (res.ok) {
                 const data = await res.json();
+                const googleOk = !!data.google_available;
+                const microsoftOk = !!data.microsoft_available;
                 setCalendarStatus({
-                    google_available: !!data.google_available,
-                    microsoft_available: !!data.microsoft_available,
+                    google_available: googleOk,
+                    microsoft_available: microsoftOk,
                 });
+                // When calendar is connected, ensure the "Daily calendar check" automation exists (visible in Automations UI).
+                if (googleOk || microsoftOk) {
+                    fetch(api('api/calendar/ensure-daily-check-automation'), { method: 'POST', credentials: 'include' }).catch(() => {});
+                }
             }
         } catch {
             setCalendarStatus({ google_available: false, microsoft_available: false });

@@ -110,6 +110,13 @@ class Config:
         "telegram_idle_timeout": 120,          # Keep model loaded this long after last Telegram prompt when no Web connections (seconds)
         "telegram_debounce_seconds": 5,        # Wait this long for follow-up messages; combine into one prompt per chat
 
+        # Thinking Mode (Denkmodus): background reflection when user idle
+        "thinking_enabled": True,                              # Enable thinking mode when idle
+        "thinking_idle_minutes": 10,                           # Start after this many minutes without activity
+        "thinking_check_interval_seconds": 60,                 # How often to check for idle users
+        "thinking_automation_buffer_minutes": 10,              # Do not start if automation runs within this many minutes
+        "thinking_max_duration_minutes": 30,                  # Max duration per thinking run (then release lock)
+
         # Garbage Collector Settings
         "gc_enabled": True,                    # Enable automatic temp file / log cleanup
         "gc_interval_hours": 12,               # Run GC every N hours

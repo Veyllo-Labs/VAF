@@ -1021,6 +1021,7 @@ class Agent:
                             "bash",           # Shell commands (for build/test)
                             "codesearch",     # Code navigation
                             "batch",          # Parallel operations
+                            "save_thinking_suggestion",  # Removed: agent asks user via main_messenger when unsure
                         ]
                         
                         # Check if tool is coder-only (built-in or marked with coder_only=True)
@@ -1032,14 +1033,12 @@ class Agent:
                         if is_coder_only:
                             continue
                         
-                        # Exclude automation management tools when running inside an automation
-                        # OR if context is extremely small (<= 4096) to save space
+                        # When context is very small (<= 4096), exclude automation management tools to save space.
+                        # Automation agent gets the same tools as main agent (no exclusions).
                         is_in_automation = os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
                         n_ctx = self.config.get("n_ctx", 8192)
-                        
-                        if is_in_automation or n_ctx <= 4096:
-                            AUTOMATION_EXCLUDED_TOOLS = [
-                                "create_automation",
+                        if not is_in_automation and n_ctx <= 4096:
+                            SMALL_CTX_EXCLUDED_TOOLS = [
                                 "update_automation",
                                 "delete_automation",
                                 "list_automations",
@@ -1047,9 +1046,9 @@ class Agent:
                                 "restore_automation",
                                 "list_trash",
                             ]
-                            if instance.name in AUTOMATION_EXCLUDED_TOOLS:
+                            if instance.name in SMALL_CTX_EXCLUDED_TOOLS:
                                 continue
-                            
+                        
                         self.tools[instance.name] = instance
                         # Debug info (only if verbose)
                         # print(f"Loaded tool: {instance.name}")

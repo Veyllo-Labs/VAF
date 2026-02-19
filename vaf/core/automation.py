@@ -818,7 +818,24 @@ vaf automation delete <id>   # Delete task
                 agent = Agent(verbose=False)
                 agent.load_model()
                 agent.init_chat()
-                
+                # So calendar and create_automation tools use the correct user (same scope as this task).
+                from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+                agent._current_user_scope_id = task.user_scope_id
+                if not task.user_scope_id or str(task.user_scope_id).strip() == str(get_local_admin_scope_id()).strip():
+                    agent._current_username = get_local_admin_username()
+                else:
+                    agent._current_username = "admin"
+
+                # Tell the agent it is the same agent, just running an automation in the background.
+                if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
+                    automation_notice = (
+                        "\n\n## AUTOMATION MODE\n"
+                        "You are the **main agent**. You are currently **executing an automation in the background** (autonomous / selbständig). "
+                        "Act on your own to complete the task given in the user message below."
+                    )
+                    if agent.history and agent.history[0].get("role") == "system":
+                        agent.history[0]["content"] = (agent.history[0]["content"] or "") + automation_notice
+
                 # Capture response but filter out internal thinking
                 response_parts = []
                 def capture(text):
@@ -1073,6 +1090,29 @@ vaf automation delete <id>   # Delete task
                 if datetime.now().day == (t.day or 1):
                     self.run_task(t, new_terminal=True)
             schedule.every().day.at(task.time).do(monthly_check)
+
+
+def get_next_automation_run_utc(user_scope_id: Optional[str]) -> Optional[datetime]:
+    """
+    Return the next run time (minimum across all visible automations for this user).
+    Used by thinking mode to skip starting if an automation runs within the buffer window.
+    For local admin, includes root automations (same merge as get_automations in web_server).
+    """
+    from vaf.core.config import get_local_admin_scope_id
+    tasks: List[AutomationTask] = []
+    mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
+    tasks.extend(mgr.list(enabled_only=True))
+    local_scope = get_local_admin_scope_id()
+    if user_scope_id and str(user_scope_id).strip() == str(local_scope).strip():
+        root_mgr = AutomationManager()
+        seen = {t.id for t in tasks}
+        for t in root_mgr.list(enabled_only=True):
+            if t.id not in seen:
+                tasks.append(t)
+                seen.add(t.id)
+    if not tasks:
+        return None
+    return min(t.next_run_datetime for t in tasks)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

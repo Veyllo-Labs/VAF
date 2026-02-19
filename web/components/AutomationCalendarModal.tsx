@@ -2,9 +2,12 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslations } from 'next-intl';
-import { X, ChevronRight, Zap } from 'lucide-react';
+import { X, ChevronRight, Zap, Trash2, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import CreateAutomationPopup, { type CreateAutomationPayload } from './CreateAutomationPopup';
+
+export type AutomationNoteItem = { id: string; title?: string | null; content: string; created_at: string };
+export type AutomationTodoItem = { id: string; text: string; created_at: string; due_at?: string | null; done: boolean };
 
 export type CalendarAutomationItem = {
     id: string;
@@ -94,6 +97,14 @@ export interface AutomationCalendarModalProps {
     currentUser?: { username?: string };
     /** List of automations to show in the calendar (agent-created and manual). */
     automations?: CalendarAutomationItem[];
+    /** Notes for the automation planner (per user). */
+    automationNotes?: AutomationNoteItem[];
+    /** To-dos for the automation planner (per user). */
+    automationTodos?: AutomationTodoItem[];
+    /** Send WebSocket message for planner (notes/todos create/update/delete). */
+    onSendPlannerMessage?: (msg: object) => void;
+    /** User's time format from settings for timestamp display. */
+    userTimeFormat?: '24h' | '12h';
     /** When provided, clicking an hour slot opens CreateAutomationPopup and this is used to submit. */
     onSubmitCreateAutomation?: (payload: CreateAutomationPayload) => Promise<{ ok: boolean; error?: string }>;
     /** Called after an automation was created (e.g. to refresh list). */
@@ -102,16 +113,48 @@ export interface AutomationCalendarModalProps {
     onEditAutomation?: (automation: CalendarAutomationItem) => void;
 }
 
-export default function AutomationCalendarModal({ isOpen, onClose, currentUser, automations = [], onSubmitCreateAutomation, onAutomationCreated, onEditAutomation }: AutomationCalendarModalProps) {
+function formatPlannerDate(iso: string, userTimeFormat?: '24h' | '12h'): string {
+    try {
+        const d = new Date(iso);
+        const hour12 = userTimeFormat === '12h';
+        return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short', hour12 });
+    } catch {
+        return iso;
+    }
+}
+
+export default function AutomationCalendarModal({ isOpen, onClose, currentUser, automations = [], automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onSubmitCreateAutomation, onAutomationCreated, onEditAutomation }: AutomationCalendarModalProps) {
     const t = useTranslations('settings.automations');
     const [automationCalendarViewDate, setAutomationCalendarViewDate] = useState(() => new Date());
     const [selectedDayForView, setSelectedDayForView] = useState<Date | null>(null);
     const [selectedSlot, setSelectedSlot] = useState<{ date: Date; hour: number } | null>(null);
+    const [showAddTodoPopup, setShowAddTodoPopup] = useState(false);
+    const [addTodoText, setAddTodoText] = useState('');
+    const [addTodoDueAt, setAddTodoDueAt] = useState('');
+    const [showAddNotePopup, setShowAddNotePopup] = useState(false);
+    const [addNoteTitle, setAddNoteTitle] = useState('');
+    const [addNoteContent, setAddNoteContent] = useState('');
 
     useEffect(() => {
         if (!isOpen) return;
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key !== 'Escape') return;
+            if (showAddNotePopup) {
+                setShowAddNotePopup(false);
+                setAddNoteTitle('');
+                setAddNoteContent('');
+                e.stopPropagation();
+                e.preventDefault();
+                return;
+            }
+            if (showAddTodoPopup) {
+                setShowAddTodoPopup(false);
+                setAddTodoText('');
+                setAddTodoDueAt('');
+                e.stopPropagation();
+                e.preventDefault();
+                return;
+            }
             if (selectedSlot) {
                 setSelectedSlot(null);
                 e.stopPropagation();
@@ -128,7 +171,7 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, selectedDayForView, selectedSlot, onClose]);
+    }, [isOpen, showAddNotePopup, showAddTodoPopup, selectedDayForView, selectedSlot, onClose]);
 
     if (!isOpen) return null;
 
@@ -181,8 +224,41 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                         style={{ backgroundImage: 'radial-gradient(circle, #d1d5db 1.5px, transparent 1.5px)', backgroundSize: '10px 10px' }}
                     >
                         <h3 className="text-sm font-medium text-gray-700 mb-1.5 shrink-0">To-do list</h3>
-                        <p className="text-xs text-gray-500 shrink-0">Quick tasks beside your calendar.</p>
-                        <div className="flex-1 min-h-[100px]" />
+                        <p className="text-xs text-gray-500 shrink-0 mb-2">Quick tasks beside your calendar.</p>
+                        <button
+                            type="button"
+                            onClick={() => setShowAddTodoPopup(true)}
+                            className="shrink-0 flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-800 mb-2"
+                        >
+                            <Plus className="w-3.5 h-3.5" /> Add to-do
+                        </button>
+                        <div className="flex-1 min-h-0 overflow-auto space-y-2">
+                            {automationTodos.map((todo) => (
+                                <div key={todo.id} className="flex items-start gap-2 p-2 rounded-lg bg-white border border-gray-200">
+                                    <input
+                                        type="checkbox"
+                                        checked={!!todo.done}
+                                        onChange={() => onSendPlannerMessage?.({ type: 'update_automation_todo', id: todo.id, done: !todo.done })}
+                                        className="mt-0.5 shrink-0 rounded border-gray-300"
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                        <span className={cn('text-sm', todo.done && 'line-through text-gray-500')}>{todo.text}</span>
+                                        <p className="text-xs text-gray-500 mt-0.5">
+                                            {formatPlannerDate(todo.created_at, userTimeFormat)}
+                                            {todo.due_at ? ` · Due: ${formatPlannerDate(todo.due_at, userTimeFormat)}` : ''}
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => onSendPlannerMessage?.({ type: 'delete_automation_todo', id: todo.id })}
+                                        className="p-1 text-gray-400 hover:text-red-600 shrink-0"
+                                        title="Delete"
+                                    >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
                     </div>
                     <div className="flex-1 flex flex-col min-w-0 min-h-0 rounded-xl border-2 border-dashed border-gray-200 p-3 overflow-hidden">
                         {selectedDayForView ? (
@@ -327,12 +403,138 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                     </div>
                 </div>
                 <div
-                    className="shrink-0 mx-4 mb-4 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 flex flex-col items-center justify-center h-[150px] py-3"
+                    className="shrink-0 mx-4 mb-4 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-4 flex flex-col h-[200px]"
                     style={{ backgroundImage: 'radial-gradient(circle, #d1d5db 1.5px, transparent 1.5px)', backgroundSize: '10px 10px' }}
                 >
-                    <span className="text-sm font-medium text-gray-600">Note</span>
+                    <div className="flex flex-wrap items-center gap-2 mb-2 shrink-0">
+                        <span className="text-sm font-medium text-gray-700">Notes</span>
+                        <button type="button" onClick={() => setShowAddNotePopup(true)} className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-800">
+                            <Plus className="w-3.5 h-3.5" /> Add note
+                        </button>
+                    </div>
+                    <div className="flex-1 min-h-0 overflow-auto flex flex-wrap gap-2 content-start">
+                        {automationNotes.map((note) => (
+                            <div key={note.id} className="flex flex-col p-3 rounded-lg bg-white border border-gray-200 min-w-[180px] max-w-[280px] shrink-0">
+                                {note.title ? <span className="text-sm font-medium text-gray-800">{note.title}</span> : null}
+                                <p className="text-sm text-gray-700 mt-0.5 break-words">{note.content}</p>
+                                <p className="text-xs text-gray-500 mt-1">{formatPlannerDate(note.created_at, userTimeFormat)}</p>
+                                <button
+                                    type="button"
+                                    onClick={() => onSendPlannerMessage?.({ type: 'delete_automation_note', id: note.id })}
+                                    className="self-end p-1 text-gray-400 hover:text-red-600 mt-1"
+                                    title="Delete"
+                                >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
                 </div>
             </div>
+
+            {showAddNotePopup && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => { setShowAddNotePopup(false); setAddNoteTitle(''); setAddNoteContent(''); }}>
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div
+                        className="relative w-full max-w-md rounded-xl bg-white shadow-xl border border-gray-200 p-4"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h3 className="text-sm font-semibold text-gray-900 mb-3">Add note</h3>
+                        <input
+                            type="text"
+                            value={addNoteTitle}
+                            onChange={(e) => setAddNoteTitle(e.target.value)}
+                            placeholder="Title (optional)"
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-400 focus:border-gray-400 mb-2"
+                        />
+                        <textarea
+                            value={addNoteContent}
+                            onChange={(e) => setAddNoteContent(e.target.value)}
+                            placeholder="Content"
+                            rows={4}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-400 resize-none mb-4"
+                        />
+                        <div className="flex justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={() => { setShowAddNotePopup(false); setAddNoteTitle(''); setAddNoteContent(''); }}
+                                className="px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-800"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const content = addNoteContent.trim();
+                                    if (content && onSendPlannerMessage) {
+                                        onSendPlannerMessage({ type: 'create_automation_note', title: addNoteTitle.trim() || undefined, content });
+                                        setAddNoteTitle('');
+                                        setAddNoteContent('');
+                                        setShowAddNotePopup(false);
+                                    }
+                                }}
+                                className="px-3 py-1.5 text-sm font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-700"
+                            >
+                                Add
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showAddTodoPopup && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => { setShowAddTodoPopup(false); setAddTodoText(''); setAddTodoDueAt(''); }}>
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div
+                        className="relative w-full max-w-md rounded-xl bg-white shadow-xl border border-gray-200 p-4"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h3 className="text-sm font-semibold text-gray-900 mb-3">Add to-do</h3>
+                        <input
+                            type="text"
+                            value={addTodoText}
+                            onChange={(e) => setAddTodoText(e.target.value)}
+                            placeholder="To-do text"
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-400 focus:border-gray-400 mb-2"
+                        />
+                        <input
+                            type="text"
+                            value={addTodoDueAt}
+                            onChange={(e) => setAddTodoDueAt(e.target.value)}
+                            placeholder="Due date (optional, e.g. YYYY-MM-DD)"
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-400 focus:border-gray-400 mb-4"
+                        />
+                        <div className="flex justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={() => { setShowAddTodoPopup(false); setAddTodoText(''); setAddTodoDueAt(''); }}
+                                className="px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-800"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const text = addTodoText.trim();
+                                    if (text && onSendPlannerMessage) {
+                                        onSendPlannerMessage({
+                                            type: 'create_automation_todo',
+                                            text,
+                                            ...(addTodoDueAt.trim() ? { due_at: addTodoDueAt.trim() } : {}),
+                                        });
+                                        setAddTodoText('');
+                                        setAddTodoDueAt('');
+                                        setShowAddTodoPopup(false);
+                                    }
+                                }}
+                                className="px-3 py-1.5 text-sm font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-700"
+                            >
+                                Add
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {selectedSlot && (
                 <CreateAutomationPopup

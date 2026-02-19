@@ -2594,6 +2594,97 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     except Exception as e:
                         await websocket.send_json({"type": "update_automation_result", "ok": False, "error": str(e)})
 
+                elif type == "get_automation_notes":
+                    try:
+                        from vaf.core.automation_planner import list_notes
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        notes = list_notes(user_scope_id)
+                        await websocket.send_json({"type": "automation_notes_list", "notes": notes})
+                    except Exception as e:
+                        await websocket.send_json({"type": "automation_notes_list", "notes": [], "error": str(e)})
+
+                elif type == "get_automation_todos":
+                    try:
+                        from vaf.core.automation_planner import list_todos
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        todos = list_todos(user_scope_id)
+                        await websocket.send_json({"type": "automation_todos_list", "todos": todos})
+                    except Exception as e:
+                        await websocket.send_json({"type": "automation_todos_list", "todos": [], "error": str(e)})
+
+                elif type == "create_automation_note":
+                    try:
+                        from vaf.core.automation_planner import add_note
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        title = cmd.get("title")
+                        content = (cmd.get("content") or "").strip()
+                        if not content:
+                            await websocket.send_json({"type": "create_automation_note_result", "ok": False, "error": "content required"})
+                            continue
+                        note = add_note(user_scope_id, content, title=title)
+                        await websocket.send_json({"type": "create_automation_note_result", "ok": True, "note": note})
+                    except Exception as e:
+                        await websocket.send_json({"type": "create_automation_note_result", "ok": False, "error": str(e)})
+
+                elif type == "create_automation_todo":
+                    try:
+                        from vaf.core.automation_planner import add_todo
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        text = (cmd.get("text") or "").strip()
+                        if not text:
+                            await websocket.send_json({"type": "create_automation_todo_result", "ok": False, "error": "text required"})
+                            continue
+                        due_at = cmd.get("due_at")
+                        todo = add_todo(user_scope_id, text, due_at=due_at)
+                        await websocket.send_json({"type": "create_automation_todo_result", "ok": True, "todo": todo})
+                    except Exception as e:
+                        await websocket.send_json({"type": "create_automation_todo_result", "ok": False, "error": str(e)})
+
+                elif type == "update_automation_todo":
+                    try:
+                        from vaf.core.automation_planner import update_todo
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        todo_id = (cmd.get("id") or "").strip()
+                        if not todo_id:
+                            await websocket.send_json({"type": "update_automation_todo_result", "ok": False, "error": "id required"})
+                            continue
+                        text = cmd.get("text")
+                        done = cmd.get("done")
+                        due_at = cmd.get("due_at")
+                        updated = update_todo(user_scope_id, todo_id, text=text, done=done, due_at=due_at)
+                        if not updated:
+                            await websocket.send_json({"type": "update_automation_todo_result", "ok": False, "error": "Todo not found"})
+                            continue
+                        await websocket.send_json({"type": "update_automation_todo_result", "ok": True, "todo": updated})
+                    except Exception as e:
+                        await websocket.send_json({"type": "update_automation_todo_result", "ok": False, "error": str(e)})
+
+                elif type == "delete_automation_note":
+                    try:
+                        from vaf.core.automation_planner import delete_note
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        note_id = (cmd.get("id") or "").strip()
+                        if not note_id:
+                            await websocket.send_json({"type": "delete_automation_note_result", "ok": False, "error": "id required"})
+                            continue
+                        ok = delete_note(user_scope_id, note_id)
+                        await websocket.send_json({"type": "delete_automation_note_result", "ok": ok, "id": note_id if ok else None})
+                    except Exception as e:
+                        await websocket.send_json({"type": "delete_automation_note_result", "ok": False, "error": str(e)})
+
+                elif type == "delete_automation_todo":
+                    try:
+                        from vaf.core.automation_planner import delete_todo
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        todo_id = (cmd.get("id") or "").strip()
+                        if not todo_id:
+                            await websocket.send_json({"type": "delete_automation_todo_result", "ok": False, "error": "id required"})
+                            continue
+                        ok = delete_todo(user_scope_id, todo_id)
+                        await websocket.send_json({"type": "delete_automation_todo_result", "ok": ok, "id": todo_id if ok else None})
+                    except Exception as e:
+                        await websocket.send_json({"type": "delete_automation_todo_result", "ok": False, "error": str(e)})
+
                 elif type == "process_audio":
                     # Process audio for STT: Docker (HTTP) or local (faster-whisper)
                     import base64

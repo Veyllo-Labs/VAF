@@ -6177,6 +6177,8 @@ class Agent:
                 if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "label_mail", "list_email_accounts", "send_mail"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name in ("add_automation_note", "add_automation_todo", "list_automation_notes", "list_automation_todos", "delete_automation_note", "delete_automation_todo"):
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 # Pre-write intent/goal before sub-agent invocation for validation/retry
                 SUBAGENT_TOOLS = ("librarian_agent", "coding_agent", "research_agent", "document_agent")
                 if name in SUBAGENT_TOOLS and hasattr(self, "main_persistence") and self.main_persistence:

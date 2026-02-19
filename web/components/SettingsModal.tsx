@@ -155,6 +155,16 @@ export interface SettingsModalProps {
     onAutomationCreated?: () => void;
     /** Delete automation by id (WebSocket). */
     onDeleteAutomation?: (taskId: string) => void;
+    /** Automation planner notes (per user). Passed to calendar modal. */
+    automationNotes?: Array<{ id: string; title?: string | null; content: string; created_at: string }>;
+    /** Automation planner todos (per user). Passed to calendar modal. */
+    automationTodos?: Array<{ id: string; text: string; created_at: string; due_at?: string | null; done: boolean }>;
+    /** Send WebSocket message for planner (notes/todos). */
+    onSendPlannerMessage?: (msg: object) => void;
+    /** User time format for planner timestamps. */
+    userTimeFormat?: '24h' | '12h';
+    /** Called when automation calendar is opened (e.g. to load notes/todos). */
+    onOpenAutomationCalendar?: () => void;
 }
 
 const CATEGORIES = [
@@ -212,7 +222,7 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 ];
 
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -731,6 +741,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isOpen, codeModal, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, showCloudDashboard, onClose]);
+
+    // When automation calendar is opened from Settings, request notes/todos so they are loaded
+    useEffect(() => {
+        if (showCreateAutomationModal) onOpenAutomationCalendar?.();
+    }, [showCreateAutomationModal, onOpenAutomationCalendar]);
 
     const handleLogoutYes = useCallback(() => {
         setShowLogoutConfirm(false);
@@ -3002,6 +3017,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onClose={() => setShowCreateAutomationModal(false)}
                 currentUser={currentUser}
                 automations={automations}
+                automationNotes={automationNotes}
+                automationTodos={automationTodos}
+                onSendPlannerMessage={onSendPlannerMessage}
+                userTimeFormat={userTimeFormat}
                 onSubmitCreateAutomation={onCreateAutomationSubmit}
                 onAutomationCreated={onAutomationCreated}
                 onEditAutomation={(auto) => setEditingAutomation({

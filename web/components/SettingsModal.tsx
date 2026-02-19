@@ -1817,9 +1817,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
                                                 <button 
                                                     onClick={() => setShowAddUserModal(true)}
-                                                    className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white font-medium rounded-lg text-sm shadow-sm hover:shadow transition-all flex items-center gap-2"
+                                                    className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg text-sm shadow-sm hover:shadow transition-all flex items-center gap-2"
                                                 >
-                                                    <Plus size={16} /> {tLocalNet('addNewUser')}
+                                                    <Plus size={16} /> {tLocalNet('add')}
                                                 </button>
                                             </div>
 

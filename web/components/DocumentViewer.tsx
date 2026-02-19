@@ -643,7 +643,7 @@ export default function DocumentViewer({
                                     </div>
                                 ) : (
                                     <div className="min-h-full flex flex-col items-center py-4 px-2 gap-6">
-                                        {documents.map((doc) => {
+                                        {documents.map((doc, index) => {
                                             const isImg = doc.mimeType?.startsWith('image/') && doc.content?.startsWith('data:');
                                             const htmlContent = isHtmlDocument(doc) ? extractHtmlContent(doc.content ?? '') : null;
                                             const officeHtml = isOfficeWithHtml(doc) ? doc.htmlContent! : null;
@@ -656,7 +656,7 @@ export default function DocumentViewer({
                                             const showAsDocument = showPdf || showDocx || !!displayHtml;
                                             return (
                                                 <div
-                                                    key={doc.id}
+                                                    key={`${doc.id}-${index}`}
                                                     className={cn(
                                                         'flex justify-center',
                                                         showAsDocument ? 'w-full max-w-4xl' : 'w-[210mm] max-w-full'
@@ -769,9 +769,9 @@ export default function DocumentViewer({
                                         className="hidden"
                                         onChange={handleFileChange}
                                     />
-                                    {documents.map((doc) => (
+                                    {documents.map((doc, index) => (
                                         <div
-                                            key={doc.id}
+                                            key={`${doc.id}-${index}`}
                                             className={cn(
                                                 'flex items-center gap-2 rounded-xl border px-3 py-2.5 transition cursor-pointer',
                                                 selectedId === doc.id
@@ -880,7 +880,7 @@ export default function DocumentViewer({
                                 </div>
                             ) : (
                                 <div className="min-h-full flex flex-col items-center py-6 px-4 gap-6">
-                                    {documents.map((doc) => {
+                                    {documents.map((doc, index) => {
                                         const isImg = doc.mimeType?.startsWith('image/') && doc.content?.startsWith('data:');
                                         const htmlContent = isHtmlDocument(doc) ? extractHtmlContent(doc.content ?? '') : null;
                                         const officeHtml = isOfficeWithHtml(doc) ? doc.htmlContent! : null;
@@ -893,7 +893,7 @@ export default function DocumentViewer({
                                         const showAsDocumentOverlay = showPdfOverlay || showDocxOverlay || !!displayHtml;
                                         return (
                                             <div
-                                                key={doc.id}
+                                                key={`${doc.id}-${index}`}
                                                 className={cn(
                                                     'flex justify-center',
                                                     showAsDocumentOverlay ? 'w-full max-w-4xl' : 'w-[210mm] max-w-full'
@@ -1004,9 +1004,9 @@ export default function DocumentViewer({
                                     className="hidden"
                                     onChange={handleFileChange}
                                 />
-                                {documents.map((doc) => (
+                                {documents.map((doc, index) => (
                                     <div
-                                        key={doc.id}
+                                        key={`${doc.id}-${index}`}
                                         className={cn(
                                             'flex items-center gap-2 rounded-xl border px-4 py-3 transition cursor-pointer',
                                             selectedId === doc.id ? 'border-blue-200 bg-blue-50/50' : 'border-gray-100 bg-gray-50'

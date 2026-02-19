@@ -537,6 +537,15 @@ async def startup_event():
             log("WebServer", "Cloud storage background sync started")
         except Exception as e:
             log("WebServer", f"Cloud sync loop start error: {e}")
+
+    # Thinking mode (Denkmodus): background reflection when user idle
+    if Config.get("thinking_enabled", True):
+        try:
+            from vaf.core.thinking_mode import start_thinking_mode_background
+            start_thinking_mode_background()
+            log("WebServer", "Thinking mode background loop started")
+        except Exception as e:
+            log("WebServer", f"Thinking mode start error: {e}")
     log("WebServer", "Email auto-sync background task started (every 30 min)")
 
     # In Docker mode, start the headless agent runner
@@ -2201,6 +2210,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if username:
                             metadata["username"] = username
                         log("WebServer", f"Chat message from user_scope_id={user_scope_id}, username={username}")
+                        # Mark user activity for thinking mode (idle detection)
+                        try:
+                            from vaf.core.last_interaction import update_last_interaction
+                            update_last_interaction(
+                                user_scope_id=user_scope_id,
+                                source="web",
+                                preview=(content or "")[:80],
+                            )
+                        except Exception:
+                            pass
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)
                         try:
                             if is_debug_logging_enabled():
@@ -2436,9 +2455,20 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Return list of saved automations (user-scoped when user_scope_id present)
                     try:
                         from vaf.core.automation import AutomationManager
+                        from vaf.core.config import get_local_admin_scope_id
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
-                        tasks = mgr.list()
+                        tasks = list(mgr.list())
+                        # Local admin: also show automations from root (e.g. "Daily calendar check" created by ensure-daily-check-automation)
+                        local_scope = get_local_admin_scope_id()
+                        if user_scope_id and str(user_scope_id).strip() == str(local_scope).strip():
+                            root_mgr = AutomationManager()
+                            root_tasks = root_mgr.list()
+                            seen = {t.id for t in tasks}
+                            for t in root_tasks:
+                                if t.id not in seen:
+                                    tasks.append(t)
+                                    seen.add(t.id)
                         automations_list = [
                             {
                                 "id": task.id,

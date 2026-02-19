@@ -141,6 +141,15 @@ async def get_whatsapp_dashboard(request: Request):
         chat_id = phone if phone.startswith("+") else f"+{phone}"
         whitelist_by_phone[chat_id] = e
 
+    def _canonical_chat_key(cid: str) -> str:
+        """Single key per logical chat: E.164 for numbers, raw id for @lid/groups."""
+        if not cid or not isinstance(cid, str):
+            return (cid or "").strip()
+        s = (cid or "").strip()
+        if s.endswith("@lid") or "@g.us" in s:
+            return s
+        return _normalize_chat_id(s) or s
+
     sessions_by_chat: Dict[str, Dict[str, Any]] = {}
     raw_chats = get_whatsapp_chats(username, wait_timeout=3.0)
     for c in raw_chats:
@@ -154,32 +163,38 @@ async def get_whatsapp_dashboard(request: Request):
         else:
             phone = c.get("phone") or _jid_to_phone(jid)
             chat_id = phone if phone and phone.startswith("+") else _jid_to_phone(jid) if jid else ""
-            # Include @lid chats in the list (so all WhatsApp chats appear; agent can read when needed)
             if not chat_id and str(jid).endswith("@lid"):
                 chat_id = str(jid)
                 phone = chat_id
         if not chat_id:
             continue
+        key = _canonical_chat_key(chat_id)
         vaf_username = username
-        wl_entry = whitelist_by_phone.get(chat_id)
+        wl_entry = whitelist_by_phone.get(key) or whitelist_by_phone.get(chat_id)
         if wl_entry:
             vaf_username = (wl_entry.get("vaf_username") or "admin").strip()
-        stype = "admin" if chat_id in whitelist_by_phone else "contact"
-        sessions_by_chat[chat_id] = {
-            "chat_id": chat_id,
-            "phone_number": phone or chat_id,
-            "vaf_username": vaf_username,
-            "session_id": _phone_to_session_id(phone or chat_id, vaf_username),
-            "type": stype,
-            "name": c.get("name"),
-            "last_ts": int(c.get("last_ts") or 0),
-            "message_count": 0,
-        }
+        stype = "admin" if key in whitelist_by_phone or chat_id in whitelist_by_phone else "contact"
+        if key in sessions_by_chat:
+            rec = sessions_by_chat[key]
+            rec["last_ts"] = max(rec.get("last_ts") or 0, int(c.get("last_ts") or 0))
+            if c.get("name") and not (rec.get("name") or "").strip():
+                rec["name"] = c.get("name")
+        else:
+            sessions_by_chat[key] = {
+                "chat_id": key,
+                "phone_number": (phone or chat_id) if key == chat_id else (key if not key.endswith("@lid") else phone or key),
+                "vaf_username": vaf_username,
+                "session_id": _phone_to_session_id(phone or chat_id, vaf_username),
+                "type": stype,
+                "name": c.get("name"),
+                "last_ts": int(c.get("last_ts") or 0),
+                "message_count": 0,
+            }
     for a in activity:
         cid_raw = str(a.get("chat_id") or "")
         if not cid_raw:
             continue
-        cid = _normalize_chat_id(cid_raw)
+        cid = _canonical_chat_key(cid_raw)
         if not cid:
             cid = cid_raw
         if cid not in sessions_by_chat:
@@ -241,20 +256,28 @@ async def get_whatsapp_dashboard(request: Request):
         from vaf.core.whatsapp_message_store import list_chats_from_store
         for row in list_chats_from_store(username, limit=500, user_scope_id=user_info.get("user_scope_id")):
             cid = (row.get("chat_id") or "").strip()
-            if not cid or cid in sessions_by_chat:
+            if not cid:
                 continue
+            key = _canonical_chat_key(cid)
             last_ts = int(row.get("last_ts") or 0)
             msg_count = int(row.get("message_count") or 0)
-            sessions_by_chat[cid] = {
-                "chat_id": cid,
-                "phone_number": cid,
-                "vaf_username": username,
-                "session_id": _phone_to_session_id(cid, username),
-                "type": "contact",
-                "name": (row.get("chat_name") or "").strip() or None,
-                "last_ts": last_ts,
-                "message_count": msg_count,
-            }
+            if key in sessions_by_chat:
+                rec = sessions_by_chat[key]
+                rec["last_ts"] = max(rec.get("last_ts") or 0, last_ts)
+                rec["message_count"] = max(rec.get("message_count") or 0, msg_count)
+                if not (rec.get("name") or "").strip() and (row.get("chat_name") or "").strip():
+                    rec["name"] = (row.get("chat_name") or "").strip()
+            else:
+                sessions_by_chat[key] = {
+                    "chat_id": key,
+                    "phone_number": key if not key.endswith("@lid") else cid,
+                    "vaf_username": username,
+                    "session_id": _phone_to_session_id(key if not key.endswith("@lid") else cid, username),
+                    "type": "contact",
+                    "name": (row.get("chat_name") or "").strip() or None,
+                    "last_ts": last_ts,
+                    "message_count": msg_count,
+                }
     except Exception:
         pass
     # When the bridge didn't send a name (e.g. activity-only session), use VAF contact name if stored
@@ -293,7 +316,17 @@ async def get_whatsapp_dashboard(request: Request):
                 pass
     except Exception:
         pass
-    # Apply LID→E.164 mapping so FO contacts show the correct session (with history) when chat came via @lid
+    # Resolve LID→E.164 from config + Node so we can merge duplicate rows (same person as +55... and 123@lid)
+    node_by_lid: Dict[str, str] = {}
+    try:
+        from vaf.api.whatsapp_bridge import get_lid_mappings
+        for m in get_lid_mappings(username, wait_timeout=2.0):
+            lid_val = m.get("lid") or ""
+            e164_val = (m.get("e164") or "").strip()
+            if lid_val and e164_val:
+                node_by_lid[str(lid_val)] = e164_val
+    except Exception:
+        pass
     lid_to_e164 = dict((whatsapp_config.get("lid_to_e164") or {}) if isinstance(whatsapp_config, dict) else {})
     for lid_jid, e164 in list(lid_to_e164.items()):
         if not lid_jid or not e164 or "@lid" not in str(lid_jid):
@@ -307,6 +340,30 @@ async def get_whatsapp_dashboard(request: Request):
         sid_lid = f"whatsapp_{username}_{lid_digits}"
         if canonical in sessions_by_chat:
             sessions_by_chat[canonical]["session_id"] = sid_lid
+    # Merge LID rows into E.164 so the same contact (baba, Alice) appears only once
+    for key in list(sessions_by_chat.keys()):
+        if not str(key).endswith("@lid"):
+            continue
+        resolved = (lid_to_e164.get(key) or "").strip() or (node_by_lid.get(key) or "").strip()
+        if not resolved:
+            continue
+        e164 = _normalize_chat_id(resolved)
+        if not e164 or e164 == key:
+            continue
+        rec = sessions_by_chat[key]
+        if e164 in sessions_by_chat:
+            ex = sessions_by_chat[e164]
+            ex["last_ts"] = max(ex.get("last_ts") or 0, rec.get("last_ts") or 0)
+            ex["name"] = (ex.get("name") or "").strip() or (rec.get("name") or "").strip() or None
+            ex["message_count"] = max(ex.get("message_count") or 0, rec.get("message_count") or 0)
+            ex["session_id"] = (rec.get("session_id") or "").strip() or ex.get("session_id")
+        else:
+            rec2 = dict(rec)
+            rec2["chat_id"] = e164
+            rec2["phone_number"] = e164
+            rec2["session_id"] = rec.get("session_id") or _phone_to_session_id(e164, username)
+            sessions_by_chat[e164] = rec2
+        del sessions_by_chat[key]
     # Infer LID→E.164 when we have one FO contact with no messages and one LID-style session with messages (same user)
     try:
         from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values

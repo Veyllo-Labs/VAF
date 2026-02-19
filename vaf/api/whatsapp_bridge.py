@@ -474,6 +474,12 @@ def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional
             lang = _voice_reply_pending.pop(f"{username}|{chat_jid}", None)
         if lang:
             voice_path = _synthesize_voice_for_reply(text, lang)
+            # Fallback: if TTS returns empty (e.g. unsupported lang like tr), try English so we still send voice
+            if not voice_path and (lang or "")[:2].lower() != "en":
+                logger.info("WhatsApp TTS: fallback to en after empty/fail for lang=%s", lang)
+                voice_path = _synthesize_voice_for_reply(text, "en")
+                if voice_path:
+                    lang = "en"
             if voice_path:
                 try:
                     from vaf.core.log_helper import log_whatsapp_reply

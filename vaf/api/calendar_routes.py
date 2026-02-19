@@ -88,3 +88,63 @@ async def calendar_events(
         max_results=50,
     )
     return {"events": events, "account": account_id}
+
+
+# Name of the auto-created daily calendar check automation (visible in Automations UI).
+CALENDAR_DAILY_CHECK_NAME = "Daily calendar check"
+
+DEFAULT_CALENDAR_CHECK_PROMPT = """You are running the daily calendar check. Your job is to think carefully and act, not just list events.
+
+1. Call list_calendar_events for the next 24 to 48 hours (use time_min and time_max as ISO8601).
+
+2. Analyze each event: How important is it? Consider: meetings, deadlines, presentations, reviews, customer calls, first or last appointment of the day, long duration. Ignore low-value blocks (e.g. "Focus time", "Lunch" unless relevant).
+
+3. For each important event, decide what to do:
+   - Reminder: If the event is in the future and the user would benefit from a reminder (e.g. 30 minutes before), create a one-off automation with create_automation: frequency "once", time = 30 minutes before the event start. In the prompt for that one-off automation, instruct the agent to send the reminder via the user's main_messenger (see User Identity): use the matching tool—send_telegram, send_whatsapp, send_discord, send_slack, or send_mail—depending on main_messenger. Use the exact time in HH:MM for the "time" parameter.
+   - Prepare now: If the event starts within the next 30–60 minutes, send a reminder or preparation help now via the user's main_messenger: look up main_messenger in the User Identity (above in your context) and call the corresponding tool (send_telegram, send_whatsapp, send_discord, send_slack, or send_mail) with a short summary and "Your meeting [X] starts soon". If main_messenger is not set, skip sending and only summarize in your reply.
+   - Optional: Use memory_search to find relevant notes for a meeting and include a one-line hint in the reminder.
+
+4. Execute: Actually call create_automation for each one-off reminder you decided on, and for any immediate reminders call the send tool that matches the user's main_messenger (send_telegram, send_whatsapp, send_discord, send_slack, or send_mail). Do not just say what you would do—do it.
+
+5. At the end, reply briefly in the user's language: what you found, how many events, which reminders or messages you created/sent."""
+
+
+@router.post("/ensure-daily-check-automation")
+async def ensure_daily_check_automation(_user: Dict[str, Any] = Depends(_get_current_user)):
+    """
+    If the current user has a calendar connected and does not yet have the "Daily calendar check"
+    automation, create it. This automation appears in the Automations UI and runs daily at 08:00
+    (user can change time). Idempotent: safe to call every time; only creates if missing.
+    """
+    username = _user.get("username") or "admin"
+    user_scope_id = _user.get("user_scope_id")
+    ec = _get_email_config(username, user_scope_id=user_scope_id)
+    accounts = ec.get("accounts") or []
+    google_available = any((a.get("provider") or "").lower() == "gmail" and (a.get("enabled") is not False) for a in accounts)
+    microsoft_available = any((a.get("provider") or "").lower() == "microsoft" and (a.get("enabled") is not False) for a in accounts)
+    if not google_available and not microsoft_available:
+        return {"ok": False, "created": False, "reason": "no_calendar"}
+    try:
+        from vaf.core.automation import AutomationManager, AutomationTask
+        from vaf.core.config import get_local_admin_scope_id
+        local_scope = get_local_admin_scope_id()
+        # Local admin: store in root automations/ so CLI scheduler (get_manager()) sees it.
+        use_scope = None if (not user_scope_id or str(user_scope_id).strip() == str(local_scope).strip()) else user_scope_id
+        mgr = AutomationManager(user_scope_id=use_scope) if use_scope else AutomationManager()
+        existing = [t for t in mgr.list() if (t.name or "").strip() == CALENDAR_DAILY_CHECK_NAME]
+        if existing:
+            return {"ok": True, "created": False, "task_id": existing[0].id}
+        task = AutomationTask(
+            name=CALENDAR_DAILY_CHECK_NAME,
+            prompt=DEFAULT_CALENDAR_CHECK_PROMPT,
+            frequency="daily",
+            time="08:00",
+            enabled=True,
+            user_scope_id=user_scope_id,  # Store scope on task so run_task sets agent context
+        )
+        task = mgr.create(task)
+        logger.info("Created daily calendar check automation for user scope %s", (user_scope_id or "local")[:8])
+        return {"ok": True, "created": True, "task_id": task.id}
+    except Exception as e:
+        logger.exception("Failed to ensure daily calendar check automation")
+        return {"ok": False, "created": False, "error": str(e)}

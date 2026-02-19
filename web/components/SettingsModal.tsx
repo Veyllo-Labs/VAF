@@ -732,6 +732,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     e.stopPropagation();
                     return;
                 }
+                if (showCalendarDashboard) {
+                    setShowCalendarDashboard(false);
+                    e.stopPropagation();
+                    return;
+                }
+                if (showCalendarWizard) {
+                    setShowCalendarWizard(false);
+                    setCalendarWizardProvider(undefined);
+                    e.stopPropagation();
+                    return;
+                }
                 // Finally close settings
                 if (isOpen) {
                     onClose();
@@ -743,7 +754,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             window.addEventListener('keydown', handleKeyDown);
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, codeModal, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, showCloudDashboard, onClose]);
+    }, [isOpen, codeModal, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, showCloudDashboard, showCalendarDashboard, showCalendarWizard, onClose]);
 
     // When automation calendar is opened from Settings, request notes/todos so they are loaded
     useEffect(() => {

@@ -99,6 +99,9 @@ let connectionState = null;
 /** Chat store: jid -> { jid, name, phone, is_group, last_ts } for all WhatsApp chats. */
 const chatStore = new Map();
 
+/** LID → E.164 from events (senderPn, chats.phoneNumberShare). Used when Baileys lidMapping has no entry. */
+const lidToE164Map = new Map();
+
 /** Recently sent text (self-chat echo prevention). Bot’s own replies must be ignored. */
 const echoSent = new Map(); // text -> timestamp
 const ECHO_TTL_MS = 90_000;
@@ -143,9 +146,28 @@ function jidToPhone(jid) {
   return "+" + part;
 }
 
-/** Resolve @lid JID to E.164 via Baileys lidMapping. Returns null if unresolved. Retries once after delay (mapping can arrive late). */
+/** Normalize sender_pn / JID to E.164 string. */
+function toE164(value) {
+  if (!value || typeof value !== "string") return "";
+  const s = value.trim();
+  if (s.startsWith("+") && /^\+?\d{7,15}$/.test(s.replace(/\s/g, ""))) return s.replace(/\s/g, "");
+  return jidToPhone(s);
+}
+
+/** Ensure LID is full JID (e.g. 123456@lid). */
+function toLidJid(lid) {
+  if (!lid || typeof lid !== "string") return "";
+  const s = lid.trim();
+  if (s.endsWith("@lid") || s.endsWith("@hosted.lid")) return s;
+  const digits = s.replace(/\D/g, "");
+  return digits ? `${digits}@lid` : "";
+}
+
+/** Resolve @lid JID to E.164: first from event-built map (senderPn, phoneNumberShare), then Baileys lidMapping. */
 async function resolveLidToE164(sock, jid) {
   if (!jid || !/(@lid|@hosted\.lid)$/.test(jid)) return null;
+  const fromMap = lidToE164Map.get(jid);
+  if (fromMap) return fromMap;
   const mapping = sock?.signalRepository?.lidMapping;
   if (!mapping?.getPNForLID || typeof mapping.getPNForLID !== "function") return null;
   for (const waitMs of [0, 400]) {
@@ -213,6 +235,8 @@ async function connect(authDir) {
     markOnlineOnConnect: false,
     connectTimeoutMs: 90000,
     defaultQueryTimeoutMs: 60000,
+    // Required for history sync / fetchMessageHistory so Baileys does not crash (e.g. reading remoteJid on undefined)
+    getMessage: async () => undefined,
   });
   currentSock = sock;
 
@@ -294,14 +318,18 @@ async function connect(authDir) {
 
   sock.ev.on("messaging-history.set", (evt) => {
     const newChats = evt?.chats || evt?.conversations;
+    const count = Array.isArray(newChats) ? newChats.length : 0;
     try {
-      fs.writeSync(2, `${LOG_PREFIX} messaging-history.set: ${Array.isArray(newChats) ? newChats.length : 0} chats\n`);
+      fs.writeSync(2, `${LOG_PREFIX} messaging-history.set: ${count} chats in this batch\n`);
     } catch (_) {}
     if (Array.isArray(newChats)) {
       for (const c of newChats) {
         const n = normalizeChat(c);
         if (n) chatStore.set(n.jid, n);
       }
+      try {
+        fs.writeSync(2, `${LOG_PREFIX} messaging-history.set: chatStore total now ${chatStore.size} chats\n`);
+      } catch (_) {}
       emitChats();
     }
   });
@@ -325,6 +353,16 @@ async function connect(authDir) {
         const merged = existing ? { ...existing, ...normalizeChat(u) } : normalizeChat(u);
         if (merged) chatStore.set(jid, merged);
       }
+      emitChats();
+    }
+  });
+
+  sock.ev.on("chats.phoneNumberShare", ({ lid, jid }) => {
+    const lidJid = toLidJid(lid);
+    const e164 = jid ? toE164(jid) : "";
+    if (lidJid && e164) {
+      lidToE164Map.set(lidJid, e164);
+      try { fs.writeSync(2, `${LOG_PREFIX} LID→E.164 from phoneNumberShare: ${lidJid} → ${e164}\n`); } catch (_) {}
       emitChats();
     }
   });
@@ -377,6 +415,10 @@ async function connect(authDir) {
       if (!body) continue;
       let fromE164 = null;
       try {
+        if (remoteJid.endsWith("@lid") && msg.key?.senderPn) {
+          const e164 = toE164(msg.key.senderPn);
+          if (e164) lidToE164Map.set(remoteJid, e164);
+        }
         fromE164 = jidToPhone(remoteJid);
         if (!fromE164 && remoteJid.endsWith("@lid")) {
           fromE164 = (await resolveLidToE164(sock, remoteJid)) || null;
@@ -517,6 +559,35 @@ async function main() {
           fs.writeSync(2, `${LOG_PREFIX} getChats: emitting ${chatStore.size} chats\n`);
         } catch (_) {}
         emitChats();
+      } else if (obj?.cmd === "syncChats") {
+        // Note: Baileys fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestamp) is per-chat (more messages), not "full chat list".
+        // The full chat list only comes from messaging-history.set (on connect). We just re-emit current chatStore so the dashboard refreshes.
+        try {
+          fs.writeSync(2, `${LOG_PREFIX} syncChats: emitting ${chatStore.size} chats (full list comes from WhatsApp on connect)\n`);
+        } catch (_) {}
+        emitChats();
+      } else if (obj?.cmd === "getLidMappings") {
+        (async () => {
+          const out = [];
+          const seenLid = new Set();
+          for (const [lid, e164] of lidToE164Map) {
+            if (e164) { out.push({ lid, e164 }); seenLid.add(lid); }
+          }
+          const mapping = currentSock?.signalRepository?.lidMapping;
+          if (mapping?.getPNForLID) {
+            for (const chat of chatStore.values()) {
+              const jid = chat?.jid || chat?.id || "";
+              if (!jid || !jid.endsWith("@lid") || seenLid.has(jid)) continue;
+              try {
+                const pnJid = await mapping.getPNForLID(jid);
+                const e164 = pnJid ? jidToPhone(pnJid) : null;
+                if (e164) { out.push({ lid: jid, e164 }); seenLid.add(jid); }
+              } catch (_) {}
+            }
+          }
+          try { fs.writeSync(2, `${LOG_PREFIX} getLidMappings: ${out.length} resolved (${lidToE164Map.size} from events)\n`); } catch (_) {}
+          emit({ type: "lid_mappings", mappings: out });
+        })();
       } else if (obj?.cmd === "ping") {
         emit({ type: "pong", connected: connectionState === "open", state: connectionState });
       }

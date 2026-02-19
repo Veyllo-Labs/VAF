@@ -2,6 +2,11 @@
 Persistent store for WhatsApp messages (SQLite).
 Stores incoming and outgoing messages so the agent can search and read chat history.
 Similar to email_sync_store for mail_inbox/find_mail/read_mail.
+
+Isolation: Per user and per scope (UUID). When user_scope_id is passed, the DB path is
+scopes/<user_scope_id>/whatsapp_messages.db (or data_dir/whatsapp_messages.db for local admin scope).
+Otherwise per-username: data_dir/users/<username>/whatsapp_messages.db or data_dir for local admin.
+Dashboard and tools pass user_scope_id when available so scope users get their own DB.
 """
 import logging
 from pathlib import Path
@@ -154,27 +159,93 @@ def search_messages(
         conn.close()
 
 
+def list_chats_from_store(
+    username: str,
+    limit: int = 500,
+    user_scope_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """List all chats that have at least one message in the store (for inbox/dashboard merge).
+    Returns list of dicts with chat_id, last_ts, message_count; chat_name from latest message if present."""
+    import sqlite3
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        u = (username or "").strip() or ""
+        limit = min(max(limit, 1), 500)
+        cur = conn.execute(
+            """
+            SELECT chat_id, MAX(ts) AS last_ts, COUNT(*) AS message_count
+            FROM whatsapp_messages
+            WHERE username = ?
+            GROUP BY chat_id
+            ORDER BY last_ts DESC
+            LIMIT ?
+            """,
+            (u, limit),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+        # Optionally attach latest chat_name per chat
+        for r in rows:
+            cid = r.get("chat_id") or ""
+            cur2 = conn.execute(
+                """
+                SELECT chat_name FROM whatsapp_messages
+                WHERE username = ? AND chat_id = ? AND chat_name IS NOT NULL AND chat_name != ''
+                ORDER BY ts DESC LIMIT 1
+                """,
+                (u, cid),
+            )
+            row2 = cur2.fetchone()
+            r["chat_name"] = (dict(row2).get("chat_name") or "").strip() if row2 else ""
+        return rows
+    finally:
+        conn.close()
+
+
 def get_chat_messages(
     username: str,
     chat_id: str,
     limit: int = 50,
     user_scope_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Get messages for a chat, newest first."""
+    """Get messages for a chat, newest first. When chat_id is a @lid, also look up lid_to_e164 so messages stored under the resolved E.164 are found."""
     import sqlite3
+    from vaf.core.config import Config
     init_store(username, user_scope_id)
+    chat_ids_to_try = [chat_id or ""]
+    if (chat_id or "").strip().endswith("@lid"):
+        try:
+            wc = Config.get("whatsapp_config") or {}
+            if isinstance(wc, dict):
+                lid_map = wc.get("lid_to_e164") or {}
+                if isinstance(lid_map, dict):
+                    resolved = (lid_map.get(chat_id.strip()) or "").strip()
+                    if resolved and not resolved.startswith("+"):
+                        resolved = "+" + resolved
+                    if resolved:
+                        chat_ids_to_try.append(resolved)
+        except Exception:
+            pass
     conn = _get_conn(username, user_scope_id)
     try:
-        cur = conn.execute(
-            """
-            SELECT chat_id, chat_name, body, direction, ts, content_type
-            FROM whatsapp_messages
-            WHERE username = ? AND chat_id = ?
-            ORDER BY ts DESC
-            LIMIT ?
-            """,
-            ((username or "").strip() or "", chat_id or "", min(max(limit, 1), 200)),
-        )
-        return [dict(row) for row in cur.fetchall()]
+        all_rows = []
+        seen = set()
+        for cid in chat_ids_to_try:
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            cur = conn.execute(
+                """
+                SELECT chat_id, chat_name, body, direction, ts, content_type
+                FROM whatsapp_messages
+                WHERE username = ? AND chat_id = ?
+                ORDER BY ts DESC
+                LIMIT ?
+                """,
+                ((username or "").strip() or "", cid, min(max(limit, 1), 200)),
+            )
+            all_rows.extend([dict(row) for row in cur.fetchall()])
+        all_rows.sort(key=lambda r: -(r.get("ts") or 0))
+        return all_rows[: min(max(limit, 1), 200)]
     finally:
         conn.close()

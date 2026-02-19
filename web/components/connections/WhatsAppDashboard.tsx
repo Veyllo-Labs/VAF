@@ -25,11 +25,24 @@ interface WhatsAppSession {
     type: string;
     last_ts: number;
     message_count: number;
+    answerable?: boolean;
+    needs_assign?: boolean;
+    display_name?: string | null;
+    resolved_e164?: string | null;
 }
 
 interface Stats4hBucket {
     bucket_ts: number;
     count: number;
+}
+
+interface LidChatToAssign {
+    lid_jid: string;
+    chat_id: string;
+    name?: string | null;
+    session_id?: string;
+    resolved_e164_from_config?: string | null;
+    resolved_e164_from_node?: string | null;
 }
 
 interface DashboardData {
@@ -40,6 +53,7 @@ interface DashboardData {
     admin_whitelist: Array<{ phone_number: string; vaf_username?: string | null }>;
     relay_whitelist: Array<{ phone_number: string; vaf_username?: string | null }>;
     front_office_contacts: Array<{ name: string | null; phone_number: string }>;
+    lid_chats_to_assign: LidChatToAssign[];
     activity: Array<{ chat_id: string; user_scope_id: string | null; ts: number; direction: string }>;
     connected?: boolean;
     running?: boolean;
@@ -125,6 +139,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             admin_whitelist: whitelist,
             relay_whitelist: [],
             front_office_contacts: Array.isArray(json?.front_office_contacts) ? json.front_office_contacts : [],
+            lid_chats_to_assign: Array.isArray(json?.lid_chats_to_assign) ? json.lid_chats_to_assign : [],
             activity: Array.isArray(json?.activity) ? json.activity : [],
             connected: json?.connected === true,
             running: json?.running === true,
@@ -163,7 +178,12 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 return;
             }
             setDataFromJson(json);
-            if (!json.running && json.enabled) {
+            if (json.connected) {
+                await fetch(api('api/whatsapp/sync-chats'), { method: 'POST', credentials: 'include' });
+                const res2 = await fetch(api('api/whatsapp/dashboard'), { credentials: 'include' });
+                const json2 = await res2.json();
+                if (res2.ok) setDataFromJson(json2);
+            } else if (!json.running && json.enabled) {
                 await fetch(api('api/whatsapp/start'), { method: 'POST', credentials: 'include' });
                 await new Promise(r => setTimeout(r, 2000));
                 const res2 = await fetch(api('api/whatsapp/dashboard'), { credentials: 'include' });
@@ -291,7 +311,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                                 onClick={(e) => { e.stopPropagation(); handleRefresh(); }}
                                 disabled={loading}
                                 className="p-1.5 rounded hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors disabled:opacity-50"
-                                title="Refresh; starts bridge if not running"
+                                title={data?.connected ? 'Alle Chats von WhatsApp laden & Aktualisieren' : 'Aktualisieren; startet Bridge falls nötig'}
                             >
                                 <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
                             </button>
@@ -301,39 +321,49 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                                 <div className="p-3 text-sm text-gray-500">Loading…</div>
                             ) : data?.sessions && data.sessions.length > 0 ? (
                                 <ul className="py-1">
-                                    {data.sessions.map((s) => (
-                                        <li key={s.chat_id}>
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setSelectedChatId(s.chat_id);
-                                                    setSessionHistoryPopoutChatId(s.chat_id);
-                                                }}
-                                                className={cn(
-                                                    'w-full text-left px-3 py-2.5 flex flex-col gap-0.5 transition-colors border-l-2',
-                                                    selectedChatId === s.chat_id
-                                                        ? 'bg-sky-100 text-sky-900 border-sky-500'
-                                                        : 'border-transparent hover:bg-gray-100 text-gray-700'
-                                                )}
-                                            >
-                                                <span className="text-sm font-medium truncate">
-                                                    {s.name || s.phone_number}
-                                                </span>
-                                                <span className="flex items-center gap-1.5 text-xs text-gray-500">
-                                                    <span className={cn(
-                                                        'px-1.5 py-0.5 rounded',
-                                                        s.type === 'admin' ? 'bg-green-100 text-green-700' : s.type === 'relay' ? 'bg-amber-100 text-amber-700' : s.type === 'contact' ? 'bg-gray-200 text-gray-600' : 'bg-gray-200 text-gray-600'
-                                                    )}>
-                                                        {s.type}
+                                    {data.sessions.map((s) => {
+                                        const title = s.display_name ?? s.name ?? s.phone_number ?? s.chat_id;
+                                        const lidJid = (s.chat_id && String(s.chat_id).includes('@lid')) ? s.chat_id : null;
+                                        const showAssign = s.needs_assign && lidJid;
+                                        return (
+                                        <li key={s.chat_id} className="border-b border-gray-100 last:border-0">
+                                            <div className="flex flex-col gap-1">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setSelectedChatId(s.chat_id);
+                                                        setSessionHistoryPopoutChatId(s.chat_id);
+                                                    }}
+                                                    className={cn(
+                                                        'w-full text-left px-3 py-2 flex flex-col gap-0.5 transition-colors border-l-2',
+                                                        selectedChatId === s.chat_id
+                                                            ? 'bg-sky-100 text-sky-900 border-sky-500'
+                                                            : 'border-transparent hover:bg-gray-100 text-gray-700'
+                                                    )}
+                                                >
+                                                    <span className="text-sm font-medium truncate" title={s.chat_id}>
+                                                        {title}
                                                     </span>
-                                                    {s.message_count > 0 && <span>{s.message_count} msgs</span>}
-                                                </span>
-                                                {s.last_ts > 0 && (
-                                                    <span className="text-xs text-gray-400">{formatActivityTime(s.last_ts)}</span>
+                                                    <span className="flex items-center gap-1.5 text-xs text-gray-500 flex-wrap">
+                                                        {s.answerable ? (
+                                                            <span className="px-1.5 py-0.5 rounded bg-green-100 text-green-700">Agent</span>
+                                                        ) : (
+                                                            <span className="px-1.5 py-0.5 rounded bg-gray-200 text-gray-600">Read-only</span>
+                                                        )}
+                                                        {s.message_count > 0 && <span>{s.message_count} msgs</span>}
+                                                    </span>
+                                                    {s.last_ts > 0 && (
+                                                        <span className="text-xs text-gray-400">{formatActivityTime(s.last_ts)}</span>
+                                                    )}
+                                                </button>
+                                                {showAssign && (
+                                                    <p className="px-3 py-0.5 text-[10px] text-gray-500 leading-none">
+                                                        LID-Chat: Die Linked-Device-API liefert oft keine Nummer (auch bei gespeichertem Kontakt auf dem Handy). Nur Lesen. Für Agent-Antwort: whatsapp_config.lid_to_e164 in der Config.
+                                                    </p>
                                                 )}
-                                            </button>
+                                            </div>
                                         </li>
-                                    ))}
+                                    );})}
                                 </ul>
                             ) : (
                                 <p className="p-3 text-sm text-gray-500">No chats. Restart bridge (Settings → Connections) and wait 1–2 min.</p>

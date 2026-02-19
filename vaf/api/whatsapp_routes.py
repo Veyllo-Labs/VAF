@@ -80,6 +80,12 @@ class ConfigUpdateRequest(BaseModel):
     whitelist: Optional[list] = None
 
 
+class LidAssignRequest(BaseModel):
+    """Assign a LID JID to an E.164 number (contact/whitelist). So the bridge accepts messages from that @lid."""
+    lid_jid: str  # e.g. "55877994332394@lid"
+    phone_number: str  # E.164, e.g. "+4915256564444"
+
+
 @router.get("/dashboard/debug")
 async def get_whatsapp_dashboard_debug(request: Request):
     """Debug: raw_chats count from bridge. Helps diagnose empty chat list."""
@@ -148,6 +154,10 @@ async def get_whatsapp_dashboard(request: Request):
         else:
             phone = c.get("phone") or _jid_to_phone(jid)
             chat_id = phone if phone and phone.startswith("+") else _jid_to_phone(jid) if jid else ""
+            # Include @lid chats in the list (so all WhatsApp chats appear; agent can read when needed)
+            if not chat_id and str(jid).endswith("@lid"):
+                chat_id = str(jid)
+                phone = chat_id
         if not chat_id:
             continue
         vaf_username = username
@@ -224,6 +234,27 @@ async def get_whatsapp_dashboard(request: Request):
                         "last_ts": 0,
                         "message_count": 0,
                     }
+    except Exception:
+        pass
+    # Include chats from message store (persistent inbox: show all chats we have messages for, like mail/Telegram)
+    try:
+        from vaf.core.whatsapp_message_store import list_chats_from_store
+        for row in list_chats_from_store(username, limit=500, user_scope_id=user_info.get("user_scope_id")):
+            cid = (row.get("chat_id") or "").strip()
+            if not cid or cid in sessions_by_chat:
+                continue
+            last_ts = int(row.get("last_ts") or 0)
+            msg_count = int(row.get("message_count") or 0)
+            sessions_by_chat[cid] = {
+                "chat_id": cid,
+                "phone_number": cid,
+                "vaf_username": username,
+                "session_id": _phone_to_session_id(cid, username),
+                "type": "contact",
+                "name": (row.get("chat_name") or "").strip() or None,
+                "last_ts": last_ts,
+                "message_count": msg_count,
+            }
     except Exception:
         pass
     # When the bridge didn't send a name (e.g. activity-only session), use VAF contact name if stored
@@ -319,10 +350,84 @@ async def get_whatsapp_dashboard(request: Request):
                     fo_rec["session_id"] = sid
     except Exception:
         pass
+    now_ts = int(_time.time())
+    # Clamp last_ts to now so UI never shows future dates (e.g. bad Baileys timestamp for baba)
+    for rec in sessions_by_chat.values():
+        lt = rec.get("last_ts") or 0
+        if lt > now_ts:
+            rec["last_ts"] = now_ts
     sessions = sorted(sessions_by_chat.values(), key=lambda s: (s.get("last_ts") or 0), reverse=True)
 
+    # FO phones (E.164) for answerable check
+    fo_phones: set = set()
+    try:
+        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
+        for contact in get_contacts_allowing_assistant(username):
+            for phone in _contact_whatsapp_values(contact):
+                if phone and phone.strip():
+                    cid = phone.strip() if phone.strip().startswith("+") else f"+{phone.strip()}"
+                    fo_phones.add(_normalize_chat_id(cid) or cid)
+    except Exception:
+        pass
+
+    # LID resolution (config + node) for session enrichment and lid_chats_to_assign
+    lid_to_e164_cfg = dict((whatsapp_config.get("lid_to_e164") or {}) if isinstance(whatsapp_config, dict) else {})
+    lid_mappings_from_node: list = []
+    node_by_lid: dict = {}
+    try:
+        from vaf.api.whatsapp_bridge import get_lid_mappings
+        lid_mappings_from_node = get_lid_mappings(username, wait_timeout=2.0)
+        node_by_lid = {m.get("lid", ""): (m.get("e164") or "").strip() for m in lid_mappings_from_node if m.get("lid")}
+    except Exception:
+        pass
+
+    def _resolved_e164(rec: dict) -> str | None:
+        cid = str(rec.get("chat_id") or "")
+        if "@lid" not in cid:
+            return None
+        lid_jid = cid if cid.endswith("@lid") else f"{''.join(c for c in cid if c.isdigit())}@lid"
+        return (lid_to_e164_cfg.get(lid_jid) or "").strip() or (node_by_lid.get(lid_jid) or "").strip() or None
+
+    for rec in sessions:
+        cid = str(rec.get("chat_id") or "")
+        is_lid = "@lid" in cid
+        resolved = _resolved_e164(rec) if is_lid else None
+        if is_lid and resolved:
+            rec["resolved_e164"] = resolved
+            rec["answerable"] = resolved in whitelist_by_phone or resolved in fo_phones
+            rec["needs_assign"] = False
+        elif is_lid:
+            rec["resolved_e164"] = None
+            rec["answerable"] = False
+            rec["needs_assign"] = True
+        else:
+            # Only whitelist and Front Office contacts get Agent; others are read-only
+            cid_norm = _normalize_chat_id(cid) or cid
+            in_whitelist = cid in whitelist_by_phone or cid_norm in whitelist_by_phone
+            in_fo = cid_norm in fo_phones or cid in fo_phones
+            rec["type"] = "admin" if in_whitelist else ("contact" if in_fo else "unknown")
+            rec["answerable"] = rec.get("type") in ("admin", "relay", "contact")
+            rec["needs_assign"] = False
+        # display_name: prefer name, then contact name for resolved/phone, then "Unknown chat" for LID, else phone
+        disp = (rec.get("name") or "").strip() or None
+        if not disp:
+            phone = resolved or rec.get("phone_number") or cid
+            if phone:
+                try:
+                    from vaf.core.contacts_store import get_contact_name_by_phone
+                    for scope in [user_info.get("user_scope_id"), None, get_local_admin_scope_id()]:
+                        disp = get_contact_name_by_phone(phone, username, scope)
+                        if disp:
+                            break
+                except Exception:
+                    pass
+        if not disp and is_lid:
+            disp = "Unknown chat"
+        if not disp:
+            disp = (rec.get("phone_number") or cid or "").strip() or "Unknown chat"
+        rec["display_name"] = disp
+
     bucket_seconds = 4 * 3600
-    now_ts = int(_time.time())
     cutoff = now_ts - 7 * 24 * 3600
     buckets: Dict[int, int] = {}
     for t in range(int(cutoff // bucket_seconds) * bucket_seconds, now_ts + 1, bucket_seconds):
@@ -358,6 +463,33 @@ async def get_whatsapp_dashboard(request: Request):
     except Exception:
         pass
 
+    # List of LID chats for "Assign to contact" (reuses lid_to_e164_cfg, node_by_lid, lid_mappings_from_node from above)
+    lid_chats_to_assign: list = []
+    try:
+        for rec in sessions:
+            sid = str(rec.get("session_id") or "")
+            if not sid.startswith("whatsapp_"):
+                continue
+            parts = sid.split("_")
+            if len(parts) < 3:
+                continue
+            digits = "".join(c for c in parts[-1] if c.isdigit())
+            if len(digits) < 12:
+                continue
+            lid_jid = f"{digits}@lid"
+            resolved_config = (lid_to_e164_cfg.get(lid_jid) or "").strip() or None
+            resolved_node = (node_by_lid.get(lid_jid) or "").strip() or None
+            lid_chats_to_assign.append({
+                "lid_jid": lid_jid,
+                "chat_id": rec.get("chat_id") or digits,
+                "name": rec.get("name"),
+                "session_id": sid,
+                "resolved_e164_from_config": resolved_config,
+                "resolved_e164_from_node": resolved_node,
+            })
+    except Exception:
+        pass
+
     return {
         "configured": bool(whitelist) and linked,
         "linked": linked,
@@ -374,6 +506,8 @@ async def get_whatsapp_dashboard(request: Request):
             for e in whitelist
         ],
         "front_office_contacts": front_office_contacts,
+        "lid_mappings_from_node": lid_mappings_from_node,
+        "lid_chats_to_assign": lid_chats_to_assign,
     }
 
 
@@ -726,6 +860,43 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
     config["whatsapp_config"] = wc
     Config.save(config)
     return {"status": "added", "message": "Whitelist entry added."}
+
+
+@router.post("/lid-assign")
+async def assign_lid_to_number(request: Request, body: LidAssignRequest):
+    """Assign a LID (e.g. 55877994332394@lid) to an E.164 number so the bridge accepts messages from that chat. The number must be in whitelist or a Front Office contact."""
+    lid_jid = (body.lid_jid or "").strip()
+    phone = (body.phone_number or "").strip()
+    if not lid_jid or "@lid" not in lid_jid:
+        raise HTTPException(status_code=400, detail="lid_jid required (e.g. 55877994332394@lid)")
+    if not phone:
+        raise HTTPException(status_code=400, detail="phone_number required (E.164)")
+    if not phone.startswith("+"):
+        phone = "+" + phone
+    config = Config.load()
+    wc = config.get("whatsapp_config") or {}
+    if not isinstance(wc, dict):
+        wc = {}
+    lid_map = dict(wc.get("lid_to_e164") or {})
+    lid_map[lid_jid] = phone
+    wc["lid_to_e164"] = lid_map
+    config["whatsapp_config"] = wc
+    Config.save(config)
+    return {"status": "assigned", "message": f"LID {lid_jid} assigned to {phone}. Bridge will accept messages from this chat.", "lid_jid": lid_jid, "phone_number": phone}
+
+
+@router.post("/sync-chats")
+async def sync_whatsapp_chats_route(request: Request):
+    """Request full chat list sync from WhatsApp (Baileys fetchMessageHistory). Use when the left chat list is incomplete. Returns updated chats count."""
+    import asyncio
+    from vaf.api.whatsapp_bridge import is_bridge_running, sync_whatsapp_chats
+
+    user_info = get_current_vaf_user(request)
+    username = user_info["username"]
+    if not is_bridge_running():
+        raise HTTPException(status_code=503, detail="WhatsApp bridge not running. Start it in Connections first.")
+    chats = await asyncio.to_thread(sync_whatsapp_chats, username, 25.0)
+    return {"status": "ok", "chats_count": len(chats), "message": "Chat list synced from WhatsApp. Refresh the dashboard to see all chats."}
 
 
 @router.get("/config")

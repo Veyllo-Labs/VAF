@@ -12,6 +12,7 @@ The WhatsApp bridge allows users to interact with VAF through WhatsApp, supporti
 - **Per-User Isolation**: Each VAF user has a separate WhatsApp session; credentials stored under `~/.vaf/users/<username>/whatsapp/`
 - **Whitelist**: Only configured phone numbers (E.164) and contacts with "Can reach your assistant" (Front Office) can send messages and receive replies
 - **Agent Tools**: `whatsapp_inbox`, `find_whatsapp_messages`, `read_whatsapp_chat`, `send_whatsapp` for listing, searching, reading, and sending
+- **WhatsApp Inbox (message store)**: Like mail/Telegram, every message that passes through the bridge is stored in a local SQLite DB (`whatsapp_messages.db`). The chat list (dashboard and `whatsapp_inbox`) is built from the **bridge** list + **activity** (including rejected senders) + **store** (chats that have at least one stored message). So all chats with messages stay visible and searchable even after a reconnect or when WhatsApp sends only a subset of chats.
 - **Optional Send-Only Mode**: When `inbound_to_agent` is `false`, incoming messages do not trigger the agent; the bot can still send content to you
 
 ---
@@ -110,6 +111,7 @@ Authentication (Baileys session) is stored per user under `~/.vaf/users/<usernam
 | `enabled` | bool | Enable/disable the WhatsApp bridge |
 | `inbound_to_agent` | bool | When `true`, incoming messages are enqueued and the agent replies (two-way). When `false`, WhatsApp is send-only: bot can send you content but incoming messages do not trigger the agent |
 | `whitelist` | array | List of allowed phone numbers (E.164) with `phone_number`, `user_scope_id`, `vaf_username` |
+| `chat_sync_interval_sec` | number | Interval in seconds for periodic full chat list sync (default: 600 = 10 min). The bridge requests `getChats` from the Node so the bot and dashboard have the latest chat list (names, last_ts). Set to `0` to disable. |
 
 ### Whitelist and Front Office
 
@@ -118,7 +120,9 @@ Authentication (Baileys session) is stored per user under `~/.vaf/users/<usernam
 
 The bridge builds the allowed set from the config whitelist plus all WhatsApp/phone channel values from contacts with "Can reach your assistant" enabled.
 
-- **@lid (Linked ID)**: WhatsApp sometimes sends 1:1 chats as `…@lid` instead of `…@s.whatsapp.net`. The Node bridge resolves LID→E.164 via Baileys when possible. **Inbound rule:** A message is accepted only when the sender JID or the resolved `fromE164` matches the whitelist or a Front Office contact. The numeric part of a `…@lid` JID (e.g. a long digit string like `12345678901234`) is **not** a phone number; it is an internal WhatsApp LID. **Unresolved @lid** (no `fromE164` from Node) are **rejected** so that strangers cannot reach the assistant. In logs you will see `REJECT unresolved @lid from=… (not in whitelist/contacts)` for those. When the bridge later resolves LID→E.164 (or the dashboard infers it from one FO contact with no history and one LID session with history), the mapping is stored so the **Web UI** shows that conversation under the contact’s phone (Connections → WhatsApp → click contact): session history and Memory Learning then match the real chat.
+**Chat list sync:** So the bot and dashboard always see the latest chats (e.g. for `whatsapp_inbox`, Connections UI), the bridge runs a **periodic sync** every 10 minutes by default: it sends `getChats` to the Node, which returns the full chat list (Baileys `chatStore`); the Python side merges that with **chat_activity** and with **chats from the message store** (all chat_ids that have at least one message in `whatsapp_messages.db`), so the inbox is persistent like mail/Telegram. You can change the interval with `whatsapp_config.chat_sync_interval_sec` (seconds; `0` = disabled). **All chats** from the linked device (including @lid chats) appear in the list; the agent can use `whatsapp_inbox` to list them and `read_whatsapp_chat(chat_id=...)` to read messages. The chat list is whatever WhatsApp sends in the initial **messaging-history.set** (on connect) plus any **chats.upsert** / **chats.update** / **messages.upsert** (new chats when someone writes). After a bridge reconnect the Node may have only a subset of chats; the dashboard also shows chats with **activity** (including rejected senders), so numbers that have written at least once stay visible as Read-only. If you only see a few chats (e.g. only newsletters or recent ones), WhatsApp may be sending the full list in batches – wait 1–2 minutes after connecting and click **Refresh** (🔄) again; the Node merges every batch into the list. **"Alle Chats von WhatsApp laden"** (Refresh when connected) re-requests the current list from the Node; it does not trigger a new history sync from the phone (Baileys has no API for “sync all chat list again”). Message history the agent can read is what the bridge has received or sent (no full server-side history fetch yet).
+
+- **@lid (Linked ID)**: WhatsApp uses **LID** (Link ID) as a privacy-preserving identifier: it often replaces the phone number (JID `number@s.whatsapp.net`) with something like `XXXXXXXXXX@lid`, especially in groups and Communities, so participants don’t see each other’s numbers. The LID is **account-specific**, stable across chats, and sent over WhatsApp Web/Multi-Device. **On the phone app**, if you have the person in your **phone contacts**, WhatsApp can resolve the LID and show the saved name and number – but that resolution happens on the phone. **Our bridge uses the Linked Device API** (Baileys): it only knows a LID’s number if WhatsApp **sends that mapping to the linked device**. Baileys exposes this via `lidMapping.getPNForLID`; we call it (e.g. when building the dashboard) and show `resolved_e164_from_node` when we get a result. WhatsApp does **not** always sync “saved contact → LID resolution” to linked devices, so even with the contact saved on your phone, the bridge may never receive the number for that LID. When we do receive it, the chat is shown as resolved (no manual step). When we don’t, the only way to allow replies is a manual mapping in `whatsapp_config.lid_to_e164`. **Inbound rule:** A message is accepted only when the sender JID or the resolved `fromE164` matches the whitelist or a Front Office contact. **Unresolved @lid** (no `fromE164` from Node and no `lid_to_e164` entry) are **rejected** so that strangers cannot reach the assistant.
 
 - **Self-chat (admin = bridge number)**: When the linked WhatsApp number (the one that scanned the QR code) is the same as the admin’s number (e.g. you message yourself or use “Saved Messages”), the bridge does **not** hand the message to the agent. It is stored as a note/backlog only (message store + activity), so the agent does not “talk to itself”. In logs you will see `SELF_CHAT stored as note (no agent reply)`.
 
@@ -152,7 +156,29 @@ If the agent wrote to a "number" that is a long digit string and not a real phon
 - **whatsapp_inbound.log** – each inbound message: `ACCEPT`, `REJECT`, `REJECT unresolved @lid`, `SELF_CHAT`, etc.
 - **whatsapp_qr.log** – QR flow and bridge events.
 
-Search for `from=…@lid` or `REJECT unresolved @lid` to confirm rejections. After the fix, new messages from unknown LIDs will no longer be accepted.
+Search for `from=…@lid` or `REJECT unresolved @lid` to confirm rejections. New messages from unknown LIDs are rejected unless you add a manual mapping (see below).
+
+### Troubleshooting: Bot doesn't reply to a contact (e.g. Baba) – REJECT unresolved @lid
+
+If a **known** Front Office contact (e.g. Baba) uses a chat that WhatsApp sends as **@lid** (e.g. `55877994332394@lid`) and the Node never sends `fromE164`, the bridge will **reject** their messages after the security fix (`REJECT unresolved @lid from=55877994332394@lid`). To allow that contact again, add a **manual LID→E.164 mapping** in config so the bridge can treat that LID as their phone number:
+
+1. In **whatsapp_inbound.log** note the rejected JID (e.g. `55877994332394@lid`).
+2. In your VAF config (`~/.vaf/config.json` or `%APPDATA%\\vaf\\config.json`), under `whatsapp_config`, add or extend `lid_to_e164` with that JID as key and the contact’s **real E.164 number** (as in Front Office) as value. Example: `"lid_to_e164": { "55877994332394@lid": "+4915256564444" }` (use Baba’s actual number from Contacts).
+3. Save config and restart the WhatsApp bridge (or wait for the next message). Messages from that LID will then be accepted and the bot will reply.
+
+The contact must have that E.164 number in whitelist or in Front Office with “Can reach your assistant” enabled; the mapping only tells the bridge which allowed number that @lid represents.
+
+**Why the bridge often has no number for a LID:** We use whatever the Linked Device API (Baileys) gives us via `lidMapping.getPNForLID`. If WhatsApp never sends that LID→number mapping to the linked device, we have no way to “ask WhatsApp for the number” – there is no such API. That can happen even if the contact is **saved on your phone**: the phone app may show name/number (WhatsApp resolves there), but the multi-device protocol does not always sync that resolution to linked devices. So the dashboard shows an info that the chat has no number from WhatsApp; to allow the agent to reply, you can add a mapping in config (`whatsapp_config.lid_to_e164`). When Baileys does receive the mapping later (e.g. after more traffic), we show the chat as resolved and no config change is needed.
+
+**Event-based LID resolution:** The Node bridge also builds a LID→E.164 map from events, so more chats can be resolved without config: (1) **senderPn** – when an incoming message has `remoteJid` ending with `@lid`, Baileys sometimes includes a Sender Phone Number (`msg.key.senderPn`); we store that and use it for resolution and for `getLidMappings`. (2) **chats.phoneNumberShare** – Baileys can emit this event with `lid` and `jid` (phone JID); we store that pair and re-emit the chat list so the dashboard shows the resolved number. This map is in-memory (per Node process); `getLidMappings` returns both Baileys `lidMapping` results and these event-derived entries, so the dashboard and inbound logic see all resolved LIDs.
+
+### Troubleshooting: Voice reply contained raw JSON (tool_calls)
+
+If a voice or text reply to a contact contained literal JSON (e.g. `{"tool_calls": [{"function": {"name": "memory_save", ...}}]}`) instead of normal speech, the model output had leaked tool-call payloads into the reply. The headless runner now **strips** any such JSON from the text before sending to WhatsApp (and Telegram/Discord), so TTS and chat only receive clean text. If you still see this, ensure you are on the latest code and that the reply path goes through `headless_runner` (not a custom sender).
+
+### Troubleshooting: Reply to contact A had context meant for contact B
+
+Each WhatsApp chat has a **session** `whatsapp_{username}_{digits}` (e.g. `whatsapp_admin_4917642996812` for Anne). Context and history are per session. If the agent replied to Anne with content that clearly referred to another contact (e.g. Baba), possible causes: (1) the same LID was used for two different people (e.g. one contact’s chat not yet resolved to E.164), so both shared one session; (2) two messages processed close together and a reply was associated with the wrong chat. Check **whatsapp_inbound.log** and **whatsapp_reply.log** for the order of `ENQUEUED session=…`, `HEADLESS task_source=whatsapp jid=…`, and `REPLY … jid=…` to see which session and JID each reply used. Ensure each contact has a distinct phone/JID in Front Office so they get distinct sessions.
 
 ---
 
@@ -362,6 +388,7 @@ Both Node stderr and Python bridge logs are written here. Use it to verify that 
 | Python | `[inbound] owner_control: skip reply ...` | Agent skip: owner has control, 10 min not elapsed. |
 | Python | `[Python] JSON decode error: ...` | A non-JSON or empty line was read (e.g. stray output); that line is skipped. |
 | Python | `[Python] FATAL read loop: ...` | The stdout read loop crashed; restart VAF. |
+| Node | `syncChats fetchMessageHistory: Cannot read properties of undefined (reading 'remoteJid')` | Obsolete: syncChats no longer calls fetchMessageHistory (that API is per-chat message history, not full chat list). The full chat list comes only from WhatsApp’s initial `messaging-history.set` on connect. |
 
 Best practice: if the bot does not reply, check that you see `[Python] got type='message'` and then `[inbound] ACCEPT` or `ENQUEUED` after Node’s `emitting message to Python`. If not, see "Bridge Not Responding / No Reply" and "Front Office Contact Does Not Get a Reply" above.
 

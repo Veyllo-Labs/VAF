@@ -118,6 +118,12 @@ Authentication (Baileys session) is stored per user under `~/.vaf/users/<usernam
 
 The bridge builds the allowed set from the config whitelist plus all WhatsApp/phone channel values from contacts with "Can reach your assistant" enabled.
 
+- **@lid (Linked ID)**: WhatsApp sometimes sends 1:1 chats as `…@lid` instead of `…@s.whatsapp.net`. The Node bridge resolves LID→E.164 via Baileys when possible. If resolution fails (e.g. mapping not yet synced), incoming messages from that JID are still **accepted** when you have whitelist or Front Office contacts configured, so contacts like baba can reach the assistant; replies go to the same chat. In logs you may see `ACCEPT unresolved @lid`. When the bridge later resolves LID→E.164 (or the dashboard infers it from one FO contact with no history and one LID session with history), the mapping is stored so the **Web UI** shows that conversation under the contact’s phone (Connections → WhatsApp → click contact): session history and Memory Learning then match the real chat.
+
+- **Self-chat (admin = bridge number)**: When the linked WhatsApp number (the one that scanned the QR code) is the same as the admin’s number (e.g. you message yourself or use “Saved Messages”), the bridge does **not** hand the message to the agent. It is stored as a note/backlog only (message store + activity), so the agent does not “talk to itself”. In logs you will see `SELF_CHAT stored as note (no agent reply)`.
+
+- **Owner takeover**: When the account owner (main user) replies themselves in a contact chat (e.g. you open the chat with baba and send a message from your phone), the bridge records “owner has control” for that chat. The agent **pauses replying** in that chat for **10 minutes** after your last message. Incoming messages from the contact are still stored (message store + activity) but not handed to the agent until 10 minutes have passed with no further message from you. In logs you will see `owner_sent chat=… → owner has control` and `owner_control: skip reply (owner has control, 10 min not elapsed)`.
+
 ### Best practices
 
 - **Whitelist format:** Use E.164 for all phone numbers (e.g. `+491761234567`). The bridge normalizes JIDs; leading zeros or missing country codes can cause mismatches.
@@ -316,7 +322,8 @@ The dashboard shows **Bridge running, WhatsApp not connected** when the Node pro
 1. **Check bridge is enabled:** `whatsapp_config.enabled` should be `true` in config.
 2. **Ensure bridge process is running:** Settings → Connections → WhatsApp toggle on; after VAF restart the bridge starts automatically when enabled.
 3. **Verify sender is whitelisted:** Your phone number (E.164) must be in the config whitelist or in a contact with "Can reach your assistant" and that contact must have the WhatsApp number in Channels. Check `logs/whatsapp_inbound.log` for `ACCEPT` vs `REJECT not_whitelist`.
-4. **Diagnose in `logs/whatsapp_qr.log`:** Python logs each received event as `[Python] got type='message'` (or `chats`, `connected`, etc.). If Node logs `emitting message to Python` but you never see `[Python] got type='message'`, the read loop may have failed (e.g. encoding). The bridge uses UTF-8 for Node stdout/stderr; restart the **full VAF application** and try again. Look for `[Python] JSON decode error` or `[Python] FATAL read loop` if the loop crashed.
+4. **Owner takeover:** If you (the account owner) recently replied in that contact chat from your phone, the agent intentionally does not reply for 10 minutes. Check `logs/whatsapp_inbound.log` or `logs/whatsapp_qr.log` for `owner_control: skip reply (owner has control, 10 min not elapsed)`. After 10 minutes without you sending another message, the next contact message will be answered by the agent again.
+5. **Diagnose in `logs/whatsapp_qr.log`:** Python logs each received event as `[Python] got type='message'` (or `chats`, `connected`, etc.). If Node logs `emitting message to Python` but you never see `[Python] got type='message'`, the read loop may have failed (e.g. encoding). The bridge uses UTF-8 for Node stdout/stderr; restart the **full VAF application** and try again. Look for `[Python] JSON decode error` or `[Python] FATAL read loop` if the loop crashed.
 
 ### Diagnostic logs (`logs/whatsapp_qr.log`)
 
@@ -329,6 +336,8 @@ Both Node stderr and Python bridge logs are written here. Use it to verify that 
 | Python | `[Python] got type='message'` (or `chats`, `connected`, `connection_closed`) | Python received and parsed this event type from Node stdout. |
 | Python | `[inbound] MESSAGE from=<jid>` | Incoming message is being processed. |
 | Python | `[inbound] REJECT` / `ACCEPT` / `ENQUEUED` | Sender not allowed / allowed / task enqueued. |
+| Python | `[inbound] owner_sent chat=...` | Account owner sent a message in that contact chat; owner has control for 10 min. |
+| Python | `[inbound] owner_control: skip reply ...` | Agent skip: owner has control, 10 min not elapsed. |
 | Python | `[Python] JSON decode error: ...` | A non-JSON or empty line was read (e.g. stray output); that line is skipped. |
 | Python | `[Python] FATAL read loop: ...` | The stdout read loop crashed; restart VAF. |
 

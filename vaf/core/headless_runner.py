@@ -621,27 +621,59 @@ def run_headless_agent():
                         except Exception:
                             pass
                         contact_block = ""
+                        reply_lang_hint = ""
                         if contact:
-                            parts = [f"Contact name: {contact.get('name') or 'Unknown'}."]
-                            if contact.get("preferred_language"):
-                                parts.append(f"Preferred language: {contact['preferred_language']}.")
-                            if contact.get("how_to_address"):
-                                parts.append(f"How to address them: {contact['how_to_address']}.")
-                            if contact.get("birthday"):
-                                parts.append(f"Birthday: {contact['birthday']}.")
-                            if contact.get("notes"):
-                                notes = (contact["notes"] or "").strip()
+                            from vaf.core.contacts_store import _contact_ensure_channels
+                            c = _contact_ensure_channels(contact)
+                            lines = []
+                            lines.append(f"Contact: {c.get('name') or 'Unknown'}")
+                            lines.append("Channels")
+                            for ch in (c.get("channels") or []):
+                                t, v = (ch.get("type") or "").strip().lower(), (ch.get("value") or "").strip()
+                                if not v:
+                                    continue
+                                if t in ("whatsapp", "phone"):
+                                    lines.append(f"  Phone (used as WhatsApp): {v}")
+                                elif t == "telegram":
+                                    lines.append(f"  Telegram: {v}")
+                                elif t == "email":
+                                    lines.append(f"  Email: {v}")
+                                elif t == "discord":
+                                    lines.append(f"  Discord: {v}")
+                            if not any("Phone" in ln or "WhatsApp" in ln for ln in lines):
+                                if c.get("whatsapp_phone"):
+                                    lines.append(f"  Phone (used as WhatsApp): {c['whatsapp_phone']}")
+                            lines.append("Personal file")
+                            if c.get("preferred_language"):
+                                lines.append(f"  Language: {c['preferred_language']}")
+                                pl_code = (c["preferred_language"] or "").strip().lower()[:2]
+                                _lang_names = {"de": "German", "en": "English", "tr": "Turkish", "fr": "French", "es": "Spanish", "ar": "Arabic"}
+                                pl_name = _lang_names.get(pl_code) or pl_code
+                                reply_lang_hint = f" REPLY IN: {pl_name} (contact preferred_language; use this language for your reply even if the message was in another language)."
+                            if c.get("how_to_address"):
+                                lines.append(f"  How to address: {c['how_to_address']}")
+                            if c.get("allow_as_assistant_user"):
+                                lines.append("  Can reach your assistant")
+                            if c.get("birthday"):
+                                lines.append(f"  Birthday: {c['birthday']}")
+                            lines.append("Notes")
+                            if c.get("notes"):
+                                notes = (c["notes"] or "").strip()
                                 if len(notes) > 600:
                                     notes = notes[:597] + "..."
-                                parts.append(f"Notes: {notes}")
-                            contact_block = " " + " ".join(parts)
+                                lines.append(f"  {notes}")
+                            else:
+                                lines.append("  (none)")
+                            contact_block = "\n".join(lines)
                         effective_input = (
                             "[FRONT OFFICE – MESSAGE FROM A CONTACT, NOT FROM THE ACCOUNT OWNER.] "
                             "The following message was sent by a contact to your front office. "
                             "You must respond directly TO this contact (they will receive your reply). "
                             "Do NOT report to the account owner (e.g. do not say 'I sent X to the contact' or 'I have sent Alice...'). "
-                            "Do NOT repeat or echo the contact's message back; give a helpful reply."
+                            "Do NOT repeat or echo the contact's message back; give a helpful reply.\n\n"
+                            "Contact details (use Language / How to address / Notes when replying):\n"
                             + contact_block
+                            + ("\n" + reply_lang_hint if reply_lang_hint else "")
                             + "\n\nMessage from the contact:\n\n"
                             + effective_input
                         )

@@ -385,7 +385,7 @@ VAF: ✅ Automation created!
      Next Run: 2025-12-19 06:00
 ```
 
-**In Settings:** `S` → `⚡ Automations` to view/manage
+**In the Web UI:** Open **Settings → Automations** to view and manage tasks, or use the **Automation** button in the footer to open the calendar: pick a month, then a day, then an hour slot to create a new automation (repeat: once/daily/weekly/monthly/hourly, time, and a detailed prompt). The agent can also create automations via chat using the `create_automation` tool.
 
 ### 💾 Session Management
 

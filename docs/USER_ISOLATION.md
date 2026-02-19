@@ -268,6 +268,10 @@ Currently **single-admin only** — one Discord bot per VAF instance. Not multi-
 
 Uses **per-user keyring credentials** encrypted with AES-256-GCM. Each user's IMAP/SMTP sessions use their own stored credentials. Credential keys include the `user_scope_id` when set (format: `email:{provider}:{scope_id}:{account_id}`), falling back to username-based keys for legacy data.
 
+### Calendar (Google / Microsoft)
+
+Calendar uses the **same OAuth credentials and the same `user_scope_id`** as Email. There are no separate calendar credential keys. The calendar client (`vaf/core/calendar_client.py`) and calendar tools call `get_valid_access_token(..., user_scope_id=user_scope_id)` and use the same account list from `email_config` / `email_config_by_scope`. All calendar API calls are therefore scoped per user.
+
 Email config lookup follows a three-tier chain:
 1. `email_config_by_scope[user_scope_id]` — preferred, UUID-based
 2. `email_config_by_user[username]` — legacy per-user
@@ -291,6 +295,7 @@ Synced messages are stored per-scope in `scopes/<user_scope_id>/email_sync.db` (
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |
 | Email | Per-user encrypted credentials + scope-based config lookup chain | Application |
+| Calendar (Google/Microsoft) | Same OAuth and `user_scope_id` as Email; no separate credentials | Application |
 | Automations | Per-user task storage and scoped RAG access | Application |
 | Automation planner (notes/todos) | Per-user `automation_planner/<scope>/notes.json`, `todos.json` | Application |
 

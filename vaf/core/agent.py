@@ -3728,6 +3728,17 @@ class Agent:
         ]):
             if "librarian_agent" in self.tools:
                 forced_tools.add("librarian_agent")
+
+        # Calendar Heuristics
+        if any(kw in u_lower for kw in [
+            "calendar", "kalender", "event", "termin", "meeting", "reminder",
+            "erinnerung", "appointment", "verabredung", "schedule", "termine",
+            "was steht an", "upcoming", "meine termine"
+        ]):
+            if "list_calendar_events" in self.tools:
+                forced_tools.add("list_calendar_events")
+            if "create_calendar_event" in self.tools:
+                forced_tools.add("create_calendar_event")
         
         # Research Heuristics
         if any(kw in u_lower for kw in ["research", "recherche", "analyse", "report", "comprehensive", "umfassend", "deep"]):
@@ -6178,6 +6189,9 @@ class Agent:
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("add_automation_note", "add_automation_todo", "list_automation_notes", "list_automation_todos", "delete_automation_note", "delete_automation_todo"):
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name in ("list_calendar_events", "create_calendar_event", "update_calendar_event", "delete_calendar_event"):
+                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 # Pre-write intent/goal before sub-agent invocation for validation/retry
                 SUBAGENT_TOOLS = ("librarian_agent", "coding_agent", "research_agent", "document_agent")

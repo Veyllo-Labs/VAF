@@ -116,6 +116,24 @@ def append_domain_log(domain: str, message: str) -> None:
         pass
 
 
+def append_domain_log_always(domain: str, message: str) -> None:
+    """
+    Append one timestamped line to {domain}.log even when debug_logs_enabled is False.
+    Use only for important diagnostics (e.g. [CALENDAR] status, [EMAIL_OAUTH]) so users
+    can see what the backend did without enabling Debug Logs.
+    """
+    if domain not in ALLOWED_DOMAINS:
+        return
+    try:
+        log_dir = get_app_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().isoformat()
+        with open(log_dir / f"{domain}.log", "a", encoding="utf-8") as f:
+            f.write(f"{ts} {message}\n")
+    except Exception:
+        pass
+
+
 def append_domain_log_block(domain: str, first_line: str, rest_lines: Optional[List[str]] = None) -> None:
     """
     Append a timestamped first line and optional continuation lines (indented, no extra timestamp).

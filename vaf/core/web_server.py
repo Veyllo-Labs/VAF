@@ -283,6 +283,14 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount Cloud routes: {e}")
 
+# Mount Calendar routes (status + events; uses same OAuth as email)
+try:
+    from vaf.api.calendar_routes import router as calendar_router
+    app.include_router(calendar_router)
+    log("WebServer", "Calendar routes mounted at /api/calendar")
+except Exception as e:
+    log("WebServer", f"Failed to mount Calendar routes: {e}")
+
 # Add authentication middleware if local network is enabled
 if Config.get("local_network_enabled", False):
     try:
@@ -2980,11 +2988,20 @@ async def process_uploaded_files(files: list) -> str:
     return "".join(results)
 
 
+def _is_temp_like_filename(name: str) -> bool:
+    """True if name looks like our temp file (vaf_xxxxx.ext), so we should not expose it as document name."""
+    if not name or not name.startswith("vaf_"):
+        return False
+    import re
+    return bool(re.match(r"^vaf_[a-zA-Z0-9_]+\.[a-zA-Z0-9]+$", name))
+
+
 async def process_files_to_sidebar_list(files: list) -> list:
     """
-    Process uploaded files and return a list of {name, content, data?, mimeType?} for sidebar_documents.
+    Process uploaded files and return a list of {name, content, data?, mimeType?, path?} for sidebar_documents.
     Uses same Librarian extraction as process_uploaded_files.
     Passes through data (base64) and mimeType for PDF display.
+    Uploaded files get path="Hochgeladen über Web-UI (kein lokaler Pfad)" so the agent knows there is no local path.
     """
     import base64
     import tempfile
@@ -3007,6 +3024,8 @@ async def process_files_to_sidebar_list(files: list) -> list:
 
             decoded_data = base64.b64decode(base64_part)
             file_ext = Path(filename).suffix or ".txt"
+            if _is_temp_like_filename(filename):
+                filename = f"Dokument{file_ext}"
             with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=file_ext, delete=False) as temp_file:
                 temp_file.write(decoded_data)
                 temp_path = temp_file.name
@@ -3015,7 +3034,11 @@ async def process_files_to_sidebar_list(files: list) -> list:
                 from vaf.tools.librarian import LibrarianTool
                 librarian = LibrarianTool()
                 content = librarian._read_file(Path(temp_path), enable_chunking=True)
-                entry = {"name": filename, "content": content}
+                entry = {
+                    "name": filename,
+                    "content": content,
+                    "path": "Hochgeladen über Web-UI (kein lokaler Pfad)",
+                }
                 if base64_part:
                     entry["data"] = base64_part
                 if mime_type:
@@ -3054,9 +3077,13 @@ async def process_files_to_sidebar_list(files: list) -> list:
                 except Exception:
                     pass
         except Exception as e:
+            err_name = file_obj.get("name", "unknown")
+            if _is_temp_like_filename(err_name):
+                err_name = "Dokument" + (Path(err_name).suffix or ".txt")
             results.append({
-                "name": file_obj.get("name", "unknown"),
-                "content": f"[ERROR] Failed to process file: {str(e)}"
+                "name": err_name,
+                "content": f"[ERROR] Failed to process file: {str(e)}",
+                "path": "Hochgeladen über Web-UI (kein lokaler Pfad)",
             })
     return results
 

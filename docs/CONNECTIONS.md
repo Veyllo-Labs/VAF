@@ -12,17 +12,23 @@ Connect external apps and services to interact with your VAF agent.
 | **Telegram** | ✅ Available | Use VAF from Telegram; VAF can reach you there (whitelist, per-user) |
 | **Email** | ✅ Available | OAuth2 (Google, Microsoft, Apple) or IMAP/SMTP; read and send email via agent |
 | Slack | 🔜 Coming Soon | Integrate VAF into your Slack workspace |
+| Signal | 🔜 Coming Soon | Chat with your agent via Signal |
 | **WhatsApp** | ✅ Available | Chat with your agent on WhatsApp (QR link, per-user isolation) |
+| Microsoft Teams | 🔜 Coming Soon | Bot Framework for Teams integration |
+| Matrix (Element) | 🔜 Coming Soon | Open-source chat protocol |
+| IRC | 🔜 Coming Soon | Classic IRC for communities |
 | **Contacts** | ✅ Available | Central contact list with personal file and assistant whitelist |
 
 ### Calendar
 
 | Platform | Status | Description |
 |----------|--------|-------------|
-| Google Calendar | 🔜 Coming Soon | Sync events, create reminders, manage your calendar |
-| Microsoft Outlook | 🔜 Coming Soon | Connect to Outlook/Microsoft 365 calendar |
+| Google Calendar | ✅ Available | Sync events, create reminders, manage your calendar (uses Gmail OAuth) |
+| Microsoft Outlook | ✅ Available | Connect to Outlook/Microsoft 365 calendar (uses Outlook OAuth) |
 | Apple Calendar | 🔜 Coming Soon | Sync with iCloud Calendar on macOS |
 | CalDAV (Local) | 🔜 Coming Soon | Connect to any CalDAV server (Nextcloud, etc.) |
+
+**Setup:** Calendar uses the same OAuth connection as Email. Connect Gmail or Outlook in **Settings → Connections → Email**; the agent can then list, create, update, and delete events via the tools `list_calendar_events`, `create_calendar_event`, `update_calendar_event`, `delete_calendar_event`. In Google Cloud Console, enable the **Google Calendar API** for your project; the redirect URI is the same as for email (`/api/email/oauth/callback`). For Microsoft, the scope `Calendars.ReadWrite` is requested automatically. See [CALENDAR_INTEGRATION.md](CALENDAR_INTEGRATION.md) for details.
 
 ### Cloud Storage
 
@@ -584,7 +590,26 @@ If the Google Drive (or other cloud) connection sometimes **disappears from the 
 
 ## Future Integrations
 
-We're working on additional integrations:
+Additional platforms are listed in **Settings → Connections** as “Coming Soon” and may be implemented in future releases:
 
-- **Slack**: OAuth-based workspace integration
-- **WhatsApp**: Via WhatsApp Business API
+### Communication & team tools
+- **Slack** – Slack Bolt API for workspace bots, channels, threads
+- **Signal** – Chat with your agent via Signal
+- **Microsoft Teams** – Bot Framework for Teams integration
+- **Matrix (Element)** – Open-source chat protocol
+- **IRC** – Classic IRC for communities
+
+### Social & streaming
+- **LinkedIn** – Messaging API for professional contacts, lead generation
+- **X (Twitter)** – Twitter API v2 for DMs, mentions, tweet interactions
+- **Facebook Messenger** – Messenger Platform (similar to Instagram)
+- **Reddit** – Reddit API for PMs, comments, subreddit moderation
+- **YouTube** – YouTube Data API for comments, Community tab
+- **Twitch** – Twitch API for chat bots, subscriber messages
+- **Steam** – Steam Chat API for gaming community
+
+### Calendar & business
+- **Calendly** – Appointment scheduling and booking
+- **HubSpot** – CRM integration via HubSpot API
+- **Salesforce** – CRM integration via Salesforce API
+- **Shopify** – Customer support and order updates

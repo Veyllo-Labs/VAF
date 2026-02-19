@@ -55,6 +55,7 @@ To prevent the small Router LLM from missing obvious intents (e.g., overlooking 
 **Keywords & Forced Tools:**
 - **Filesystem:** "folder size", "disk usage", "how big", "storage", "read", "write" → `librarian_agent`
 - **Cloud Storage:** "Google Drive", "OneDrive", "cloud", "Drive durchsuchen" → `librarian_agent` (has `cloud_storage` tool for browse/read/download)
+- **Calendar:** "calendar", "kalender", "event", "termin", "meeting", "reminder", "erinnerung", "appointment", "verabredung", "schedule", "termine", "was steht an", "upcoming", "meine termine" → `list_calendar_events`, `create_calendar_event`
 - **Automation:** "automate", "schedule", "daily", "weekly" → `create_automation`
 - **Coding:** "code", "script", "app", "website", "fix", "bug" → `coding_agent`, `git_status`, `git_add_commit`
 - **Git:** "git", "commit", "push", "pull" → `git_status`, `git_add_commit`, `git_log`

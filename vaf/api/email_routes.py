@@ -283,6 +283,12 @@ async def oauth_callback(
         data = exchange_code_for_tokens(provider, code, state, redirect_uri)
         account_id = data.get("account_id") or "unknown"
         _add_account(account_id, provider, account_id if "@" in account_id else account_id, enabled=True)
+        logger.info("email oauth callback: account added account_id=%s provider=%s", account_id, provider)
+        try:
+            from vaf.core.log_helper import append_domain_log
+            append_domain_log("backend", f"[EMAIL_OAUTH] account added account_id={account_id} provider={provider}")
+        except Exception:
+            pass
         return _redirect_success(account_id, provider)
     except ValueError as e:
         logger.warning("OAuth callback error: %s", e)

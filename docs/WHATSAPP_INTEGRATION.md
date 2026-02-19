@@ -242,7 +242,9 @@ Node responds with `{ "type": "send_result", "req_id": "...", "success": true|fa
 | `find_whatsapp_messages` | Search messages by query (body, chat name, sender); optional `chat_id` | User asks "find messages from X" or "what did X say in WhatsApp" |
 | `read_whatsapp_chat` | Read messages from a chat (`chat_id`, `limit`) | Read full thread; use chat_id from inbox or find |
 | `send_whatsapp` | Send text, voice (`voice_lang`), or document (`file_path`) | User asks to send something via WhatsApp; use contact’s preferred_language for voice_lang when sending to a contact |
-| `whatsapp_call` | Placeholder | Not implemented; use send_whatsapp for communication |
+| `whatsapp_call` | Placeholder (not implemented) | Do not use; voice/video calls are not supported. Use `send_whatsapp` for text or `send_whatsapp(voice_lang="...")` for voice messages. |
+
+**Best practice:** For all WhatsApp communication (text, voice, documents), use `send_whatsapp`. The `whatsapp_call` tool is intentionally unimplemented and returns a message directing the agent to use `send_whatsapp` instead.
 
 ---
 

@@ -57,6 +57,7 @@ Key rules:
 - `set_sidebar_documents`: set documents shown in the Document Viewer (attachments panel) for the current session. Payload: `{ sessionId?, documents: Array<{ name, data (base64/data-URL), mimeType? }> }`. Backend stores extracted text in `session.runtime_state["sidebar_documents"]` and injects it into the next user turn for the LLM. Send `documents: []` to clear.
 - `get_sessions`, `new_session`, `load_session`, `delete_session`
 - `get_config`, `get_models`, `get_tools`, `get_workflows`
+- **Automation planner (per-user):** `get_automation_notes`, `get_automation_todos` (no payload). Create/update/delete: `create_automation_note` (`title?`, `content`), `create_automation_todo` (`text`, `due_at?`), `update_automation_todo` (`id`, `text?`, `done?`, `due_at?`), `delete_automation_note` (`id`), `delete_automation_todo` (`id`). Server uses `user_scope_id` from the connection (same as `get_automations`).
 - `contact_reply_decision`: approve or reject a pending contact reply (Front Office). Payload: `{ replyId: string, decision: "approve" | "reject" }`. Server responds with `contact_reply_result` (`ok`, `decision`, `replyId`, optional `error`).
 
 ### Server → Client
@@ -75,6 +76,7 @@ Key rules:
 - `subagent_output_stream`: live stdout/stderr lines from headless sub-agents
 - `model_state`: Status des lokalen Modells (`loaded`, `persistent`, `provider`)
 - `config_saved`: Bestätigung nach Speichern der Einstellungen; bei Provider-Änderung enthält die Antwort `requires_refresh: true`, die Web-UI zeigt dann das Overlay „Changing model“ und lädt nach 5 Sekunden neu (siehe [MODELL_UND_PROVIDER_WECHSEL.md](MODELL_UND_PROVIDER_WECHSEL.md)).
+- **Automation planner responses:** `automation_notes_list` (`notes: []`), `automation_todos_list` (`todos: []`); `create_automation_note_result` (`ok`, `note?`), `create_automation_todo_result` (`ok`, `todo?`), `update_automation_todo_result` (`ok`, `todo?`), `delete_automation_note_result` (`ok`, `id?`), `delete_automation_todo_result` (`ok`, `id?`). The frontend updates lists optimistically using returned `note`/`todo`/`id` when present.
 - `contact_reply_pending`: a reply to a contact (Front Office) is waiting for approval. Payload: `{ replyId, source ("telegram"|"whatsapp"), contactName, preview, sessionId }`. The UI shows Approve/Reject; the client sends `contact_reply_decision` with the same `replyId` and `decision: "approve"` or `"reject"`.
 - `contact_reply_result`: response to `contact_reply_decision`. Payload: `{ ok, decision?, replyId, error? }`. Used to remove the pending item from the UI or show an error.
 

@@ -235,6 +235,10 @@ A one-time migration script (`scripts/migrate_users_to_scopes.py`) copies data f
 
 Each `AutomationManager` instance is created with a `user_scope_id` and stores tasks in a per-user subdirectory. Tasks carry their `user_scope_id` so that scheduled RAG searches only access the owner's memories.
 
+### Automation planner – notes and todos (`vaf/core/automation_planner.py`)
+
+Notes and to-dos for the automation calendar are stored per user under `Platform.vaf_dir() / "automation_planner" / <user_scope_id> /` (or `_default` when no scope): `notes.json` and `todos.json`. All planner API functions take `user_scope_id`; the Web UI and agent tools use the same scope so that the calendar shows only the current user's data.
+
 ### Sandbox (`vaf/tools/python_sandbox.py`)
 
 Code execution in the Docker sandbox uses per-user working directories:
@@ -288,6 +292,7 @@ Synced messages are stored per-scope in `scopes/<user_scope_id>/email_sync.db` (
 | Telegram | Whitelist-based routing | Application |
 | Email | Per-user encrypted credentials + scope-based config lookup chain | Application |
 | Automations | Per-user task storage and scoped RAG access | Application |
+| Automation planner (notes/todos) | Per-user `automation_planner/<scope>/notes.json`, `todos.json` | Application |
 
 ## Developer Guidelines: Building New Features
 

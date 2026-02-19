@@ -801,6 +801,12 @@ def run_headless_agent():
                         )
                     except Exception:
                         pass
+                    try:
+                        from vaf.core.thinking_mode import clear_waiting_for_reply
+                        meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                        clear_waiting_for_reply(meta.get("user_scope_id"))
+                    except Exception:
+                        pass
 
                     # Handle async-ack markers (sub-agent dispatched, no stream output)
                     response_text = str(response) if response is not None else ""

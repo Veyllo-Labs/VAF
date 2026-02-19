@@ -1029,7 +1029,10 @@ class Agent:
                             instance.name in MAIN_AGENT_EXCLUDED_TOOLS or 
                             getattr(instance, 'coder_only', False)
                         )
-                        
+                        # Denkmodus: no Git commits – background runs must not change the repo
+                        if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+                            if instance.name == "git_add_commit":
+                                continue
                         if is_coder_only:
                             continue
                         

@@ -116,6 +116,8 @@ class Config:
         "thinking_check_interval_seconds": 60,                 # How often to check for idle users
         "thinking_automation_buffer_minutes": 10,              # Do not start if automation runs within this many minutes
         "thinking_max_duration_minutes": 30,                  # Max duration per thinking run (then release lock)
+        "thinking_wait_nudge_minutes": 3,                     # If user does not reply to a question: send nudge after this many minutes
+        "thinking_wait_skip_minutes": 10,                     # If still no reply after this many minutes total: skip the question and do other things
 
         # Garbage Collector Settings
         "gc_enabled": True,                    # Enable automatic temp file / log cleanup

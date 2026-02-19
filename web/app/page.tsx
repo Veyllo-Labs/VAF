@@ -49,6 +49,8 @@ type Session = {
     id: string;
     title: string;
     messageCount?: number;
+    /** Denkmodus run shown in chat list with speech-bubble icon */
+    source?: 'thinking';
 };
 
 /** Replace plain-text range [start, end] in HTML with newText; returns new HTML. */
@@ -2894,7 +2896,11 @@ function VAFDashboardContent() {
                                         <div className="absolute left-1 my-auto w-1 h-1 bg-black rounded-full" />
                                     )}
 
-                                    <MessageSquare size={16} className={cn("shrink-0", currentSessionId === s.id ? "text-gray-900" : "text-gray-400")} />
+                                    {(s as Session).source === 'thinking' ? (
+                                        <span title="Denkmodus" className="text-base leading-none">🧠</span>
+                                    ) : (
+                                        <MessageSquare size={16} className={cn("shrink-0", currentSessionId === s.id ? "text-gray-900" : "text-gray-400")} />
+                                    )}
 
                                     <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 transition-opacity min-w-0 pr-1">
                                         {editingId === s.id ? (

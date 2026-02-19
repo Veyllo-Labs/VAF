@@ -1647,7 +1647,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         web_sessions = _web_ui_sessions(sessions)
         await websocket.send_json({
             "type": "session_list",
-            "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in web_sessions]
+            "sessions": [
+                {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
+                for s in web_sessions
+            ]
         })
         # Send cached stats if available, otherwise send defaults
         stats_to_send = manager.last_stats
@@ -1751,7 +1754,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     web_sessions = _web_ui_sessions(sessions)
                     await websocket.send_json({
                         "type": "session_list",
-                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in web_sessions]
+                        "sessions": [
+                            {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
+                            for s in web_sessions
+                        ]
                     })                
                 elif type == "load_session":
                     sid = cmd.get("id")
@@ -1862,7 +1868,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     web_sessions = _web_ui_sessions(sessions)
                     await manager.broadcast({
                         "type": "session_list",
-                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in web_sessions]
+                        "sessions": [
+                            {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
+                            for s in web_sessions
+                        ]
                     })
 
                 elif type == "new_session":
@@ -1883,8 +1892,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     web_sessions = _web_ui_sessions(sessions)
                     await websocket.send_json({
                         "type": "session_list",
-                        "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in web_sessions]
-                    })                    
+                        "sessions": [
+                            {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
+                            for s in web_sessions
+                        ]
+                    })
                     # Clear frontend chat
                     await websocket.send_json({
                         "type": "history_update",
@@ -1907,7 +1919,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         web_sessions = _web_ui_sessions(sessions)
                         await manager.broadcast({
                             "type": "session_list",
-                            "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"]} for s in web_sessions]
+                            "sessions": [
+                                {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
+                                for s in web_sessions
+                            ]
                         })
 
                 elif type == "get_config":
@@ -2218,6 +2233,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 source="web",
                                 preview=(content or "")[:80],
                             )
+                        except Exception:
+                            pass
+                        try:
+                            from vaf.core.thinking_mode import clear_waiting_for_reply
+                            clear_waiting_for_reply(user_scope_id)
                         except Exception:
                             pass
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)

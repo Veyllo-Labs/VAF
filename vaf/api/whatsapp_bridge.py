@@ -580,7 +580,7 @@ def _read_user_process(
                     pass
                 continue
             typ = obj.get("type")
-            if typ in ("message", "chats", "connected", "connection_closed", "lid_mappings"):
+            if typ in ("message", "chats", "connected", "connection_closed", "lid_mappings", "history_messages"):
                 try:
                     from vaf.core.log_helper import log_whatsapp_qr
                     log_whatsapp_qr(f"[Python] got type={typ!r}")
@@ -654,6 +654,38 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             log_whatsapp_qr(f"[Python] connection_closed statusCode={code} → UI will show orange")
         except Exception:
             pass
+    elif typ == "history_messages":
+        # Chat history from WhatsApp (messaging-history.set); store so inbox has full history
+        try:
+            from vaf.core.whatsapp_message_store import append_message
+            stored = 0
+            for m in obj.get("messages") or []:
+                chat_id = (m.get("chat_id") or "").strip()
+                if not chat_id:
+                    continue
+                body = (m.get("body") or "").strip() or "<message>"
+                direction = "out" if m.get("direction") == "out" else "in"
+                ts_val = m.get("ts")
+                ts_float = float(ts_val) if ts_val is not None else None
+                append_message(
+                    username,
+                    chat_id,
+                    body,
+                    direction=direction,
+                    message_id=m.get("message_id"),
+                    content_type=m.get("content_type") or "text",
+                    user_scope_id=user_scope_id,
+                    ts=ts_float,
+                )
+                stored += 1
+            if stored:
+                try:
+                    from vaf.core.log_helper import log_whatsapp_qr
+                    log_whatsapp_qr(f"[Python] history_messages: stored {stored} to message store")
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("WhatsApp: store history_messages failed: %s", e)
     elif typ == "owner_sent":
         from_jid = (obj.get("from") or "").strip()
         ts = obj.get("ts")

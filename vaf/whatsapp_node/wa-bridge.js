@@ -332,6 +332,29 @@ async function connect(authDir) {
       } catch (_) {}
       emitChats();
     }
+    // Emit history messages so Python can store them (chat history download)
+    const historyMessages = evt?.messages;
+    if (Array.isArray(historyMessages) && historyMessages.length > 0) {
+      const BATCH = 200;
+      for (let i = 0; i < historyMessages.length; i += BATCH) {
+        const batch = historyMessages.slice(i, i + BATCH).map((msg) => {
+          if (!msg?.key?.remoteJid) return null;
+          const remoteJid = msg.key.remoteJid;
+          if (isJidGroup(remoteJid)) return null; // Phase 1: DMs only
+          const chatId = jidToPhone(remoteJid) || remoteJid;
+          const body = extractText(msg) || (getContentType(msg) !== "text" ? `<media:${getContentType(msg)}>` : "");
+          const direction = msg.key.fromMe ? "out" : "in";
+          const ts = msg.messageTimestamp ? (Number(msg.messageTimestamp) > 1e12 ? Math.floor(Number(msg.messageTimestamp) / 1000) : Number(msg.messageTimestamp)) : 0;
+          const messageId = msg.key.id || "";
+          const contentType = getContentType(msg) || "text";
+          return { chat_id: chatId, body, direction, ts, message_id: messageId, content_type: contentType };
+        }).filter(Boolean);
+        if (batch.length > 0) emit({ type: "history_messages", messages: batch });
+      }
+      try {
+        fs.writeSync(2, `${LOG_PREFIX} messaging-history.set: emitted ${historyMessages.length} history messages to Python\n`);
+      } catch (_) {}
+    }
   });
 
   sock.ev.on("chats.upsert", (chats) => {

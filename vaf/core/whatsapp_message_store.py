@@ -91,14 +91,15 @@ def append_message(
     message_id: Optional[str] = None,
     content_type: str = "text",
     user_scope_id: Optional[str] = None,
+    ts: Optional[float] = None,
 ) -> None:
-    """Append one message to the store."""
+    """Append one message to the store. ts: optional Unix timestamp (e.g. from history sync); default now."""
     import time
     import sqlite3
     init_store(username, user_scope_id)
     conn = _get_conn(username, user_scope_id)
     try:
-        ts = time.time()
+        ts = float(ts) if ts is not None else time.time()
         # Use chat_id+ts+direction as fallback unique key when message_id missing
         mid = message_id or f"_{ts}_{direction}"
         conn.execute(

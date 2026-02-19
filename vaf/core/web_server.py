@@ -538,7 +538,7 @@ async def startup_event():
         except Exception as e:
             log("WebServer", f"Cloud sync loop start error: {e}")
 
-    # Thinking mode (Denkmodus): background reflection when user idle
+    # Thinking mode: background reflection when user idle
     if Config.get("thinking_enabled", True):
         try:
             from vaf.core.thinking_mode import start_thinking_mode_background

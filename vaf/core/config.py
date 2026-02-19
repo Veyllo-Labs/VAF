@@ -110,7 +110,7 @@ class Config:
         "telegram_idle_timeout": 120,          # Keep model loaded this long after last Telegram prompt when no Web connections (seconds)
         "telegram_debounce_seconds": 5,        # Wait this long for follow-up messages; combine into one prompt per chat
 
-        # Thinking Mode (Denkmodus): background reflection when user idle
+        # Thinking mode: background reflection when user idle
         "thinking_enabled": True,                              # Enable thinking mode when idle
         "thinking_idle_minutes": 10,                           # Start after this many minutes without activity
         "thinking_check_interval_seconds": 60,                 # How often to check for idle users

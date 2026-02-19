@@ -101,6 +101,10 @@ def is_locked(user_scope_id: Optional[str], max_duration_minutes: int = 30) -> b
 
 # --- Waiting for user reply (after agent asked a question in thinking mode) ---
 WAITING_REPLY_FILENAME = "thinking_waiting_reply.json"
+LAST_REPLY_FILENAME = "thinking_last_reply.json"
+LAST_REPLY_PREVIEW_MAX = 500
+LAST_THINKING_SESSION_FILENAME = "thinking_last_session_id.json"
+USER_REPLIES_FILENAME = "thinking_user_replies.json"
 
 
 def _waiting_path() -> Path:
@@ -144,9 +148,52 @@ def set_waiting_for_reply(
     _save_waiting(data)
 
 
-def clear_waiting_for_reply(user_scope_id: Optional[str]) -> None:
-    """User replied or we skipped after 10 min; clear waiting state."""
+def _last_reply_path() -> Path:
+    return Platform.data_dir() / LAST_REPLY_FILENAME
+
+
+def _load_last_reply() -> Dict[str, dict]:
+    path = _last_reply_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+        if not raw.strip():
+            return {}
+        return json.loads(raw)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_last_reply(data: Dict[str, dict]) -> None:
+    path = _last_reply_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def clear_waiting_for_reply(
+    user_scope_id: Optional[str],
+    user_reply_text: Optional[str] = None,
+) -> None:
+    """User replied or we skipped after 10 min; clear waiting state. If user_reply_text is given, save it for the next thinking run and for the thinking-session UI."""
     key = _key(user_scope_id)
+    if user_reply_text is not None and (user_reply_text or "").strip():
+        preview = (user_reply_text or "").strip()
+        if len(preview) > LAST_REPLY_PREVIEW_MAX:
+            preview = preview[:LAST_REPLY_PREVIEW_MAX] + "…"
+        data = _load_last_reply()
+        data[key] = {
+            "reply_preview": preview,
+            "reply_at_ts": time.time(),
+        }
+        _save_last_reply(data)
+        # Attach reply to last thinking session so it can be shown in that session's UI
+        last_sid = get_and_clear_last_thinking_session_id(user_scope_id)
+        if last_sid:
+            replies = _load_user_replies()
+            replies[last_sid] = {"reply": preview, "at": datetime.now().isoformat()}
+            _save_user_replies(replies)
     data = _load_waiting()
     if key in data:
         del data[key]
@@ -158,6 +205,110 @@ def get_waiting_for_reply(user_scope_id: Optional[str]) -> Optional[Dict[str, An
     key = _key(user_scope_id)
     data = _load_waiting()
     return data.get(key)
+
+
+def get_and_clear_last_reply(user_scope_id: Optional[str]) -> Optional[str]:
+    """
+    Return the saved user reply preview for the next thinking run, then remove it (one-time use).
+    Returns None if no reply was stored.
+    """
+    key = _key(user_scope_id)
+    data = _load_last_reply()
+    entry = data.get(key)
+    if not entry or not isinstance(entry, dict):
+        return None
+    preview = (entry.get("reply_preview") or "").strip()
+    if key in data:
+        del data[key]
+        _save_last_reply(data)
+    return preview if preview else None
+
+
+# --- Last thinking session id (for associating user replies with a session in the UI) ---
+
+def _last_session_id_path() -> Path:
+    return Platform.data_dir() / LAST_THINKING_SESSION_FILENAME
+
+
+def _user_replies_path() -> Path:
+    return Platform.data_dir() / USER_REPLIES_FILENAME
+
+
+def _load_last_session_ids() -> Dict[str, str]:
+    path = _last_session_id_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+        if not raw.strip():
+            return {}
+        return json.loads(raw)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_last_session_ids(data: Dict[str, str]) -> None:
+    path = _last_session_id_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def set_last_thinking_session_id(user_scope_id: Optional[str], session_id: str) -> None:
+    """Record the thinking session id for this user so the next user reply can be attached to it in the UI."""
+    key = _key(user_scope_id)
+    data = _load_last_session_ids()
+    data[key] = str(session_id).strip()
+    _save_last_session_ids(data)
+
+
+def get_and_clear_last_thinking_session_id(user_scope_id: Optional[str]) -> Optional[str]:
+    """Return the last thinking session id for this user and remove it (used when saving a reply to that session)."""
+    key = _key(user_scope_id)
+    data = _load_last_session_ids()
+    sid = data.pop(key, None)
+    if sid is not None:
+        _save_last_session_ids(data)
+    return sid if sid else None
+
+
+def _load_user_replies() -> Dict[str, Dict[str, Any]]:
+    path = _user_replies_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+        if not raw.strip():
+            return {}
+        return json.loads(raw)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_user_replies(data: Dict[str, Dict[str, Any]]) -> None:
+    path = _user_replies_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def get_user_reply_for_session(session_id: str) -> Optional[Dict[str, Any]]:
+    """Return the stored user reply for this thinking session, if any. Does not remove it."""
+    if not session_id or not str(session_id).strip().startswith("thinking_"):
+        return None
+    data = _load_user_replies()
+    return data.get(str(session_id))
+
+
+def pop_user_reply_for_session(session_id: str) -> Optional[Dict[str, Any]]:
+    """Return and remove the stored user reply for this thinking session, if any."""
+    if not session_id or not str(session_id).strip().startswith("thinking_"):
+        return None
+    data = _load_user_replies()
+    entry = data.pop(session_id, None)
+    if entry is not None:
+        _save_user_replies(data)
+    return entry
 
 
 def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str) -> bool:
@@ -421,6 +572,9 @@ def _run_thinking_for_user(
                     "\n\n**Last thinking-mode run (for context only – do not repeat these actions or ask the same again):**\n"
                     + last_summary
                 )
+            last_reply = get_and_clear_last_reply(user_scope_id)
+            if last_reply:
+                notice += "\n\n**User reply to your last question:** " + last_reply
             agent.history[0]["content"] = (agent.history[0]["content"] or "") + notice
 
         logger.info("Thinking started for user %s", scope_key[:8] if scope_key != "default" else "default")
@@ -454,9 +608,11 @@ def _run_thinking_for_user(
                 )
                 try:
                     from vaf.core.session import SessionManager
-                    SessionManager().save_thinking_run(
+                    sid = SessionManager().save_thinking_run(
                         user_scope_id, run_id, started_iso, ended_iso, log_messages
                     )
+                    if sid:
+                        set_last_thinking_session_id(user_scope_id, sid)
                 except Exception as sess_err:
                     logger.warning("Could not save thinking run as session: %s", sess_err)
             except Exception as log_err:

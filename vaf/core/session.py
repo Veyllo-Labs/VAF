@@ -299,6 +299,8 @@ class SessionManager:
                         data = json.load(f)
                 
                 meta = data.get("metadata") or {}
+                if meta.get("hidden_from_list"):
+                    continue  # Hide from list (e.g. thinking session "removed" by user); GC can delete later
                 sessions.append({
                     "id": data.get("id"),
                     "name": data.get("name"),
@@ -314,6 +316,18 @@ class SessionManager:
         
         return sessions
 
+    def hide(self, session_id: str) -> bool:
+        """Mark session as hidden from list (e.g. thinking session). Does not delete; GC can delete later."""
+        try:
+            session = self.load(session_id)
+            if not session.metadata:
+                session.metadata = {}
+            session.metadata["hidden_from_list"] = True
+            self.save(session, sync_state=False)
+            return True
+        except FileNotFoundError:
+            return False
+
     def save_thinking_run(
         self,
         user_scope_id: Optional[str],
@@ -321,11 +335,12 @@ class SessionManager:
         started_at: str,
         ended_at: str,
         messages_list: List[Dict[str, Any]],
-    ) -> None:
+    ) -> str:
         """
         Save a thinking-mode run as a session so it appears in the Web UI chat list.
         user_scope_id: scope key (string); started_at/ended_at: ISO datetime strings.
         messages_list: list of {"role", "content", "tool_calls": [names]} (e.g. from run log).
+        Returns the session id (e.g. thinking_<scope>_<run_id>).
         """
         scope_key = str(user_scope_id).strip() if user_scope_id else "default"
         safe_key = "".join(c if c.isalnum() or c in "-_" else "_" for c in scope_key)[:32]
@@ -336,12 +351,22 @@ class SessionManager:
             role = m.get("role") or "assistant"
             content = m.get("content") or ""
             tools = m.get("tool_calls")
-            if tools:
-                content = (content or "").strip()
-                if content:
-                    content += "\n\n"
-                content += "[Tools: " + ", ".join(str(t) for t in tools) + "]"
-            messages.append(Message(role=role, content=(content or "").strip() or "(no content)", timestamp=started_at))
+            if role == "assistant" and tools:
+                # Assistant message without "[Tools: ...]" suffix
+                messages.append(Message(role="assistant", content=(content or "").strip() or "(no content)", timestamp=started_at))
+                # One tool message per tool so UI shows real tool names (not "Unknown Tool")
+                for i, tool_name in enumerate(tools):
+                    messages.append(Message(
+                        role="tool",
+                        content="(completed)",
+                        timestamp=started_at,
+                        metadata={"toolName": str(tool_name), "toolId": f"thinking-{run_id}-{i}", "toolStatus": "completed"},
+                    ))
+            else:
+                content_plain = (content or "").strip()
+                if tools:
+                    content_plain += "\n\n[Tools: " + ", ".join(str(t) for t in tools) + "]"
+                messages.append(Message(role=role, content=content_plain or "(no content)", timestamp=started_at))
         session = Session(
             id=sid,
             name=name,
@@ -353,6 +378,7 @@ class SessionManager:
             metadata={"source": "thinking"},
         )
         self.save(session, sync_state=False)
+        return sid
 
     def delete(self, session_id: str) -> bool:
         """Delete a session."""

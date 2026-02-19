@@ -6,6 +6,8 @@ Deletes files older than gc_max_age_hours (default 48).
 Controlled via config keys: gc_enabled, gc_interval_hours, gc_max_age_hours.
 """
 
+import gzip
+import json
 import logging
 import shutil
 import tempfile
@@ -128,13 +130,56 @@ class GarbageCollector:
 
     def _collect(self) -> Dict[str, int]:
         cutoff = datetime.now() - timedelta(hours=self._max_age_hours())
-        stats: Dict[str, int] = {"deleted": 0, "freed_bytes": 0, "errors": 0}
+        stats: Dict[str, int] = {"deleted": 0, "freed_bytes": 0, "errors": 0, "thinking_sessions_deleted": 0}
 
         self._clean_log_files(cutoff, stats)
         self._clean_temp_files(cutoff, stats)
         self._clean_cache_dir(cutoff, stats)
+        self._clean_old_thinking_sessions(stats)
 
         return stats
+
+    # -- Old thinking-mode sessions (by age) -----------------------------
+
+    def _clean_old_thinking_sessions(self, stats: Dict[str, int]) -> None:
+        """Delete thinking-mode sessions older than thinking_gc_hours."""
+        try:
+            from vaf.core.session import SessionManager
+            from vaf.core.config import Config
+        except Exception:
+            return
+        hours = 12
+        try:
+            hours = int(Config.get("thinking_gc_hours", 12) or 12)
+        except (TypeError, ValueError):
+            pass
+        cutoff = datetime.now() - timedelta(hours=hours)
+        sm = SessionManager()
+        for filepath in list(sm.storage_dir.glob("*.json")) + list(sm.storage_dir.glob("*.json.gz")):
+            sid = filepath.name.split(".")[0]
+            try:
+                if filepath.suffix == ".gz":
+                    with gzip.open(filepath, "rt", encoding="utf-8") as f:
+                        data = json.load(f)
+                else:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                if (data.get("metadata") or {}).get("source") != "thinking":
+                    continue
+                updated = data.get("updated_at") or data.get("created_at") or ""
+                if not updated:
+                    continue
+                try:
+                    # Parse ISO datetime (use first 19 chars for naive YYYY-MM-DDTHH:MM:SS)
+                    updated_dt = datetime.fromisoformat(updated[:19])
+                except Exception:
+                    continue
+                if updated_dt < cutoff:
+                    sm.delete(sid)
+                    stats["thinking_sessions_deleted"] = stats.get("thinking_sessions_deleted", 0) + 1
+                    logger.debug("[GC] Deleted old thinking session %s", sid)
+            except Exception as exc:
+                logger.debug("[GC] Skip session %s: %s", sid, exc)
 
     # -- Log files -------------------------------------------------------
 

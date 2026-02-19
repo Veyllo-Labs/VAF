@@ -298,6 +298,7 @@ class SessionManager:
                     with open(filepath, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                 
+                meta = data.get("metadata") or {}
                 sessions.append({
                     "id": data.get("id"),
                     "name": data.get("name"),
@@ -306,12 +307,53 @@ class SessionManager:
                     "model": data.get("model"),
                     "message_count": len(data.get("messages", [])),
                     "summary": Session.from_dict(data).summary(),
+                    "metadata": meta,
                 })
             except Exception:
                 continue
         
         return sessions
-    
+
+    def save_thinking_run(
+        self,
+        user_scope_id: Optional[str],
+        run_id: str,
+        started_at: str,
+        ended_at: str,
+        messages_list: List[Dict[str, Any]],
+    ) -> None:
+        """
+        Save a Denkmodus (thinking mode) run as a session so it appears in the Web UI chat list.
+        user_scope_id: scope key (string); started_at/ended_at: ISO datetime strings.
+        messages_list: list of {"role", "content", "tool_calls": [names]} (e.g. from run log).
+        """
+        scope_key = str(user_scope_id).strip() if user_scope_id else "default"
+        safe_key = "".join(c if c.isalnum() or c in "-_" else "_" for c in scope_key)[:32]
+        sid = f"thinking_{safe_key}_{run_id}"
+        name = f"Denkmodus {started_at[:16].replace('T', ' ')}"
+        messages = []
+        for m in messages_list or []:
+            role = m.get("role") or "assistant"
+            content = m.get("content") or ""
+            tools = m.get("tool_calls")
+            if tools:
+                content = (content or "").strip()
+                if content:
+                    content += "\n\n"
+                content += "[Tools: " + ", ".join(str(t) for t in tools) + "]"
+            messages.append(Message(role=role, content=(content or "").strip() or "(no content)", timestamp=started_at))
+        session = Session(
+            id=sid,
+            name=name,
+            created_at=started_at,
+            updated_at=ended_at,
+            model="",
+            project_path="",
+            messages=messages,
+            metadata={"source": "thinking"},
+        )
+        self.save(session, sync_state=False)
+
     def delete(self, session_id: str) -> bool:
         """Delete a session."""
         deleted = False

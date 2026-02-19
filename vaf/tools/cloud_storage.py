@@ -514,6 +514,8 @@ def _action_show_in_viewer(username: str, account_id: str, provider: str, file_i
             if not getattr(session, "runtime_state", None):
                 session.runtime_state = {}
             sidebar = session.runtime_state.get("sidebar_documents") or []
+            if any(d.get("name") == meta.name for d in sidebar):
+                return f'Document "{meta.name}" is already open in the Document Viewer (Anhänge).'
             sidebar.append(new_doc)
             session.runtime_state["sidebar_documents"] = sidebar
             session_mgr.save(session, sync_state=False)

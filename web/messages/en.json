@@ -234,6 +234,7 @@
       "localhostHint": "localhost only works on this PC. Other devices need your PC's IP (e.g. http://192.168.x.x:3000). Backend will show it when available.",
       "userManagement": "User Management",
       "searchUsers": "Search users\u2026",
+      "add": "Add",
       "addNewUser": "Add New User",
       "username": "Username",
       "role": "Role",

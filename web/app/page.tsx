@@ -1622,7 +1622,9 @@ function VAFDashboardContent() {
                             isOpen: true,
                             documents: contents.map((c, i) => ({
                                 ...(prev.documents[i] || {}),
-                                id: prev.documents[i]?.id ?? `doc-${i}-${c.name}`,
+                                id: (prev.documents.length === contents.length && prev.documents[i]?.name === c.name && prev.documents[i]?.id)
+                                    ? prev.documents[i].id
+                                    : `doc-${i}-${crypto.randomUUID().slice(0, 8)}`,
                                 name: c.name,
                                 content: c.content ?? prev.documents[i]?.content ?? '',
                                 ...(c.data != null && { data: c.data }),

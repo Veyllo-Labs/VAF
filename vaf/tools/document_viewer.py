@@ -97,6 +97,8 @@ Pass the full file path. The document appears in the right-hand Document Viewer 
             if not getattr(session, "runtime_state", None):
                 session.runtime_state = {}
             sidebar = session.runtime_state.get("sidebar_documents") or []
+            if any(d.get("name") == name for d in sidebar):
+                return f'Document "{name}" is already open in the Document Viewer (Anhänge).'
             sidebar.append(new_doc)
             session.runtime_state["sidebar_documents"] = sidebar
             session_mgr.save(session, sync_state=False)

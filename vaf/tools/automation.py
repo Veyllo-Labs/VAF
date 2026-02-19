@@ -56,7 +56,13 @@ Use this when user wants to schedule recurring tasks or a one-time task:
 - Use `list_automations` to find the automation ID
 - Use `read_automation` to see the full details
 - UPDATE the existing automation instead of creating a new one
-- Inform user: "I'll update the existing automation [name] instead of creating a new one" """
+- Inform user: "I'll update the existing automation [name] instead of creating a new one"
+
+4. **PROMPT CONTENT (when the automation sends something to the user):**
+   - Never hardcode a messenger (e.g. send_telegram). The user may use WhatsApp, Discord, email, etc.
+   - In the prompt, instruct: "Send the result/summary to the user via their **main_messenger** (see User Identity): use the matching tool—send_telegram, send_whatsapp, send_discord, send_slack, or send_mail—depending on main_messenger. If main_messenger is not set, summarize in your reply."
+   - For "weekly review", "wöchentlicher Report", or similar: use frequency **weekly** and set **weekday** (e.g. friday). Do not use daily.
+   - Do not assume git or version control. If the prompt mentions "recent changes" or "commits", phrase it as: "If the project uses version control (e.g. git), check recent commits with git_log; otherwise skip or use file/context." """
     
     parameters = {
         "type": "object",

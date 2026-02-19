@@ -63,6 +63,7 @@ export default function CreateAutomationPopup({
     const t = useTranslations('settings.automations.createPopup');
     const tAutomations = useTranslations('settings.automations');
     const [frequency, setFrequency] = useState<'once' | 'daily' | 'weekly' | 'monthly' | 'hourly'>('daily');
+    const [selectedWeekday, setSelectedWeekday] = useState<string>(WEEKDAYS[new Date().getDay()]);
     const [timeStr, setTimeStr] = useState(() => formatTime(initialHour, 0));
     const [prompt, setPrompt] = useState('');
     const [name, setName] = useState('');
@@ -72,15 +73,18 @@ export default function CreateAutomationPopup({
 
     const resetForm = useCallback(() => {
         if (editTask) {
-            setFrequency((editTask.frequency || 'daily') as 'once' | 'daily' | 'weekly' | 'monthly' | 'hourly');
+            const freq = (editTask.frequency || 'daily') as 'once' | 'daily' | 'weekly' | 'monthly' | 'hourly';
+            setFrequency(freq);
             setTimeStr(editTask.time || '06:00');
             setPrompt(editTask.prompt || '');
             setName(editTask.name || '');
+            setSelectedWeekday((editTask.weekday || '').toLowerCase() || WEEKDAYS[initialDate.getDay()]);
         } else {
             setFrequency('daily');
             setTimeStr(formatTime(initialHour, 0));
             setPrompt('');
             setName('');
+            setSelectedWeekday(WEEKDAYS[initialDate.getDay()]);
         }
         setError(null);
     }, [initialHour, editTask]);
@@ -88,13 +92,16 @@ export default function CreateAutomationPopup({
     useEffect(() => {
         if (isOpen) {
             if (editTask) {
-                setFrequency((editTask.frequency || 'daily') as 'once' | 'daily' | 'weekly' | 'monthly' | 'hourly');
+                const freq = (editTask.frequency || 'daily') as 'once' | 'daily' | 'weekly' | 'monthly' | 'hourly';
+                setFrequency(freq);
                 setTimeStr(editTask.time || '06:00');
                 setPrompt(editTask.prompt || '');
                 setName(editTask.name || '');
+                setSelectedWeekday((editTask.weekday || '').toLowerCase() || WEEKDAYS[initialDate.getDay()]);
                 setError(null);
             } else {
                 setTimeStr(formatTime(initialHour, 0));
+                setSelectedWeekday(WEEKDAYS[initialDate.getDay()]);
                 resetForm();
             }
         }
@@ -132,7 +139,7 @@ export default function CreateAutomationPopup({
             time,
             name: name.trim() || undefined,
             description: promptTrimmed.slice(0, 200),
-            weekday: frequency === 'weekly' ? (editTask?.weekday || weekday) : undefined,
+            weekday: frequency === 'weekly' ? selectedWeekday : undefined,
             day: frequency === 'monthly' ? (editTask?.day ?? dayOfMonth) : undefined,
         };
         if (editTask?.id) payload.task_id = editTask.id;
@@ -204,6 +211,24 @@ export default function CreateAutomationPopup({
                                 <option value="hourly">{t('frequencyHourly')}</option>
                             </select>
                         </div>
+
+                        {frequency === 'weekly' && (
+                            <div>
+                                <label htmlFor="create-automation-weekday" className="block text-sm font-medium text-gray-700 mb-1">
+                                    {t('weekdayLabel')}
+                                </label>
+                                <select
+                                    id="create-automation-weekday"
+                                    value={selectedWeekday}
+                                    onChange={(e) => setSelectedWeekday(e.target.value)}
+                                    className="w-full h-10 px-4 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                                >
+                                    {WEEKDAYS.map((d) => (
+                                        <option key={d} value={d}>{d.charAt(0).toUpperCase() + d.slice(1)}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
 
                         <div>
                             <label htmlFor="create-automation-time" className="block text-sm font-medium text-gray-700 mb-1">

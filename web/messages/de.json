@@ -301,6 +301,7 @@
         "title": "Automation erstellen",
         "subtitle": "Wiederholung und Aktion festlegen",
         "frequencyLabel": "Wiederholung",
+        "weekdayLabel": "Wochentag",
         "frequencyOnce": "Einmal",
         "frequencyDaily": "Täglich",
         "frequencyWeekly": "Wöchentlich (immer an diesem Wochentag)",

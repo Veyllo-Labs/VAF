@@ -301,6 +301,7 @@
         "title": "Create Automation",
         "subtitle": "Set schedule and action",
         "frequencyLabel": "Repeat",
+        "weekdayLabel": "Weekday",
         "frequencyOnce": "Once",
         "frequencyDaily": "Daily",
         "frequencyWeekly": "Weekly (always on this weekday)",

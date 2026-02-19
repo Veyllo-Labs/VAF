@@ -67,6 +67,8 @@ All keys live in the main config (e.g. `config.json` or Settings in the Web UI).
 - **Session id:** `thinking_<scope_key>_<run_id>` (e.g. `thinking_default_abc12345`). Stored by `SessionManager.save_thinking_run()`; that method returns the session id so it can be recorded as “last thinking session” for the user.
 - **Chat list:** Thinking sessions appear with a brain icon and `source === 'thinking'`. They are normal sessions on disk; `list()` excludes those with `metadata.hidden_from_list === true`.
 - **Hide vs delete:** In the Web UI, the trash action on a thinking session sends `hide_session` (not `delete_session`). The backend sets `metadata.hidden_from_list = true` and broadcasts the updated session list. The session file remains; it is only hidden from the list. The garbage collector still deletes old thinking sessions by age (see below).
+- **System prompt hidden:** When viewing a thinking session in the Web UI, the long thinking-mode system prompt (the instruction block sent to the agent) is not shown. Only the agent's steps, tool calls, and final reply are displayed.
+- **Message input:** The message box remains available in thinking sessions. The user can type a reply there (e.g. to answer the agent's question); the backend enqueues it for the session and stores it for the next thinking run and for the session history when reloaded.
 - **Tool names:** Saving a thinking run creates one assistant message and one `role="tool"` message per tool call, with `metadata.toolName`, `toolId`, `toolStatus`. The Web server sends these in `frontend_messages` so the UI shows real tool names instead of “Unknown Tool”.
 - **User reply in session:** When loading a session whose id starts with `thinking_`, the backend checks for a stored user reply for that session id. If present, it appends a user message “User replied: &lt;preview&gt;” to the history and removes the stored reply so it is only shown once.
 
@@ -100,7 +102,7 @@ Run logs are under `Platform.vaf_dir() / "thinking_mode_logs" / <scope_key> /` (
 - **Web:** `vaf/core/web_server.py` — WebSocket handlers `load_session`, `hide_session`; `update_last_interaction` on connect; injection of user reply when loading a thinking session; startup starts the garbage collector.
 - **GC:** `vaf/core/garbage_collector.py` — `_clean_old_thinking_sessions()`.
 - **Idle/reply:** `vaf/core/last_interaction.py` (activity); `vaf/core/thinking_mode.py` (waiting state, last reply, last session id, user replies per session).
-- **Frontend:** `web/app/page.tsx` — brain icon for thinking sessions; trash sends `hide_session` for `source === 'thinking'`.
+- **Frontend:** `web/app/page.tsx` — brain icon for thinking sessions; trash sends `hide_session` for `source === 'thinking'`; thinking-mode system prompt is hidden when viewing a thinking session; message input stays enabled for replying.
 
 ---
 

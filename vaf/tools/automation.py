@@ -3,9 +3,18 @@ VAF Automation Tool - Allow the model to create scheduled tasks
 """
 import json
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 from vaf.tools.base import BaseTool
 from vaf.core.automation import AutomationManager, AutomationTask, AutomationClarifier
+
+
+def _manager_for_scope(user_scope_id: Optional[str]) -> Tuple[AutomationManager, Optional[str]]:
+    """Return (manager, effective_scope) for user-scoped automation access. Local admin uses global scope."""
+    from vaf.core.config import get_local_admin_scope_id
+    local = get_local_admin_scope_id()
+    if not user_scope_id or str(user_scope_id).strip() == str(local).strip():
+        return AutomationManager(), None
+    return AutomationManager(user_scope_id=user_scope_id), user_scope_id
 
 
 class AutomationTool(BaseTool):
@@ -251,7 +260,7 @@ Use this when user wants to schedule recurring tasks or a one-time task:
             return f"Error: Invalid time format '{schedule_time}'. Expected HH:MM format (e.g., '22:46')."
         
         try:
-            manager = AutomationManager()
+            manager, use_scope = _manager_for_scope(kwargs.get("user_scope_id"))
             
             # Check for existing automations with same name or similar prompt
             existing_tasks = manager.list()
@@ -380,7 +389,7 @@ Use this when user wants to schedule recurring tasks or a one-time task:
                 from vaf.cli.ui import UI
                 UI.event("Warning", "Workflow generation failed - automation will use prompt-based execution", style="yellow")
             
-            # Create the task
+            # Create the task (user_scope_id so run_task uses this user's tools/memory)
             task = AutomationTask(
                 name=name,
                 prompt=prompt,  # Keep for backwards compatibility
@@ -391,7 +400,8 @@ Use this when user wants to schedule recurring tasks or a one-time task:
                 day=day if frequency == "monthly" else None,
                 output_path=output_path,
                 output_format=format_type,  # IMPORTANT: Set the output format!
-                parameters=params
+                parameters=params,
+                user_scope_id=use_scope,
             )
             
             task = manager.create(task)
@@ -862,7 +872,7 @@ class ListAutomationsTool(BaseTool):
     
     def run(self, **kwargs) -> str:
         try:
-            manager = AutomationManager()
+            manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
             tasks = manager.list()
             
             if not tasks:
@@ -911,7 +921,7 @@ class ReadAutomationTool(BaseTool):
             return "Error: No task ID provided. Use `list_automations` to see available task IDs."
         
         try:
-            manager = AutomationManager()
+            manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
             task = manager.get(task_id)
             
             if not task:
@@ -1008,7 +1018,7 @@ class UpdateAutomationTool(BaseTool):
             return "Error: No task ID provided. Use `list_automations` to see available task IDs."
         
         try:
-            manager = AutomationManager()
+            manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
             task = manager.get(task_id)
             
             if not task:
@@ -1131,7 +1141,7 @@ Use this when user wants to remove an automation but might want to restore it la
             return "Error: No task ID provided."
         
         try:
-            manager = AutomationManager()
+            manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
             task = manager.get(task_id)
             
             if not task:
@@ -1186,7 +1196,7 @@ Use this when user wants to recover a previously deleted automation."""
             return "Error: No task ID provided."
         
         try:
-            manager = AutomationManager()
+            manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
             
             # Check if task exists in trash
             trash_tasks = manager.list_trash()
@@ -1229,7 +1239,7 @@ class ListTrashTool(BaseTool):
     
     def run(self, **kwargs) -> str:
         try:
-            manager = AutomationManager()
+            manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
             tasks = manager.list_trash()
             
             if not tasks:

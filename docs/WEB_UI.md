@@ -71,6 +71,7 @@ Singleton pattern manager that:
 - **Delete Sessions**: Remove unwanted sessions
 - **Auto-Save**: Sessions persist automatically
 - **Session List**: Displays recent 20 sessions
+- **Thinking-mode sessions**: Sessions from thinking mode (brain icon) show only the agent's steps and reply; the long system prompt is hidden. The message input stays available so you can reply to the agent's question in the Web UI. See [Thinking-Mode.md](Thinking-Mode.md).
 
 ### 3. Status Indicators
 
@@ -108,7 +109,7 @@ Under **Settings → Interface** you can set:
 
 **Settings → Connections:** Manage external integrations (Email, Calendar, Cloud, Discord, Telegram, WhatsApp, etc.). The **Calendar** category shows Google Calendar and Microsoft Outlook; they use the same OAuth connection as Email (connect Gmail or Outlook under Email first). When a calendar is connected, the settings (gear) icon opens the **Calendar Dashboard**: left sidebar lists connected accounts with links to open Google Calendar or Outlook in the browser; main area shows upcoming events from the API with selectable range and refresh. See [CONNECTIONS.md](CONNECTIONS.md) and [CALENDAR_INTEGRATION.md](CALENDAR_INTEGRATION.md).
 
-**Settings → Automations:** View scheduled automations (user-scoped when multi-user is used). To create one manually: click **Create New** (or use the **Automation** button in the main footer) to open the calendar; choose month, then day, then an hour slot. A popup lets you set repeat (once, daily, weekly, monthly, hourly), time, a detailed prompt, and an optional name. Creation is sent via WebSocket (`create_automation`); the list refreshes on success. The agent can also create automations via the `create_automation` tool in chat.
+**Settings → Automations:** View scheduled automations (user-scoped when multi-user is used; root/global automations such as "Daily calendar check" are also shown so the list matches the agent's `list_automations` tool). To create one manually: click **Create New** (or use the **Automation** button in the main footer) to open the calendar; choose month, then day, then an hour slot. Opening the Automation popup (footer) also triggers the calendar ensure-daily-check API when a calendar is connected, so the Daily calendar check appears in the list without opening Settings first. A popup lets you set repeat (once, daily, weekly, monthly, hourly), time, a detailed prompt, and an optional name. Creation is sent via WebSocket (`create_automation`); the list refreshes on success. The agent can also create automations via the `create_automation` tool in chat.
 
 The same automation calendar includes a **per-user planner**:
 

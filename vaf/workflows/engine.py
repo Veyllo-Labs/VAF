@@ -68,17 +68,27 @@ class WorkflowEngine:
         ], variables={"query": "Python web scraping"})
     """
     
-    def __init__(self, tools: Dict[str, Any], callback: Callable = None):
+    def __init__(
+        self,
+        tools: Dict[str, Any],
+        callback: Callable = None,
+        user_scope_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ):
         """
         Initialize the workflow engine.
-        
+
         Args:
             tools: Dict mapping tool names to tool instances
             callback: Optional callback for progress updates
+            user_scope_id: Optional user scope UUID for tool isolation (memory, calendar, etc.)
+            username: Optional username for tools that need it (messaging, contacts, etc.)
         """
         self.tools = tools
         self.callback = callback or (lambda *args: None)
-        
+        self.user_scope_id = user_scope_id
+        self.username = username or "admin"
+
         # Initialize context manager for workflow execution (like main agent)
         from vaf.core.context import ContextManager
         self.context_manager = ContextManager(max_tokens=8192)
@@ -286,12 +296,38 @@ class WorkflowEngine:
                     except Exception:
                         pass
                 
+                # User isolation: inject user_scope_id/username for tools that need it (same as agent)
+                def _inject_user_scope(tool_name: str, a: Dict[str, Any]) -> None:
+                    if self.user_scope_id is not None or self.username:
+                        if tool_name in ("memory_save", "memory_search"):
+                            a["user_scope_id"] = self.user_scope_id
+                        elif tool_name == "update_user_identity":
+                            a["username"] = self.username
+                        elif tool_name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp"):
+                            a["username"] = self.username
+                            a["user_scope_id"] = self.user_scope_id
+                        elif tool_name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
+                            a["username"] = self.username
+                            a["user_scope_id"] = self.user_scope_id
+                        elif tool_name in ("list_contacts", "get_contact", "create_contact", "update_contact", "delete_contact"):
+                            a["username"] = self.username
+                            a["user_scope_id"] = self.user_scope_id
+                        elif tool_name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "label_mail", "list_email_accounts", "send_mail"):
+                            a["username"] = self.username
+                            a["user_scope_id"] = self.user_scope_id
+                        elif tool_name in ("add_automation_note", "add_automation_todo", "list_automation_notes", "list_automation_todos", "delete_automation_note", "delete_automation_todo"):
+                            a["user_scope_id"] = self.user_scope_id
+                        elif tool_name in ("list_calendar_events", "create_calendar_event", "update_calendar_event", "delete_calendar_event"):
+                            a["username"] = self.username
+                            a["user_scope_id"] = self.user_scope_id
+
                 # Retry logic for context errors (like main agent)
                 max_retries = 3
                 retry_count = 0
                 result = None
                 
                 while retry_count < max_retries:
+                    _inject_user_scope(step.tool, args)
                     try:
                         result = tool.run(**args)
                         

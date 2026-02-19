@@ -6212,6 +6212,8 @@ class Agent:
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("add_automation_note", "add_automation_todo", "list_automation_notes", "list_automation_todos", "delete_automation_note", "delete_automation_todo"):
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name in ("create_automation", "list_automations", "read_automation", "update_automation", "delete_automation", "restore_automation", "list_trash"):
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("list_calendar_events", "create_calendar_event", "update_calendar_event", "delete_calendar_event"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)

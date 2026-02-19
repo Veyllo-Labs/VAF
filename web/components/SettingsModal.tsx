@@ -113,7 +113,7 @@ import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
 import { useLocaleStore } from '@/lib/localeStore';
 import { languages } from '@/lib/languages';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, CalendarSetupWizard, CalendarDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 import CreateAutomationPopup, { type EditAutomationTask } from './CreateAutomationPopup';
@@ -264,6 +264,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showCloudDashboard, setShowCloudDashboard] = useState(false);
     const [cloudDashboardRefresh, setCloudDashboardRefresh] = useState(0);
     const [cloudWizardProvider, setCloudWizardProvider] = useState<string | undefined>(undefined);
+    const [showCalendarWizard, setShowCalendarWizard] = useState(false);
+    const [showCalendarDashboard, setShowCalendarDashboard] = useState(false);
+    const [calendarWizardProvider, setCalendarWizardProvider] = useState<'google_calendar' | 'outlook_calendar' | undefined>(undefined);
     const [mailDashboardRefresh, setMailDashboardRefresh] = useState(0);
     const [showCreateAutomationModal, setShowCreateAutomationModal] = useState(false);
     const [editingAutomation, setEditingAutomation] = useState<EditAutomationTask | null>(null);
@@ -494,7 +497,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const parseList = (text: string) => text.split('\n').map(s => s.trim()).filter(s => s.length > 0);
 
         const rawMain = (userIdentityDraft.main_messenger || '').trim().toLowerCase();
-        const main_messenger = ['telegram', 'discord', 'slack', 'whatsapp', 'email'].includes(rawMain) ? rawMain : null;
+        const main_messenger = ['telegram', 'discord', 'slack', 'signal', 'whatsapp', 'email'].includes(rawMain) ? rawMain : null;
         const updateData = {
             name: userIdentityDraft.name.trim() || undefined,
             preferred_language: userIdentityDraft.preferred_language.trim() || undefined,
@@ -1743,6 +1746,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     setShowCloudWizard(true);
                                 }}
                                 onOpenContactsDashboard={() => setShowContactsDashboard(true)}
+                                onOpenCalendarWizard={(provider?: 'google_calendar' | 'outlook_calendar') => {
+                                    setCalendarWizardProvider(provider);
+                                    setShowCalendarWizard(true);
+                                }}
+                                onOpenCalendarDashboard={() => setShowCalendarDashboard(true)}
                             />
                         )}
 
@@ -3169,6 +3177,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     <option value="telegram">Telegram</option>
                                                     <option value="discord">Discord</option>
                                                     <option value="slack">Slack</option>
+                                                    <option value="signal">Signal</option>
                                                     <option value="whatsapp">WhatsApp</option>
                                                     <option value="email">Mail</option>
                                                 </select>
@@ -3969,7 +3978,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             {/* Mail Dashboard (same size as Telegram Dashboard) */}
             <MailDashboard
                 isOpen={showMailDashboard}
-                onClose={() => setShowMailDashboard(false)}
+                onClose={() => {
+                    setShowMailDashboard(false);
+                    setCloudDashboardRefresh(r => r + 1);
+                }}
                 onOpenAddWizard={() => setShowEmailWizard(true)}
                 refreshTrigger={mailDashboardRefresh}
             />
@@ -3980,13 +3992,45 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onClose={() => {
                     setShowEmailWizard(false);
                     setMailDashboardRefresh(r => r + 1);
+                    setCloudDashboardRefresh(r => r + 1);
                 }}
                 onComplete={() => {
                     setShowEmailWizard(false);
                     setMailDashboardRefresh(r => r + 1);
+                    setCloudDashboardRefresh(r => r + 1);
                 }}
                 existingAccounts={localConfig?.email_config?.accounts || []}
                 currentUser={currentUser}
+            />
+
+            {/* Calendar Setup Wizard (reuses Email OAuth; opened from Connections Calendar cards) */}
+            <CalendarSetupWizard
+                isOpen={showCalendarWizard}
+                onClose={() => {
+                    setShowCalendarWizard(false);
+                    setCalendarWizardProvider(undefined);
+                    setCloudDashboardRefresh(r => r + 1);
+                }}
+                onComplete={() => {
+                    setShowCalendarWizard(false);
+                    setCalendarWizardProvider(undefined);
+                    setCloudDashboardRefresh(r => r + 1);
+                }}
+                initialProvider={calendarWizardProvider}
+            />
+
+            {/* Calendar Dashboard (accounts left, events in the middle) */}
+            <CalendarDashboard
+                isOpen={showCalendarDashboard}
+                onClose={() => {
+                    setShowCalendarDashboard(false);
+                    setCloudDashboardRefresh(r => r + 1);
+                }}
+                onOpenAddWizard={() => {
+                    setShowCalendarDashboard(false);
+                    setShowMailDashboard(true);
+                }}
+                refreshTrigger={cloudDashboardRefresh}
             />
 
             {/* Cloud Storage Dashboard (Mail-style: accounts left, files middle) */}

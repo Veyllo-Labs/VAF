@@ -749,6 +749,12 @@ function VAFDashboardContent() {
     /** User's preferred time format from Settings → Interface (24h | 12h). Used for message timestamps. */
     const [userTimeFormat, setUserTimeFormat] = useState<'24h' | '12h' | undefined>(undefined);
     const [isAutomationPopupOpen, setIsAutomationPopupOpen] = useState(false);
+    // When automation calendar opens (footer), load notes and todos for the current user
+    useEffect(() => {
+        if (!isAutomationPopupOpen || !ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: 'get_automation_notes' }));
+        ws.send(JSON.stringify({ type: 'get_automation_todos' }));
+    }, [isAutomationPopupOpen, ws]);
     const [editingAutomationFromCalendar, setEditingAutomationFromCalendar] = useState<EditAutomationTask | null>(null);
     const [showChangingModelOverlay, setShowChangingModelOverlay] = useState(false);
     type PendingContactReply = { replyId: string; source: string; contactName: string; preview: string; sessionId?: string };
@@ -758,6 +764,10 @@ function VAFDashboardContent() {
     const [trustedSources, setTrustedSources] = useState<{ categories: Array<{ id: string; name: string; description: string; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> }>({ categories: [] });
     const [trustedSourcesError, setTrustedSourcesError] = useState<string | null>(null);
     const [automations, setAutomations] = useState<Array<{ id: string; name: string; description: string; prompt?: string; frequency: string; time: string; weekday?: string | null; day?: number | null; enabled: boolean; next_run?: string }>>([]);
+    type AutomationNote = { id: string; title?: string | null; content: string; created_at: string };
+    type AutomationTodo = { id: string; text: string; created_at: string; due_at?: string | null; done: boolean };
+    const [automationNotes, setAutomationNotes] = useState<AutomationNote[]>([]);
+    const [automationTodos, setAutomationTodos] = useState<AutomationTodo[]>([]);
     // const [activeTools, setActiveTools] = useState<ToolState[]>([]); // REPLACED BY INLINE MESSAGES
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1935,6 +1945,43 @@ function VAFDashboardContent() {
                 }
                 else if (data.type === 'delete_automation_result') {
                     if (data.ok === true) ws?.send(JSON.stringify({ type: 'get_automations' }));
+                }
+                else if (data.type === 'automation_notes_list') {
+                    setAutomationNotes(Array.isArray(data.notes) ? data.notes : []);
+                }
+                else if (data.type === 'automation_todos_list') {
+                    setAutomationTodos(Array.isArray(data.todos) ? data.todos : []);
+                }
+                else if (data.type === 'create_automation_note_result' && data.ok === true) {
+                    if (data.note && typeof data.note === 'object' && data.note.id) {
+                        setAutomationNotes(prev => [...prev, data.note]);
+                    } else {
+                        ws?.send(JSON.stringify({ type: 'get_automation_notes' }));
+                    }
+                }
+                else if (data.type === 'create_automation_todo_result' && data.ok === true) {
+                    if (data.todo && typeof data.todo === 'object' && data.todo.id) {
+                        setAutomationTodos(prev => [...prev, data.todo]);
+                    } else {
+                        ws?.send(JSON.stringify({ type: 'get_automation_todos' }));
+                    }
+                }
+                else if (data.type === 'update_automation_todo_result' && data.ok === true) {
+                    ws?.send(JSON.stringify({ type: 'get_automation_todos' }));
+                }
+                else if (data.type === 'delete_automation_note_result' && data.ok === true) {
+                    if (data.id) {
+                        setAutomationNotes(prev => prev.filter(n => n.id !== data.id));
+                    } else {
+                        ws?.send(JSON.stringify({ type: 'get_automation_notes' }));
+                    }
+                }
+                else if (data.type === 'delete_automation_todo_result' && data.ok === true) {
+                    if (data.id) {
+                        setAutomationTodos(prev => prev.filter(t => t.id !== data.id));
+                    } else {
+                        ws?.send(JSON.stringify({ type: 'get_automation_todos' }));
+                    }
                 }
                 else if (data.type === 'model_state') {
                     if (typeof data.loaded === 'boolean') {
@@ -3837,12 +3884,21 @@ function VAFDashboardContent() {
                 onCreateAutomationSubmit={createAutomationSubmit as SettingsModalProps['onCreateAutomationSubmit']}
                 onAutomationCreated={refreshAutomations}
                 onDeleteAutomation={deleteAutomation}
+                automationNotes={automationNotes}
+                automationTodos={automationTodos}
+                onSendPlannerMessage={(msg) => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }}
+                userTimeFormat={userTimeFormat}
+                onOpenAutomationCalendar={() => { if (ws?.readyState === WebSocket.OPEN) { ws.send(JSON.stringify({ type: 'get_automation_notes' })); ws.send(JSON.stringify({ type: 'get_automation_todos' })); } }}
             />
             <AutomationCalendarModal
                 isOpen={isAutomationPopupOpen}
                 onClose={() => setIsAutomationPopupOpen(false)}
                 currentUser={currentUser}
                 automations={automations}
+                automationNotes={automationNotes}
+                automationTodos={automationTodos}
+                onSendPlannerMessage={(msg) => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }}
+                userTimeFormat={userTimeFormat}
                 onSubmitCreateAutomation={createAutomationSubmit}
                 onAutomationCreated={refreshAutomations}
                 onEditAutomation={(auto) => setEditingAutomationFromCalendar({

@@ -303,6 +303,17 @@ const parseContent = (content: string): { thought: string | null; answer: string
     return { thought: null, answer: merged, isThinkingComplete: true };
 };
 
+/** Detect thinking-mode system prompt so we can hide it in the Web UI when viewing a thinking session. */
+function isThinkingModePrompt(content: string): boolean {
+    if (!content || typeof content !== 'string') return false;
+    const c = content.trim();
+    if (c.length < 200) return false;
+    return (
+        (c.includes('You are the main agent in **Thinking Mode**') || c.includes('You are the main agent in Thinking Mode')) &&
+        (c.includes('act on their behalf') || c.includes('That concludes this pass'))
+    );
+}
+
 // Parse [WORKFLOW_ASYNC:taskId:workflowId] Workflow 'Name' ... from assistant text for card display
 const WORKFLOW_ASYNC_REGEX = /\[WORKFLOW_ASYNC:([^:]+):([^\]]+)\]\s*Workflow\s+'([^']+)'[^\n]*(?:\n\n)?([\s\S]*)/;
 function parseWorkflowAsync(answer: string): { taskId: string; workflowId: string; name: string; rest: string } | null {
@@ -3025,7 +3036,14 @@ function VAFDashboardContent() {
                                 {/* Sub-Agent banner removed; reopen via tool cards or system log */}
                                 {/* Empty state welcome is shown in the centered input block below */}
                                 {(() => {
-                                    const filteredMessages = messages.filter(m => !m.content.includes('__CMD__'));
+                                    const isThinkingSession = (sessions.find(s => s.id === currentSessionId) as Session | undefined)?.source === 'thinking';
+                                    const filteredMessages = messages
+                                        .filter(m => !m.content.includes('__CMD__'))
+                                        .filter(m => {
+                                            if (!isThinkingSession) return true;
+                                            if ((m.role === 'system' || m.role === 'user') && isThinkingModePrompt(String(m.content ?? ''))) return false;
+                                            return true;
+                                        });
                                     return filteredMessages.map((msg, i) => {
                                         const trueIndex = messages.indexOf(msg);
                                         const prevMsg = i > 0 ? filteredMessages[i - 1] : null;

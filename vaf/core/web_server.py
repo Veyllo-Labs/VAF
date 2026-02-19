@@ -2545,13 +2545,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Return list of saved automations (user-scoped when user_scope_id present)
                     try:
                         from vaf.core.automation import AutomationManager
-                        from vaf.core.config import get_local_admin_scope_id
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
                         tasks = list(mgr.list())
-                        # Local admin: also show automations from root (e.g. "Daily calendar check" created by ensure-daily-check-automation)
-                        local_scope = get_local_admin_scope_id()
-                        if user_scope_id and str(user_scope_id).strip() == str(local_scope).strip():
+                        # Always merge root automations so UI matches what the agent sees (list_automations uses root).
+                        # E.g. "Daily calendar check" lives in root; without this, non-local-admin or wrong scope showed empty.
+                        if user_scope_id:
                             root_mgr = AutomationManager()
                             root_tasks = root_mgr.list()
                             seen = {t.id for t in tasks}

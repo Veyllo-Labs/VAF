@@ -219,9 +219,8 @@ Each user also has a username-based directory tree. This is the legacy layout, p
 ~/.vaf/users/<username>/
 ├── user_identity.json      # Personal preferences
 ├── identity.json            # Agent persona config
-├── automations/             # Per-user automation tasks
-│   └── <user_scope_id>/
-│       └── tasks.json
+├── automations/             # Automation tasks (global + per-user)
+│   └── <user_scope_id>/    # One .json file per task
 ├── auth/                    # Connection credentials
 │   ├── whatsapp/
 │   ├── telegram/

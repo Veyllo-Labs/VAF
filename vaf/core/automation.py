@@ -159,6 +159,7 @@ class AutomationManager:
 
         if storage_dir:
             self.storage_dir = Path(storage_dir)
+            self.base_dir = self.storage_dir
         else:
             # OS-unabhängiger Pfad
             from vaf.core.platform import Platform
@@ -166,9 +167,11 @@ class AutomationManager:
             if user_scope_id:
                 # Per-user isolation: store automations in user-specific subdirectory
                 self.storage_dir = base_dir / user_scope_id
+                self.base_dir = base_dir
             else:
-                # Legacy/admin: global automations directory
+                # Legacy/admin: global automations directory (also aggregates all user dirs for CLI/scheduler)
                 self.storage_dir = base_dir
+                self.base_dir = base_dir
 
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         # Trash directory (system-independent)
@@ -324,24 +327,54 @@ vaf automation delete <id>   # Delete task
         self.tasks.clear()
         self._load_tasks()
     
+    def _is_uuid_dir(self, name: str) -> bool:
+        """Return True if name looks like a UUID (user scope subdir)."""
+        try:
+            uuid.UUID(name)
+            return True
+        except (ValueError, TypeError):
+            return False
+
     def _load_tasks(self):
-        """Load all tasks from storage."""
+        """Load all tasks from storage. When manager is global (no user_scope_id), also load from user subdirs."""
+        # Load from current storage_dir (global dir or this user's dir)
         for filepath in self.storage_dir.glob("*.json"):
             try:
                 with open(filepath, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 task = AutomationTask.from_dict(data)
-                
-                # next_run is now calculated dynamically - no need to validate or store it
-                # Just ensure the task is properly loaded
-                
+                # Ensure task has scope when loaded from user-scoped manager
+                if self.user_scope_id and not task.user_scope_id:
+                    task.user_scope_id = self.user_scope_id
                 self.tasks[task.id] = task
             except Exception:
                 continue
+        # When global manager: also load from each user scope subdir so CLI/scheduler see all
+        if self.user_scope_id is None and self.base_dir.exists():
+            for subdir in self.base_dir.iterdir():
+                if subdir.is_dir() and self._is_uuid_dir(subdir.name):
+                    for filepath in subdir.glob("*.json"):
+                        try:
+                            with open(filepath, 'r', encoding='utf-8') as f:
+                                data = json.load(f)
+                            task = AutomationTask.from_dict(data)
+                            if not task.user_scope_id:
+                                task.user_scope_id = subdir.name
+                            self.tasks[task.id] = task
+                        except Exception:
+                            continue
     
+    def _path_for_task(self, task: AutomationTask) -> Path:
+        """Return the filesystem path where this task is or should be stored."""
+        if task.user_scope_id:
+            return self.base_dir / task.user_scope_id / f"{task.id}.json"
+        return self.storage_dir / f"{task.id}.json"
+
     def _save_task(self, task: AutomationTask):
-        """Save a task to storage."""
-        filepath = self.storage_dir / f"{task.id}.json"
+        """Save a task to storage. When task has user_scope_id, save to that user's dir (for global manager)."""
+        filepath = self._path_for_task(task)
+        if task.user_scope_id:
+            filepath.parent.mkdir(parents=True, exist_ok=True)
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(task.to_dict(), f, indent=2, ensure_ascii=False)
     
@@ -417,7 +450,7 @@ vaf automation delete <id>   # Delete task
             return False
         
         task = self.tasks[task_id]
-        filepath = self.storage_dir / f"{task_id}.json"
+        filepath = self._path_for_task(task)
         trash_path = self.trash_dir / f"{task_id}.json"
         
         if filepath.exists():
@@ -443,13 +476,15 @@ vaf automation delete <id>   # Delete task
             return False
         
         try:
-            # Load task from trash
+            # Load task from trash (preserves user_scope_id so we restore to correct dir)
             with open(trash_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             task = AutomationTask.from_dict(data)
             
-            # Move back to storage
-            filepath = self.storage_dir / f"{task_id}.json"
+            # Move back to storage (user scope dir if task has user_scope_id)
+            filepath = self._path_for_task(task)
+            if task.user_scope_id:
+                filepath.parent.mkdir(parents=True, exist_ok=True)
             import shutil
             shutil.move(str(trash_path), str(filepath))
             
@@ -684,12 +719,19 @@ vaf automation delete <id>   # Delete task
             if task.workflow_steps and len(task.workflow_steps) > 0:
                 from vaf.workflows.engine import WorkflowEngine, WorkflowStep
                 from vaf.core.agent import Agent
-                
+                from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+
                 # Initialize agent to get tools
                 agent = Agent(verbose=False)
                 agent.load_model()
                 agent.init_chat()
-                
+                # User isolation: workflow runs with task owner's scope (tools + memory)
+                agent._current_user_scope_id = task.user_scope_id
+                if not task.user_scope_id or str(task.user_scope_id).strip() == str(get_local_admin_scope_id()).strip():
+                    agent._current_username = get_local_admin_username()
+                else:
+                    agent._current_username = "admin"
+
                 # Get all available tools
                 all_tools = {**agent.tools}
                 
@@ -753,7 +795,12 @@ vaf automation delete <id>   # Delete task
                         step_results[-1]["status"] = "failed"
                         step_results[-1]["error"] = str(step.error) if step.error else "Unknown error"
                 
-                engine = WorkflowEngine(all_tools, callback=workflow_callback)
+                engine = WorkflowEngine(
+                    all_tools,
+                    callback=workflow_callback,
+                    user_scope_id=task.user_scope_id,
+                    username=agent._current_username,
+                )
                 # Add 'date' to workflow defaults so {date} can be resolved in templates
                 engine._workflow_defaults = {"date": date_str}
                 workflow_result = engine.execute(steps, variables=task.parameters)

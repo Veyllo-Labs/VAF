@@ -29,8 +29,15 @@ def _locks_path() -> Path:
 
 
 def _key(user_scope_id: Any) -> str:
+    """Canonical key for storage; local admin scope maps to 'default' so one user = one key."""
     if user_scope_id is None:
         return "default"
+    try:
+        from vaf.core.config import get_local_admin_scope_id
+        if str(user_scope_id).strip() == str(get_local_admin_scope_id()).strip():
+            return "default"
+    except Exception:
+        pass
     return str(user_scope_id).strip()
 
 
@@ -516,11 +523,13 @@ def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
     return "skip"
 
 
-def get_idle_user_scope_ids(idle_minutes: float) -> List[str]:
+def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
     """
     Return list of user_scope_id that have been idle for at least idle_minutes.
     Reads last_interaction.json (same store as last_interaction module).
+    Normalizes so that "default" and local_admin_scope_id count as one user (None).
     """
+    from vaf.core.config import get_local_admin_scope_id
     from vaf.core.last_interaction import get_last_interaction
     path = Platform.data_dir() / "last_interaction.json"
     if not path.exists():
@@ -532,6 +541,7 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[str]:
         data = json.loads(raw)
         now = time.time()
         threshold = now - (idle_minutes * 60)
+        local_admin_scope = str(get_local_admin_scope_id()).strip()
         out = []
         for key in data:
             if not isinstance(key, str):
@@ -544,10 +554,21 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[str]:
                 continue
             try:
                 if float(ts) <= threshold:
-                    out.append(key if key != "default" else None)
+                    scope_id = None if key == "default" else key
+                    if scope_id is not None and scope_id == local_admin_scope:
+                        scope_id = None
+                    out.append(scope_id)
             except (TypeError, ValueError):
                 continue
-        return out
+        # Deduplicate: one canonical entry per logical user (local admin = None)
+        seen = set()
+        normalized = []
+        for s in out:
+            k = (s is None, s if s is not None else "")
+            if k not in seen:
+                seen.add(k)
+                normalized.append(s)
+        return normalized
     except (json.JSONDecodeError, OSError):
         return []
 
@@ -660,6 +681,18 @@ def _build_run_log_messages(agent_history: List[Dict[str, Any]], max_content_len
     return messages
 
 
+def _history_has_thinking_done(history: List[Dict[str, Any]]) -> bool:
+    """True if any assistant message in history includes a tool_call to thinking_done."""
+    for msg in history or []:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            name = (tc.get("function") or {}).get("name") or tc.get("name") or ""
+            if name == "thinking_done":
+                return True
+    return False
+
+
 def _save_run_log(
     user_scope_id: Optional[str],
     run_id: str,
@@ -715,15 +748,17 @@ def _run_thinking_for_user(
     started_at_ts: float,
 ) -> None:
     """
-    Run one thinking pass for the user. Single agent turn: one chat_step(THINKING_PROMPT)
-    (the model may invoke multiple tools in that turn); when the model returns a final
-    reply, the run ends and the lock is released. No loop – one pass only.
+    Run one thinking pass for the user. Multiple agent turns until thinking_done is called
+    or max_turns is reached. When the model calls thinking_done (or limit hit), the run
+    ends and the lock is released.
     """
     from vaf.core.last_interaction import get_last_interaction
     from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 
     scope_key = _key(user_scope_id)
     max_duration_minutes = int(Config.get("thinking_max_duration_minutes", 30) or 30)
+    # So Agent._load_tools() sees thinking mode and registers thinking_done tool
+    os.environ["VAF_THINKING_MODE"] = "1"
     try:
         from vaf.core.agent import Agent
 
@@ -737,12 +772,54 @@ def _run_thinking_for_user(
             agent._current_username = "admin"
         agent.init_chat()
 
+        # Load the user's main chat session so the thinking agent sees the full conversation history.
+        # This gives the agent the same context as when the user chats normally (Telegram, WhatsApp, Web).
+        _loaded_session = False
+        try:
+            from vaf.core.messaging_connections import (
+                get_messaging_connections,
+                get_telegram_chat_id,
+                get_whatsapp_chat_jid,
+            )
+            uname = getattr(agent, "_current_username", None) or get_local_admin_username()
+            conn = get_messaging_connections(username=uname, user_scope_id=user_scope_id)
+            main_messenger = (conn.get("main_messenger") or "").strip().lower()
+
+            chat_session_id = None
+            if main_messenger == "telegram":
+                tg_id = get_telegram_chat_id(user_scope_id, uname)
+                if tg_id:
+                    chat_session_id = f"telegram_{tg_id}"
+            elif main_messenger == "whatsapp":
+                jid = get_whatsapp_chat_jid(user_scope_id, uname)
+                if jid:
+                    chat_session_id = f"whatsapp_{jid}"
+            # Fallback: local admin uses web-default
+            if not chat_session_id:
+                is_local_admin = (
+                    user_scope_id is None
+                    or str(user_scope_id).strip() == str(get_local_admin_scope_id()).strip()
+                )
+                if is_local_admin:
+                    chat_session_id = "web-default"
+
+            if chat_session_id:
+                try:
+                    agent.load_session_context(chat_session_id)
+                    _loaded_session = True
+                    logger.info("Thinking agent loaded chat session: %s", chat_session_id)
+                except Exception as e:
+                    logger.debug("Could not load chat session %s for thinking: %s", chat_session_id, e)
+        except Exception as e:
+            logger.debug("Could not resolve chat session for thinking: %s", e)
+
         # Append thinking mode notice and last run summary (context so we don't repeat or re-ask)
         if agent.history and agent.history[0].get("role") == "system":
             notice = (
                 "\n\n## THINKING MODE\n"
                 "You are the **main agent** in a background pass while the user is idle. "
-                "Act: create automations, process todos. When you send a message, write like a normal human – never say you're in thinking mode or running in the background. At most one message per run. If you ask something, the system will wait for their reply (nudge after 3 min, skip after 10 min); end this pass after your one message."
+                "Act: create automations, process todos. When you send a message, write like a normal human – never say you're in thinking mode or running in the background. At most one message per run. If you ask something, the system will wait for their reply (nudge after 3 min, skip after 10 min). "
+                "You may use **multiple turns** in this pass. When you have finished all you can do for the user, call the **thinking_done** tool to end this pass."
             )
             last_summary = _get_last_thinking_summary(user_scope_id)
             if last_summary:
@@ -759,10 +836,11 @@ def _run_thinking_for_user(
             agent.history[0]["content"] = (agent.history[0]["content"] or "") + notice
 
         logger.info("Thinking started for user %s", scope_key[:8] if scope_key != "default" else "default")
-        os.environ["VAF_THINKING_MODE"] = "1"
 
         try:
-            # RAG context for this turn
+            max_turns = int(Config.get("thinking_max_turns", 10) or 10)
+            max_turns = max(1, min(max_turns, 30))
+            # RAG context for first turn only
             memory_context = ""
             try:
                 if Config.get("memory_enabled", True):
@@ -781,7 +859,15 @@ def _run_thinking_for_user(
             except Exception:
                 memory_context = ""
 
-            agent.chat_step(THINKING_PROMPT, stream_callback=None, memory_context=memory_context or None)
+            for turn in range(max_turns):
+                prompt = THINKING_PROMPT if turn == 0 else (
+                    "Continue. When you have finished all you can do for the user, call thinking_done."
+                )
+                mem_ctx = (memory_context or None) if turn == 0 else None
+                agent.chat_step(prompt, stream_callback=None, memory_context=mem_ctx)
+                if _history_has_thinking_done(getattr(agent, "history", [])):
+                    break
+
             # Persist run for inspection (tool calls, messages) and as session for Web UI chat list
             try:
                 started_iso, ended_iso, log_messages = _save_run_log(
@@ -789,11 +875,23 @@ def _run_thinking_for_user(
                 )
                 try:
                     from vaf.core.session import SessionManager
-                    sid = SessionManager().append_to_thinking_session(
-                        user_scope_id, run_id, started_iso, ended_iso, log_messages
+                    sm = SessionManager()
+                    # Local admin: append to web-default so thinking appears in the same chat as the user
+                    is_local_admin = (
+                        user_scope_id is None
+                        or str(user_scope_id).strip() == str(get_local_admin_scope_id()).strip()
                     )
-                    if sid:
-                        set_last_thinking_session_id(user_scope_id, sid)
+                    if is_local_admin:
+                        sm.append_thinking_run_to_session(
+                            "web-default", run_id, started_iso, ended_iso, log_messages
+                        )
+                        set_last_thinking_session_id(user_scope_id, "web-default")
+                    else:
+                        sid = sm.append_to_thinking_session(
+                            user_scope_id, run_id, started_iso, ended_iso, log_messages
+                        )
+                        if sid:
+                            set_last_thinking_session_id(user_scope_id, sid)
                 except Exception as sess_err:
                     logger.warning("Could not save thinking run as session: %s", sess_err)
             except Exception as log_err:
@@ -854,6 +952,7 @@ def _run_thinking_for_user(
 
         logger.info("Thinking completed for user %s", scope_key[:8] if scope_key != "default" else "default")
     finally:
+        os.environ.pop("VAF_THINKING_MODE", None)
         _set_last_run_completed(user_scope_id)
         release_lock(user_scope_id)
 

@@ -23,6 +23,10 @@ export default function WhatsAppSetupWizard({ isOpen, onClose, onComplete }: Wha
     const pollQr = useCallback(async () => {
         try {
             const res = await fetch(api('api/whatsapp/qr'), { credentials: 'include' });
+            if (!res.ok) {
+                setError(res.status >= 500 ? 'Backend not reachable – is VAF running?' : `Server error (${res.status})`);
+                return;
+            }
             const data = await res.json();
             if (data.status === 'connected') {
                 setQrData(null);

@@ -18,6 +18,10 @@ from vaf.core.platform import Platform
 logger = logging.getLogger(__name__)
 
 LOCKS_FILENAME = "thinking_mode_locks.json"
+LAST_COMPLETED_FILENAME = "thinking_last_completed.json"
+DECLINED_QUESTIONS_FILENAME = "thinking_declined_questions.json"
+_DECLINED_MAX_ENTRIES = 20
+_DECLINED_MAX_AGE_DAYS = 30
 
 
 def _locks_path() -> Path:
@@ -97,6 +101,109 @@ def is_locked(user_scope_id: Optional[str], max_duration_minutes: int = 30) -> b
         return (time.time() - started) < max_duration_minutes * 60
     except (TypeError, ValueError):
         return True
+
+
+# --- Cooldown: prevent rapid-fire thinking runs ---
+
+def _last_completed_path() -> Path:
+    return Platform.data_dir() / LAST_COMPLETED_FILENAME
+
+
+def _set_last_run_completed(user_scope_id: Optional[str]) -> None:
+    """Record that a thinking run just finished for this user."""
+    path = _last_completed_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        data = {}
+    data[_key(user_scope_id)] = {"completed_at_ts": time.time()}
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _minutes_since_last_run(user_scope_id: Optional[str]) -> float:
+    """Return minutes since last completed thinking run for this user. Returns inf if no record."""
+    path = _last_completed_path()
+    if not path.exists():
+        return float("inf")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        entry = data.get(_key(user_scope_id))
+        if not entry:
+            return float("inf")
+        return (time.time() - float(entry["completed_at_ts"])) / 60.0
+    except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError):
+        return float("inf")
+
+
+# --- Declined questions: prevent repeating questions the user already refused ---
+
+def _declined_path() -> Path:
+    return Platform.data_dir() / DECLINED_QUESTIONS_FILENAME
+
+
+def _load_declined(user_scope_id: Optional[str]) -> List[Dict[str, str]]:
+    """Load declined questions for this user (auto-expire old entries)."""
+    path = _declined_path()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        entries = data.get(_key(user_scope_id)) or []
+        if not isinstance(entries, list):
+            return []
+        cutoff = time.time() - _DECLINED_MAX_AGE_DAYS * 86400
+        return [e for e in entries if isinstance(e, dict) and float(e.get("ts", 0)) > cutoff]
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        return []
+
+
+def _save_declined_entry(user_scope_id: Optional[str], question: str, user_reply: str) -> None:
+    """Add a declined question to the persistent log."""
+    path = _declined_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        data = {}
+    key = _key(user_scope_id)
+    entries = data.get(key) or []
+    if not isinstance(entries, list):
+        entries = []
+    entries.append({
+        "question": (question or "")[:500],
+        "user_reply": (user_reply or "")[:200],
+        "ts": time.time(),
+        "at": datetime.now().isoformat(),
+    })
+    # Keep only latest N entries
+    data[key] = entries[-_DECLINED_MAX_ENTRIES:]
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _is_refusal(text: str) -> bool:
+    """Return True if the user's reply is a refusal/decline."""
+    t = (text or "").strip().lower()
+    refusal_keywords = [
+        "nein", "no", "nicht", "erstmal nicht", "later", "stop",
+        "lass", "hör auf", "aufhören", "nie", "never", "don't",
+        "kein", "bitte nicht", "ich will nicht", "brauch ich nicht",
+    ]
+    return any(kw in t for kw in refusal_keywords)
+
+
+def _get_declined_questions_prompt(user_scope_id: Optional[str]) -> str:
+    """Build prompt section listing declined questions so the agent knows not to ask them again."""
+    entries = _load_declined(user_scope_id)
+    if not entries:
+        return ""
+    lines = ["**Questions the user has already declined (DO NOT ask these again, DO NOT suggest these topics):**"]
+    for e in entries:
+        q = (e.get("question") or "").strip()
+        r = (e.get("user_reply") or "").strip()
+        if q:
+            lines.append(f'- "{q}" → User said: "{r}"')
+    return "\n".join(lines)
 
 
 # --- Waiting for user reply (after agent asked a question in thinking mode) ---
@@ -194,6 +301,11 @@ def clear_waiting_for_reply(
             replies = _load_user_replies()
             replies[last_sid] = {"reply": preview, "at": datetime.now().isoformat()}
             _save_user_replies(replies)
+        # If user declined, save question + reply to declined-questions log
+        if _is_refusal(preview):
+            last_question = _get_last_thinking_summary(user_scope_id, max_chars=500)
+            if last_question:
+                _save_declined_entry(user_scope_id, last_question, preview)
     data = _load_waiting()
     if key in data:
         del data[key]
@@ -442,8 +554,12 @@ def should_skip_for_automation(user_scope_id: Optional[str], buffer_minutes: int
     return 0 <= delta < buffer_minutes * 60
 
 
-def _get_last_thinking_summary(user_scope_id: Optional[str], max_chars: int = 1200) -> str:
-    """Load the most recent thinking-mode run log for this user and return the last assistant reply (context for next run)."""
+def _get_last_thinking_summary(user_scope_id: Optional[str], max_chars: int = 2000) -> str:
+    """
+    Load the last 3 thinking-mode run logs for this user and build a structured summary.
+    Includes: what the agent did (tool calls), what it said, and user replies.
+    Falls back to single-run summary for the 500-char variant used by declined-questions.
+    """
     try:
         log_dir = Platform.vaf_dir() / "thinking_mode_logs" / _key(user_scope_id)
         if not log_dir.exists():
@@ -451,15 +567,69 @@ def _get_last_thinking_summary(user_scope_id: Optional[str], max_chars: int = 12
         files = sorted(log_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
         if not files:
             return ""
-        raw = files[0].read_text(encoding="utf-8")
-        data = json.loads(raw)
-        messages = data.get("messages") or []
-        for msg in reversed(messages):
-            if isinstance(msg, dict) and msg.get("role") == "assistant":
-                content = msg.get("content") or ""
-                if isinstance(content, str) and content.strip():
-                    return (content.strip()[:max_chars] + "…") if len(content) > max_chars else content.strip()
-        return ""
+
+        # For short max_chars (e.g. declined-questions caller), just return last assistant message
+        if max_chars <= 500:
+            raw = files[0].read_text(encoding="utf-8")
+            data = json.loads(raw)
+            messages = data.get("messages") or []
+            for msg in reversed(messages):
+                if isinstance(msg, dict) and msg.get("role") == "assistant":
+                    content = msg.get("content") or ""
+                    if isinstance(content, str) and content.strip():
+                        return (content.strip()[:max_chars] + "…") if len(content) > max_chars else content.strip()
+            return ""
+
+        # Build structured summary from last 3 runs
+        summaries = []
+        for i, f in enumerate(files[:3]):
+            try:
+                raw = f.read_text(encoding="utf-8")
+                data = json.loads(raw)
+                messages = data.get("messages") or []
+                started = data.get("started_at", "")[:16].replace("T", " ")
+
+                # How long ago
+                try:
+                    started_ts = datetime.fromisoformat(data.get("started_at", "")).timestamp()
+                    mins_ago = int((time.time() - started_ts) / 60)
+                    if mins_ago < 60:
+                        ago = f"{mins_ago}min ago"
+                    else:
+                        ago = f"{mins_ago // 60}h ago"
+                except Exception:
+                    ago = started
+
+                # Collect tool calls and assistant message
+                tools_used = []
+                assistant_msg = ""
+                for msg in messages:
+                    if not isinstance(msg, dict):
+                        continue
+                    if msg.get("role") == "assistant":
+                        for tc in msg.get("tool_calls") or []:
+                            name = tc if isinstance(tc, str) else ((tc.get("function") or {}).get("name") or tc.get("name") or "?")
+                            tools_used.append(name)
+                        content = (msg.get("content") or "").strip()
+                        if content and content != "(no content)":
+                            assistant_msg = content[:300]
+
+                parts = [f"Run {i+1} ({ago}):"]
+                if tools_used:
+                    parts.append(f"Tools: {', '.join(tools_used[:5])}")
+                if assistant_msg:
+                    parts.append(f"Message: \"{assistant_msg[:200]}\"")
+                if not tools_used and not assistant_msg:
+                    parts.append("No action taken.")
+
+                summaries.append(" ".join(parts))
+            except Exception:
+                continue
+
+        if not summaries:
+            return ""
+        result = "**Recent thinking activity:**\n" + "\n".join(summaries)
+        return result[:max_chars] if len(result) > max_chars else result
     except Exception:
         return ""
 
@@ -569,12 +739,15 @@ def _run_thinking_for_user(
             last_summary = _get_last_thinking_summary(user_scope_id)
             if last_summary:
                 notice += (
-                    "\n\n**Last thinking-mode run (for context only – do not repeat these actions or ask the same again):**\n"
-                    + last_summary
+                    "\n\n" + last_summary
+                    + "\n(For context only – do not repeat these actions or ask the same questions again.)"
                 )
             last_reply = get_and_clear_last_reply(user_scope_id)
             if last_reply:
                 notice += "\n\n**User reply to your last question:** " + last_reply
+            declined_prompt = _get_declined_questions_prompt(user_scope_id)
+            if declined_prompt:
+                notice += "\n\n" + declined_prompt
             agent.history[0]["content"] = (agent.history[0]["content"] or "") + notice
 
         logger.info("Thinking started for user %s", scope_key[:8] if scope_key != "default" else "default")
@@ -608,7 +781,7 @@ def _run_thinking_for_user(
                 )
                 try:
                     from vaf.core.session import SessionManager
-                    sid = SessionManager().save_thinking_run(
+                    sid = SessionManager().append_to_thinking_session(
                         user_scope_id, run_id, started_iso, ended_iso, log_messages
                     )
                     if sid:
@@ -654,6 +827,7 @@ def _run_thinking_for_user(
 
         logger.info("Thinking completed for user %s", scope_key[:8] if scope_key != "default" else "default")
     finally:
+        _set_last_run_completed(user_scope_id)
         release_lock(user_scope_id)
 
 
@@ -666,6 +840,13 @@ def maybe_start_thinking_for_user(user_scope_id: Optional[str]) -> bool:
     idle_min = float(Config.get("thinking_idle_minutes", 10) or 10)
     buffer_min = int(Config.get("thinking_automation_buffer_minutes", 10) or 10)
     max_duration = int(Config.get("thinking_max_duration_minutes", 30) or 30)
+
+    # Cooldown: skip if a thinking run completed recently
+    cooldown_min = int(Config.get("thinking_cooldown_minutes", 60) or 60)
+    mins_since = _minutes_since_last_run(user_scope_id)
+    if mins_since < cooldown_min:
+        logger.debug("Thinking skipped for user: cooldown (%d/%d min)", int(mins_since), cooldown_min)
+        return False
 
     if should_skip_for_automation(user_scope_id, buffer_min):
         logger.debug("Thinking skipped for user: next automation within %d min", buffer_min)

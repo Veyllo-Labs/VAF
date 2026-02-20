@@ -186,6 +186,7 @@ call web_search 2-3 times IN THE SAME RESPONSE! Don't use workflows or sub-agent
 ## File System Guidelines
 - You can read and analyze local files by using the `librarian_agent`.
 - Always confirm before overwriting important files.
+- **Protected paths:** Do not search, read, list, or modify files inside the VAF application/project directory (the directory where VAF is installed, e.g. D:\\VAF). That directory is protected. Only use allowed tools within user workspaces and other permitted paths.
 
 ### 📂 Handling Local Files and Summaries (CRITICAL)
 If the user provides a local file path (e.g., `file:///...` or `C:\\...`) and asks you to read or summarize it:
@@ -790,13 +791,24 @@ Then use the results to answer. Do NOT guess from your training data!
 
         # 
         # 3. WORKSPACE CONTEXT (CWD Awareness)
+        # When CWD is the application directory, do not expose the path or name so the agent
+        # is not tempted to search or modify it; show a neutral workspace label instead.
         # ═
         if self.agent and hasattr(self.agent, 'workspace'):
             ws_info = self.agent.workspace.get_context_info()
+            _vaf_root = Path(__file__).resolve().parents[2]
+            _cwd_path = Path(ws_info['cwd']).resolve()
+            _proj_path = Path(ws_info['project_root']).resolve() if ws_info.get('project_root') and ws_info['project_root'] != 'None' else None
+            if _cwd_path == _vaf_root or (_proj_path and _proj_path == _vaf_root):
+                cwd_display = "[current workspace – use user-requested paths only; this directory is protected]"
+                project_root_display = "[same]"
+            else:
+                cwd_display = ws_info['cwd']
+                project_root_display = ws_info['project_root']
             parts.append(f"""
 ## 📂 WORKSPACE CONTEXT
-**Current Working Directory:** `{ws_info['cwd']}`
-**Project Root:** `{ws_info['project_root']}`
+**Current Working Directory:** `{cwd_display}`
+**Project Root:** `{project_root_display}`
 **Inside Project:** {'Yes' if ws_info['is_in_project'] else 'No'}
 """)
 

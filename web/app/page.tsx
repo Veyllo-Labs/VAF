@@ -3954,6 +3954,7 @@ function VAFDashboardContent() {
                     onClose={() => setEditingAutomationFromCalendar(null)}
                     initialDate={new Date()}
                     initialHour={(() => { const p = (editingAutomationFromCalendar.time || '06:00').split(':'); return Math.max(0, Math.min(23, parseInt(p[0], 10) || 0)); })()}
+                    initialMinute={(() => { const p = (editingAutomationFromCalendar.time || '06:00').split(':'); return Math.max(0, Math.min(59, parseInt(p[1], 10) || 0)); })()}
                     editTask={editingAutomationFromCalendar}
                     onCreated={() => { setEditingAutomationFromCalendar(null); refreshAutomations(); }}
                     onSubmit={createAutomationSubmit}

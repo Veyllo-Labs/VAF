@@ -2612,6 +2612,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         time_str = (cmd.get("time") or "06:00").strip()
                         if ":" not in time_str:
                             time_str = f"{int(time_str or 0) % 24:02d}:00"
+                        else:
+                            parts = time_str.split(":", 1)
+                            h = max(0, min(23, int(parts[0] or 0)))
+                            m = max(0, min(59, int(parts[1] or 0) if len(parts) > 1 else 0))
+                            time_str = f"{h:02d}:{m:02d}"
                         name = (cmd.get("name") or "").strip() or (prompt[:50] + ("..." if len(prompt) > 50 else ""))
                         description = (cmd.get("description") or "").strip() or prompt[:200]
                         weekday = (cmd.get("weekday") or "").strip().lower() or None
@@ -2718,6 +2723,23 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if not update_params:
                             await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "No fields to update"})
                             continue
+                        if "time" in update_params:
+                            new_time = update_params["time"]
+                            if isinstance(new_time, str) and ":" in new_time:
+                                parts = new_time.strip().split(":", 1)
+                                h = max(0, min(23, int(parts[0] or 0)))
+                                m = max(0, min(59, int(parts[1] or 0) if len(parts) > 1 else 0))
+                                update_params["time"] = f"{h:02d}:{m:02d}"
+                                new_time = update_params["time"]
+                            new_frequency = update_params.get("frequency", task.frequency)
+                            can_update, err_msg = mgr.check_can_update_automation(task_id=task_id, new_time=str(new_time), new_frequency=new_frequency)
+                            if not can_update and err_msg:
+                                await websocket.send_json({
+                                    "type": "update_automation_result",
+                                    "ok": False,
+                                    "error": (err_msg[:500] if err_msg else "Time too close to another automation"),
+                                })
+                                continue
                         updated = mgr.update(task_id, **update_params)
                         if not updated:
                             await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "Update failed"})

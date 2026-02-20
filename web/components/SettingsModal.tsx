@@ -3059,6 +3059,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     onClose={() => setEditingAutomation(null)}
                     initialDate={new Date()}
                     initialHour={(() => { const p = (editingAutomation.time || '06:00').split(':'); return Math.max(0, Math.min(23, parseInt(p[0], 10) || 0)); })()}
+                    initialMinute={(() => { const p = (editingAutomation.time || '06:00').split(':'); return Math.max(0, Math.min(59, parseInt(p[1], 10) || 0)); })()}
                     editTask={editingAutomation}
                     onCreated={() => { setEditingAutomation(null); onAutomationCreated?.(); }}
                     onSubmit={onCreateAutomationSubmit}

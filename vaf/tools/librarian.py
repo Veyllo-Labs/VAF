@@ -57,7 +57,7 @@ class LibrarianTool(BaseTool):
     - **Cloud Storage:** "What's in my Google Drive?", "Browse cloud", "List Drive folders"
     - **System Info:** "How many drives", "Hardware info"
     
-    Use this agent for ANY file system, cloud storage, or storage query. Do not say "I can't access files" - delegate to this agent!"""
+    Use this agent for ANY file system, cloud storage, or storage query. Do not say "I can't access files" - delegate to this agent! Do not use this agent to search or analyze the VAF installation folder; that path is not allowed."""
     
     parameters = {
         "type": "object",

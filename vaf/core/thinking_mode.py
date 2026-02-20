@@ -242,6 +242,7 @@ def set_waiting_for_reply(
     user_scope_id: Optional[str],
     username: str,
     display_name: str = "",
+    question_text: str = "",
 ) -> None:
     """Record that we sent a question to the user; we will wait for reply, then nudge at 3 min, skip at 10 min."""
     key = _key(user_scope_id)
@@ -251,6 +252,7 @@ def set_waiting_for_reply(
         "nudge_sent_at_ts": None,
         "username": (username or "").strip() or "admin",
         "display_name": (display_name or username or "admin").strip() or "admin",
+        "question_text": (question_text or "")[:500],
     }
     _save_waiting(data)
 
@@ -301,11 +303,17 @@ def clear_waiting_for_reply(
             replies = _load_user_replies()
             replies[last_sid] = {"reply": preview, "at": datetime.now().isoformat()}
             _save_user_replies(replies)
-        # If user declined, save question + reply to declined-questions log
+        # If user declined, save the actual sent question + reply to declined-questions log
         if _is_refusal(preview):
-            last_question = _get_last_thinking_summary(user_scope_id, max_chars=500)
-            if last_question:
-                _save_declined_entry(user_scope_id, last_question, preview)
+            # Get the real question text from the waiting state (before we clear it)
+            waiting_data = _load_waiting()
+            waiting_entry = waiting_data.get(key) or {}
+            actual_question = (waiting_entry.get("question_text") or "").strip()
+            if not actual_question:
+                # Fallback: use last assistant summary if question_text wasn't stored
+                actual_question = _get_last_thinking_summary(user_scope_id, max_chars=500)
+            if actual_question:
+                _save_declined_entry(user_scope_id, actual_question, preview)
     data = _load_waiting()
     if key in data:
         del data[key]
@@ -809,7 +817,26 @@ def _run_thinking_for_user(
                                 display_name = (ui.get("name") or "").strip() or uname
                             except Exception:
                                 pass
-                            set_waiting_for_reply(user_scope_id, uname, display_name=display_name)
+                            # Extract the actual message text from tool arguments
+                            question_text = ""
+                            try:
+                                args_raw = (tc.get("function") or {}).get("arguments") or ""
+                                if isinstance(args_raw, str):
+                                    args_parsed = json.loads(args_raw)
+                                elif isinstance(args_raw, dict):
+                                    args_parsed = args_raw
+                                else:
+                                    args_parsed = {}
+                                # Try common parameter names for the message text
+                                question_text = (
+                                    args_parsed.get("text")
+                                    or args_parsed.get("message")
+                                    or args_parsed.get("content")
+                                    or ""
+                                )
+                            except (json.JSONDecodeError, TypeError, AttributeError):
+                                pass
+                            set_waiting_for_reply(user_scope_id, uname, display_name=display_name, question_text=question_text)
                             break
                     else:
                         continue

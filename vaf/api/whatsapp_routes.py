@@ -803,20 +803,24 @@ async def get_qr_log_path(request: Request):
 @router.get("/qr")
 async def get_qr_code(request: Request):
     """Get current QR code for linking (or status). Poll until connected."""
-    user_info = get_current_vaf_user(request)
-    username = user_info["username"]
+    try:
+        user_info = get_current_vaf_user(request)
+        username = user_info["username"]
 
-    with _qr_lock:
-        state = _qr_state.get(username, {})
+        with _qr_lock:
+            state = _qr_state.get(username, {})
 
-    if state.get("connected"):
-        phone = state.get("phone") or ""
-        return {"status": "connected", "message": "WhatsApp linked successfully.", "phone": phone}
-    if state.get("error"):
-        return {"status": "error", "error": state["error"]}
-    if state.get("qr"):
-        return {"status": "qr", "qr": state["qr"]}
-    return {"status": "waiting", "message": "Start QR flow from Settings -> Connections."}
+        if state.get("connected"):
+            phone = state.get("phone") or ""
+            return {"status": "connected", "message": "WhatsApp linked successfully.", "phone": phone}
+        if state.get("error"):
+            return {"status": "error", "error": state["error"]}
+        if state.get("qr"):
+            return {"status": "qr", "qr": state["qr"]}
+        return {"status": "waiting", "message": "Start QR flow from Settings -> Connections."}
+    except Exception as e:
+        logger.exception("WhatsApp QR endpoint error: %s", e)
+        return {"status": "error", "error": f"Internal error: {e}"}
 
 
 @router.post("/qr/reset")

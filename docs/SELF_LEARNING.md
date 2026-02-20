@@ -40,6 +40,18 @@ The **user profile** (`user_identity.json`) is a structured description of the c
 
 **Implementation:** `vaf/tools/user_identity.py` (`UpdateUserIdentityTool`), `vaf/auth/user_workspace.py` (read/write `user_identity.json`), `vaf/core/system_prompt.py` (injection of user identity block).
 
+### 3. Document learning (learn_document)
+
+When the user provides a **document** (PDF, TXT, or MD), the agent can learn it into RAG via the **`learn_document`** tool. The document is split by page or section; for each part, a short LLM call extracts key facts; each extraction is stored as one memory with `type=document` and a single document tag (e.g. `doc-tora`). The agent can then answer questions about the document using retrieval.
+
+| Mechanism | What it does | Where it's documented |
+|-----------|--------------|------------------------|
+| **learn_document tool** | The agent reads the file, splits by page/section, runs an extraction LLM call per part, and ingests each result as a document memory with a shared tag. | [MEMORY_SYSTEM.md – Document memories](MEMORY_SYSTEM.md#document-memories-learn_document) |
+
+**Effect over time:** User-provided documents become queryable knowledge; the memory graph shows one tag per document with many purple document nodes. Learning is per user (`user_scope_id`).
+
+**Implementation:** `vaf/tools/learn_document.py`; `vaf/core/agent.py` (`_generate_for_document_extraction`).
+
 ---
 
 ## Extending the self-learning system

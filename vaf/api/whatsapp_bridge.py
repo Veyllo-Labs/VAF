@@ -373,11 +373,35 @@ def _sender_loop() -> None:
             if voice_path:
                 try:
                     from pathlib import Path
+                    # For voice messages, prefer @lid JID over @s.whatsapp.net when known.
+                    # Some WhatsApp accounts (privacy-migrated) only receive voice via @lid;
+                    # text works with @s.whatsapp.net but voice does not.
+                    voice_jid = chat_jid
+                    if not (chat_jid or "").endswith("@lid"):
+                        try:
+                            from vaf.core.config import Config as _Cfg
+                            _wc = _Cfg.get("whatsapp_config") or {}
+                            _lid_map = (_wc.get("lid_to_e164") or {}) if isinstance(_wc, dict) else {}
+                            # Build reverse map: E.164 digits → @lid JID
+                            _jid_digits = "".join(c for c in (chat_jid or "").split("@")[0] if c.isdigit())
+                            for _lid, _e164 in _lid_map.items():
+                                _e164_digits = "".join(c for c in str(_e164) if c.isdigit())
+                                if _e164_digits and _jid_digits and _e164_digits.endswith(_jid_digits) or _jid_digits.endswith(_e164_digits):
+                                    voice_jid = _lid
+                                    logger.info("WhatsApp voice: resolved %s → %s via lid_to_e164", chat_jid, voice_jid)
+                                    try:
+                                        from vaf.core.log_helper import log_whatsapp_reply
+                                        log_whatsapp_reply(f"VOICE_LID_RESOLVE {chat_jid} → {voice_jid}")
+                                    except Exception:
+                                        pass
+                                    break
+                        except Exception:
+                            pass
                     p = Path(voice_path)
                     if p.is_file():
                         size = p.stat().st_size
-                        logger.info("WhatsApp sending voice to %s, path=%s, size=%s", chat_jid, p, size)
-                        cmd = {"cmd": "send_voice", "to": chat_jid, "path": str(p.resolve())}
+                        logger.info("WhatsApp sending voice to %s, path=%s, size=%s", voice_jid, p, size)
+                        cmd = {"cmd": "send_voice", "to": voice_jid, "path": str(p.resolve())}
                         if req_id:
                             cmd["req_id"] = req_id
                         proc.stdin.write(json.dumps(cmd) + "\n")

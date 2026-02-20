@@ -456,6 +456,57 @@ Workflows now support **async sub-agents with pause/resume**. When a workflow st
 a sub-agent running in a separate terminal, the workflow **pauses** and returns control
 to the user. When the sub-agent finishes, the workflow **automatically resumes**.
 
+### Step execution and conditions
+
+Steps run in **strict sequence** by default. Each step supports three optional control-flow fields:
+
+**`condition`** — skip a step unless the expression is truthy. Supports AND / OR / NOT operators (left-to-right, no parentheses):
+
+```python
+# Simple: run only when research_content is non-empty
+"condition": "{research_content}"
+
+# AND: both must be truthy
+"condition": "{research_content} AND {user_wants_report}"
+
+# OR: at least one truthy
+"condition": "{step1_ok} OR {fallback_data}"
+
+# NOT: invert
+"condition": "NOT {error_occurred}"
+
+# Combined
+"condition": "{a} AND NOT {b} OR {c}"
+```
+
+**`on_success`** — after a step succeeds, jump to the step whose `output` name matches (or a 0-based index string). Normal sequential flow if omitted.
+
+**`on_failure`** — after a step fails, jump to the named step instead of aborting the workflow. The failed step is reclassified as *skipped* so the workflow is not marked failed overall. Requires no `optional: true`.
+
+```python
+"steps": [
+    {
+        "tool": "web_search",
+        "input": "{topic}",
+        "output": "research",
+        "on_failure": "notify_empty",       # jump here when search fails
+    },
+    {
+        "tool": "quality_check_agent",
+        "input": "{research}",
+        "output": "quality_ok",
+        "condition": "{research} AND NOT {skip_check}",
+        "on_success": "write_report",       # skip straight to write when check passes
+        "on_failure": "notify_quality",
+    },
+    {"tool": "notify", "input": "Quality check failed for {topic}", "output": "notify_quality"},
+    {"tool": "write_file", "input": "{research}", "output": "write_report"},
+    {"tool": "notify", "input": "No results for {topic}", "output": "notify_empty"},
+]
+```
+
+An infinite-loop guard aborts the workflow if the number of step-jumps exceeds `len(steps) × 3`.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    WORKFLOW WITH ASYNC SUB-AGENT (PAUSE/RESUME)             │

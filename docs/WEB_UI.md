@@ -71,7 +71,7 @@ Singleton pattern manager that:
 - **Delete Sessions**: Remove unwanted sessions
 - **Auto-Save**: Sessions persist automatically
 - **Session List**: Displays recent 20 sessions
-- **Thinking-mode sessions**: Sessions from thinking mode (brain icon) show only the agent's steps and reply; the long system prompt is hidden. The message input stays available so you can reply to the agent's question in the Web UI. See [Thinking-Mode.md](Thinking-Mode.md).
+- **Thinking mode:** When the agent runs in the background (idle thinking), its output is appended to your main chat session (`web-default`) so you see it in the same conversation. Legacy thinking-only sessions are hidden from the sidebar. The message input stays available so you can reply. See [Thinking-Mode.md](Thinking-Mode.md).
 
 ### 3. Status Indicators
 

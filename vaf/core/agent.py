@@ -1038,6 +1038,12 @@ class Agent:
                         if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
                             if instance.name in ("git_add_commit", "git_status", "git_log"):
                                 continue
+                        # thinking_done: only in thinking mode; skip when not in thinking mode
+                        if instance.name == "thinking_done":
+                            if os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes"):
+                                continue
+                            self.tools["thinking_done"] = instance
+                            continue
                         if is_coder_only:
                             continue
                         

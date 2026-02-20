@@ -106,8 +106,18 @@ def _is_channel_session(session_id: str) -> bool:
 
 
 def _web_ui_sessions(sessions: list) -> list:
-    """Filter to sessions that belong in the main Web UI sidebar (exclude channel sessions)."""
-    return [s for s in sessions if not _is_channel_session(s.get("id") or "")]
+    """Filter to sessions that belong in the main Web UI sidebar (exclude channel and thinking-only sessions)."""
+    out = []
+    for s in sessions:
+        sid = s.get("id") or ""
+        if _is_channel_session(sid):
+            continue
+        # Thinking output now goes into web-default; hide legacy thinking_* sessions from the list
+        meta = s.get("metadata") or {}
+        if meta.get("source") == "thinking" or sid.startswith("thinking_"):
+            continue
+        out.append(s)
+    return out
 
 log("WebServer", "Getting WebInterfaceManager...")
 manager = get_web_interface()

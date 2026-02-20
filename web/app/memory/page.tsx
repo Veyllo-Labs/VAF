@@ -321,6 +321,13 @@ export default function MemoryPage() {
     const [isInitialized, setIsInitialized] = useState(false);
     const [detailsExpanded, setDetailsExpanded] = useState(true);
     const [showTagConnections, setShowTagConnections] = useState(true);
+
+    // When a tag node is selected, expand the detail panel so "Memories with this tag" list is visible
+    const selectedNode = nodes.find((n) => n.id === selectedNodeId);
+    const isTagSelected = selectedNode?.type === 'tagNode' || selectedNode?.data?.isTagNode;
+    useEffect(() => {
+        if (isTagSelected) setDetailsExpanded(true);
+    }, [isTagSelected]);
     
     // Initialize on mount
     useEffect(() => {

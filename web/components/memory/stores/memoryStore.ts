@@ -433,7 +433,8 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
     // Selection
     selectMemory: async (id) => {
         if (!id) {
-            set({ selectedMemory: null, selectedNodeId: null });
+            // Only clear selected memory; keep selectedNodeId so tag-node selection still shows Tag Details panel
+            set({ selectedMemory: null });
             return;
         }
 

@@ -10,7 +10,7 @@ The model needs to know who it is talking to so it can:
 - Use the user's location (city/country) for context-aware answers (e.g. weather, local time).
 - Follow stated preferences and rules (e.g. "always be concise", "don't use emojis").
 
-That data is stored per user and injected into the system prompt each turn.
+That data is stored per user and injected into the system prompt each turn. Because the agent updates it from conversation (via the `update_user_identity` tool), the user profile is part of VAF’s **self-learning** system: the model learns the user better over time. See [SELF_LEARNING.md](SELF_LEARNING.md) for an overview of all self-learning mechanisms.
 
 ## Storage
 

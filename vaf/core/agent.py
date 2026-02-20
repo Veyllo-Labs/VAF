@@ -1039,11 +1039,11 @@ class Agent:
                         if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
                             if instance.name in ("git_add_commit", "git_status", "git_log", "memory_save"):
                                 continue
-                        # thinking_done: only in thinking mode; skip when not in thinking mode
-                        if instance.name == "thinking_done":
+                        # thinking_done / thinking_note_add: only in thinking mode; skip when not in thinking mode
+                        if instance.name in ("thinking_done", "thinking_note_add"):
                             if os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes"):
                                 continue
-                            self.tools["thinking_done"] = instance
+                            self.tools[instance.name] = instance
                             continue
                         if is_coder_only:
                             continue
@@ -2607,6 +2607,56 @@ class Agent:
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning("Compaction LLM call failed: %s", e)
+        finally:
+            self._compaction_in_progress = False
+        return (content or "").strip()
+
+    def _generate_for_document_extraction(self, user_prompt: str) -> str:
+        """
+        Single non-streaming LLM call for document learning extraction (per page/section).
+        Same provider path as compaction but with lower max_tokens (memory_document_extraction_max_tokens, default 800).
+        """
+        from vaf.core.config import Config
+        max_tokens = int(Config.get("memory_document_extraction_max_tokens", 800) or 800)
+        max_tokens = max(200, min(max_tokens, 2000))
+        temp_history = [{"role": "user", "content": user_prompt}]
+        content = ""
+        self._compaction_in_progress = True
+        try:
+            if self.use_server:
+                import requests
+                payload = {
+                    "messages": temp_history,
+                    "max_tokens": max_tokens,
+                    "temperature": 0.2,
+                    "stream": False,
+                }
+                res = requests.post(
+                    "http://127.0.0.1:8080/v1/chat/completions",
+                    json=payload,
+                    timeout=90,
+                ).json()
+                content = (res.get("choices") or [{}])[0].get("message", {}).get("content", "")
+            elif self.api_backend:
+                chunks = list(
+                    self.api_backend.chat_completion(
+                        messages=temp_history,
+                        max_tokens=max_tokens,
+                        temperature=0.2,
+                        stream=False,
+                    )
+                )
+                content = "".join(c if isinstance(c, str) else str(c) for c in chunks if c)
+            elif self.llm:
+                output = self.llm.create_chat_completion(
+                    messages=temp_history,
+                    max_tokens=max_tokens,
+                    temperature=0.2,
+                )
+                content = (output.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Document extraction LLM call failed: %s", e)
         finally:
             self._compaction_in_progress = False
         return (content or "").strip()
@@ -6203,6 +6253,9 @@ class Agent:
                     tool_args["user_scope_id"] = scope_id
                     # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
                     append_domain_log("rag", f"[Agent] {name} called with user_scope_id={scope_id}")
+                if name == "learn_document":
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                    tool_args["_agent"] = self
                 if name == "update_user_identity":
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp"):

@@ -757,8 +757,10 @@ def _run_thinking_for_user(
 
     scope_key = _key(user_scope_id)
     max_duration_minutes = int(Config.get("thinking_max_duration_minutes", 30) or 30)
-    # So Agent._load_tools() sees thinking mode and registers thinking_done tool
+    # So Agent._load_tools() sees thinking mode and registers thinking_done / thinking_note_add tools
     os.environ["VAF_THINKING_MODE"] = "1"
+    # Pass scope_key to thinking_note_add tool via env (tool reads VAF_THINKING_SCOPE_ID)
+    os.environ["VAF_THINKING_SCOPE_ID"] = scope_key
     try:
         from vaf.core.agent import Agent
 
@@ -833,6 +835,13 @@ def _run_thinking_for_user(
             declined_prompt = _get_declined_questions_prompt(user_scope_id)
             if declined_prompt:
                 notice += "\n\n" + declined_prompt
+            try:
+                from vaf.core.thinking_notes import build_notes_prompt
+                notes_prompt = build_notes_prompt(scope_key)
+                if notes_prompt:
+                    notice += "\n\n" + notes_prompt
+            except Exception as _notes_err:
+                logger.debug("Could not load thinking notes: %s", _notes_err)
             agent.history[0]["content"] = (agent.history[0]["content"] or "") + notice
 
         logger.info("Thinking started for user %s", scope_key[:8] if scope_key != "default" else "default")
@@ -947,6 +956,7 @@ def _run_thinking_for_user(
         logger.info("Thinking completed for user %s", scope_key[:8] if scope_key != "default" else "default")
     finally:
         os.environ.pop("VAF_THINKING_MODE", None)
+        os.environ.pop("VAF_THINKING_SCOPE_ID", None)
         _set_last_run_completed(user_scope_id)
         release_lock(user_scope_id)
 

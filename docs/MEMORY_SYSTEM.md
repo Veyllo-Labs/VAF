@@ -12,6 +12,7 @@ The Memory System provides persistent, encrypted memory storage with RAG (Retrie
 - **Auto-Connections**: Automatically links semantically related memories
 - **Streaming**: Token streaming for RAG query responses
 - **Session Compaction**: Background process that every N user turns prompts the LLM to write durable memories (MEMORY:/NO_REPLY) into RAG. The model sees only a user/assistant dialogue excerpt (no system or tool messages). See [Session Compaction (background)](#session-compaction-background).
+- **Document learning**: The agent can learn a document (PDF, TXT, MD) via the `learn_document` tool; one tag per document, LLM extraction per page/section. See [Document memories (learn_document)](#document-memories-learn_document).
 
 ### Self-learning behavior
 
@@ -19,6 +20,7 @@ The memory system is **self-learning**: it improves with use. The more you chat 
 
 - **Automatic learning:** Every N user turns (default 15), [session compaction](#session-compaction-background) runs: the LLM is given a recent conversation excerpt and writes durable facts into RAG (preferences, decisions, events, follow-ups). No manual saving is required; normal chat is the main source of long-term memory.
 - **Explicit saves:** The agent can call the `memory_save` tool during a conversation to store important information immediately (e.g. after you state a preference or share a detail).
+- **Document learning:** The agent can ingest a document via the `learn_document` tool (one tag per document, LLM extraction per page/section); see [Document memories (learn_document)](#document-memories-learn_document).
 - **Better recall over time:** RAG retrieval runs before each reply. As more memories are stored (from compaction and `memory_save`), semantic search returns more relevant context, so answers become more personalized and consistent across sessions.
 - **Scope:** Learning is per user (`user_scope_id`). Only the main user’s Web UI conversations are compacted; contact chats (Telegram, WhatsApp, Discord) are not written to RAG for data protection.
 
@@ -163,6 +165,18 @@ Additional settings in `~/.vaf/config.json`:
 **Storage:** Tag links are stored in `~/.vaf/tag_links.json` (or Docker config dir). No database migration required.
 
 **Sync:** When a link is created, existing memories with either tag are updated to include the other tag.
+
+### Document memories (learn_document)
+
+The agent can **learn a document** into long-term memory via the **`learn_document`** tool. Use it when the user asks to "learn", "remember", or "ingest" a document (e.g. a PDF or text file) so the agent can answer questions about it later.
+
+- **Input:** File path (required) and optional `document_title` (e.g. "Tora"). Supported formats: PDF, TXT, MD.
+- **One tag per document:** All memories from that run share a single tag derived from the title (e.g. `doc-tora`). In the memory graph, one tag node is linked to many purple document nodes (one per page/section).
+- **One memory per page/section:** The document is split by page (PDF) or by section/headers/size (TXT/MD). For each part, a short **LLM extraction** runs ("Extract key facts and knowledge from this page"); only the extracted text is stored, not the raw page. This keeps memories compact and improves retrieval.
+- **Scoping:** Uses the current user’s `user_scope_id` (same as `memory_save`). Paths must be under an allowed root (home, cwd, or VAF data dir).
+- **Config (optional in `config.json`):** `learn_document_max_pages` (default 200) caps how many pages/sections are processed; `memory_document_extraction_max_tokens` (default 800) limits the per-page extraction reply length.
+
+Implementation: `vaf/tools/learn_document.py`; ingestion uses the same `RagPipeline.ingest()` as other memories with `type=document`, `source=learn_document`, and `tags=[doc-<title>]`. See the memory graph legend: **Document** = purple.
 
 ## API Reference
 

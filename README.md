@@ -1089,19 +1089,6 @@ For commercial use including hardware embedding, SaaS, or proprietary distributi
 
 ---
 
-## Editions
-
-| Feature | VAF Open Source (This Repo) | Veyllo PRO Appliance (Hardware) |
-|--------|-----------------------------|----------------------------------|
-| **Code Access** | ✅ Source Available | ✅ Source Available |
-| **Setup** | DIY (Docker/Python skills required) |  Plug & Play (Pre-installed) |
-| **Model** | Bring Your Own (Llama/Mistral/Qwen/VQ-1) | Bring Your Own + Pre-installed |
-| **Privacy** | Local |  Local  |
-| **Support** | GitHub Issues |  24/7 Enterprise Support |
-| **Liability** | None |  Included  |
-
----
-
 # **Support**
 
 > ## **Community Support only via GitHub Issues.**  

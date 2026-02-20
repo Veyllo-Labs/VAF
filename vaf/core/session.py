@@ -455,6 +455,70 @@ class SessionManager:
 
         return sid
 
+    def append_thinking_run_to_session(
+        self,
+        session_id: str,
+        run_id: str,
+        started_at: str,
+        ended_at: str,
+        messages_list: List[Dict[str, Any]],
+    ) -> None:
+        """
+        Append a thinking-mode run to an existing session (e.g. web-default).
+        Use this so thinking output appears in the same chat as the user's web session.
+        Creates the session if it does not exist.
+        """
+        # Build messages for this run (same format as append_to_thinking_session)
+        new_messages = []
+        for m in messages_list or []:
+            role = m.get("role") or "assistant"
+            content = m.get("content") or ""
+            tools = m.get("tool_calls")
+            if role == "assistant" and tools:
+                new_messages.append(Message(role="assistant", content=(content or "").strip() or "(no content)", timestamp=started_at))
+                for i, tool_name in enumerate(tools):
+                    new_messages.append(Message(
+                        role="tool",
+                        content="(completed)",
+                        timestamp=started_at,
+                        metadata={"toolName": str(tool_name), "toolId": f"thinking-{run_id}-{i}", "toolStatus": "completed"},
+                    ))
+            else:
+                content_plain = (content or "").strip()
+                if tools:
+                    content_plain += "\n\n[Tools: " + ", ".join(str(t) for t in tools) + "]"
+                new_messages.append(Message(role=role, content=content_plain or "(no content)", timestamp=started_at))
+
+        existing = None
+        try:
+            existing = self.load(session_id)
+        except (FileNotFoundError, Exception):
+            existing = None
+
+        if existing and existing.messages is not None:
+            separator = Message(
+                role="system",
+                content=f"--- Thinking run {run_id} ({started_at[:16].replace('T', ' ')}) ---",
+                timestamp=started_at,
+            )
+            existing.messages.append(separator)
+            existing.messages.extend(new_messages)
+            existing.updated_at = ended_at
+            self.save(existing, sync_state=False)
+        else:
+            name = f"Chat {session_id}" if not existing else existing.name
+            session = Session(
+                id=session_id,
+                name=name,
+                created_at=started_at,
+                updated_at=ended_at,
+                model=existing.model if existing else "",
+                project_path=existing.project_path if existing else "",
+                messages=new_messages,
+                metadata=dict(existing.metadata) if existing and existing.metadata else {},
+            )
+            self.save(session, sync_state=False)
+
     def delete(self, session_id: str) -> bool:
         """Delete a session."""
         deleted = False

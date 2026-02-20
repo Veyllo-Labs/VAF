@@ -105,6 +105,43 @@ def _strip_tool_calls_json(text: str) -> str:
     return "".join(out)
 
 
+# Phrases that must never appear in messages sent to contacts via Telegram/WhatsApp/Discord.
+# If any of these are found in the outgoing text, the message is blocked or sanitized.
+_INTERNAL_PHRASES = [
+    "[SYSTEM_LOG_ONLY]",
+    "[FRONT OFFICE",
+    "MESSAGE FROM A CONTACT",
+    "NOT FROM THE ACCOUNT OWNER",
+    "API returned empty responses",
+    "Do NOT report to the account owner",
+    "Do NOT repeat or echo the contact",
+    "REPLY IN:",
+    "Contact details (use Language",
+    "contact preferred_language",
+]
+
+
+def _sanitize_outgoing_message(text: str) -> str:
+    """
+    Safety net: strip internal system phrases from outgoing messages before sending
+    to external channels (Telegram/WhatsApp/Discord). If the entire message is just
+    internal content, return empty string.
+    """
+    if not text or not text.strip():
+        return ""
+    # Check if any internal phrase is present
+    text_lower = text.lower()
+    for phrase in _INTERNAL_PHRASES:
+        if phrase.lower() in text_lower:
+            # Try to extract just the agent's actual response by removing the contaminated block.
+            # If the FRONT OFFICE prompt leaked, it's typically at the start or end — drop the whole thing.
+            logging.getLogger(__name__).warning(
+                "SANITIZE: blocked internal phrase %r in outgoing message (len=%d)", phrase, len(text)
+            )
+            return ""
+    return text
+
+
 def _user_asked_for_text(user_input: str) -> bool:
     """True if the user prompt looks like a request to write/compose text (for opening in Document Editor)."""
     if not (user_input and user_input.strip()):
@@ -812,6 +849,7 @@ def run_headless_agent():
 
                     # Handle async-ack markers (sub-agent dispatched, no stream output)
                     response_text = str(response) if response is not None else ""
+                    _is_system_log_only = response_text.startswith("[SYSTEM_LOG_ONLY]")
                     if response_text.startswith("[ASYNC_ACK]"):
                         clean_ack = response_text.replace("[ASYNC_ACK]", "").strip()
                         final_text = clean_ack or response_text
@@ -821,8 +859,9 @@ def run_headless_agent():
                                 content=clean_ack,
                                 session_id=task.session_id
                             )
-                    elif response_text.startswith("[SYSTEM_LOG_ONLY]"):
-                        # Agent already sent this as system log; do not add assistant bubble
+                    elif _is_system_log_only:
+                        # Agent already sent this as system log; do NOT add assistant bubble
+                        # and do NOT send to any external channel (Telegram/WhatsApp/Discord)
                         final_text = response_text.replace("[SYSTEM_LOG_ONLY]", "").strip()
                     else:
                         # Final response broadcast (in case streaming missed the final state)
@@ -856,9 +895,16 @@ def run_headless_agent():
                         except Exception:
                             pass
 
-                    # If this task came from Telegram bridge, send reply back to Telegram
+                    # If this task came from Telegram/WhatsApp/Discord, send reply back.
+                    # NEVER send [SYSTEM_LOG_ONLY] responses to external channels.
+                    if _is_system_log_only:
+                        try:
+                            from vaf.core.log_helper import log_whatsapp_reply
+                            log_whatsapp_reply(f"HEADLESS SYSTEM_LOG_ONLY suppressed for session={task.session_id!r} len={len(final_text)}")
+                        except Exception:
+                            pass
                     try:
-                        task_source = getattr(task, "source", None)
+                        task_source = getattr(task, "source", None) if not _is_system_log_only else None
                         meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
                         chat_id = meta.get("telegram_chat_id")
                         try:
@@ -868,21 +914,22 @@ def run_headless_agent():
                             pass
                         if task_source == "telegram" and chat_id:
                             from vaf.core.telegram_reply import send_telegram_reply
-                            # Strip <think>...</think> and raw tool_calls JSON so user never sees internal payloads
+                            # Strip <think>...</think>, raw tool_calls JSON, and internal phrases
                             out = str(final_text)
                             out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
                             out = _strip_tool_calls_json(out)
                             out = re.sub(r'\n{3,}', '\n\n', out).strip()
+                            out = _sanitize_outgoing_message(out)
                             if not out:
                                 try:
                                     log_telegram_reply(
-                                        f"HEADLESS reply empty after strip → [No reply text] "
+                                        f"HEADLESS reply empty/blocked after sanitize "
                                         f"raw_len={len(str(final_text))} chat_id={chat_id}"
                                     )
                                 except Exception:
                                     pass
-                                out = "[No reply text]"
-                            send_telegram_reply(str(chat_id), out)
+                            else:
+                                send_telegram_reply(str(chat_id), out)
                         elif task_source == "discord":
                             discord_channel_id = meta.get("discord_channel_id")
                             if discord_channel_id:
@@ -898,9 +945,9 @@ def run_headless_agent():
                                 out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
                                 out = _strip_tool_calls_json(out)
                                 out = re.sub(r'\n{3,}', '\n\n', out).strip()
-                                if not out:
-                                    out = "[No reply text]"
-                                send_discord_reply(str(discord_channel_id), out)
+                                out = _sanitize_outgoing_message(out)
+                                if out:
+                                    send_discord_reply(str(discord_channel_id), out)
                         elif task_source == "whatsapp":
                             chat_jid = meta.get("whatsapp_chat_jid")
                             username = meta.get("username") or "admin"
@@ -926,9 +973,15 @@ def run_headless_agent():
                                 out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
                                 out = _strip_tool_calls_json(out)
                                 out = re.sub(r'\n{3,}', '\n\n', out).strip()
-                                if not out:
-                                    out = "[No reply text]"
-                                send_whatsapp_reply(username, str(chat_jid), out, user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None)
+                                out = _sanitize_outgoing_message(out)
+                                if out:
+                                    send_whatsapp_reply(username, str(chat_jid), out, user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None)
+                                else:
+                                    try:
+                                        from vaf.core.log_helper import log_whatsapp_reply
+                                        log_whatsapp_reply(f"HEADLESS whatsapp reply BLOCKED by sanitize jid={chat_jid!r}")
+                                    except Exception:
+                                        pass
                             else:
                                 try:
                                     from vaf.core.log_helper import log_whatsapp_reply
@@ -1403,6 +1456,8 @@ def run_headless_agent():
                                         session = session_mgr.load(sid)
                                         out = "".join(response_parts)
                                         out = re.sub(r"<think>.*?</think>", "", out, flags=re.DOTALL)
+                                        out = re.sub(r"\n{3,}", "\n\n", out).strip()
+                                        out = _strip_tool_calls_json(out)
                                         out = re.sub(r"\n{3,}", "\n\n", out).strip()
                                         if not out:
                                             out = "[No summary generated]"

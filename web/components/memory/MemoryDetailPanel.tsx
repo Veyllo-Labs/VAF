@@ -129,12 +129,24 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [expanded, setExpanded] = useState(true);
 
-    // Determine if selected node is a tag
+    // Determine if selected node is a tag (match API type and fallback by id prefix)
     const selectedNode = useMemo(() => {
-        return nodes.find(n => n.id === selectedNodeId);
+        const found = nodes.find(n => n.id === selectedNodeId);
+        if (found) return found;
+        // Fallback: build minimal tag node from id so Tag Details still show (e.g. after refresh)
+        if (selectedNodeId?.startsWith('tag-')) {
+            const tag = selectedNodeId.replace(/^tag-/, '');
+            return {
+                id: selectedNodeId,
+                type: 'tagNode',
+                position: { x: 0, y: 0 },
+                data: { label: `#${tag}`, tag, memoryCount: 0, isTagNode: true },
+            } as typeof nodes[0];
+        }
+        return undefined;
     }, [nodes, selectedNodeId]);
 
-    const isTagSelected = selectedNode?.type === 'tagNode';
+    const isTagSelected = !!(selectedNode && (selectedNode.type === 'tagNode' || selectedNode.data?.isTagNode));
 
     // Get connected memories for tag node
     const connectedMemories = useMemo(() => {

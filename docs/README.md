@@ -5,7 +5,8 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 ## Contents
 
 ### Core Systems
-- **MEMORY_SYSTEM.md**: RAG-powered memory storage with encryption, vector search, and graph visualization.
+- **SELF_LEARNING.md**: Overview of how VAF learns from usage (current: RAG/memory; template for future self-learning extensions).
+- **MEMORY_SYSTEM.md**: Self-learning RAG memory (improves with use via session compaction and memory_save), encryption, vector search, and graph visualization.
 - **SOUL_SYSTEM.md**: Agent personality and rules (Soul, identity.json). Distinct from the human user profile.
 - **USER_IDENTITY.md**: Current user profile (user_identity.json), update_user_identity tool, and Settings UI.
 - **CONTEXT_MANAGEMENT.md**: Dynamic system prompt and token optimization strategies.

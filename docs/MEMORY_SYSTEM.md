@@ -13,6 +13,17 @@ The Memory System provides persistent, encrypted memory storage with RAG (Retrie
 - **Streaming**: Token streaming for RAG query responses
 - **Session Compaction**: Background process that every N user turns prompts the LLM to write durable memories (MEMORY:/NO_REPLY) into RAG. The model sees only a user/assistant dialogue excerpt (no system or tool messages). See [Session Compaction (background)](#session-compaction-background).
 
+### Self-learning behavior
+
+The memory system is **self-learning**: it improves with use. The more you chat (Web UI), the more the framework learns about you and your context.
+
+- **Automatic learning:** Every N user turns (default 15), [session compaction](#session-compaction-background) runs: the LLM is given a recent conversation excerpt and writes durable facts into RAG (preferences, decisions, events, follow-ups). No manual saving is required; normal chat is the main source of long-term memory.
+- **Explicit saves:** The agent can call the `memory_save` tool during a conversation to store important information immediately (e.g. after you state a preference or share a detail).
+- **Better recall over time:** RAG retrieval runs before each reply. As more memories are stored (from compaction and `memory_save`), semantic search returns more relevant context, so answers become more personalized and consistent across sessions.
+- **Scope:** Learning is per user (`user_scope_id`). Only the main user’s Web UI conversations are compacted; contact chats (Telegram, WhatsApp, Discord) are not written to RAG for data protection.
+
+See [Session Compaction (background)](#session-compaction-background) and the `memory_save` / `memory_search` tools for implementation details. For a high-level overview of self-learning in VAF (including future extensions), see [SELF_LEARNING.md](SELF_LEARNING.md).
+
 ## Overview
 
 ```

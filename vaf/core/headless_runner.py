@@ -1096,7 +1096,8 @@ def run_headless_agent():
                         except Exception:
                             pass
 
-                    # 3. Session compaction: only for main user (Web UI). Never for contact chats (Telegram/WhatsApp/Discord) – DSGVO.
+                    # 3. Session compaction: main user chats (Web, Telegram, WhatsApp, Discord).
+                    #    DSGVO: skip contact chats (from_contact=True) — never learn from other people's messages.
                     if _post_chat_ok:
                         try:
                             if is_debug_logging_enabled():
@@ -1109,13 +1110,14 @@ def run_headless_agent():
                             from uuid import UUID
                             from vaf.memory.rag import run_session_compaction_sync
                             from vaf.core.config import Config
-                            _chat_source = getattr(task, "source", "web")
-                            if _chat_source != "web":
+                            _task_meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                            _is_contact = bool(_task_meta.get("from_contact"))
+                            if _is_contact:
                                 if is_debug_logging_enabled():
                                     from datetime import datetime as _dt
                                     try:
                                         with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
-                                            f.write(f"{_dt.now().isoformat()} COMPACTION_SKIP session_id={task.session_id} source={_chat_source!r} (main_user_only)\n")
+                                            f.write(f"{_dt.now().isoformat()} COMPACTION_SKIP session_id={task.session_id} reason=contact_chat_dsgvo\n")
                                     except Exception:
                                         pass
                             elif Config.get("memory_enabled", True) and Config.get("memory_compaction_enabled", True):

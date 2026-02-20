@@ -479,8 +479,10 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
             const savedPos = savedPositionsRef.current[node.id];
             const position = savedPos || node.position;
 
-            // Determine if this node should be faded
+            // Determine if this node should be faded (unconnected) or highlighted (connected)
             const isFaded = selectedNodeId !== null && !connectedNodeIds.has(node.id);
+            const isHighlightedFromSelection = selectedNodeId !== null && connectedNodeIds.has(node.id);
+            const isHighlighted = isHighlightedFromSelection || (selectedNodeId === null && !!node.data.isHighlighted);
 
             return {
                 id: node.id,
@@ -489,6 +491,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                 data: {
                     ...node.data,
                     isFaded,
+                    isHighlighted,
                 },
                 selected: node.id === selectedNodeId,
             };
@@ -554,18 +557,24 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
 
     // Update local state when store changes or selection changes
     useEffect(() => {
-        // Update nodes with new isFaded state
         setNodes(currentNodes =>
-            currentNodes.map(node => ({
-                ...node,
-                data: {
-                    ...node.data,
-                    isFaded: selectedNodeId !== null && !connectedNodeIds.has(node.id),
-                },
-                selected: node.id === selectedNodeId,
-            }))
+            currentNodes.map(node => {
+                const isFaded = selectedNodeId !== null && !connectedNodeIds.has(node.id);
+                const isHighlightedFromSelection = selectedNodeId !== null && connectedNodeIds.has(node.id);
+                const ragHighlight = storeNodes.find(n => n.id === node.id)?.data?.isHighlighted ?? false;
+                const isHighlighted = isHighlightedFromSelection || (selectedNodeId === null && ragHighlight);
+                return {
+                    ...node,
+                    data: {
+                        ...node.data,
+                        isFaded,
+                        isHighlighted,
+                    },
+                    selected: node.id === selectedNodeId,
+                };
+            })
         );
-    }, [selectedNodeId, connectedNodeIds, setNodes]);
+    }, [selectedNodeId, connectedNodeIds, storeNodes, setNodes]);
 
     // Update when store nodes change (new data from backend)
     useEffect(() => {

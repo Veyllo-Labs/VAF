@@ -6,7 +6,7 @@ Respects Config.debug_logs_enabled: when False, no domain logs and no queue.log 
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from vaf.core.platform import Platform
 
@@ -150,5 +150,71 @@ def append_domain_log_block(domain: str, first_line: str, rest_lines: Optional[L
             f.write(f"{ts} {first_line}\n")
             for line in rest_lines or []:
                 f.write(f"    {line}\n")
+    except Exception:
+        pass
+
+
+def log_thinking_run(
+    run_id: str,
+    scope_key: str,
+    started_at: str,
+    ended_at: str,
+    duration_seconds: float,
+    messages: List[Dict[str, Any]],
+) -> None:
+    """
+    Always append a thinking-mode run to logs/vaf_denk.log for debugging.
+    One log file for all users; each run gets a separator block with run metadata
+    and a human-readable summary of what the agent did.
+    """
+    try:
+        log_dir = get_app_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().isoformat()
+
+        lines: list[str] = []
+        lines.append(f"{'=' * 80}")
+        lines.append(f"[THINKING RUN] {ts}")
+        lines.append(f"  run_id:    {run_id}")
+        lines.append(f"  user:      {scope_key}")
+        lines.append(f"  started:   {started_at}")
+        lines.append(f"  ended:     {ended_at}")
+        lines.append(f"  duration:  {duration_seconds:.1f}s")
+        lines.append(f"  turns:     {len([m for m in messages if isinstance(m, dict) and m.get('role') == 'assistant'])}")
+        lines.append("")
+
+        # Log each message in a readable format
+        for msg in messages or []:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role", "?")
+            content = (msg.get("content") or "").strip()
+            tool_calls = msg.get("tool_calls") or []
+
+            if role == "system":
+                # Skip system prompt (too long), just note it
+                lines.append(f"  [{role}] (system prompt, {len(content)} chars)")
+            elif role == "user":
+                # Truncate long user prompts
+                preview = content[:300] + "..." if len(content) > 300 else content
+                lines.append(f"  [{role}] {preview}")
+            elif role == "assistant":
+                if tool_calls:
+                    tools_str = ", ".join(str(t) for t in tool_calls)
+                    lines.append(f"  [{role}] Tools: {tools_str}")
+                if content and content != "(no content)":
+                    preview = content[:500] + "..." if len(content) > 500 else content
+                    lines.append(f"  [{role}] {preview}")
+                elif not tool_calls:
+                    lines.append(f"  [{role}] (no content)")
+            elif role == "tool":
+                # Tool results – just note them briefly
+                preview = content[:200] + "..." if len(content) > 200 else content
+                lines.append(f"  [{role}] {preview}")
+
+        lines.append("")
+
+        with open(log_dir / "vaf_denk.log", "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
     except Exception:
         pass

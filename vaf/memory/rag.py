@@ -846,11 +846,15 @@ def _build_compaction_conversation_excerpt(agent: Any, max_chars: int = 12000) -
 
 
 def _is_contact_session(session_id: str) -> bool:
-    """True if this session is a chat with a contact (Telegram/WhatsApp/Discord), not the main user. No compaction for these (DSGVO)."""
-    if not session_id or not isinstance(session_id, str):
-        return False
-    s = session_id.strip().lower()
-    return s.startswith("telegram_") or s.startswith("whatsapp_") or s.startswith("discord_")
+    """
+    True if this session is a chat with a contact (Telegram/WhatsApp/Discord), not the main user.
+    NOTE: This is a FALLBACK safety check only. The primary DSGVO filter is in headless_runner
+    which checks task.metadata["from_contact"]. Main-user Telegram/WhatsApp/Discord sessions
+    (where the user themselves chats) are NOT contact sessions and SHOULD be compacted.
+    """
+    # No longer block by prefix — the headless_runner's from_contact check is the authoritative filter.
+    # This function is kept for backward compatibility but always returns False.
+    return False
 
 
 def run_session_compaction_sync(
@@ -862,12 +866,10 @@ def run_session_compaction_sync(
     """
     Run session compaction if interval reached: inject prompt, parse MEMORY:/NO_REPLY, ingest to RAG.
     Does not append compaction reply to chat history or UI.
-    Only runs for the main user (Web UI sessions). Contact chats (telegram_*, whatsapp_*, discord_*) are skipped (DSGVO).
+    Runs for main user sessions (Web, Telegram, WhatsApp, Discord).
+    DSGVO: Contact chats are filtered upstream in headless_runner (from_contact metadata).
     """
     if not Config.get("memory_enabled", True) or not Config.get("memory_compaction_enabled", True):
-        return
-    if _is_contact_session(session_id):
-        _compaction_log("COMPACTION_SKIP", session_id=session_id, reason="contact_session_main_user_only")
         return
     interval = int(Config.get("memory_compaction_interval", 15))
     state = _load_compaction_state()

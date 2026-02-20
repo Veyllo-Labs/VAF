@@ -13,7 +13,7 @@ VAF is a comprehensive agent suite designed to transform LLMs into autonomous po
 **Note on Models:** VAF works with any GGUF model (Llama 3, Mistral, Qwen, etc.).
 
 **New in VAF 2.5:**
-*   **Memory System (RAG):** Encrypted memory storage with semantic search, graph visualization, and AI-powered retrieval.
+*   **Memory System (RAG):** Self-learning encrypted memory: the more you chat, the more the framework learns (session compaction + `memory_save`). Semantic search, graph visualization, and AI-powered retrieval. See [docs/MEMORY_SYSTEM.md](docs/MEMORY_SYSTEM.md).
 *   **Auto-Installer:** Cross-platform installation scripts with Docker detection (`install.sh`, `install.ps1`).
 *   **System Tray:** Persistent background server for instant agent availability.
 *   **Gateway Architecture:** A persistent control plane for concurrent multi-channel access.

@@ -868,32 +868,26 @@ def _run_thinking_for_user(
                 if _history_has_thinking_done(getattr(agent, "history", [])):
                     break
 
-            # Persist run for inspection (tool calls, messages) and as session for Web UI chat list
+            # Persist run: JSON run log (for internal summary) + vaf_denk.log (for debugging)
+            # NOT saved to WebUI sessions — thinking output is debug-only, visible in logs/vaf_denk.log
             try:
                 started_iso, ended_iso, log_messages = _save_run_log(
                     user_scope_id, run_id, started_at_ts, getattr(agent, "history", [])
                 )
+                # Write human-readable log to logs/vaf_denk.log
                 try:
-                    from vaf.core.session import SessionManager
-                    sm = SessionManager()
-                    # Local admin: append to web-default so thinking appears in the same chat as the user
-                    is_local_admin = (
-                        user_scope_id is None
-                        or str(user_scope_id).strip() == str(get_local_admin_scope_id()).strip()
+                    from vaf.core.log_helper import log_thinking_run
+                    duration = time.time() - started_at_ts
+                    log_thinking_run(
+                        run_id=run_id,
+                        scope_key=scope_key,
+                        started_at=started_iso,
+                        ended_at=ended_iso,
+                        duration_seconds=round(duration, 1),
+                        messages=log_messages,
                     )
-                    if is_local_admin:
-                        sm.append_thinking_run_to_session(
-                            "web-default", run_id, started_iso, ended_iso, log_messages
-                        )
-                        set_last_thinking_session_id(user_scope_id, "web-default")
-                    else:
-                        sid = sm.append_to_thinking_session(
-                            user_scope_id, run_id, started_iso, ended_iso, log_messages
-                        )
-                        if sid:
-                            set_last_thinking_session_id(user_scope_id, sid)
-                except Exception as sess_err:
-                    logger.warning("Could not save thinking run as session: %s", sess_err)
+                except Exception as log_file_err:
+                    logger.warning("Could not write vaf_denk.log: %s", log_file_err)
             except Exception as log_err:
                 logger.warning("Thinking run log save failed: %s", log_err)
             # If agent sent a message (question), wait for reply: nudge at 3 min, skip question after 10 min

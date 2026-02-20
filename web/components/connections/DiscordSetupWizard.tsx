@@ -465,20 +465,50 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
 
                     {/* Step 5: Complete */}
                     {currentStep === 5 && (
-                        <div className="text-center py-8">
-                            <div className="w-20 h-20 mx-auto rounded-2xl bg-green-500 flex items-center justify-center mb-4">
-                                <Check className="w-10 h-10 text-white" />
+                        <div className="space-y-6">
+                            <div className="text-center pt-4">
+                                <div className="w-20 h-20 mx-auto rounded-2xl bg-green-500 flex items-center justify-center mb-4">
+                                    <Check className="w-10 h-10 text-white" />
+                                </div>
+                                <h3 className="text-2xl font-bold text-gray-900 mb-2">Setup Complete!</h3>
+                                <p className="text-gray-500 max-w-md mx-auto">
+                                    Your Discord bot is now connected to VAF. You can chat with your agent by sending messages to the bot.
+                                </p>
                             </div>
-                            <h3 className="text-2xl font-bold text-gray-900 mb-2">Setup Complete!</h3>
-                            <p className="text-gray-500 max-w-md mx-auto mb-6">
-                                Your Discord bot is now connected to VAF. You can chat with your agent by sending messages to the bot.
-                            </p>
                             {adminInfo && (
-                                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200 inline-block">
+                                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200 text-center">
                                     <p className="text-sm text-gray-500">Authorized Admin</p>
                                     <p className="text-lg text-gray-900 font-medium">@{adminInfo.username}</p>
                                 </div>
                             )}
+                            {/* Recommendation: set bot to Private */}
+                            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
+                                <div className="flex items-start gap-3">
+                                    <Shield className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                                    <div>
+                                        <p className="text-sm font-semibold text-amber-900 mb-1">
+                                            Empfehlung: Bot auf &quot;Private&quot; stellen
+                                        </p>
+                                        <p className="text-sm text-amber-800 mb-2">
+                                            Dein Bot ist aktuell öffentlich — jeder könnte ihn mit einem OAuth-Link in seinen Server einladen.
+                                            Da er nur für dich gedacht ist, solltest du ihn auf <strong>Private</strong> stellen.
+                                        </p>
+                                        <ol className="text-sm text-amber-700 space-y-1 mb-3">
+                                            <li>1. Developer Portal → deine App → Tab <strong>Bot</strong></li>
+                                            <li>2. Abschnitt <strong>&quot;Authorization Flow&quot;</strong></li>
+                                            <li>3. <strong>&quot;Public Bot&quot;</strong> deaktivieren → Save</li>
+                                        </ol>
+                                        <a
+                                            href="https://discord.com/developers/applications"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-1 text-sm text-amber-700 hover:text-amber-900 underline font-medium"
+                                        >
+                                            Zum Discord Developer Portal <ExternalLink className="w-3 h-3" />
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>

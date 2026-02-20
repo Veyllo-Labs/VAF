@@ -118,6 +118,7 @@ class Config:
         "thinking_max_duration_minutes": 30,                  # Max duration per thinking run (then release lock)
         "thinking_wait_nudge_minutes": 3,                     # If user does not reply to a question: send nudge after this many minutes
         "thinking_wait_skip_minutes": 10,                     # If still no reply after this many minutes total: skip the question and do other things
+        "thinking_cooldown_minutes": 60,                     # After a thinking run completes: wait this many minutes before starting another
         "thinking_gc_hours": 12,                              # GC deletes thinking-mode sessions older than this many hours
 
         # Garbage Collector Settings

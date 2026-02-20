@@ -380,6 +380,81 @@ class SessionManager:
         self.save(session, sync_state=False)
         return sid
 
+    def append_to_thinking_session(
+        self,
+        user_scope_id: Optional[str],
+        run_id: str,
+        started_at: str,
+        ended_at: str,
+        messages_list: List[Dict[str, Any]],
+    ) -> str:
+        """
+        Append a thinking-mode run to the daily session (one session per user per day).
+        If no session exists for today, creates one. Otherwise appends a separator + new messages.
+        Returns the session id.
+        """
+        scope_key = str(user_scope_id).strip() if user_scope_id else "default"
+        safe_key = "".join(c if c.isalnum() or c in "-_" else "_" for c in scope_key)[:32]
+        today = datetime.now().strftime("%Y%m%d")
+        sid = f"thinking_{safe_key}_{today}"
+
+        # Build messages for this run
+        new_messages = []
+        for m in messages_list or []:
+            role = m.get("role") or "assistant"
+            content = m.get("content") or ""
+            tools = m.get("tool_calls")
+            if role == "assistant" and tools:
+                new_messages.append(Message(role="assistant", content=(content or "").strip() or "(no content)", timestamp=started_at))
+                for i, tool_name in enumerate(tools):
+                    new_messages.append(Message(
+                        role="tool",
+                        content="(completed)",
+                        timestamp=started_at,
+                        metadata={"toolName": str(tool_name), "toolId": f"thinking-{run_id}-{i}", "toolStatus": "completed"},
+                    ))
+            else:
+                content_plain = (content or "").strip()
+                if tools:
+                    content_plain += "\n\n[Tools: " + ", ".join(str(t) for t in tools) + "]"
+                new_messages.append(Message(role=role, content=content_plain or "(no content)", timestamp=started_at))
+
+        # Try to load existing daily session
+        existing = None
+        try:
+            existing = self.load(sid)
+        except (FileNotFoundError, Exception):
+            existing = None
+
+        if existing and existing.messages:
+            # Append separator + new run messages
+            separator = Message(
+                role="system",
+                content=f"--- Thinking run {run_id} ({started_at[:16].replace('T', ' ')}) ---",
+                timestamp=started_at,
+            )
+            existing.messages.append(separator)
+            existing.messages.extend(new_messages)
+            existing.updated_at = ended_at
+            existing.name = f"Thinking mode {today[:4]}-{today[4:6]}-{today[6:8]}"
+            self.save(existing, sync_state=False)
+        else:
+            # Create new daily session
+            name = f"Thinking mode {today[:4]}-{today[4:6]}-{today[6:8]}"
+            session = Session(
+                id=sid,
+                name=name,
+                created_at=started_at,
+                updated_at=ended_at,
+                model="",
+                project_path="",
+                messages=new_messages,
+                metadata={"source": "thinking"},
+            )
+            self.save(session, sync_state=False)
+
+        return sid
+
     def delete(self, session_id: str) -> bool:
         """Delete a session."""
         deleted = False

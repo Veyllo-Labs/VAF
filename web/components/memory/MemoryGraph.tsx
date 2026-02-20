@@ -302,7 +302,7 @@ const TagNodeComponent = ({ data, selected }: NodeProps) => {
                 'min-w-[120px] max-w-[180px] rounded-xl border-2 shadow-sm transition-all duration-300',
                 'border-gray-300 bg-gray-50',
                 selected && 'ring-2 ring-purple-400 shadow-md',
-                data.isHighlighted && 'ring-2 ring-yellow-500 shadow-lg scale-105 z-10'
+                data.isHighlighted && 'ring-2 ring-purple-500 shadow-lg scale-105 z-10'
             )}
             style={{ opacity: isFaded ? 0.4 : 1 }}
         >
@@ -745,7 +745,8 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                 <Controls className="bg-white rounded-lg shadow-lg" />
                 <MiniMap
                     nodeColor={(node) => {
-                        // Tag nodes are purple
+                        // Tag nodes purple; highlighted tag = brighter purple, highlighted memory = yellow
+                        if (node.data?.isTagNode && node.data?.isHighlighted) return '#a78bfa';
                         if (node.data?.isTagNode) return '#8b5cf6';
                         if (node.data?.isHighlighted) return '#eab308';
                         if (node.selected) return '#374151';

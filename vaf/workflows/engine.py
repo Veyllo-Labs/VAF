@@ -31,9 +31,11 @@ class WorkflowStep:
     output_name: str                    # Name for this step's output
     description: str = ""               # Human-readable description
     optional: bool = False              # Skip on failure instead of abort
-    condition: Optional[str] = None     # Only run if condition met
+    condition: Optional[str] = None     # Only run if condition met; supports AND/OR/NOT operators
     args_template: Optional[Dict[str, Any]] = None  # Multi-arg tool inputs (safer than JSON strings)
-    
+    on_success: Optional[str] = None    # Jump to step with this output_name (or index) on success
+    on_failure: Optional[str] = None    # Jump to step with this output_name (or index) on failure (suppresses abort)
+
     # Runtime state
     status: StepStatus = StepStatus.PENDING
     result: Any = None
@@ -139,7 +141,20 @@ class WorkflowEngine:
         except Exception:
             pass
 
-        for i, step in enumerate(steps, 1):
+        # While-loop with manual index to support on_success/on_failure jumps.
+        # Infinite-loop guard: allow at most len(steps) * 3 iterations.
+        _step_idx = 0          # 0-based current step index
+        _jump_count = 0        # tracks non-sequential advances
+        _max_jumps = len(steps) * 3
+
+        while _step_idx < len(steps):
+            if _jump_count > _max_jumps:
+                UI.error(f"  [FAIL] Workflow aborted: too many step jumps (possible infinite loop). Limit={_max_jumps}")
+                error = "Workflow aborted: too many step jumps (possible infinite loop)"
+                break
+
+            step = steps[_step_idx]
+            i = _step_idx + 1   # 1-based display index (matches original)
             step_start = time.time()
             step.status = StepStatus.RUNNING
 
@@ -155,6 +170,7 @@ class WorkflowEngine:
                 UI.event("Workflow", f"Step {i}/{len(steps)}: {step.tool} [Skipped]", style="dim")
                 if workflow_debug_lg:
                     workflow_debug_lg.event("workflow_step_skipped", step_index=i, step_tool=step.tool)
+                _step_idx += 1
                 continue
 
             # Progress callback
@@ -170,9 +186,11 @@ class WorkflowEngine:
                 step.error = f"Tool not found: {step.tool}"
                 error = step.error
                 UI.error(f"  → {step.error}")
-                
-                if stop_on_error and not step.optional:
+
+                if stop_on_error and not step.optional and not step.on_failure:
                     break
+                _step_idx = self._branch_step(_step_idx, step, steps, outputs, error)
+                _jump_count += 1
                 continue
             
             # Build tool args (prefer args_template to avoid fragile JSON templating)
@@ -217,8 +235,10 @@ class WorkflowEngine:
                 step.error = f"Missing variable: {e}"
                 error = step.error
                 UI.error(f"  → {step.error}")
-                if stop_on_error and not step.optional:
+                if stop_on_error and not step.optional and not step.on_failure:
                     break
+                _step_idx = self._branch_step(_step_idx, step, steps, outputs, error)
+                _jump_count += 1
                 continue
             
             # Execute the tool
@@ -489,6 +509,8 @@ class WorkflowEngine:
                             'optional': s.optional,
                             'condition': s.condition,
                             'args_template': s.args_template,
+                            'on_success': s.on_success,
+                            'on_failure': s.on_failure,
                             'status': s.status.value,
                             'result': s.result,
                             'error': s.error,
@@ -532,10 +554,12 @@ class WorkflowEngine:
                     error = step.error
                     UI.error(f"  [FAIL] {step.error}")
                     self.callback("error", step, i, len(steps))
-                    if stop_on_error and not step.optional:
+                    if stop_on_error and not step.optional and not step.on_failure:
                         break
+                    _step_idx = self._branch_step(_step_idx, step, steps, outputs, error)
+                    _jump_count += 1
                     continue
-                
+
                 result_str = str(result)
                 is_error_result = (
                     result_str.startswith("### ❌") or
@@ -546,21 +570,23 @@ class WorkflowEngine:
                     (result_str.startswith("###") and "❌" in result_str[:200]) or
                     ("error:" in result_str.lower() and result_str.lower().startswith("error"))
                 )
-                
+
                 if is_error_result:
                     step.status = StepStatus.FAILED
                     step.error = f"Tool returned error message: {result_str[:200]}"
                     step.result = result
                     step.duration = time.time() - step_start
                     error = step.error
-                    
+
                     UI.error(f"  [FAIL] {step.error}")
                     self.callback("error", step, i, len(steps))
-                    
-                    if stop_on_error and not step.optional:
+
+                    if stop_on_error and not step.optional and not step.on_failure:
                         break
+                    _step_idx = self._branch_step(_step_idx, step, steps, outputs, error)
+                    _jump_count += 1
                     continue
-                
+
                 step.status = StepStatus.SUCCESS
                 step.result = result
                 step.duration = time.time() - step_start
@@ -578,21 +604,30 @@ class WorkflowEngine:
                 display_result = str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
                 # Use ASCII markers for maximum terminal compatibility (avoid UnicodeEncodeError on some Windows consoles)
                 UI.event("Workflow", f"  [OK] {step.output_name}: {display_result}", style="success")
-                
+
                 self.callback("success", step, i, len(steps))
-                
+
+                # Branching: on_success jump (optional)
+                _step_idx = self._branch_step(_step_idx, step, steps, outputs, None)
+                if step.on_success:
+                    _jump_count += 1
+                continue
+
             except Exception as e:
                 step.status = StepStatus.FAILED
                 step.error = str(e)
                 step.duration = time.time() - step_start
                 error = step.error
-                
+
                 UI.error(f"  [FAIL] Error: {step.error}")
                 self.callback("error", step, i, len(steps))
-                
-                if stop_on_error and not step.optional:
+
+                if stop_on_error and not step.optional and not step.on_failure:
                     break
-        
+                _step_idx = self._branch_step(_step_idx, step, steps, outputs, error)
+                _jump_count += 1
+                continue
+
         total_duration = time.time() - start_time
 
         # Determine overall success
@@ -648,6 +683,8 @@ class WorkflowEngine:
                 optional=step_data.get('optional', False),
                 condition=step_data.get('condition'),
                 args_template=step_data.get('args_template'),
+                on_success=step_data.get('on_success'),
+                on_failure=step_data.get('on_failure'),
             )
             # Restore status
             step.status = StepStatus(step_data['status'])
@@ -776,27 +813,145 @@ class WorkflowEngine:
         arg_name = ARG_MAPPINGS.get(tool_name, "input")
         return {arg_name: value}
     
+    # ─── Branching helpers ──────────────────────────────────────────────────────
+
+    def _find_step_index(self, steps: List["WorkflowStep"], target: str) -> int:
+        """Return 0-based index of step whose output_name matches *target*.
+
+        Falls back to treating *target* as a 0-based integer string (e.g. "3").
+        Returns -1 when not found (caller should not jump).
+        """
+        for idx, s in enumerate(steps):
+            if s.output_name == target:
+                return idx
+        try:
+            numeric = int(target)
+            if 0 <= numeric < len(steps):
+                return numeric
+        except (ValueError, TypeError):
+            pass
+        return -1
+
+    def _branch_step(
+        self,
+        current_idx: int,
+        step: "WorkflowStep",
+        steps: List["WorkflowStep"],
+        outputs: Dict[str, Any],
+        error: Optional[str],
+    ) -> int:
+        """Return the next 0-based step index applying on_success / on_failure.
+
+        - On success (error is None) and step.on_success set  → jump to target
+        - On failure (error is not None) and step.on_failure set → jump to target,
+          and reset step.status to SKIPPED so the workflow isn't marked failed.
+        - Otherwise advance by 1 (normal sequential flow).
+        """
+        from vaf.cli.ui import UI
+
+        if error is None and step.on_success:
+            target_idx = self._find_step_index(steps, step.on_success)
+            if target_idx >= 0:
+                UI.event("Workflow", f"  → branch on_success → {step.on_success}", style="dim")
+                return target_idx
+        elif error is not None and step.on_failure:
+            target_idx = self._find_step_index(steps, step.on_failure)
+            if target_idx >= 0:
+                step.status = StepStatus.SKIPPED  # Don't count as fatal failure
+                UI.event("Workflow", f"  → branch on_failure → {step.on_failure}", style="dim")
+                return target_idx
+
+        return current_idx + 1  # Default: next step
+
+    # ─── Condition evaluation ────────────────────────────────────────────────────
+
     def _evaluate_condition(self, condition: str, variables: Dict[str, Any]) -> bool:
         """
-        Evaluate a simple condition string.
-        
-        Supports:
-        - {var} exists
-        - {var} == "value"
-        - {var} != "value"
-        - {var} contains "text"
+        Evaluate a condition string with optional AND / OR / NOT logic.
+
+        Supported syntax (evaluated left-to-right, no parentheses):
+        - Simple truthy:          ``{var}``
+        - NOT:                    ``NOT {var}``
+        - AND:                    ``{a} AND {b}``
+        - OR:                     ``{a} OR {b}``
+        - Combined:               ``{a} AND NOT {b} OR {c}``
+        - Legacy comparisons:     ``{var} == "value"``,  ``{var} != "value"``,
+                                  ``{var} contains "text"``
+
+        Each operand is resolved via _resolve_template() first and then
+        tested for truthiness (non-empty, non-"false"/"0"/"no" string).
         """
-        # Resolve any variables in the condition
-        resolved = self._resolve_template(condition, variables)
-        
-        # Simple truthy check
-        if resolved.lower() in ("true", "yes", "1"):
+        if not condition or not condition.strip():
             return True
-        if resolved.lower() in ("false", "no", "0", ""):
-            return False
-        
-        # If it's just a variable name check, see if it exists and has value
-        return bool(resolved.strip())
+
+        # --- tokenise into [(operator, operand_expr), ...] ------------------
+        # Split on AND / OR boundaries (case-insensitive, surrounded by spaces)
+        token_re = re.compile(r'\b(AND|OR)\b', re.IGNORECASE)
+        parts = token_re.split(condition.strip())
+
+        # parts alternates:  [expr, "AND"|"OR", expr, ...]
+        tokens: list[tuple[str, str]] = []   # (operator, operand_expr)
+        op = ""
+        for part in parts:
+            stripped = part.strip()
+            if not stripped:
+                continue
+            if stripped.upper() in ("AND", "OR"):
+                op = stripped.upper()
+            else:
+                tokens.append((op, stripped))
+                op = ""
+
+        if not tokens:
+            return True
+
+        def _eval_operand(expr: str) -> bool:
+            """Resolve a single operand (may be prefixed with NOT)."""
+            negated = False
+            e = expr.strip()
+            if e.upper().startswith("NOT "):
+                negated = True
+                e = e[4:].strip()
+
+            # Resolve template variables
+            resolved = self._resolve_template(e, variables)
+
+            # Check for legacy comparison operators in the resolved string
+            # e.g. "hello == hello" or "hello contains ell"
+            for op_str in (" == ", " != ", " contains "):
+                if op_str in resolved:
+                    lhs, rhs = resolved.split(op_str, 1)
+                    lhs = lhs.strip().strip('"')
+                    rhs = rhs.strip().strip('"')
+                    if op_str == " == ":
+                        result = lhs == rhs
+                    elif op_str == " != ":
+                        result = lhs != rhs
+                    else:  # contains
+                        result = rhs in lhs
+                    return not result if negated else result
+
+            # Plain truthy check
+            r = resolved.strip()
+            if r.lower() in ("true", "yes", "1"):
+                truthy = True
+            elif r.lower() in ("false", "no", "0", ""):
+                truthy = False
+            else:
+                truthy = bool(r)
+
+            return not truthy if negated else truthy
+
+        # --- evaluate tokens left-to-right ----------------------------------
+        result = _eval_operand(tokens[0][1])   # first token, operator is ""
+        for operator, expr in tokens[1:]:
+            val = _eval_operand(expr)
+            if operator == "AND":
+                result = result and val
+            else:  # OR
+                result = result or val
+
+        return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -823,6 +978,8 @@ def create_workflow(template: Dict[str, Any]) -> List[WorkflowStep]:
             description=step_def.get("description", ""),
             optional=step_def.get("optional", False),
             condition=step_def.get("condition"),
+            on_success=step_def.get("on_success"),
+            on_failure=step_def.get("on_failure"),
         ))
     return steps
 

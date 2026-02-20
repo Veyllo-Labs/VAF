@@ -107,11 +107,17 @@ class SendWhatsAppTool(BaseTool):
                     "Once linked, you can send proactive messages."
                 )
 
-        # Strip <think>...</think> for clean delivery
+        # Strip <think>...</think> and internal system phrases for clean delivery
         out = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
         out = re.sub(r"\n{3,}", "\n\n", out).strip()
+        # Safety: block messages that contain internal/system-level content
+        try:
+            from vaf.core.headless_runner import _sanitize_outgoing_message
+            out = _sanitize_outgoing_message(out)
+        except Exception:
+            pass
         if not out:
-            out = "[No reply text]"
+            return "Message was blocked (contained internal system content). Send a clean user-facing message without any internal context markers."
 
         voice_lang = (kwargs.get("voice_lang") or "").strip()
         file_path_str = (kwargs.get("file_path") or "").strip()

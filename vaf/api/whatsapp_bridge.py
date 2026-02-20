@@ -111,10 +111,22 @@ def _to_e164_display(phone_or_jid: str) -> str:
 
 
 def _e164_to_jid(phone: str) -> str:
-    """Convert E.164 or phone string to WhatsApp JID (e.g. +491761234567 -> 491761234567@s.whatsapp.net)."""
+    """Convert E.164 or phone string to WhatsApp JID.
+    Prefers @lid JID when the number is found in lid_to_e164 config map (LID-migrated accounts).
+    Falls back to <digits>@s.whatsapp.net."""
     digits = _normalize_phone(phone or "")
     if not digits or len(digits) < 7 or len(digits) > 15:
         return ""
+    # Check lid_to_e164 map: some accounts (privacy-migrated) must be addressed by @lid JID
+    try:
+        _wc = Config.get("whatsapp_config") or {}
+        _lid_map = (_wc.get("lid_to_e164") or {}) if isinstance(_wc, dict) else {}
+        for _lid, _e164 in _lid_map.items():
+            _e164_digits = "".join(c for c in str(_e164) if c.isdigit())
+            if _e164_digits and (_e164_digits.endswith(digits) or digits.endswith(_e164_digits)):
+                return _lid  # Use @lid JID for this contact
+    except Exception:
+        pass
     return f"{digits}@s.whatsapp.net"
 
 
@@ -435,9 +447,33 @@ def _sender_loop() -> None:
                     if req_id:
                         _deliver_send_result(req_id, False, str(e))
             else:
+                # For text messages, also prefer @lid JID when known (same reason as voice).
+                # Some LID-migrated WhatsApp accounts only reliably receive messages via @lid JID.
+                text_jid = chat_jid
+                if not (chat_jid or "").endswith("@lid"):
+                    try:
+                        from vaf.core.config import Config as _Cfg
+                        _wc = _Cfg.get("whatsapp_config") or {}
+                        _lid_map = (_wc.get("lid_to_e164") or {}) if isinstance(_wc, dict) else {}
+                        _jid_digits = "".join(c for c in (chat_jid or "").split("@")[0] if c.isdigit())
+                        for _lid, _e164 in _lid_map.items():
+                            _e164_digits = "".join(c for c in str(_e164) if c.isdigit())
+                            if _e164_digits and _jid_digits and (
+                                _e164_digits.endswith(_jid_digits) or _jid_digits.endswith(_e164_digits)
+                            ):
+                                text_jid = _lid
+                                logger.info("WhatsApp text: resolved %s → %s via lid_to_e164", chat_jid, text_jid)
+                                try:
+                                    from vaf.core.log_helper import log_whatsapp_reply
+                                    log_whatsapp_reply(f"TEXT_LID_RESOLVE {chat_jid} → {text_jid}")
+                                except Exception:
+                                    pass
+                                break
+                    except Exception:
+                        pass
                 chunks = chunk_whatsapp_text(text)
                 for i, chunk in enumerate(chunks):
-                    cmd = {"cmd": "send", "to": chat_jid, "text": chunk}
+                    cmd = {"cmd": "send", "to": text_jid, "text": chunk}
                     if req_id and i == len(chunks) - 1:
                         cmd["req_id"] = req_id
                     try:

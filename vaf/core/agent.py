@@ -1034,9 +1034,10 @@ class Agent:
                             instance.name in MAIN_AGENT_EXCLUDED_TOOLS or 
                             getattr(instance, 'coder_only', False)
                         )
-                        # Thinking mode: no Git – VAF is the user's project, not for the agent to inspect or change
+                        # Thinking mode: no Git (VAF is the user's project, not for the agent to inspect or change)
+                        # and no memory_save (thinking should read context but never write to long-term memory)
                         if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
-                            if instance.name in ("git_add_commit", "git_status", "git_log"):
+                            if instance.name in ("git_add_commit", "git_status", "git_log", "memory_save"):
                                 continue
                         # thinking_done: only in thinking mode; skip when not in thinking mode
                         if instance.name == "thinking_done":

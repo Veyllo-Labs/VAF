@@ -148,6 +148,34 @@ class AutomationTask:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TIME INTERVAL HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+MIN_AUTOMATION_INTERVAL_MINUTES = 10
+
+
+def _minutes_since_midnight(time_str: str) -> int:
+    """Parse HH:MM and return minutes since midnight (0-1439)."""
+    if not time_str or ":" not in time_str:
+        return 0
+    parts = time_str.strip().split(":")
+    try:
+        h = int(parts[0] or 0)
+        m = int(parts[1] or 0) if len(parts) > 1 else 0
+        return max(0, min(1439, h * 60 + m))
+    except (ValueError, TypeError):
+        return 0
+
+
+def _min_gap_minutes(t1: str, t2: str) -> int:
+    """Minimum gap in minutes on the 24h circle between two HH:MM times."""
+    a = _minutes_since_midnight(t1)
+    b = _minutes_since_midnight(t2)
+    diff = abs(a - b)
+    return min(diff, 1440 - diff)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # AUTOMATION MANAGER
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -392,8 +420,8 @@ vaf automation delete <id>   # Delete task
     
     def check_can_create_automation(self, new_time: str = None, new_frequency: str = None) -> tuple[bool, Optional[str]]:
         """
-        Check if a new automation can be created (cooldown check).
-        Only applies cooldown if the new automation would run at the same time as an existing one.
+        Check if a new automation can be created. Enforces a minimum interval of
+        MIN_AUTOMATION_INTERVAL_MINUTES between any two automations.
         
         Args:
             new_time: Time of the new automation (HH:MM format)
@@ -401,33 +429,46 @@ vaf automation delete <id>   # Delete task
         
         Returns: (can_create, error_message)
         """
-        # If time and frequency are provided, check if there's a conflict with existing automations
-        if new_time and new_frequency:
-            existing_tasks = self.list(enabled_only=True)
-            for task in existing_tasks:
-                # Check if same time and frequency
-                if task.time == new_time and task.frequency == new_frequency:
-                    # There's a conflict - check cooldown
-                    can_run, seconds_remaining = self._check_cooldown()
-                    if not can_run:
-                        minutes_remaining = int(seconds_remaining // 60)
-                        seconds_part = int(seconds_remaining % 60)
-                        error_msg = (
-                            f"ERROR: Automation cooldown active - cannot create automation now!\n\n"
-                            f"❌ **DO NOT RETRY create_automation** - An automation '{task.name}' ({task.id}) already runs "
-                            f"at the same time ({new_time}) with the same frequency ({new_frequency}).\n\n"
-                            f"**Cooldown:** An automation was executed {minutes_remaining}min {seconds_part}s ago. "
-                            f"Please wait {minutes_remaining}min {seconds_part}s before creating an automation at the same time.\n\n"
-                            f"**Solution:**\n"
-                            f"- Choose a different time for the new automation (at least 3 minutes later)\n"
-                            f"- Or update the existing automation '{task.name}' with `update_automation`\n\n"
-                            f"**Note:** Automations at the same time need a 3-minute buffer between executions."
-                        )
-                        return (False, error_msg)
-                    # No cooldown active, but same time - warn but allow
-                    return (True, None)
+        if not new_time or ":" not in new_time:
+            return (True, None)
+        existing_tasks = self.list(enabled_only=True)
+        for task in existing_tasks:
+            gap = _min_gap_minutes(task.time, new_time)
+            if gap < MIN_AUTOMATION_INTERVAL_MINUTES:
+                error_msg = (
+                    f"ERROR: Automation time too close to an existing one.\n\n"
+                    f"Another automation '{task.name}' ({task.id}) runs at {task.time}. "
+                    f"The chosen time ({new_time}) is only {gap} minute(s) apart. "
+                    f"Choose a time at least {MIN_AUTOMATION_INTERVAL_MINUTES} minutes apart (e.g. {task.time} → use 06:10 if the other is 06:00).\n\n"
+                    f"**Solution:** Pick a different time in HH:MM format, or update the existing automation with `update_automation`."
+                )
+                return (False, error_msg)
+        return (True, None)
+
+    def check_can_update_automation(
+        self, task_id: str, new_time: str, new_frequency: str = None
+    ) -> tuple[bool, Optional[str]]:
+        """
+        Check if an automation's time can be updated. Same 10-minute minimum
+        interval rule as create; excludes the task being updated.
         
-        # No time conflict - allow creation
+        Returns: (can_update, error_message)
+        """
+        if not new_time or ":" not in new_time:
+            return (True, None)
+        existing_tasks = self.list(enabled_only=True)
+        for task in existing_tasks:
+            if task.id == task_id:
+                continue
+            gap = _min_gap_minutes(task.time, new_time)
+            if gap < MIN_AUTOMATION_INTERVAL_MINUTES:
+                error_msg = (
+                    f"ERROR: New time too close to another automation.\n\n"
+                    f"Automation '{task.name}' ({task.id}) runs at {task.time}. "
+                    f"The new time ({new_time}) is only {gap} minute(s) apart. "
+                    f"Choose a time at least {MIN_AUTOMATION_INTERVAL_MINUTES} minutes apart."
+                )
+                return (False, error_msg)
         return (True, None)
     
     def update(self, task_id: str, **kwargs) -> Optional[AutomationTask]:

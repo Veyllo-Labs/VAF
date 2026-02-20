@@ -62,7 +62,11 @@ Use this when user wants to schedule recurring tasks or a one-time task:
    - Never hardcode a messenger (e.g. send_telegram). The user may use WhatsApp, Discord, email, etc.
    - In the prompt, instruct: "Send the result/summary to the user via their **main_messenger** (see User Identity): use the matching tool—send_telegram, send_whatsapp, send_discord, send_slack, or send_mail—depending on main_messenger. If main_messenger is not set, summarize in your reply."
    - For "weekly review", "wöchentlicher Report", or similar: use frequency **weekly** and set **weekday** (e.g. friday). Do not use daily.
-   - Do not assume git or version control. If the prompt mentions "recent changes" or "commits", phrase it as: "If the project uses version control (e.g. git), check recent commits with git_log; otherwise skip or use file/context." """
+   - Do not assume git or version control. If the prompt mentions "recent changes" or "commits", phrase it as: "If the project uses version control (e.g. git), check recent commits with git_log; otherwise skip or use file/context."
+
+5. **TIME SLOTS (HH:MM, 10-minute rule):**
+   - Always use **HH:MM** for the time parameter (e.g. 06:00, 06:15, 18:30).
+   - No two automations may be scheduled within 10 minutes of each other. The system will return an error if the chosen time is too close to an existing automation; then choose a different time (e.g. 06:10 if 06:00 is taken). """
     
     parameters = {
         "type": "object",
@@ -82,7 +86,7 @@ Use this when user wants to schedule recurring tasks or a one-time task:
             },
             "time": {
                 "type": "string",
-                "description": "Time to run in HH:MM format (e.g., '06:00', '18:30')"
+                "description": "Time to run in HH:MM format (e.g., '06:00', '18:30'). Must be at least 10 minutes apart from any existing automation."
             },
             "weekday": {
                 "type": "string",
@@ -971,7 +975,8 @@ class UpdateAutomationTool(BaseTool):
     name = "update_automation"
     description = """Update an existing automation task by ID. Use this when user wants to modify an existing automation (change time, frequency, prompt, etc.) instead of creating a new one.
     
-**IMPORTANT:** Always check existing automations with `list_automations` first to find the correct ID, then use `read_automation` to see current values before updating."""
+**IMPORTANT:** Always check existing automations with `list_automations` first to find the correct ID, then use `read_automation` to see current values before updating.
+When changing **time**, the new time must be at least 10 minutes apart from all other automations; the system will return an error otherwise."""
     
     parameters = {
         "type": "object",
@@ -995,7 +1000,7 @@ class UpdateAutomationTool(BaseTool):
             },
             "time": {
                 "type": "string",
-                "description": "New time in HH:MM format (optional)"
+                "description": "New time in HH:MM format (optional). Must be at least 10 minutes apart from other automations."
             },
             "weekday": {
                 "type": "string",
@@ -1030,25 +1035,15 @@ class UpdateAutomationTool(BaseTool):
             if not task:
                 return f"Error: Automation with ID '{task_id}' not found. Use `list_automations` to see available automations."
             
-            # Check for time conflicts if time is being updated
+            # Check for time interval (10-min rule) if time is being updated
             if "time" in kwargs and kwargs["time"]:
                 new_time = kwargs["time"]
                 new_frequency = kwargs.get("frequency", task.frequency)
-                
-                # Check for conflicts with other automations
-                existing_tasks = manager.list()
-                for existing_task in existing_tasks:
-                    if existing_task.id != task_id and existing_task.enabled:
-                        if existing_task.time == new_time and existing_task.frequency == new_frequency:
-                            return (
-                                f"ERROR: Automation already exists at the same time!\n\n"
-                                f"❌ **DO NOT RETRY update_automation** - An active automation '{existing_task.name}' ({existing_task.id}) "
-                                f"already runs at the same time ({new_time}) with the same frequency ({new_frequency}).\n\n"
-                                f"**Solution:**\n"
-                                f"- Choose a different time for this automation\n"
-                                f"- Or disable the other automation '{existing_task.name}' first\n\n"
-                                f"**Note:** Only one automation can run at the same time."
-                            )
+                can_update, err_msg = manager.check_can_update_automation(
+                    task_id=task_id, new_time=new_time, new_frequency=new_frequency
+                )
+                if not can_update and err_msg:
+                    return err_msg
             
             # Prepare update parameters (only include non-None values)
             update_params = {}

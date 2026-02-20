@@ -219,6 +219,7 @@ VAF is now **CWD-Aware** (Current Working Directory). It understands the differe
 1. **Detection**: Scans for `.git`, `.vaf`, `package.json`, etc.
 2. **Anchor**: If inside a project, VAF anchors the Coder Agent to the current directory.
 3. **Scaffold**: If the user asks to "create a new project", VAF breaks out to `~/Documents/VAF_Projects/`.
+4. **Application directory**: When the process runs from the application directory, the system prompt shows a neutral workspace label instead of the path so the agent does not use that directory for file operations.
 
 ### Intent Locking & Validation
 
@@ -398,6 +399,7 @@ The Librarian Agent handles file system queries with its own context:
 - Own ContextManager
 - Proactive compression at 85%
 - Specialized for file operations
+- The VAF installation directory is not allowed as a target; the agent is instructed not to delegate such tasks.
 
 ---
 

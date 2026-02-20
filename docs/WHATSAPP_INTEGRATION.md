@@ -176,7 +176,7 @@ The contact must have that E.164 number in whitelist or in Front Office with “
 
 ### Troubleshooting: Voice reply contained raw JSON (tool_calls)
 
-If a voice or text reply to a contact contained literal JSON (e.g. `{"tool_calls": [{"function": {"name": "memory_save", ...}}]}`) instead of normal speech, the model output had leaked tool-call payloads into the reply. The headless runner now **strips** any such JSON from the text before sending to WhatsApp (and Telegram/Discord), so TTS and chat only receive clean text. If you still see this, ensure you are on the latest code and that the reply path goes through `headless_runner` (not a custom sender).
+If a voice or text reply to a contact contained literal JSON (e.g. `{"tool_calls": [{"function": {"name": "memory_save", ...}}]}`) instead of normal speech, the model output had leaked tool-call payloads into the reply. The headless runner now **strips** any such JSON from the text before sending to WhatsApp (and Telegram/Discord), so TTS and chat only receive clean text. Subagent summaries sent to Telegram, Discord, or WhatsApp are sanitized the same way (tool_calls JSON stripped) before delivery. If you still see this, ensure you are on the latest code and that the reply path goes through `headless_runner` (not a custom sender).
 
 ### Troubleshooting: Reply to contact A had context meant for contact B
 

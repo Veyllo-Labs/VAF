@@ -29,6 +29,8 @@ export interface CreateAutomationPopupProps {
     onClose: () => void;
     initialDate: Date;
     initialHour: number;
+    /** Minute for initial time when not in edit mode (0-59). Default 0. */
+    initialMinute?: number;
     /** When set, popup is in edit mode: prefill form and submit sends task_id for update. */
     editTask?: EditAutomationTask | null;
     onCreated?: () => void;
@@ -55,6 +57,7 @@ export default function CreateAutomationPopup({
     onClose,
     initialDate,
     initialHour,
+    initialMinute = 0,
     editTask,
     onCreated,
     onSubmit,
@@ -64,7 +67,7 @@ export default function CreateAutomationPopup({
     const tAutomations = useTranslations('settings.automations');
     const [frequency, setFrequency] = useState<'once' | 'daily' | 'weekly' | 'monthly' | 'hourly'>('daily');
     const [selectedWeekday, setSelectedWeekday] = useState<string>(WEEKDAYS[new Date().getDay()]);
-    const [timeStr, setTimeStr] = useState(() => formatTime(initialHour, 0));
+    const [timeStr, setTimeStr] = useState(() => formatTime(initialHour, initialMinute));
     const [prompt, setPrompt] = useState('');
     const [name, setName] = useState('');
     const [loading, setLoading] = useState(false);
@@ -81,13 +84,13 @@ export default function CreateAutomationPopup({
             setSelectedWeekday((editTask.weekday || '').toLowerCase() || WEEKDAYS[initialDate.getDay()]);
         } else {
             setFrequency('daily');
-            setTimeStr(formatTime(initialHour, 0));
+            setTimeStr(formatTime(initialHour, initialMinute));
             setPrompt('');
             setName('');
             setSelectedWeekday(WEEKDAYS[initialDate.getDay()]);
         }
         setError(null);
-    }, [initialHour, editTask]);
+    }, [initialHour, initialMinute, editTask]);
 
     useEffect(() => {
         if (isOpen) {
@@ -100,12 +103,12 @@ export default function CreateAutomationPopup({
                 setSelectedWeekday((editTask.weekday || '').toLowerCase() || WEEKDAYS[initialDate.getDay()]);
                 setError(null);
             } else {
-                setTimeStr(formatTime(initialHour, 0));
+                setTimeStr(formatTime(initialHour, initialMinute));
                 setSelectedWeekday(WEEKDAYS[initialDate.getDay()]);
                 resetForm();
             }
         }
-    }, [isOpen, initialHour, editTask, resetForm]);
+    }, [isOpen, initialHour, initialMinute, editTask, resetForm]);
 
     useEffect(() => {
         if (!isOpen) return;

@@ -11,6 +11,8 @@ Security is paramount when allowing an AI to execute code. VAF uses **Docker Con
 | `python_sandbox` | ✅ Docker Container | Safe code execution (default) |
 | `python_exec` | ❌ Host System | Only with explicit user trust |
 
+File tools (e.g. `librarian_agent`, `read_file`) block access to the VAF installation directory; the agent is instructed not to request operations on that path.
+
 ## 🚀 Smart Auto-Start
 
 VAF tries to make sandboxing seamless:

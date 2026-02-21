@@ -4,6 +4,7 @@ Only available when the user has Telegram connected; use main_messenger or user 
 Supports optional file attachments (e.g. documents, PDFs) when the user asks for a document.
 """
 
+import re
 from pathlib import Path
 
 from vaf.tools.base import BaseTool
@@ -90,9 +91,20 @@ class SendTelegramTool(BaseTool):
         if file_path and not file_path.is_file():
             return f"File not found or not a file: {file_path}"
 
+        # Strip <think>...</think> and internal system phrases for clean delivery
+        out = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
+        out = re.sub(r"\n{3,}", "\n\n", out).strip()
+        try:
+            from vaf.core.headless_runner import _sanitize_outgoing_message
+            out = _sanitize_outgoing_message(out)
+        except Exception:
+            pass
+        if not out:
+            return "Message was blocked (contained internal system content). Send a clean user-facing message without any internal context markers."
+
         voice_lang = (kwargs.get("voice_lang") or "").strip()
         try:
-            text_to_send = message[:4096]
+            text_to_send = out[:4096]
             send_telegram_reply(
                 chat_id,
                 text_to_send,

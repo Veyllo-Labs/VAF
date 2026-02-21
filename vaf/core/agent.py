@@ -5789,8 +5789,11 @@ class Agent:
 
                 # ═══════════════════════════════════════════════════════════════
                 # PROACTIVE CONTEXT CLEARING (aggressive clear a few attempts before hard limit)
+                # In thinking mode (background pass), limit retries aggressively — no user is waiting
                 # ═══════════════════════════════════════════════════════════════
-                if empty_retry_count == 8:
+                _is_thinking_mode = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                _proactive_clear_at = 2 if _is_thinking_mode else 8
+                if empty_retry_count == _proactive_clear_at:
                     # Calculate tokens before
                     tokens_before, _ = self.get_token_usage()
                     
@@ -5811,8 +5814,8 @@ class Agent:
                 # ═══════════════════════════════════════════════════════════════
                 # CONTEXT OVERFLOW DETECTION (Fix for Issue #VAF-CTX-001)
                 # ═══════════════════════════════════════════════════════════════
-                MAX_RETRIES_BEFORE_EMERGENCY = 7   # Emergency context clear before hard stop
-                HARD_LIMIT = 10                     # Stop after 10 empty-response retries
+                MAX_RETRIES_BEFORE_EMERGENCY = 2 if _is_thinking_mode else 7
+                HARD_LIMIT = 3 if _is_thinking_mode else 10
 
                 # Wait 1 second before retry to avoid hammering the model (use global time module)
                 time.sleep(1)

@@ -322,10 +322,32 @@
       }
     },
     "about": {
+      "title": "About VAF (Veyllo Agentic Framework)",
+      "description": "VAF is a private, self-evolving agentic framework designed to run 100% locally on your own hardware. We believe that true AI intelligence should not come at the cost of your privacy. VAF is built to respect your data, adapt to your unique workflows, and grow alongside you as a digital extension of your own productivity.",
+      "principles": "Our Core Principles",
+      "privacy": "Absolute Privacy by Design",
+      "privacyDesc": "Your data never leaves your local network. With zero cloud dependencies and no third-party tracking, VAF ensures you maintain 100% sovereignty over your digital footprint.",
+      "local": "Local-First Orchestration",
+      "localDesc": "VAF operates entirely within your environment. It seamlessly integrates with your local devices and services, providing high-performance intelligence without ever compromising your security.",
+      "multiUser": "Multi-User & Team Support",
+      "multiUserDesc": "Share VAF securely with your household or team. Each user gets their own isolated environment—personal memory, preferences, and tasks—so everyone can work, delegate, and scale productivity without interfering with others.",
+      "memory": "Cognitive Long-Term Memory",
+      "memoryDesc": "Unlike static databases, VAF’s memory system is dynamic. It doesn't just store information—it learns from every interaction. By recognizing patterns and understanding context, VAF proactively suggests next steps and evolves its reasoning based on your long-term goals.",
+      "productivity": "Autonomous Productivity Engine",
+      "productivityDesc": "Beyond simple task tracking, VAF is a workflow orchestrator. From intuitive daily planning to executing complex multi-step automations, VAF adapts to your personal rhythm to keep you focused on what truly matters.",
+      "api": "Extensible & Hybrid Intelligence",
+      "apiDesc": "While VAF is local-first, it is fully extensible. We provide a robust API layer that allows you to connect to external AI providers (such as OpenAI, Anthropic, or Groq). Whether you prefer the absolute privacy of local models or the raw power of the cloud, VAF gives you the freedom to choose.",
+
       "credits": "Credits",
       "coreEngine": "Core Engine",
       "frontend": "Frontend",
-      "developedBy": "Developed by"
+      "developedBy": "Developed by",
+      "vafLicense": "VAF License",
+      "vafLicenseType": "MIT License + Commons Clause 1.0",
+      "vafLicenseDesc": "Applies to original code by Veyllo GmbH. Prohibits commercial resale of the software itself without a separate license.",
+      "thirdPartyLicenses": "Third-Party Components",
+      "thirdPartyDesc": "All third-party libraries and frameworks remain under their original licenses (MIT, Apache 2.0, BSD, etc.).",
+      "showFullLicense": "Show Full License"
     }
   },
   "modals": {

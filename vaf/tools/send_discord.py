@@ -56,11 +56,16 @@ class SendDiscordTool(BaseTool):
         if not bot_token:
             return "Discord bot token missing. Please complete Discord setup in Settings → Connections."
 
-        # Strip <think>...</think> for clean delivery
+        # Strip <think>...</think> and internal system phrases for clean delivery
         out = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
         out = re.sub(r"\n{3,}", "\n\n", out).strip()
+        try:
+            from vaf.core.headless_runner import _sanitize_outgoing_message
+            out = _sanitize_outgoing_message(out)
+        except Exception:
+            pass
         if not out:
-            out = "[No reply text]"
+            return "Message was blocked (contained internal system content). Send a clean user-facing message without any internal context markers."
 
         try:
             ok = send_discord_dm(bot_token, user_id, out, chunk=True)

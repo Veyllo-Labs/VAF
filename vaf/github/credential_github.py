@@ -149,36 +149,51 @@ def get_github_oauth_token(
     """
     Retrieve GitHub access token for an account.
     Returns None if not found or on error.
+
+    Lookup order:
+    1. Scoped key (user_scope_id or username specific)
+    2. Fallback to ``github:default:{account_id}`` (covers single-user setups
+       where the token was stored under admin but the current session has a
+       different scope/username, e.g. 'Mert' with a JWT scope).
     """
-    key = _credential_key(
+    primary_key = _credential_key(
         account_id,
         _cred_key_username(username),
         user_scope_id=_cred_key_scope(user_scope_id) or user_scope_id,
     )
+    safe_id = (account_id or "").strip().lower().replace(" ", "_")
+    fallback_key = f"github:default:{safe_id}"
+    # Try primary key first, then fallback (skip fallback if same as primary)
+    keys_to_try = [primary_key]
+    if fallback_key != primary_key:
+        keys_to_try.append(fallback_key)
+
     if _keyring_available():
-        try:
-            import keyring
-            value = keyring.get_password(SERVICE_NAME, key)
-            if not value:
-                return None
-            data = json.loads(value)
-            if data.get("type") == "oauth":
-                return data.get("access_token")
-            return None
-        except Exception as e:
-            logger.debug("Keyring get failed for GitHub %s: %s", key[:20] + "***", e)
-            return None
+        import keyring
+        for key in keys_to_try:
+            try:
+                value = keyring.get_password(SERVICE_NAME, key)
+                if not value:
+                    continue
+                data = json.loads(value)
+                if data.get("type") == "oauth" and data.get("access_token"):
+                    return data["access_token"]
+            except Exception as e:
+                logger.debug("Keyring get failed for GitHub %s: %s", key[:20] + "***", e)
+        return None
+
     data = _load_fallback_data()
-    raw = data.get(key)
-    if not raw:
-        return None
-    try:
-        obj = json.loads(raw)
-        if obj.get("type") == "oauth":
-            return obj.get("access_token")
-        return None
-    except Exception:
-        return None
+    for key in keys_to_try:
+        raw = data.get(key)
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+            if obj.get("type") == "oauth" and obj.get("access_token"):
+                return obj["access_token"]
+        except Exception:
+            pass
+    return None
 
 
 def get_github_credentials(

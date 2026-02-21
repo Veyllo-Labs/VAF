@@ -523,6 +523,62 @@ def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
     return "skip"
 
 
+def _get_known_scope_ids() -> set:
+    """
+    Return the set of all user_scope_id values that are actually configured in VAF
+    (Telegram whitelist, WhatsApp whitelist, Discord contacts, etc.).
+    The local admin scope is represented as None in this set.
+    Used to filter out stale/legacy scope_id entries in last_interaction.json.
+    """
+    from vaf.core.config import Config, get_local_admin_scope_id
+    local_admin = str(get_local_admin_scope_id()).strip()
+    known: set = {None}  # None always represents the local admin
+
+    try:
+        # Telegram whitelist
+        tg_cfg = Config.get("telegram_config") or {}
+        for entry in (tg_cfg.get("whitelist") or []):
+            sid = str(entry.get("user_scope_id") or "").strip()
+            if not sid:
+                continue
+            if sid == local_admin or sid == "default":
+                known.add(None)
+            else:
+                known.add(sid)
+    except Exception:
+        pass
+
+    try:
+        # WhatsApp contacts
+        wa_cfg = Config.get("whatsapp_config") or {}
+        for entry in (wa_cfg.get("contacts") or []):
+            sid = str(entry.get("user_scope_id") or "").strip()
+            if not sid:
+                continue
+            if sid == local_admin or sid == "default":
+                known.add(None)
+            else:
+                known.add(sid)
+    except Exception:
+        pass
+
+    try:
+        # Discord connections (if any user-scoped entries exist)
+        disc_cfg = Config.get("discord_config") or {}
+        for entry in (disc_cfg.get("users") or []):
+            sid = str(entry.get("user_scope_id") or "").strip()
+            if not sid:
+                continue
+            if sid == local_admin or sid == "default":
+                known.add(None)
+            else:
+                known.add(sid)
+    except Exception:
+        pass
+
+    return known
+
+
 def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
     """
     Return list of user_scope_id that have been idle for at least idle_minutes.
@@ -535,6 +591,10 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
     We must take the NEWEST timestamp across all aliases for the same logical user before
     deciding whether they are idle — otherwise a stale "default" entry triggers false nudges
     even though the user was recently active under their UUID key.
+
+    Additionally, only return scope_ids that are actually registered in VAF's configuration
+    (Telegram/WhatsApp/Discord). Stale or legacy scope_ids (e.g. from old sessions that used
+    a different UUID for the admin) are silently ignored.
     """
     from vaf.core.config import get_local_admin_scope_id
     path = Platform.data_dir() / "last_interaction.json"
@@ -548,6 +608,12 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
         now = time.time()
         threshold = now - (idle_minutes * 60)
         local_admin_scope = str(get_local_admin_scope_id()).strip()
+
+        # Load the set of actually-configured scope_ids so we can skip orphaned entries
+        try:
+            known_scopes = _get_known_scope_ids()
+        except Exception:
+            known_scopes = None  # If lookup fails, don't filter (safe fallback)
 
         # Step 1: collect the NEWEST timestamp per logical user (None = local admin).
         # A logical user may have entries under "default", the UUID, or both.
@@ -567,6 +633,9 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
                 continue
             # Resolve which logical user this key belongs to
             scope_id = None if (key == "default" or key == local_admin_scope) else key
+            # Skip stale/legacy scopes that have no matching configuration
+            if known_scopes is not None and scope_id not in known_scopes:
+                continue
             # Keep the newest timestamp seen for this logical user
             if scope_id not in latest_ts or ts_float > latest_ts[scope_id]:
                 latest_ts[scope_id] = ts_float

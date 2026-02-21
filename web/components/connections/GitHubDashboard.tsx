@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl';
 import { 
     X, Github, Loader2, UserPlus, RefreshCw,
     Shield, ShieldCheck, Trash2,
-    Clock, BookOpen, Pencil, GitCommit, Upload,
+    Clock, BookOpen, Pencil, GitCommit, Upload, Activity,
     FolderGit2, Star, ExternalLink
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';

@@ -339,6 +339,30 @@
     "cancel": "Cancel",
     "back": "Back",
     "next": "Next"
+    },
+    "calendar": {
+      "calendarUsesEmailAccount": "Calendar uses your email account (Gmail/Outlook). Connect under Email, then calendar is available.",
+      "calendarConnectedViaGmail": "Connected via Gmail",
+      "calendarConnectedViaOutlook": "Connected via Outlook",
+      "calendarNotConnected": "Not connected",
+      "calendarConnectViaEmail": "Please connect Gmail or Outlook under Email.",
+      "dashboardTitle": "Calendar",
+      "dashboardSubtitle": "Events from your connected calendars",
+      "noCalendarAccount": "No calendar account connected",
+      "noCalendarAccountHint": "Connect Gmail or Outlook under Email.",
+      "openEmailToConnect": "Open Email to connect",
+      "openGoogleCalendar": "Open Google Calendar",
+      "openOutlookCalendar": "Open Outlook Calendar",
+      "addAnotherAccountViaEmail": "Add another account (via Email)",
+      "yourCalendars": "Your calendars",
+      "connectGmailOutlookSidebar": "Connect Gmail or Outlook in the sidebar to see events here.",
+      "upcomingEvents": "Upcoming events",
+      "next7Days": "Next 7 days",
+      "next14Days": "Next 14 days",
+      "next30Days": "Next 30 days",
+      "next60Days": "Next 60 days",
+      "noEventsInRange": "No events in the selected range.",
+      "openInCalendar": "Open in calendar"
     }
   },
   "githubDashboard": {

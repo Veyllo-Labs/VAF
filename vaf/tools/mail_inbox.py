@@ -97,9 +97,10 @@ class MailInboxTool(BaseTool):
     name = "mail_inbox"
     description = (
         "Show the inbox (list of recent emails). Same mailbox as the Mail dashboard (Settings → Connections → Email). "
-        "When the user asks for a specific number (e.g. 'list 15 mails', 'show 20 emails', 'die letzten 50'), you MUST call mail_inbox with max_messages set to that number (e.g. max_messages=15) and then present the tool output to the user as-is. Do NOT reuse an old list or repeat the same entry to reach the count; always call the tool with the requested max_messages. "
+        "When the user asks for a specific number (e.g. 'list 15 mails', 'show 20 emails', 'die letzten 50'), you MUST call mail_inbox with max_messages set to that number (e.g. max_messages=15) and then present the tool output to the user as-is. "
+        "Use the 'label' parameter to filter for specific categories like 'primary', 'social', 'promotions' or custom labels like 'invoice', 'rechnung', 'newsletter', 'work'. "
         "Omit account_id to list from ALL connected accounts. "
-        "Parameters: account_id (optional), folder (default INBOX), max_messages (1–200; default 50). "
+        "Parameters: account_id (optional), folder (default INBOX), max_messages (1–200; default 50), label (optional). "
         "To read a message's body, use read_mail with account_id, message_id, folder, and provider_message_id from the 'IDs below (by index)' block in the tool output."
     )
     parameters = {
@@ -117,6 +118,14 @@ class MailInboxTool(BaseTool):
                 "type": "integer",
                 "description": "Number of emails to return. When the user says 'list 15 mails' or 'show 20 emails', pass that exact number (e.g. 15 or 20). Default 50, max 200. Always pass the user-requested count so the tool returns that many distinct entries.",
             },
+            "label": {
+                "type": "string",
+                "description": "Optional category/label filter (e.g. 'primary', 'social', 'promotions', or any custom label name like 'invoice', 'work'). Same as 'category'.",
+            },
+            "category": {
+                "type": "string",
+                "description": "Alias for 'label'. Optional category filter.",
+            },
         },
         "required": [],
     }
@@ -127,6 +136,10 @@ class MailInboxTool(BaseTool):
         user_scope_id = store_scope_from_kwargs(kwargs) or cred_scope_from_kwargs(kwargs)
         account_id = (kwargs.get("account_id") or "").strip()
         folder = (kwargs.get("folder") or "INBOX").strip()
+        
+        # Support both 'label' and 'category' parameter names
+        category = (kwargs.get("label") or kwargs.get("category") or "").strip() or None
+        
         max_messages = int(kwargs.get("max_messages") or 50)
         if max_messages < 1 or max_messages > 200:
             max_messages = 50
@@ -165,16 +178,22 @@ class MailInboxTool(BaseTool):
                 offset=0,
                 username=try_username,
                 user_scope_id=try_scope_id,
-                category=None,
+                category=category,
             )
             if messages:
                 used_store_username = try_username
                 used_scope_id = try_scope_id
                 break
+        
+        cat_suffix = f" (category: {category})" if category else ""
         if messages:
             if account_id:
-                return _format_inbox(messages, folder)
-            return _format_inbox_all_accounts(messages, folder)
+                return _format_inbox(messages, folder) + cat_suffix
+            return _format_inbox_all_accounts(messages, folder) + cat_suffix
+        
+        if category:
+            return f"No messages found with category '{category}' in {folder} across any connected account."
+
         if not account_id:
             return (
                 "No messages in the sync store yet. Ask the user to open Settings → Connections → Email and click Sync on each account, "
@@ -188,6 +207,6 @@ class MailInboxTool(BaseTool):
             return f"No messages in {folder}. Sync in Settings → Connections → Email to populate the mailbox."
         upsert_messages(account_id, folder, messages, username=store_username, user_scope_id=user_scope_id)
         messages = store_list_messages(
-            account_id=account_id, folder=folder, limit=max_messages, offset=0, username=store_username, user_scope_id=user_scope_id, category=None
+            account_id=account_id, folder=folder, limit=max_messages, offset=0, username=store_username, user_scope_id=user_scope_id, category=category
         )
-        return _format_inbox(messages, folder)
+        return _format_inbox(messages, folder) + cat_suffix

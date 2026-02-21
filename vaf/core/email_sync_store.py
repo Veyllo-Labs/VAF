@@ -202,9 +202,7 @@ def upsert_messages(
     try:
         for m in messages:
             message_id = (m.get("message_id") or "").strip() or f"local-{account_id}-{count}"
-            category = (m.get("category") or "primary").strip().lower() or "primary"
-            if category not in ("primary", "social", "promotions"):
-                category = "primary"
+            category = (m.get("category") or "primary").strip().lower().replace(" ", "_")[:64] or "primary"
             provider_message_id = (m.get("provider_message_id") or "")[:256]
             subject = (m.get("subject") or "")[:2048]
             from_addr = (m.get("from") or "")[:1024]

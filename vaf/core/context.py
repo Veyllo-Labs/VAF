@@ -84,14 +84,15 @@ class ContextManager:
     # TOKEN ESTIMATION
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def estimate_tokens(self, messages: List[Dict]) -> int:
+    def estimate_tokens(self, messages: List[Dict], base_tokens: int = 0) -> int:
         """
         Estimate token count with safety margin.
         - Text: ~3.0 chars/token (safer for multilingual/complex text)
         - Code: ~2.5 chars/token (code uses more tokens due to symbols)
+        - base_tokens: Tokens already consumed (tools, system prompt overhead)
         - Add 10% safety margin for special tokens, formatting, etc.
         """
-        total = 0
+        total = base_tokens
         for msg in messages:
             content = str(msg.get("content", ""))
             # Count role tokens (e.g., "user", "assistant", "system")
@@ -320,7 +321,9 @@ class ContextManager:
         if preserve_tools is None:
             preserve_tools = ["set_todos", "write_file", "read_file"]
 
-        if len(history) <= self.recent_memory_size + 2:
+        # REMOVED: history length check. If tokens are full, we MUST compress.
+        # But we still need at least system + 1 message to make sense.
+        if len(history) < 3:
             return history
 
         current_tokens = self.estimate_tokens(history)

@@ -3,9 +3,10 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslations } from 'next-intl';
 import { 
-    X, Github, Loader2, UserPlus, RefreshCw, Activity, 
+    X, Github, Loader2, UserPlus, RefreshCw,
     Shield, ShieldCheck, Trash2,
-    CheckCircle2, XCircle, Clock, BookOpen, Pencil, GitCommit, Upload
+    Clock, BookOpen, Pencil, GitCommit, Upload,
+    FolderGit2, Star, ExternalLink
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 
@@ -38,13 +39,27 @@ interface GitHubActivity {
     error?: string;
 }
 
+interface GitHubRepo {
+    name: string;
+    full_name: string;
+    description: string;
+    private: boolean;
+    stargazers_count: number;
+    html_url: string;
+    updated_at: string | null;
+}
+
 export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refreshTrigger = 0 }: GitHubDashboardProps) {
     const t = useTranslations('githubDashboard');
 
     const [accounts, setAccounts] = useState<GitHubAccount[]>([]);
     const [activities, setActivities] = useState<GitHubActivity[]>([]);
+    const [repos, setRepos] = useState<GitHubRepo[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadingRepos, setLoadingRepos] = useState(false);
+    const [reposError, setReposError] = useState<string | null>(null);
     const [updating, setUpdating] = useState<string | null>(null);
+    const [reposAccountId, setReposAccountId] = useState<string | null>(null);
 
     const fetchData = async () => {
         setLoading(true);
@@ -56,7 +71,13 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
             
             if (accRes.ok) {
                 const data = await accRes.json();
-                setAccounts(data.accounts || []);
+                const list = data.accounts || [];
+                setAccounts(list);
+                setReposAccountId(prev => {
+                    if (list.length === 0) return null;
+                    if (prev && list.some((a: GitHubAccount) => a.account_id === prev)) return prev;
+                    return list[0].account_id;
+                });
             }
             if (actRes.ok) {
                 const data = await actRes.json();
@@ -68,6 +89,33 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
             setLoading(false);
         }
     };
+
+    const fetchRepos = async (accountId: string) => {
+        setLoadingRepos(true);
+        setReposError(null);
+        try {
+            const res = await fetch(api(`api/github/repos?account_id=${encodeURIComponent(accountId)}&per_page=50`), { credentials: 'include' });
+            if (res.ok) {
+                const data = await res.json();
+                setRepos(data.repos || []);
+            } else {
+                setRepos([]);
+                const body = await res.json().catch(() => ({}));
+                const msg = body?.detail || res.statusText;
+                setReposError(msg === 'No token for this account' ? t('reposErrorNoToken') : t('reposErrorLoad'));
+            }
+        } catch (err) {
+            console.error('Failed to fetch repos', err);
+            setRepos([]);
+            setReposError(t('reposErrorLoad'));
+        } finally {
+            setLoadingRepos(false);
+        }
+    };
+
+    useEffect(() => {
+        if (isOpen && reposAccountId) fetchRepos(reposAccountId);
+    }, [isOpen, reposAccountId]);
 
     useEffect(() => {
         if (isOpen) fetchData();
@@ -179,7 +227,7 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
                                 <span className="text-sm font-medium text-gray-700">@{acc.login}</span>
                                 <div className="flex rounded-lg overflow-hidden border border-gray-200">
                                     <button
-                                        onClick={() => !acc.allow_write && handleTogglePermissions(acc.account_id, acc.allow_write)}
+                                        onClick={() => acc.allow_write && handleTogglePermissions(acc.account_id, acc.allow_write)}
                                         disabled={updating === acc.account_id}
                                         className={cn(
                                             "px-2.5 py-1 text-[10px] font-bold transition-colors",
@@ -190,7 +238,7 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
                                         {t('readOnly')}
                                     </button>
                                     <button
-                                        onClick={() => acc.allow_write && handleTogglePermissions(acc.account_id, acc.allow_write)}
+                                        onClick={() => !acc.allow_write && handleTogglePermissions(acc.account_id, acc.allow_write)}
                                         disabled={updating === acc.account_id}
                                         className={cn(
                                             "px-2.5 py-1 text-[10px] font-bold transition-colors",
@@ -349,54 +397,82 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
                         </div>
                     </div>
 
-                    {/* Right: Agent activity (compact) */}
+                    {/* Right: Repositories for selected account */}
                     <div className="w-full md:w-1/2 flex flex-col bg-gray-50/30 min-w-0">
-                        <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-white shrink-0">
+                        <div className="p-4 border-b border-gray-100 flex flex-wrap items-center gap-2 bg-white shrink-0">
                             <h3 className="font-bold text-gray-900 flex items-center gap-2">
-                                <Activity size={18} className="text-purple-500" />
-                                {t('agentActivity')}
+                                <FolderGit2 size={18} className="text-emerald-600" />
+                                {t('repositories')}
                             </h3>
+                            {accounts.length > 1 && (
+                                <select
+                                    value={reposAccountId ?? ''}
+                                    onChange={(e) => setReposAccountId(e.target.value || null)}
+                                    className="ml-2 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg px-2 py-1.5 bg-white"
+                                >
+                                    {accounts.map(acc => (
+                                        <option key={acc.account_id} value={acc.account_id}>@{acc.login}</option>
+                                    ))}
+                                </select>
+                            )}
                         </div>
                         
                         <div className="flex-1 min-h-0 overflow-auto p-4 max-h-[min(50vh,360px)]">
-                            {loading && activities.length === 0 ? (
-                                <div className="flex flex-col items-center justify-center py-8 text-gray-400">
-                                    <Loader2 className="animate-spin mb-2" />
-                                    <p className="text-sm">Loading activity history...</p>
+                            {!reposAccountId ? (
+                                <div className="flex flex-col items-center justify-center py-8 text-gray-500 text-sm">
+                                    {t('noAccountForRepos')}
                                 </div>
-                            ) : activities.length === 0 ? (
-                                <div className="flex flex-col items-center justify-center py-8 text-gray-400 opacity-60">
-                                    <Clock size={32} className="mb-2 stroke-[1]" />
-                                    <p className="text-sm italic">{t('noActivity')}</p>
+                            ) : loadingRepos ? (
+                                <div className="flex flex-col items-center justify-center py-8 text-gray-400">
+                                    <Loader2 className="animate-spin mb-2" size={24} />
+                                    <p className="text-sm">{t('loadingRepos')}</p>
+                                </div>
+                            ) : reposError ? (
+                                <div className="flex flex-col items-center justify-center py-8 text-amber-700 text-sm text-center px-4">
+                                    <FolderGit2 size={32} className="mb-2 text-amber-400" />
+                                    <p className="font-medium">{reposError}</p>
+                                    <p className="text-xs text-gray-500 mt-1">{t('reposErrorHint')}</p>
+                                </div>
+                            ) : repos.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center py-8 text-gray-500 text-sm">
+                                    <FolderGit2 size={32} className="mb-2 text-gray-300" />
+                                    <p className="italic">{t('noRepos')}</p>
                                 </div>
                             ) : (
-                                <div className="space-y-3">
-                                    {[...activities]
-                                        .sort((a, b) => (b.timestamp - a.timestamp))
-                                        .map((act, i) => (
-                                            <div key={i} className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm flex gap-3">
-                                                <div className="mt-0.5 shrink-0">
-                                                    {act.success ? (
-                                                        <CheckCircle2 size={16} className="text-green-500" />
-                                                    ) : (
-                                                        <XCircle size={16} className="text-red-500" />
-                                                    )}
-                                                </div>
+                                <ul className="space-y-2">
+                                    {repos.map((repo) => (
+                                        <li key={repo.full_name} className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
+                                            <div className="flex items-start justify-between gap-2">
                                                 <div className="flex-1 min-w-0">
-                                                    <div className="flex justify-between items-start gap-2 mb-0.5">
-                                                        <span className="text-[10px] font-bold text-gray-900 bg-gray-100 px-1.5 py-0.5 rounded uppercase">
-                                                            {act.action?.replace(/_/g, ' ') ?? t('action')}
-                                                        </span>
-                                                        <span className="text-[10px] text-gray-400 font-medium shrink-0">{formatTime(act.timestamp)}</span>
-                                                    </div>
-                                                    <p className="text-xs text-gray-700 leading-snug line-clamp-2">{act.details}</p>
-                                                    {!act.success && act.error && (
-                                                        <p className="mt-1 p-1.5 bg-red-50 rounded border border-red-100 text-[10px] text-red-600 font-mono break-words line-clamp-2">{act.error}</p>
+                                                    <a
+                                                        href={repo.html_url}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="font-semibold text-gray-900 hover:text-emerald-600 text-sm flex items-center gap-1.5"
+                                                    >
+                                                        {repo.name}
+                                                        <ExternalLink size={12} className="shrink-0 opacity-60" />
+                                                    </a>
+                                                    {repo.description && (
+                                                        <p className="text-xs text-gray-600 mt-0.5 line-clamp-2">{repo.description}</p>
                                                     )}
+                                                    <div className="flex items-center gap-3 mt-1.5 text-[10px] text-gray-400">
+                                                        {repo.stargazers_count > 0 && (
+                                                            <span className="flex items-center gap-0.5">
+                                                                <Star size={10} className="fill-amber-400 text-amber-400" />
+                                                                {repo.stargazers_count}
+                                                            </span>
+                                                        )}
+                                                        {repo.updated_at && (
+                                                            <span>{t('updated')}: {new Date(repo.updated_at).toLocaleDateString()}</span>
+                                                        )}
+                                                        {repo.private && <span className="text-amber-600">{t('private')}</span>}
+                                                    </div>
                                                 </div>
                                             </div>
-                                        ))}
-                                </div>
+                                        </li>
+                                    ))}
+                                </ul>
                             )}
                         </div>
                     </div>

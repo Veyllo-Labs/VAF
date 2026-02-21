@@ -3896,6 +3896,7 @@ function VAFDashboardContent() {
                 onFetchApiModels={fetchApiModels}
                 onRefreshLocalModels={refreshLocalModels}
                 tools={tools}
+                onRefreshTools={() => ws?.send(JSON.stringify({ type: 'get_tools' }))}
                 workflows={workflows}
                 trustedSources={trustedSources}
                 onAddTrustedSource={(categoryId, name, url) => ws?.send(JSON.stringify({ type: 'add_trusted_source', category_id: categoryId, name, url }))}

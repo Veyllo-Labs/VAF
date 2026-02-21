@@ -1009,13 +1009,24 @@ class Agent:
         for _, name, _ in pkgutil.iter_modules([package_path]):
             try:
                 # 2. Import the module (e.g. vaf.tools.calendar)
-                module = importlib.import_module(f"vaf.tools.{name}")
+                try:
+                    module = importlib.import_module(f"vaf.tools.{name}")
+                except Exception as e:
+                    if "github" in name.lower():
+                        print(f"[WARN] GitHub tools module '{name}' failed to load (is PyGithub installed?): {e}")
+                    else:
+                        print(f"[ERROR] Failed to import tool module {name}: {e}")
+                    continue
                 
                 # 3. Find classes that inherit from BaseTool
                 for _, obj in inspect.getmembers(module):
                     if inspect.isclass(obj) and issubclass(obj, BaseTool) and obj is not BaseTool:
                         # 4. Register the tool (Filter primitives to force Sub-Agent usage)
-                        instance = obj()
+                        try:
+                            instance = obj()
+                        except Exception as e:
+                            print(f"[ERROR] Failed to instantiate tool {getattr(obj, 'name', str(obj))}: {e}")
+                            continue
                         
                         # Tools intentionally NOT exposed to the Main Agent.
                         # Rationale: keep the Main Agent high-level; delegate OS/filesystem analysis to sub-agents
@@ -1071,84 +1082,6 @@ class Agent:
                 print(f"[ERROR] Failed to load tool {name}: {e}")
                 pass # Still ignore for stability, but report error
         
-        # Manually register Context Tools for Main Agent
-        try:
-            from vaf.tools.context_tools import UpdateIntentTool, UpdateWorkingMemoryTool, RequestClarificationTool, MemorySaveTool, MemorySearchTool
-            from vaf.tools.user_identity import UpdateUserIdentityTool
-            from vaf.tools.send_telegram import SendTelegramTool
-            from vaf.tools.send_discord import SendDiscordTool
-            from vaf.tools.send_slack import SendSlackTool
-            from vaf.tools.send_whatsapp import SendWhatsAppTool
-            from vaf.tools.whatsapp_inbox import WhatsAppInboxTool
-            from vaf.tools.find_whatsapp_messages import FindWhatsAppMessagesTool
-            from vaf.tools.read_whatsapp_chat import ReadWhatsAppChatTool
-            from vaf.tools.list_contacts import ListContactsTool
-            from vaf.tools.get_contact import GetContactTool
-            from vaf.tools.create_contact import CreateContactTool
-            from vaf.tools.update_contact import UpdateContactTool
-            from vaf.tools.delete_contact import DeleteContactTool
-            from vaf.tools.whatsapp_call import WhatsAppCallTool
-            from vaf.tools.label_mail import LabelMailTool
-            from vaf.tools.mail_inbox import MailInboxTool
-            from vaf.tools.read_mail import ReadMailTool
-            from vaf.tools.find_mail import FindMailTool
-            from vaf.tools.mark_mail_answered import MarkMailAnsweredTool
-            from vaf.tools.send_mail import SendMailTool
-            from vaf.tools.list_email_accounts import ListEmailAccountsTool
-            from vaf.tools.github_tools import (
-                GitHubListReposTool,
-                GitHubGetFileTool,
-                GitHubListIssuesTool,
-                GitHubListPullsTool,
-                GitHubCreateIssueTool,
-                GitHubUpdateFileTool,
-            )
-
-            # UpdateIntent and UpdateWorkingMemory are for Main Agent
-            self.tools["update_intent"] = UpdateIntentTool()
-            self.tools["update_working_memory"] = UpdateWorkingMemoryTool()
-            self.tools["memory_save"] = MemorySaveTool()
-            self.tools["memory_search"] = MemorySearchTool()
-            self.tools["update_user_identity"] = UpdateUserIdentityTool()
-            self.tools["send_telegram"] = SendTelegramTool()
-            self.tools["send_discord"] = SendDiscordTool()
-            self.tools["send_slack"] = SendSlackTool()
-            self.tools["send_whatsapp"] = SendWhatsAppTool()
-            self.tools["whatsapp_inbox"] = WhatsAppInboxTool()
-            self.tools["find_whatsapp_messages"] = FindWhatsAppMessagesTool()
-            self.tools["read_whatsapp_chat"] = ReadWhatsAppChatTool()
-            self.tools["whatsapp_call"] = WhatsAppCallTool()
-            self.tools["mail_inbox"] = MailInboxTool()
-            self.tools["read_mail"] = ReadMailTool()
-            self.tools["find_mail"] = FindMailTool()
-            self.tools["mark_mail_answered"] = MarkMailAnsweredTool()
-            self.tools["label_mail"] = LabelMailTool()
-            self.tools["list_email_accounts"] = ListEmailAccountsTool()
-            self.tools["send_mail"] = SendMailTool()
-            self.tools["list_contacts"] = ListContactsTool()
-            self.tools["get_contact"] = GetContactTool()
-            self.tools["create_contact"] = CreateContactTool()
-            self.tools["update_contact"] = UpdateContactTool()
-            self.tools["delete_contact"] = DeleteContactTool()
-            self.tools["github_list_repos"] = GitHubListReposTool()
-            self.tools["github_get_file"] = GitHubGetFileTool()
-            self.tools["github_list_issues"] = GitHubListIssuesTool()
-            self.tools["github_list_pulls"] = GitHubListPullsTool()
-            self.tools["github_create_issue"] = GitHubCreateIssueTool()
-            self.tools["github_update_file"] = GitHubUpdateFileTool()
-
-            # RequestClarification is strictly for Sub-Agents (via coder_only flag),
-            # but we register it here so it's available in the system (even if filtered out later for Main Agent).
-            # Note: The filter loop above relies on 'coder_only' attribute.
-            # Since we manually adding here, we bypass the loop.
-            # BUT: Main Agent should NOT see request_clarification.
-            # We don't add request_clarification to self.tools here for the Main Agent.
-            # It will be loaded by the Coder Agent separately.
-            
-        except Exception as e:
-            if self.verbose:
-                print(f"[WARN] Failed to load context tools: {e}")
-
         # Provide tool registry to tools that expect it (e.g., list_tools)
         for tool in self.tools.values():
             if hasattr(tool, "available_tools"):

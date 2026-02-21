@@ -366,24 +366,38 @@ log("WebServer", "Module initialization complete")
 def _scan_tool_modules() -> List[dict]:
     """
     Fallback tool list based on available Python modules.
-    This avoids importing modules (no side effects).
+    Tries to find Tool classes without full Agent initialization.
     """
     try:
-        from pathlib import Path
-        tools_dir = Path(__file__).resolve().parents[1] / "tools"
-        if not tools_dir.exists():
-            return []
-        excluded = {"__init__", "base", "__pycache__"}
+        import pkgutil
+        import importlib
+        import inspect
+        from vaf.tools.base import BaseTool
+        import vaf.tools
+        
         tools = []
-        for path in tools_dir.glob("*.py"):
-            name = path.stem
-            if name in excluded or name.startswith("_"):
+        package_path = os.path.dirname(vaf.tools.__file__)
+        excluded_mods = {"__init__", "base"}
+        
+        for _, name, _ in pkgutil.iter_modules([package_path]):
+            if name in excluded_mods or name.startswith("_"):
                 continue
-            tools.append({
-                "name": name,
-                "description": "Python tool module",
-                "category": "general"
-            })
+            try:
+                module = importlib.import_module(f"vaf.tools.{name}")
+                for _, obj in inspect.getmembers(module):
+                    if inspect.isclass(obj) and issubclass(obj, BaseTool) and obj is not BaseTool:
+                        tools.append({
+                            "name": getattr(obj, "name", name),
+                            "description": getattr(obj, "description", "Python tool"),
+                            "category": getattr(obj, "category", "general")
+                        })
+            except Exception:
+                # Fallback to module name if import fails
+                tools.append({
+                    "name": name,
+                    "description": "Python tool module (load failed)",
+                    "category": "general"
+                })
         return sorted(tools, key=lambda t: t["name"])
     except Exception:
         return []
@@ -2416,6 +2430,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 }
                                 for name, tool in agent.tools.items()
                             ]
+                            # Update cache
+                            manager.tools_cache = tools_list
                             await websocket.send_json({
                                 "type": "tools_list",
                                 "tools": tools_list

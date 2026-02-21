@@ -5,8 +5,9 @@ import {
     MessageCircle, Phone, Mail, Slack, Plus, Settings,
     CheckCircle2, XCircle, Loader2, Trash2, Power,
     Calendar, Cloud, HardDrive, FolderSync, Users,
-    Video, Gamepad2, Building2, ShoppingBag, Briefcase, Code2
+    Video, Gamepad2, Building2, ShoppingBag, Briefcase, Code2, Search
 } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 
 /** GitHub logo (official mark) as black SVG for Connections. */
@@ -432,6 +433,8 @@ export const CATEGORIES = [
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
 export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudDashboard, onOpenCloudWizard, onOpenContactsDashboard, onOpenCalendarWizard, onOpenCalendarDashboard, onOpenGitHubWizard, onOpenGitHubDashboard }: ConnectionsPanelProps) {
+    const t = useTranslations('settings.connectionsPanel');
+    const [connectionSearchQuery, setConnectionSearchQuery] = useState('');
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'linked' | 'disconnected' | 'checking'>>({});
     /** Cloud accounts from API (source of truth; config can be stale after OAuth) */
     const [cloudAccountsFromApi, setCloudAccountsFromApi] = useState<any[]>([]);
@@ -720,6 +723,25 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         return CONNECTION_APPS.filter(app => app.category === category);
     };
 
+    /** Filter apps by search query (name, id, description, category label). */
+    const matchesSearch = (app: ConnectionApp) => {
+        const q = (connectionSearchQuery || '').trim().toLowerCase();
+        if (!q) return true;
+        const cat = CATEGORIES.find(c => c.id === app.category);
+        const searchable = [
+            app.name,
+            app.id,
+            app.description,
+            cat?.label ?? '',
+            cat?.description ?? '',
+        ].join(' ').toLowerCase();
+        return searchable.includes(q) || q.split(/\s+/).every(part => searchable.includes(part));
+    };
+
+    const getFilteredAppsByCategory = (category: string) => {
+        return getAppsByCategory(category).filter(matchesSearch);
+    };
+
     const CLOUD_IDS = ['google_drive', 'onedrive', 'icloud', 'dropbox', 'nextcloud'];
     const isCloudApp = (id: string) => CLOUD_IDS.includes(id);
 
@@ -806,11 +828,25 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
 
     return (
         <div className="space-y-6">
+            <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                <input
+                    type="text"
+                    value={connectionSearchQuery}
+                    onChange={(e) => setConnectionSearchQuery(e.target.value)}
+                    placeholder={t('searchPlaceholder')}
+                    className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:border-gray-300 focus:ring-2 focus:ring-gray-200 focus:outline-none transition-colors"
+                    aria-label={t('searchPlaceholder')}
+                />
+            </div>
             <p className="text-sm text-gray-500">
                 Connect external apps and services to interact with your VAF agent.
             </p>
 
-            {CATEGORIES.filter(cat => getAppsByCategory(cat.id).length > 0).map(category => (
+            {connectionSearchQuery.trim() && !CATEGORIES.some(cat => getFilteredAppsByCategory(cat.id).length > 0) && (
+                <p className="text-sm text-gray-500 py-4">{t('noResults')}</p>
+            )}
+            {CATEGORIES.filter(cat => getFilteredAppsByCategory(cat.id).length > 0).map(category => (
                 <div key={category.id} className="space-y-3">
                     <div>
                         <h4 className="text-sm font-medium text-gray-700">{category.label}</h4>
@@ -818,7 +854,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                     </div>
 
                     <div className="space-y-2">
-                        {getAppsByCategory(category.id).map(app => {
+                        {getFilteredAppsByCategory(category.id).map(app => {
                             const configured = isConfigured(app);
                             const enabled = isEnabled(app);
                             const status = app.id === 'email'

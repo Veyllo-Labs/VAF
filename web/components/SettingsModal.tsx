@@ -129,6 +129,8 @@ export interface SettingsModalProps {
     onFetchApiModels: (provider: string, apiKey: string) => void;
     onRefreshLocalModels: () => void;
     tools?: Array<{ name: string; description: string; category: string }>;
+    /** Request fresh tool list from backend (e.g. after installing PyGithub and restarting VAF). */
+    onRefreshTools?: () => void;
     workflows?: Array<{ id: string; name: string; description: string; steps: number }>;
     trustedSources?: { categories: Array<{ id: string; name: string; description: string; is_custom?: boolean; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> };
     onAddTrustedSource?: (categoryId: string, name: string, url: string) => void;
@@ -223,7 +225,7 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 ];
 
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], onRefreshTools, workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -768,6 +770,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     useEffect(() => {
         if (showCreateAutomationModal) onOpenAutomationCalendar?.();
     }, [showCreateAutomationModal, onOpenAutomationCalendar]);
+
+    // When Tools modal opens, request fresh tool list once (e.g. after restarting VAF with PyGithub)
+    const prevShowToolsModal = useRef(false);
+    useEffect(() => {
+        if (showToolsModal && !prevShowToolsModal.current && onRefreshTools) onRefreshTools();
+        prevShowToolsModal.current = showToolsModal;
+    }, [showToolsModal, onRefreshTools]);
 
     const handleLogoutYes = useCallback(() => {
         setShowLogoutConfirm(false);
@@ -2449,9 +2458,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <h2 className="text-2xl font-bold text-gray-800">{tModals('tools.title')}</h2>
                                 <p className="text-sm text-gray-500">{tModals('tools.modulesInstalled', { count: tools.length })}</p>
                             </div>
-                            <button onClick={() => setShowToolsModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
-                                <X size={24} />
-                            </button>
+                            <div className="flex items-center gap-2">
+                                {onRefreshTools && (
+                                    <button onClick={onRefreshTools} className="p-2 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100 transition-colors" title={tModals('tools.refresh')}>
+                                        <RefreshCw size={20} />
+                                    </button>
+                                )}
+                                <button onClick={() => setShowToolsModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
+                                    <X size={24} />
+                                </button>
+                            </div>
                         </div>
                         
                         {/* Search Bar */}

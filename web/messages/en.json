@@ -122,6 +122,10 @@
       "githubClientId": "GitHub Client ID",
       "githubClientSecret": "GitHub Client Secret"
     },
+    "connectionsPanel": {
+      "searchPlaceholder": "Search (e.g. GitHub, Email, Calendar)…",
+      "noResults": "No connection matches your search."
+    },
     "persona": {
       "identity": "Identity",
       "agentName": "Agent name",
@@ -360,7 +364,16 @@
     "reconnect": "Reconnect",
     "refresh": "Refresh Activity",
     "rightsOverview": "Rights overview",
-    "eventTimeline": "Events"
+    "eventTimeline": "Events",
+    "repositories": "Repositories",
+    "noAccountForRepos": "Select or connect an account to see repositories.",
+    "loadingRepos": "Loading repositories…",
+    "noRepos": "No repositories found.",
+    "updated": "Updated",
+    "private": "Private",
+    "reposErrorNoToken": "No token for this account. Disconnect and reconnect the account.",
+    "reposErrorLoad": "Could not load repositories.",
+    "reposErrorHint": "Check token or reconnect the account (Device Login or PAT with repo scope)."
   },
   "calendar": {
     "calendarUsesEmailAccount": "Calendar uses your email account (Gmail/Outlook). Connect under Email, then calendar is available.",
@@ -407,7 +420,8 @@
       "searchPlaceholder": "Search tools by name or description\u2026",
       "viewCode": "View Code",
       "noToolsFound": "No tools found",
-      "noToolsFoundHint": "Try adjusting your search terms."
+      "noToolsFoundHint": "Try adjusting your search terms.",
+      "refresh": "Refresh tool list"
     },
     "workflows": {
       "title": "Available Workflows",

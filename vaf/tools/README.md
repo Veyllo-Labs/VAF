@@ -61,10 +61,17 @@ class MyTool(BaseTool):
 
 ### Tool Lifecycle
 
-1. **Startup**: VAF scans `vaf/tools/` and loads all `BaseTool` subclasses
-2. **Registration**: Tools are registered in `agent.tools` dictionary
-3. **Execution**: LLM calls tools via `tool_calls`
-4. **Result**: Tool returns a string that is read by the LLM
+1. **Startup**: VAF scans `vaf/tools/` and loads all `BaseTool` subclasses.
+2. **Isolation**: Modules are imported individually. A failure in one tool (e.g., a missing dependency) will log a warning but won't stop other tools from being registered.
+3. **Registration**: Valid tool instances are registered in the `agent.tools` dictionary.
+4. **Execution**: The LLM calls tools via the standard `tool_calls` protocol.
+
+### Optional Dependencies
+
+Some tools depend on extra packages. VAF handles these gracefully:
+- **GitHub tools** (`github_tools.py`) require **PyGithub** (`pip install PyGithub`).
+- If a dependency is missing, VAF logs a `[WARN]` or `[ERROR]` and skips that specific module.
+- Always check the console output if a tool is missing from the Web UI list.
 
 ---
 

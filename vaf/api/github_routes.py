@@ -28,7 +28,11 @@ from vaf.github.oauth import (
     SCOPE_FULL,
     SCOPE_READ_ONLY,
 )
-from vaf.github.credential_github import delete_github_credentials, set_github_oauth_tokens
+from vaf.github.credential_github import (
+    delete_github_credentials,
+    get_github_oauth_token,
+    set_github_oauth_tokens,
+)
 from vaf.github.activity import get_github_activity
 
 logger = logging.getLogger("vaf.api.github")
@@ -422,3 +426,48 @@ async def get_activity(
     username = _user.get("username", "admin")
     activity = get_github_activity(username, limit=limit)
     return {"activity": activity}
+
+
+@router.get("/repos")
+async def get_repos(
+    account_id: str,
+    per_page: int = 30,
+    _user: Dict[str, Any] = Depends(get_current_user_or_local_admin),
+):
+    """Return repositories for a connected GitHub account. account_id must belong to the current user."""
+    username = _user.get("username", "admin")
+    user_scope_id = _user.get("user_scope_id")
+    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    cred_username = username if (username or "").strip().lower() != local_admin else None
+    cred_scope = user_scope_id if user_scope_id and str(user_scope_id).strip() != str(Config.get("local_admin_scope_id", "")).strip() else None
+
+    gc = _get_github_config(username)
+    accounts = list(gc.get("accounts") or [])
+    if not any(acc.get("account_id") == account_id for acc in accounts):
+        raise HTTPException(status_code=404, detail="Account not found")
+    token = get_github_oauth_token(account_id, username=cred_username, user_scope_id=cred_scope)
+    if not token:
+        raise HTTPException(status_code=403, detail="No token for this account")
+    try:
+        from github import Auth, Github
+        g = Github(auth=Auth.Token(token))
+        user = g.get_user()
+        repos = user.get_repos(sort="updated", type="all")
+        per_page = min(100, max(1, per_page))
+        out = []
+        for i, repo in enumerate(repos):
+            if i >= per_page:
+                break
+            out.append({
+                "name": repo.name,
+                "full_name": repo.full_name,
+                "description": repo.description or "",
+                "private": repo.private,
+                "stargazers_count": repo.stargazers_count,
+                "html_url": repo.html_url,
+                "updated_at": repo.updated_at.isoformat() if repo.updated_at else None,
+            })
+        return {"repos": out, "account_id": account_id}
+    except Exception as e:
+        logger.warning("GitHub repos fetch failed for %s: %s", account_id, e)
+        raise HTTPException(status_code=502, detail="Failed to fetch repos from GitHub")

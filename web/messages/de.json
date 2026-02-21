@@ -122,6 +122,10 @@
       "githubClientId": "GitHub Client-ID",
       "githubClientSecret": "GitHub Client-Secret"
     },
+    "connectionsPanel": {
+      "searchPlaceholder": "Suchen (z. B. GitHub, E-Mail, Kalender)…",
+      "noResults": "Keine Verbindung passt zur Suche."
+    },
     "persona": {
       "identity": "Identität",
       "agentName": "Agentenname",
@@ -360,7 +364,16 @@
     "reconnect": "Erneut verbinden",
     "refresh": "Aktivität aktualisieren",
     "rightsOverview": "Berechtigungsübersicht",
-    "eventTimeline": "Ereignisse"
+    "eventTimeline": "Ereignisse",
+    "repositories": "Repositories",
+    "noAccountForRepos": "Konto auswählen oder verbinden, um Repositories anzuzeigen.",
+    "loadingRepos": "Repositories werden geladen…",
+    "noRepos": "Keine Repositories gefunden.",
+    "updated": "Aktualisiert",
+    "private": "Privat",
+    "reposErrorNoToken": "Kein Token für dieses Konto. Bitte Konto trennen und erneut verbinden.",
+    "reposErrorLoad": "Repositories konnten nicht geladen werden.",
+    "reposErrorHint": "Token prüfen oder Konto erneut verbinden (Device Login oder PAT mit repo-Berechtigung)."
   },
   "calendar": {
     "calendarUsesEmailAccount": "Kalender nutzt dein E-Mail-Konto (Gmail/Outlook). Verbinde unter E-Mail, dann ist der Kalender verfügbar.",
@@ -407,7 +420,8 @@
       "searchPlaceholder": "Tools nach Name oder Beschreibung suchen\u2026",
       "viewCode": "Code ansehen",
       "noToolsFound": "Keine Tools gefunden",
-      "noToolsFoundHint": "Versuche, deine Suchbegriffe anzupassen."
+      "noToolsFoundHint": "Versuche, deine Suchbegriffe anzupassen.",
+      "refresh": "Tool-Liste aktualisieren"
     },
     "workflows": {
       "title": "Verfügbare Workflows",

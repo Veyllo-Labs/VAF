@@ -63,6 +63,7 @@ def _no_github_message() -> str:
 class GitHubListReposTool(BaseTool):
     """List the user's GitHub repositories."""
     name = "github_list_repos"
+    category = "github"
     description = (
         "List the user's GitHub repositories. Use when the user asks about their repos, projects on GitHub, or which repos they have. "
         "Requires GitHub to be connected in Settings → Connections → GitHub. "
@@ -123,6 +124,7 @@ class GitHubListReposTool(BaseTool):
 class GitHubGetFileTool(BaseTool):
     """Get the content of a file from a GitHub repository."""
     name = "github_get_file"
+    category = "github"
     description = (
         "Get the content of a file from a GitHub repository. Use when the user wants to read code or a file from their GitHub repo. "
         "Requires GitHub connected. Parameters: owner (repo owner), repo (repo name), path (file path in repo), ref (branch/tag/commit, default: default branch)."
@@ -188,6 +190,7 @@ class GitHubGetFileTool(BaseTool):
 class GitHubListIssuesTool(BaseTool):
     """List issues for a GitHub repository."""
     name = "github_list_issues"
+    category = "github"
     description = (
         "List issues for a GitHub repository. Use when the user asks about issues, bugs, or open items. "
         "Parameters: owner, repo, state (open|closed|all), per_page. Requires GitHub connected."
@@ -252,6 +255,7 @@ class GitHubListIssuesTool(BaseTool):
 class GitHubListPullsTool(BaseTool):
     """List pull requests for a GitHub repository."""
     name = "github_list_pulls"
+    category = "github"
     description = (
         "List pull requests for a GitHub repository. Use when the user asks about PRs, pull requests, or reviews. "
         "Parameters: owner, repo, state (open|closed|all), per_page. Requires GitHub connected."
@@ -314,6 +318,7 @@ class GitHubListPullsTool(BaseTool):
 class GitHubCreateIssueTool(BaseTool):
     """Create a new issue in a GitHub repository."""
     name = "github_create_issue"
+    category = "github"
     description = (
         "Create a new issue in a GitHub repository. Parameters: owner, repo, title, body (optional). "
         "Requires GitHub connected and WRITE permissions enabled in Settings."
@@ -369,6 +374,7 @@ class GitHubCreateIssueTool(BaseTool):
 class GitHubUpdateFileTool(BaseTool):
     """Create or update a file in a GitHub repository."""
     name = "github_update_file"
+    category = "github"
     description = (
         "Create or update a file in a GitHub repository (commit). Parameters: owner, repo, path, content, message (commit message), branch (optional). "
         "Requires GitHub connected and WRITE permissions enabled in Settings."

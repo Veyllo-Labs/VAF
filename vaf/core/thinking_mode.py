@@ -640,8 +640,35 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
             if scope_id not in latest_ts or ts_float > latest_ts[scope_id]:
                 latest_ts[scope_id] = ts_float
 
-        # Step 2: only include users whose NEWEST interaction is older than threshold
-        return [scope_id for scope_id, ts_float in latest_ts.items() if ts_float <= threshold]
+        # Step 2: only include users whose NEWEST interaction is older than threshold.
+        # Also apply a web-activity grace period: if the last interaction was via WebUI
+        # and happened less than 2 minutes ago, treat the user as still active.
+        # This prevents a race condition where headless_runner updates last_interaction
+        # AFTER processing a message, which could make the user appear idle briefly.
+        result: List[Optional[str]] = []
+        for scope_id, ts_float in latest_ts.items():
+            if ts_float > threshold:
+                continue  # Clearly not idle yet
+            # Web grace period: skip if last source was "web" and < 2 min ago
+            try:
+                key_for_entry = "default" if scope_id is None else str(scope_id)
+                # Check both "default" and UUID keys for the entry source
+                entry_source = None
+                for check_key in (key_for_entry, local_admin_scope if scope_id is None else None):
+                    if check_key and check_key in data:
+                        raw_entry = data[check_key]
+                        if isinstance(raw_entry, dict):
+                            entry_source = raw_entry.get("source", "")
+                            entry_ts = float(raw_entry.get("ts", 0) or 0)
+                            # Use this entry only if it's the newest one
+                            if entry_ts >= ts_float - 1:  # within 1 second of newest
+                                break
+                if entry_source == "web" and (now - ts_float) < 120:  # 2-minute grace
+                    continue  # Skip — user just used the WebUI, not really idle
+            except Exception:
+                pass
+            result.append(scope_id)
+        return result
     except (json.JSONDecodeError, OSError):
         return []
 
@@ -1143,6 +1170,24 @@ def _run_thinking_for_user(
                     if not has_any_tool_call:
                         logger.warning("Thinking: no tool calls after %d turns, aborting", turn + 1)
                         break
+
+                # SAFETY 3: Abort if user became active during this run (e.g. opened WebUI).
+                # Don't check on turn 0 — the run just started and last_interaction may still
+                # show the idle timestamp that triggered this run.
+                if turn > 0:
+                    try:
+                        from vaf.core.last_interaction import get_last_interaction
+                        li = get_last_interaction(user_scope_id)
+                        if li:
+                            secs_since = time.time() - float(li.get("ts", 0) or 0)
+                            if secs_since < 45:  # User was active in the last 45 seconds
+                                logger.info(
+                                    "Thinking: user became active (%ds ago), aborting run early",
+                                    int(secs_since),
+                                )
+                                break
+                    except Exception:
+                        pass
 
             # Persist run: JSON run log (for internal summary) + vaf_denk.log (for debugging)
             # NOT saved to WebUI sessions — thinking output is debug-only, visible in logs/vaf_denk.log

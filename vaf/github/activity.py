@@ -20,7 +20,8 @@ _MAX_ACTIVITY_LOGS = 100
 def _get_activity_file(username: str) -> Path:
     """Return the path to the activity log file for a specific user."""
     # Store in user-specific directory if possible, else data_dir
-    base_dir = Platform.data_dir() / "users" / username if username != "admin" else Platform.data_dir()
+    safe_user = (username or "admin").strip() or "admin"
+    base_dir = Platform.data_dir() / "users" / safe_user if safe_user != "admin" else Platform.data_dir()
     base_dir.mkdir(parents=True, exist_ok=True)
     return base_dir / "github_activity.json"
 

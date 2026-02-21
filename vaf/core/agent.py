@@ -2631,8 +2631,29 @@ class Agent:
         
         cm = self._context_manager
         
-        # Check if compression needed
-        if not cm.should_compress(self.history):
+        # Check if compression needed using PRECISE token count (including tools)
+        current_tokens, max_tokens = self.get_token_usage()
+        usage_percent = current_tokens / max_tokens if max_tokens else 0
+        
+        # 1. EMERGENCY PURGE (Hard Reset if > 100%)
+        # If we are already over the hard limit, standard compression might be too slow or fail.
+        if usage_percent >= 1.0 and len(self.history) > 1:
+            UI.event("Context", f"CRITICAL OVERFLOW ({current_tokens}/{max_tokens}). Emergency purge active!", style="bold red")
+            # Absolute Minimum: System Prompt + LAST message (usually the user prompt that caused the overflow)
+            system_msg = [self.history[0]] if self.history and self.history[0].get("role") == "system" else []
+            last_msg = [self.history[-1]] if len(self.history) > 1 else []
+            self.history = system_msg + last_msg
+            
+            # If even System + Last is too big, we have a problem with Tool overhead or one massive message
+            # Standard compression below will handle Tool reduction if configured.
+            
+            # Force UI update
+            self._broadcast_context_status()
+            # Continue to standard compression for remaining history if still needed
+            current_tokens, _ = self.get_token_usage()
+            usage_percent = current_tokens / max_tokens if max_tokens else 0
+
+        if usage_percent < cm.trigger_threshold:
             return
 
         # LLM-based Summarization Logic
@@ -3786,6 +3807,22 @@ class Agent:
              if "web_search" in self.tools:
                  forced_tools.add("web_search")
 
+        # Email Heuristics
+        if any(kw in u_lower for kw in [
+            "mail", "email", "inbox", "posteingang", "nachricht", "send mail",
+            "label", "category", "kategorie", "promotions", "social", "primary",
+            "newsletter", "rechnung", "bill", "invoice", "order", "bestellung"
+        ]):
+            if "mail_inbox" in self.tools:
+                forced_tools.add("mail_inbox")
+            if "find_mail" in self.tools:
+                forced_tools.add("find_mail")
+            if "list_email_accounts" in self.tools:
+                forced_tools.add("list_email_accounts")
+        if any(kw in u_lower for kw in ["schreib", "send", "antwort", "reply", "compose"]):
+            if "send_mail" in self.tools:
+                forced_tools.add("send_mail")
+
         # Web Search Heuristics
         if any(kw in u_lower for kw in [
             "search", "find", "google", "look up", "news", "weather", 
@@ -4246,8 +4283,40 @@ class Agent:
                 except Exception:
                     pass
 
+            # SAFETY NET: If router returns empty list, fallback to sensible tools
+            # Otherwise the model gets 0 tools and hallucinates using them.
+            if not selected_tools:
+                # Check if ALL tools fit in context
+                # Temporary set active_tools to None to get 'ALL' count
+                self._active_tools = None
+                current_tokens, max_tokens = self.get_token_usage()
+                
+                # If ALL tools consume > 85% of context, use a "Core" subset instead
+                # (prevents HTTP 400 errors on small context models)
+                if current_tokens > (max_tokens * 0.85):
+                    CORE_TOOLS = [
+                        "web_search", "memory_search", "memory_save", "list_tools",
+                        "update_intent", "update_working_memory", "read_file", "list_files",
+                        "coding_agent", "librarian_agent", "research_agent"
+                    ]
+                    # Filter to only those that actually exist in this agent
+                    fallback_set = [t for t in CORE_TOOLS if t in self.tools]
+                    UI.event("Router", f"Safety Net: Context tight ({current_tokens}/{max_tokens}). Using {len(fallback_set)} Core tools.", style="warning")
+                    self._active_tools = fallback_set
+                else:
+                    UI.event("Router", "Safety Net: Using ALL tools (Router found none)", style="dim")
+                    self._active_tools = None
+            else:
+                self._active_tools = selected_tools
+
             # ALWAYS show final tools as system message for debugging consistency
-            final_list = ", ".join(selected_tools) if selected_tools else "None (Safety Net -> ALL)"
+            actual_tools = self._active_tools if self._active_tools is not None else list(self.tools.keys())
+            final_list = ", ".join(actual_tools)
+            if self._active_tools is None:
+                final_list = f"ALL ({len(actual_tools)})"
+            elif not selected_tools:
+                final_list = f"CORE ({len(actual_tools)})"
+            
             UI.event("Router", f"Final tools: {final_list}", style="dim")
             # Push to Web UI directly so it is never dropped by log throttle (skip in thinking mode)
             if _emit_to_web_ui():
@@ -4267,21 +4336,15 @@ class Agent:
                     })
                 except Exception:
                     pass
-
-            # SAFETY NET: If router returns empty list, fallback to ALL tools
-            # Otherwise the model gets 0 tools and hallucinates using them.
-            if not selected_tools:
-                UI.event("Router", "Safety Net: Using ALL tools (Router found none)", style="dim")
-                self._active_tools = None
-            else:
-                self._active_tools = selected_tools
         else:
-            # On retries or for internal steps, use all tools
+            # On retries or for internal steps, use a slightly more generous set if ALL doesn't fit
             self._active_tools = None
+            current_tokens, max_tokens = self.get_token_usage()
+            if current_tokens > (max_tokens * 0.90):
+                # Emergency fallback for internal steps/retries
+                self._active_tools = [t for t in ["web_search", "memory_search", "list_tools", "update_intent"] if t in self.tools]
 
         if not skip_input and user_input:
-            # 0.5. Context Management AGAIN - AFTER adding user input (in case it pushed us over limit)
-            self.manage_context()
             # Re-apply after potential compression to ensure the hint stays in history[0].
             self._refresh_language_hint(user_input)
 
@@ -4583,9 +4646,8 @@ class Agent:
                 # CRITICAL: Calculate threshold dynamically - Tools consume context but can't be compressed!
                 current_tokens, max_tokens = self.get_token_usage()
                 
-                # Reserve space for response (1500 tokens)
-                # current_tokens already includes tool definitions + history from get_token_usage()
-                response_buffer = 1500
+                # Reserve space for response (at least 10% of context or 1500 tokens)
+                response_buffer = max(1500, int(max_tokens * 0.10))
                 safe_limit = max_tokens - response_buffer
                 
                 if current_tokens > safe_limit:
@@ -4597,11 +4659,23 @@ class Agent:
                     if current_tokens > safe_limit:
                         # Still too big - aggressive pruning needed
                         UI.event("Context", "Standard compression insufficient. Pruning aggressively...", style="warning")
-                        # Keep only system + last 4 messages
-                        if len(self.history) > 5:
-                            system_msg = [self.history[0]] if self.history and self.history[0].get("role") == "system" else []
-                            self.history = system_msg + self.history[-4:]
-                            UI.event("Context", f"Reduced to {len(self.history)} messages", style="info")
+                        
+                        # Emergency tool reduction if using ALL tools
+                        if self._active_tools is None:
+                             UI.event("Context", "Too many tools active. Switching to CORE subset.", style="warning")
+                             CORE_FALLBACK = ["web_search", "memory_search", "memory_save", "list_tools", "update_intent", "read_file", "list_files"]
+                             self._active_tools = [t for t in CORE_FALLBACK if t in self.tools]
+                             # Re-calculate after tool reduction
+                             current_tokens, _ = self.get_token_usage()
+
+                        if current_tokens > safe_limit:
+                            # Keep only system + last 4 messages
+                            if len(self.history) > 5:
+                                system_msg = [self.history[0]] if self.history and self.history[0].get("role") == "system" else []
+                                self.history = system_msg + self.history[-4:]
+                                UI.event("Context", f"Reduced to {len(self.history)} messages", style="info")
+                                # Notify UI
+                                self._broadcast_context_status()
                 
                 # Retry loop for 503 (Model Loading), 500 (Context Overflow), and 400 (Context Size Error)
                 response = None
@@ -6242,7 +6316,7 @@ class Agent:
                 if name in ("list_calendar_events", "create_calendar_event", "update_calendar_event", "delete_calendar_event"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("github_list_repos", "github_get_file", "github_list_issues", "github_list_pulls"):
+                if name in ("github_list_repos", "github_get_file", "github_list_issues", "github_list_pulls", "github_create_issue", "github_update_file"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 # Pre-write intent/goal before sub-agent invocation for validation/retry

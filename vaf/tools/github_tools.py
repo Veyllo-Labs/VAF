@@ -47,18 +47,22 @@ def _get_github_account_for_user(
 def _get_github_client(kwargs: dict) -> tuple:
     """Return (Github_client, account_dict) or (None, None)."""
     if not _PYGITHUB_AVAILABLE:
-        logger.warning("PyGithub not installed. Run: pip install 'PyGithub>=2.1.1'")
+        logger.warning("GitHub: PyGithub not installed. Run: pip install 'PyGithub>=2.1.1'")
         return None, None
     user_scope_id = cred_scope_from_kwargs(kwargs)
     username = cred_username_from_kwargs(kwargs)
+    logger.info("GitHub client request: username=%s, scope=%s, _PYGITHUB=%s", username, user_scope_id, _PYGITHUB_AVAILABLE)
     account = _get_github_account_for_user(username=username, user_scope_id=user_scope_id)
     if not account:
+        logger.warning("GitHub: No account found (username=%s, scope=%s). Check Settings → Connections → GitHub.", username, user_scope_id)
         return None, None
     account_id = account.get("account_id")
     token = get_github_oauth_token(account_id, username=username, user_scope_id=user_scope_id)
     if not token:
+        logger.warning("GitHub: No token for account_id=%s (username=%s). Re-connect in Settings → Connections → GitHub.", account_id, username)
         return None, None
 
+    logger.info("GitHub client created for account=%s", account_id)
     auth = Auth.Token(token)
     return Github(auth=auth), account
 
@@ -463,3 +467,7 @@ class GitHubUpdateFileTool(BaseTool):
             logger.exception("github_update_file failed")
             log_github_activity(username, "update_file", f"Failed to update {path} in {owner}/{repo_name}", account_id=account_id, success=False, error=str(e))
             return f"Error updating file: {e}"
+
+
+# Module load confirmation (visible in server logs on startup)
+logger.info("GitHub tools module loaded (PyGithub available: %s)", _PYGITHUB_AVAILABLE)

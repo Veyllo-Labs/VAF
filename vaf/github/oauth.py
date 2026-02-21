@@ -30,10 +30,13 @@ _GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
 _GITHUB_USER_URL = "https://api.github.com/user"
 _STATE_FILE: Optional[Path] = None
 
-# Scopes: repo = full repo access (read+write), public_repo = public only (read+write on public)
+# Scopes: repo = full repo access (read+write+private), public_repo = public only
 # read:user, user:email for login identity
+# Note: GitHub has no "read-only private repos" scope. We use "repo" for both
+# modes so private repos are accessible; write-protection is enforced server-side
+# via allow_write=False in the account config.
 SCOPE_FULL = "read:user user:email repo"
-SCOPE_READ_ONLY = "read:user user:email public_repo"
+SCOPE_READ_ONLY = "read:user user:email repo"
 
 
 def _state_path() -> Path:

@@ -322,10 +322,32 @@
       }
     },
     "about": {
+      "title": "Über VAF (Veyllo Agentic Framework)",
+      "description": "VAF ist ein privates, sich selbst entwickelndes Agenten-Framework, das zu 100 % lokal auf deiner eigenen Hardware läuft. Wir glauben, dass echte KI-Intelligenz nicht auf Kosten deiner Privatsphäre gehen darf. VAF wurde entwickelt, um deine Daten zu respektieren, sich an deine einzigartigen Arbeitsabläufe anzupassen und als digitale Erweiterung deiner eigenen Produktivität mit dir zu wachsen.",
+      "principles": "Unsere Kernprinzipien",
+      "privacy": "Absolute Privatsphäre durch Design",
+      "privacyDesc": "Deine Daten verlassen niemals dein lokales Netzwerk. Ohne Cloud-Abhängigkeiten und ohne Tracking durch Drittanbieter garantiert VAF dir die volle Souveränität über deinen digitalen Fußabdruck.",
+      "local": "Lokal-First Orchestrierung",
+      "localDesc": "VAF arbeitet vollständig in deiner Umgebung. Es integriert sich nahtlos in deine lokalen Geräte und Dienste und bietet leistungsstarke Intelligenz, ohne jemals deine Sicherheit zu gefährden.",
+      "multiUser": "Multi-User & Team-Unterstützung",
+      "multiUserDesc": "Teile VAF sicher mit deinem Haushalt oder Team. Jeder Nutzer erhält seine eigene isolierte Umgebung – persönliches Gedächtnis, Vorlieben und Aufgaben –, sodass jeder arbeiten, delegieren und seine Produktivität steigern kann, ohne die anderen zu beeinflussen.",
+      "memory": "Kognitives Langzeitgedächtnis",
+      "memoryDesc": "Im Gegensatz zu statischen Datenbanken ist das Gedächtnissystem von VAF dynamisch. Es speichert nicht nur Informationen – es lernt aus jeder Interaktion. Durch das Erkennen von Mustern und das Verstehen von Kontexten schlägt VAF proaktiv nächste Schritte vor und entwickelt seine Argumentation basierend auf deinen langfristigen Zielen weiter.",
+      "productivity": "Autonome Produktivitäts-Engine",
+      "productivityDesc": "VAF ist mehr als nur eine einfache Aufgabenverwaltung; es ist ein Workflow-Orchestrator. Von der intuitiven Tagesplanung bis zur Ausführung komplexer, mehrstufiger Automatisierungen passt sich VAF deinem persönlichen Rhythmus an, damit du dich auf das Wesentliche konzentrieren kannst.",
+      "api": "Erweiterbare & hybride Intelligenz",
+      "apiDesc": "VAF ist zwar lokal-first, aber vollständig erweiterbar. Wir bieten eine robuste API-Ebene, die es dir ermöglicht, externe KI-Anbieter (wie OpenAI, Anthropic oder Groq) anzubinden. Ob du die absolute Privatsphäre lokaler Modelle oder die rohe Leistung der Cloud bevorzugst – VAF gibt dir die Freiheit zu wählen.",
+
       "credits": "Credits",
       "coreEngine": "Kern-Engine",
       "frontend": "Frontend",
-      "developedBy": "Entwickelt von"
+      "developedBy": "Entwickelt von",
+      "vafLicense": "VAF-Lizenz",
+      "vafLicenseType": "MIT-Lizenz + Commons Clause 1.0",
+      "vafLicenseDesc": "Gilt für den Original-Code der Veyllo GmbH. Verbietet den kommerziellen Weiterverkauf der Software selbst ohne separate Lizenz.",
+      "thirdPartyLicenses": "Drittanbieter-Komponenten",
+      "thirdPartyDesc": "Alle Drittanbieter-Bibliotheken und -Frameworks unterliegen ihren jeweiligen Original-Lizenzen (MIT, Apache 2.0, BSD etc.).",
+      "showFullLicense": "Vollständige Lizenz anzeigen"
     }
   },
   "modals": {

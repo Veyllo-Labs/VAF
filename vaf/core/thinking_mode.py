@@ -796,34 +796,109 @@ def _save_run_log(
     return (started_iso, ended_iso, messages)
 
 
-THINKING_PROMPT = """You are the main agent in **Thinking Mode**. The user has been idle; use this time to **act** on their behalf. Work through the steps below, then summarize in a short reply in the user's language. When you have finished, call thinking_done – that concludes this pass.
+THINKING_PROMPT = """You are running a background check for the user while they are idle. Your job: **understand, act, help** — in that order.
 
-**Priority: act first.** Create automations, process todos/notes. If you need the user's decision (e.g. "Should I do X?"), ask them **once** via main_messenger (Telegram/WhatsApp/etc. according to their main_messenger). The system will wait for their reply: if they don't answer within a few minutes, they get a short nudge; if they still don't answer, we skip that question and do other things in a later run. So you only need to ask once and then call thinking_done.
+## YOUR IDENTITY
+You are the user's personal AI assistant. You know them from your long-term memory and conversation history. You speak their language naturally. You NEVER reveal that you are running in the background or in "thinking mode".
 
-**Messages to the user – STRICT RULES:**
-- You may send **at most one** message to the user in this entire run.
-- Write it like a normal human assistant would: natural, friendly, no meta-talk.
-- **NEVER** say "I'm in thinking mode", "I'm running in the background", "I'm an agent", "Ich bin im Thinking Mode" or similar. The user must not know this is a background pass.
-- **NEVER** include your internal reasoning, debugging output, tool results, error messages, or chain-of-thought in the message text. The `message` parameter of send_telegram/send_whatsapp/send_discord must contain ONLY the final, polished, user-facing text.
-- **BAD examples** (NEVER do this): "Lass mich prüfen...", "Ich sehe keine Automation...", "Ah, der Fehler tritt wieder auf...", "Ich habe folgende Tools aufgerufen...", listing raw tool output, or narrating your thought process.
-- **GOOD examples**: "Ich hab die wöchentliche Review-Automation für Freitag eingerichtet 👍", "Kurze Frage: Soll ich eine wöchentliche Zusammenfassung einrichten?"
-- If a tool call fails or returns an error, handle it silently. Do NOT forward error messages to the user.
-- If you already sent one message, do NOT send another. After asking something, call thinking_done.
+## STRICT RULES
+1. **Max 1 message** to the user per run. Zero messages is perfectly fine — often preferred.
+2. **Act > Ask.** If you can do something useful, DO IT. Only ask when you genuinely need the user's decision.
+3. **Never ask generic questions** like "Should I set up an automation?" or "Can I help you?". If you ask, be specific and concrete about WHAT and WHY.
+4. **Never mention** thinking mode, background pass, system internals, tool errors, or your reasoning process.
+5. **Never repeat** questions from the declined list or recent thinking activity.
+6. Messages must be **natural, short, human** — like a helpful friend texting.
+7. **ALWAYS call thinking_done** at the end. No exceptions.
+8. **NEVER** include internal reasoning, debugging output, tool results, error messages, or chain-of-thought in message text. The `message` parameter of send_telegram/send_whatsapp/send_discord must contain ONLY the final, polished, user-facing text.
 
-1. **System health:** Unread important emails, upcoming reminders – note briefly in your final reply if relevant.
+## WORKFLOW
 
-2. **Todos and notes:** Call list_automation_todos and list_automation_notes. Work through open todos (mark done where appropriate). Act.
+### Step 1: GATHER (this turn)
+Call these tools now:
+- `list_automation_todos` — open todos?
+- `list_automation_notes` — notes to process?
+- `list_automations` — what exists? anything obviously missing?
 
-3. **Automations:** Call list_automations. If something is clearly missing (e.g. weekly report tomorrow), **create_automation** yourself. If you are unsure, ask the user **once** via main_messenger (one message only, natural wording).
+Also consider: user identity, long-term memory, conversation history, current date/time.
 
-4. **User knowledge / proactive help:** If you can help concretely, do it. If you need the user's input, send **at most one** short message via main_messenger – natural, human tone. No spam.
+### Step 2: DECIDE (fast-exit rules)
+Apply these rules IN ORDER:
 
-**Mindset:** The user's interest comes first. This is your chance to really help – take load off them. Ask yourself: What can I automate for them? What can I get done for them that I'm allowed to do? What notes and todos do we have – what can I take care of for the user right now? Then do it.
+**IF** no open todos AND no actionable notes AND automations look fine:
+  → Call `thinking_done` with summary "Nothing actionable." — DONE. Don't waste more turns.
 
-When you are done, call thinking_done with a brief summary of what you did (todos processed, automations created, one message sent if any)."""
+**IF** there's a trivial todo (e.g. "check X", "test Y"):
+  → Complete it immediately, mark done, call `thinking_done` — DONE.
+
+**IF** there's a note with a clear action item:
+  → Process it (create automation, update todo, etc.), call `thinking_done` — DONE.
+
+**IF** an automation is obviously missing and you're confident about what to create:
+  → Create it, call `thinking_done` with summary — DONE.
+
+**IF** you need the user's decision on something concrete and specific:
+  → Send ONE message via their main_messenger with a specific question.
+  → Then call `thinking_done`. The system handles waiting for the reply.
+
+**IF** a tool call fails:
+  → Log it silently. Try the next thing. Do NOT send error details to the user.
+  → If all tools fail, call `thinking_done` with summary "Tools unavailable, will retry next run."
+
+### Step 3: ACT
+Execute exactly ONE concrete action from Step 2. Then call `thinking_done`.
+
+## WHEN TO SEND A MESSAGE (strict criteria)
+Only send a message to the user if ALL of these are true:
+- You need their decision (not just informing them)
+- The question is about something SPECIFIC (not generic)
+- You haven't asked this before (check declined questions + recent activity)
+- It genuinely helps the user (not just "filling" the thinking run)
+
+When you do send a message:
+- Use their language, keep it short (1-2 sentences)
+- Frame it as a concrete proposal, e.g. "Hey, I noticed you have X — should I set up Y for that?"
+- NEVER: "Can I help you with something?" / "Should I set up an automation?"
+
+## BUDGET
+- Maximum 5 turns total. Be efficient.
+- Most runs should finish in 2-3 turns (gather → decide → done).
+- Use `thinking_note_add` to save important context for the next run.
+
+Call thinking_done with a brief summary when finished."""
 
 
 _SENT_TOOLS = {"send_telegram", "send_whatsapp", "send_discord"}
+
+# Phase-based prompts for thinking mode turns 1+ (turn 0 uses THINKING_PROMPT)
+_PHASE_PROMPTS = {
+    # Turn 1: Tool results are in from GATHER. Now analyze + decide.
+    1: (
+        "You should now have the tool results from gathering. Analyze what you found:\n"
+        "- Any open todos? Process them.\n"
+        "- Any actionable notes? Handle them.\n"
+        "- Automations look complete? Great.\n"
+        "- Nothing to do? Call thinking_done('Nothing actionable.').\n"
+        "If you can act: do it now. If you need the user's input: send ONE message, then call thinking_done."
+    ),
+    # Turn 2: Should be wrapping up. Escalate.
+    2: (
+        "Wrap up now. If you took an action, call thinking_done with a summary. "
+        "If you sent a message, call thinking_done (the system handles the reply). "
+        "If you haven't done anything useful yet, call thinking_done('Nothing actionable.')."
+    ),
+    # Turn 3+: Force termination.
+    3: (
+        "FINAL TURN. Call thinking_done NOW with a summary of what you did. "
+        "Do not call any more tools. Do not send any messages. Just call thinking_done."
+    ),
+}
+
+
+def _get_turn_prompt(turn: int) -> str:
+    """Phase-based prompt: Turn 0 = THINKING_PROMPT, Turn 1-2 = Analyze/Act, Turn 3+ = Force done."""
+    if turn == 0:
+        return THINKING_PROMPT
+    return _PHASE_PROMPTS.get(turn, _PHASE_PROMPTS[3])
 
 
 def _detect_and_set_waiting_for_reply(
@@ -953,10 +1028,11 @@ def _run_thinking_for_user(
         # Append thinking mode notice and last run summary (context so we don't repeat or re-ask)
         if agent.history and agent.history[0].get("role") == "system":
             notice = (
-                "\n\n## THINKING MODE\n"
-                "You are the **main agent** in a background pass while the user is idle. "
-                "Act: create automations, process todos. When you send a message, write like a normal human – never say you're in thinking mode or running in the background. At most one message per run. If you ask something, the system will wait for their reply (nudge after 3 min, skip after 10 min). "
-                "You may use **multiple turns** in this pass. When you have finished all you can do for the user, call the **thinking_done** tool to end this pass."
+                "\n\n## THINKING MODE (background pass)\n"
+                "You are running a background check while the user is idle. "
+                "Act > Ask. Max 1 message. Never reveal you're in thinking mode. "
+                "ALWAYS call thinking_done when finished — no exceptions. "
+                "If nothing to do, call thinking_done('Nothing actionable.') immediately."
             )
             last_summary = _get_last_thinking_summary(user_scope_id)
             if last_summary:
@@ -982,9 +1058,9 @@ def _run_thinking_for_user(
         logger.info("Thinking started for user %s", scope_key[:8] if scope_key != "default" else "default")
 
         try:
-            max_turns = int(Config.get("thinking_max_turns", 10) or 10)
-            max_turns = max(1, min(max_turns, 30))
-            # RAG context for first turn only
+            max_turns = int(Config.get("thinking_max_turns", 6) or 6)
+            max_turns = max(1, min(max_turns, 10))
+            # RAG context for first turn only — build user-specific query
             memory_context = ""
             try:
                 if Config.get("memory_enabled", True):
@@ -997,17 +1073,41 @@ def _run_thinking_for_user(
                             task_scope = _UUID(str(user_scope_id))
                         except (ValueError, TypeError):
                             pass
+                    # Build user-specific RAG query from identity + recent chat topics
+                    rag_query_parts = []
+                    try:
+                        from vaf.auth.user_workspace import get_user_workspace
+                        uname = getattr(agent, "_current_username", None) or "admin"
+                        ws = get_user_workspace(uname)
+                        ui = ws.get_user_identity() or {}
+                        name = (ui.get("name") or "").strip()
+                        if name:
+                            rag_query_parts.append(name)
+                        for pref in (ui.get("preferences") or [])[:3]:
+                            rag_query_parts.append(str(pref))
+                        for do in (ui.get("dos") or [])[:2]:
+                            rag_query_parts.append(str(do))
+                    except Exception:
+                        pass
+                    try:
+                        user_msgs = [m for m in (getattr(agent, "history", []) or [])
+                                     if isinstance(m, dict) and m.get("role") == "user"]
+                        for msg in user_msgs[-3:]:
+                            content = (msg.get("content") or "")[:100]
+                            if content.strip():
+                                rag_query_parts.append(content.strip())
+                    except Exception:
+                        pass
+                    rag_query = (" ".join(rag_query_parts).strip() or "user profile preferences tasks projects")[:300]
                     memory_context = run_memory_search_sync(
-                        query=THINKING_PROMPT[:200], k=k, user_scope_id=task_scope, caller="thinking_mode"
+                        query=rag_query, k=k, user_scope_id=task_scope, caller="thinking_mode"
                     ) or ""
             except Exception:
                 memory_context = ""
 
             _waiting_already_set = False
             for turn in range(max_turns):
-                prompt = THINKING_PROMPT if turn == 0 else (
-                    "Continue. When you have finished all you can do for the user, call thinking_done."
-                )
+                prompt = _get_turn_prompt(turn)
                 mem_ctx = (memory_context or None) if turn == 0 else None
                 agent.chat_step(prompt, stream_callback=None, memory_context=mem_ctx)
 
@@ -1028,6 +1128,21 @@ def _run_thinking_for_user(
 
                 if _history_has_thinking_done(getattr(agent, "history", [])):
                     break
+
+                # SAFETY 1: Hard limit — force-break after turn 4 (5 turns total)
+                if turn >= 4:
+                    logger.warning("Thinking: force-break after %d turns (thinking_done not called)", turn + 1)
+                    break
+
+                # SAFETY 2: If after turn 2 agent hasn't made any tool calls at all, abort
+                if turn >= 2:
+                    has_any_tool_call = any(
+                        isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")
+                        for m in (getattr(agent, "history", []) or [])
+                    )
+                    if not has_any_tool_call:
+                        logger.warning("Thinking: no tool calls after %d turns, aborting", turn + 1)
+                        break
 
             # Persist run: JSON run log (for internal summary) + vaf_denk.log (for debugging)
             # NOT saved to WebUI sessions — thinking output is debug-only, visible in logs/vaf_denk.log

@@ -117,6 +117,7 @@ import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizar
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 import CreateAutomationPopup, { type EditAutomationTask } from './CreateAutomationPopup';
+import { vafLicenseText, thirdPartyLicenses } from '@/lib/licenses_data';
 
 export interface SettingsModalProps {
     isOpen: boolean;
@@ -270,6 +271,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [mailDashboardRefresh, setMailDashboardRefresh] = useState(0);
     const [showCreateAutomationModal, setShowCreateAutomationModal] = useState(false);
     const [editingAutomation, setEditingAutomation] = useState<EditAutomationTask | null>(null);
+
+    const [showLicenseModal, setShowLicenseModal] = useState(false);
+    const [licenseModalContent, setLicenseModalContent] = useState<string | null>(null);
+    const [licenseModalTitle, setLicenseModalTitle] = useState('');
 
     const [toolsSearch, setToolsSearch] = useState('');
     const [workflowsSearch, setWorkflowsSearch] = useState('');
@@ -2217,29 +2222,139 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         )}
 
                         {activeTab === 'about' && (
-                            <div className="space-y-6">
+                            <div className="space-y-6 pb-8">
                                 <div className="text-center py-6">
-                                    <div className="w-16 h-16 bg-gray-900 rounded-2xl mx-auto flex items-center justify-center mb-4 shadow-xl">
-                                        <span className="text-2xl font-bold text-white">V</span>
+                                    <div className="w-16 h-16 rounded-2xl mx-auto mb-4 shadow-xl overflow-hidden flex shrink-0">
+                                        <img src="/logo.png" alt="VAF" className="w-full h-full object-cover" />
                                     </div>
                                     <h2 className="text-2xl font-bold text-gray-900">VAF</h2>
                                     <p className="text-gray-500">Veyllo Agent Framework</p>
-                                    <p className="text-xs text-gray-400 mt-1">v2.4.0 (Mac/Metal Optimized)</p>
+                                    <p className="text-xs text-gray-400 mt-1">v2.5.0 (Mac/Metal Optimized)</p>
                                 </div>
 
+                                <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
+                                    <h3 className="text-lg font-semibold text-gray-900 mb-2">{tAbout('title')}</h3>
+                                    <p className="text-sm text-gray-600 leading-relaxed">
+                                        {tAbout('description')}
+                                    </p>
+                                </div>
+
+                                <Section title={tAbout('principles')}>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                                        <div className="p-4 bg-white border border-gray-100 rounded-xl shadow-sm">
+                                            <div className="flex items-center gap-2 mb-2 text-gray-900 font-semibold">
+                                                <Shield size={18} className="text-blue-500" />
+                                                <span>{tAbout('privacy')}</span>
+                                            </div>
+                                            <p className="text-xs text-gray-500 leading-relaxed">{tAbout('privacyDesc')}</p>
+                                        </div>
+                                        <div className="p-4 bg-white border border-gray-100 rounded-xl shadow-sm">
+                                            <div className="flex items-center gap-2 mb-2 text-gray-900 font-semibold">
+                                                <Globe size={18} className="text-green-500" />
+                                                <span>{tAbout('local')}</span>
+                                            </div>
+                                            <p className="text-xs text-gray-500 leading-relaxed">{tAbout('localDesc')}</p>
+                                        </div>
+                                        <div className="p-4 bg-white border border-gray-100 rounded-xl shadow-sm">
+                                            <div className="flex items-center gap-2 mb-2 text-gray-900 font-semibold">
+                                                <Users size={18} className="text-purple-500" />
+                                                <span>{tAbout('multiUser')}</span>
+                                            </div>
+                                            <p className="text-xs text-gray-500 leading-relaxed">{tAbout('multiUserDesc')}</p>
+                                        </div>
+                                        <div className="p-4 bg-white border border-gray-100 rounded-xl shadow-sm">
+                                            <div className="flex items-center gap-2 mb-2 text-gray-900 font-semibold">
+                                                <Brain size={18} className="text-pink-500" />
+                                                <span>{tAbout('memory')}</span>
+                                            </div>
+                                            <p className="text-xs text-gray-500 leading-relaxed">{tAbout('memoryDesc')}</p>
+                                        </div>
+                                        <div className="p-4 bg-white border border-gray-100 rounded-xl shadow-sm">
+                                            <div className="flex items-center gap-2 mb-2 text-gray-900 font-semibold">
+                                                <Zap size={18} className="text-yellow-500" />
+                                                <span>{tAbout('productivity')}</span>
+                                            </div>
+                                            <p className="text-xs text-gray-500 leading-relaxed">{tAbout('productivityDesc')}</p>
+                                        </div>
+                                        <div className="p-4 bg-white border border-gray-100 rounded-xl shadow-sm">
+                                            <div className="flex items-center gap-2 mb-2 text-gray-900 font-semibold">
+                                                <Link2 size={18} className="text-indigo-500" />
+                                                <span>{tAbout('api')}</span>
+                                            </div>
+                                            <p className="text-xs text-gray-500 leading-relaxed">{tAbout('apiDesc')}</p>
+                                        </div>
+                                    </div>
+                                </Section>
+
+
+
                                 <Section title={tAbout('credits')}>
-                                    <div className="space-y-3 text-sm text-gray-600">
-                                        <div className="flex justify-between">
-                                            <span>{tAbout('coreEngine')}</span>
-                                            <span className="font-medium">Python 3.11 + Llama.cpp</span>
+                                    <div className="space-y-4">
+                                        {/* Main Credits */}
+                                        <div className="space-y-3 text-sm text-gray-600 pb-2 border-b border-gray-100">
+                                            <div className="flex justify-between">
+                                                <span>{tAbout('coreEngine')}</span>
+                                                <span className="font-medium">Python 3.11 + Llama.cpp</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span>{tAbout('frontend')}</span>
+                                                <span className="font-medium">Next.js + Tailwind</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span>{tAbout('developedBy')}</span>
+                                                <span className="font-medium">Veyllo GmbH</span>
+                                            </div>
                                         </div>
-                                        <div className="flex justify-between">
-                                            <span>{tAbout('frontend')}</span>
-                                            <span className="font-medium">Next.js + Tailwind</span>
+
+                                        {/* VAF License */}
+                                        <div className="space-y-2">
+                                            <div className="flex justify-between items-center">
+                                                <h4 className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
+                                                    <Lock size={14} className="text-blue-500" />
+                                                    {tAbout('vafLicense')}
+                                                </h4>
+                                                <button 
+                                                    onClick={() => {
+                                                        setLicenseModalTitle(tAbout('vafLicense'));
+                                                        setLicenseModalContent(vafLicenseText);
+                                                        setShowLicenseModal(true);
+                                                    }}
+                                                    className="text-[10px] text-blue-600 hover:underline font-medium"
+                                                >
+                                                    {tAbout('showFullLicense')}
+                                                </button>
+                                            </div>
+                                            <div className="p-3 bg-blue-50/50 border border-blue-100 rounded-xl">
+                                                <div className="text-xs font-bold text-blue-800 mb-1">{tAbout('vafLicenseType')}</div>
+                                                <p className="text-[11px] text-blue-700 leading-relaxed">
+                                                    {tAbout('vafLicenseDesc')}
+                                                </p>
+                                            </div>
                                         </div>
-                                        <div className="flex justify-between">
-                                            <span>{tAbout('developedBy')}</span>
-                                            <span className="font-medium">Veyllo Labs</span>
+
+                                        {/* Third Party */}
+                                        <div className="space-y-2">
+                                            <h4 className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
+                                                <Cpu size={14} className="text-gray-500" />
+                                                {tAbout('thirdPartyLicenses')}
+                                            </h4>
+                                            <p className="text-xs text-gray-500 leading-relaxed italic">
+                                                {tAbout('thirdPartyDesc')}
+                                            </p>
+                                            <div className="flex flex-wrap gap-1.5 mt-2">
+                                                {thirdPartyLicenses.map(lib => (
+                                                    <button 
+                                                        key={lib.name}
+                                                        onClick={() => {
+                                                            window.open(lib.url, '_blank');
+                                                        }}
+                                                        className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-[10px] font-medium border border-gray-200/50 hover:bg-gray-200 transition-colors"
+                                                        title={`${lib.name} (${lib.license}) - Click to visit repository`}
+                                                    >
+                                                        {lib.name} <span className="opacity-50 ml-1">({lib.license})</span>
+                                                    </button>
+                                                ))}
+                                            </div>
                                         </div>
                                     </div>
                                 </Section>
@@ -4148,6 +4263,35 @@ const Select = ({ label, value, onChange, options }: SelectProps) => {
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
                     <ChevronRight size={16} className="rotate-90" />
                 </div>
+                {/* License Content Modal */}
+                {showLicenseModal && (
+                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/95 backdrop-blur-sm rounded-2xl p-8">
+                        <div className="bg-white rounded-2xl border border-gray-200 shadow-2xl flex flex-col w-full h-full max-w-2xl max-h-[80%]">
+                            <div className="p-4 border-b border-gray-100 flex justify-between items-center">
+                                <h3 className="font-bold text-gray-900">{licenseModalTitle}</h3>
+                                <button 
+                                    onClick={() => setShowLicenseModal(false)}
+                                    className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+                                >
+                                    <X size={20} className="text-gray-500" />
+                                </button>
+                            </div>
+                            <div className="flex-1 overflow-auto p-6">
+                                <pre className="text-[11px] text-gray-700 leading-relaxed font-mono whitespace-pre-wrap bg-gray-50 p-4 rounded-xl border border-gray-100">
+                                    {licenseModalContent}
+                                </pre>
+                            </div>
+                            <div className="p-4 border-t border-gray-100 flex justify-end">
+                                <button 
+                                    onClick={() => setShowLicenseModal(false)}
+                                    className="px-6 py-2 bg-gray-900 text-white rounded-xl text-sm font-medium hover:bg-black transition-colors"
+                                >
+                                    {tCommon('close')}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );

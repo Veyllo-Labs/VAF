@@ -113,7 +113,7 @@ import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
 import { useLocaleStore } from '@/lib/localeStore';
 import { languages } from '@/lib/languages';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, CalendarSetupWizard, CalendarDashboard } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 import CreateAutomationPopup, { type EditAutomationTask } from './CreateAutomationPopup';
@@ -268,6 +268,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showCalendarWizard, setShowCalendarWizard] = useState(false);
     const [showCalendarDashboard, setShowCalendarDashboard] = useState(false);
     const [calendarWizardProvider, setCalendarWizardProvider] = useState<'google_calendar' | 'outlook_calendar' | undefined>(undefined);
+    const [showGitHubWizard, setShowGitHubWizard] = useState(false);
+    const [showGitHubDashboard, setShowGitHubDashboard] = useState(false);
+    const [gitHubDashboardRefresh, setGitHubDashboardRefresh] = useState(0);
     const [mailDashboardRefresh, setMailDashboardRefresh] = useState(0);
     const [showCreateAutomationModal, setShowCreateAutomationModal] = useState(false);
     const [editingAutomation, setEditingAutomation] = useState<EditAutomationTask | null>(null);
@@ -1304,6 +1307,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     <Input label={tGeneral('dropboxAppSecret')} value={localConfig.cloud_oauth_dropbox_client_secret || ''} onChange={(v: string) => handleChange('cloud_oauth_dropbox_client_secret', v)} type="password" />
                                                 </div>
                                             </div>
+                                            <div>
+                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">{tGeneral('githubProvider')}</h4>
+                                                <div className="grid grid-cols-1 gap-3">
+                                                    <Input label={tGeneral('githubClientId')} value={localConfig.github_oauth_client_id || ''} onChange={(v: string) => handleChange('github_oauth_client_id', v)} type="text" placeholder="GitHub OAuth App Client ID" />
+                                                    <Input label={tGeneral('githubClientSecret')} value={localConfig.github_oauth_client_secret || ''} onChange={(v: string) => handleChange('github_oauth_client_secret', v)} type="password" placeholder="GitHub OAuth App Client Secret" />
+                                                </div>
+                                            </div>
                                         </div>
                                     </Section>
                                 )}
@@ -1747,7 +1757,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 config={localConfig}
                                 onConfigChange={handleChange}
                                 currentUser={currentUser}
-                                refreshTrigger={cloudDashboardRefresh}
+                                refreshTrigger={cloudDashboardRefresh + gitHubDashboardRefresh}
                                 onOpenDiscordWizard={() => setShowDiscordWizard(true)}
                                 onOpenDiscordDashboard={() => setShowDiscordDashboard(true)}
                                 onOpenTelegramWizard={() => setShowTelegramWizard(true)}
@@ -1767,6 +1777,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     setShowCalendarWizard(true);
                                 }}
                                 onOpenCalendarDashboard={() => setShowCalendarDashboard(true)}
+                                onOpenGitHubWizard={() => setShowGitHubWizard(true)}
+                                onOpenGitHubDashboard={() => setShowGitHubDashboard(true)}
                             />
                         )}
 
@@ -2552,6 +2564,40 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {/* Code Content */}
                         <div className="flex-1 overflow-auto p-4 font-mono text-sm text-[#d4d4d4] leading-relaxed selection:bg-blue-500/30">
                             <pre>{codeModal.code}</pre>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* License Content Modal */}
+            {showLicenseModal && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setShowLicenseModal(false)}>
+                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+                    <div
+                        className="relative bg-white rounded-2xl border border-gray-200 shadow-2xl flex flex-col w-full max-w-2xl max-h-[80vh] animate-in fade-in zoom-in-95 duration-200"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="p-4 border-b border-gray-100 flex justify-between items-center shrink-0">
+                            <h3 className="font-bold text-gray-900">{licenseModalTitle}</h3>
+                            <button
+                                onClick={() => setShowLicenseModal(false)}
+                                className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+                            >
+                                <X size={20} className="text-gray-500" />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-auto p-6">
+                            <pre className="text-[11px] text-gray-700 leading-relaxed font-mono whitespace-pre-wrap bg-gray-50 p-4 rounded-xl border border-gray-100">
+                                {licenseModalContent}
+                            </pre>
+                        </div>
+                        <div className="p-4 border-t border-gray-100 flex justify-end shrink-0">
+                            <button
+                                onClick={() => setShowLicenseModal(false)}
+                                className="px-6 py-2 bg-gray-900 text-white rounded-xl text-sm font-medium hover:bg-black transition-colors"
+                            >
+                                {tCommon('close')}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -4189,6 +4235,28 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 currentUser={currentUser}
             />
 
+            {/* GitHub Setup Wizard (OAuth or PAT) */}
+            <GitHubSetupWizard
+                isOpen={showGitHubWizard}
+                onClose={() => {
+                    setShowGitHubWizard(false);
+                    setGitHubDashboardRefresh(r => r + 1);
+                }}
+                onComplete={() => {
+                    setShowGitHubWizard(false);
+                    setGitHubDashboardRefresh(r => r + 1);
+                    onRefreshConfig?.();
+                }}
+                currentUser={currentUser}
+            />
+
+            <GitHubDashboard
+                isOpen={showGitHubDashboard}
+                onClose={() => setShowGitHubDashboard(false)}
+                onOpenAddWizard={() => setShowGitHubWizard(true)}
+                refreshTrigger={gitHubDashboardRefresh}
+            />
+
             {/* Soul Wizard Modal */}
             <SoulWizard
                 isOpen={showSoulWizard}
@@ -4263,35 +4331,6 @@ const Select = ({ label, value, onChange, options }: SelectProps) => {
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
                     <ChevronRight size={16} className="rotate-90" />
                 </div>
-                {/* License Content Modal */}
-                {showLicenseModal && (
-                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/95 backdrop-blur-sm rounded-2xl p-8">
-                        <div className="bg-white rounded-2xl border border-gray-200 shadow-2xl flex flex-col w-full h-full max-w-2xl max-h-[80%]">
-                            <div className="p-4 border-b border-gray-100 flex justify-between items-center">
-                                <h3 className="font-bold text-gray-900">{licenseModalTitle}</h3>
-                                <button 
-                                    onClick={() => setShowLicenseModal(false)}
-                                    className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
-                                >
-                                    <X size={20} className="text-gray-500" />
-                                </button>
-                            </div>
-                            <div className="flex-1 overflow-auto p-6">
-                                <pre className="text-[11px] text-gray-700 leading-relaxed font-mono whitespace-pre-wrap bg-gray-50 p-4 rounded-xl border border-gray-100">
-                                    {licenseModalContent}
-                                </pre>
-                            </div>
-                            <div className="p-4 border-t border-gray-100 flex justify-end">
-                                <button 
-                                    onClick={() => setShowLicenseModal(false)}
-                                    className="px-6 py-2 bg-gray-900 text-white rounded-xl text-sm font-medium hover:bg-black transition-colors"
-                                >
-                                    {tCommon('close')}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
             </div>
         </div>
     );

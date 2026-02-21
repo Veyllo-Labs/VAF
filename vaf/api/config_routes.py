@@ -58,7 +58,10 @@ async def patch_config(
     _user: Dict[str, Any] = Depends(get_current_user_or_local_admin),
 ) -> Dict[str, Any]:
     """Merge provided keys into config and save. Used by onboarding to persist Discord etc."""
-    has_oauth_keys = any(k.startswith("email_oauth_") or k.startswith("cloud_oauth_") for k in body)
+    has_oauth_keys = any(
+        k.startswith("email_oauth_") or k.startswith("cloud_oauth_") or k.startswith("github_oauth_")
+        for k in body
+    )
     if has_oauth_keys and _user.get("role") != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

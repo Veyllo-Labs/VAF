@@ -5,9 +5,27 @@ import {
     MessageCircle, Phone, Mail, Slack, Plus, Settings,
     CheckCircle2, XCircle, Loader2, Trash2, Power,
     Calendar, Cloud, HardDrive, FolderSync, Users,
-    Video, Gamepad2, Building2, ShoppingBag, Briefcase
+    Video, Gamepad2, Building2, ShoppingBag, Briefcase, Code2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+/** GitHub logo (official mark) as black SVG for Connections. */
+function GitHubLogo({ className }: { className?: string }) {
+    return (
+        <svg
+            className={className}
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            aria-hidden
+        >
+            <path
+                fillRule="evenodd"
+                clipRule="evenodd"
+                d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.464-1.11-1.464-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"
+            />
+        </svg>
+    );
+}
 
 interface ConnectionsPanelProps {
     config: any;
@@ -31,13 +49,17 @@ interface ConnectionsPanelProps {
     onOpenCalendarWizard?: (provider?: 'google_calendar' | 'outlook_calendar') => void;
     /** Open calendar dashboard (accounts left, events in the middle). When provided and calendar is configured, Settings opens this. */
     onOpenCalendarDashboard?: () => void;
+    /** Open GitHub setup wizard (OAuth or PAT). When provided, Connect on GitHub card opens this. */
+    onOpenGitHubWizard?: () => void;
+    /** Open GitHub dashboard (accounts, agent activity, permissions). */
+    onOpenGitHubDashboard?: () => void;
 }
 
 export interface ConnectionApp {
     id: string;
     name: string;
     icon: React.ElementType;
-    category: 'contacts' | 'communication' | 'calendar' | 'cloud' | 'productivity' | 'social';
+    category: 'contacts' | 'communication' | 'calendar' | 'cloud' | 'productivity' | 'social' | 'developer';
     description: string;
     configKey: string;
     available: boolean;
@@ -270,6 +292,18 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         comingSoon: false,
         iconColor: 'bg-cyan-600',
     },
+    // ============ Developer ============
+    {
+        id: 'github',
+        name: 'GitHub',
+        icon: Code2, // fallback; rendered as GitHubLogo in UI
+        category: 'developer',
+        description: 'Connect GitHub so agent can read repos, PRs',
+        configKey: 'github_config',
+        available: true,
+        comingSoon: false,
+        iconColor: 'bg-white',
+    },
     // ============ Social ============
     {
         id: 'linkedin',
@@ -389,6 +423,7 @@ export const CATEGORIES = [
     { id: 'communication', label: 'Communication', description: 'Messaging & chat platforms' },
     { id: 'calendar', label: 'Calendar', description: 'Scheduling & event management' },
     { id: 'cloud', label: 'Cloud Storage', description: 'File sync & cloud drives' },
+    { id: 'developer', label: 'Developer', description: 'Code repositories and development' },
     { id: 'productivity', label: 'Productivity', description: 'Work tools & integrations' },
     { id: 'social', label: 'Social', description: 'Social media platforms' },
 ];
@@ -396,7 +431,7 @@ export const CATEGORIES = [
 /** Use relative /api/ so Next.js rewrites to backend. */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudDashboard, onOpenCloudWizard, onOpenContactsDashboard, onOpenCalendarWizard, onOpenCalendarDashboard }: ConnectionsPanelProps) {
+export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudDashboard, onOpenCloudWizard, onOpenContactsDashboard, onOpenCalendarWizard, onOpenCalendarDashboard, onOpenGitHubWizard, onOpenGitHubDashboard }: ConnectionsPanelProps) {
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'linked' | 'disconnected' | 'checking'>>({});
     /** Cloud accounts from API (source of truth; config can be stale after OAuth) */
     const [cloudAccountsFromApi, setCloudAccountsFromApi] = useState<any[]>([]);
@@ -404,6 +439,8 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
     const [emailAccountsFromApi, setEmailAccountsFromApi] = useState<any[]>([]);
     /** Calendar status from API (google_available, microsoft_available from connected email accounts) */
     const [calendarStatus, setCalendarStatus] = useState<{ google_available: boolean; microsoft_available: boolean }>({ google_available: false, microsoft_available: false });
+    /** GitHub accounts from API (source of truth for connected state) */
+    const [githubAccountsFromApi, setGitHubAccountsFromApi] = useState<any[]>([]);
 
     useEffect(() => {
         checkConnectionStatus();
@@ -459,6 +496,18 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         }
     };
 
+    const fetchGitHubStatus = async () => {
+        try {
+            const res = await fetch(api('api/github/accounts'), { credentials: 'include' });
+            if (res.ok) {
+                const data = await res.json();
+                setGitHubAccountsFromApi(data.accounts || []);
+            }
+        } catch {
+            setGitHubAccountsFromApi([]);
+        }
+    };
+
     const checkConnectionStatus = async () => {
         if (config.discord_config?.verified) {
             setConnectionStatus(prev => ({ ...prev, discord: 'checking' }));
@@ -502,6 +551,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         await fetchEmailAccounts();
         await fetchCloudAccounts();
         await fetchCalendarStatus();
+        await fetchGitHubStatus();
     };
 
     const handleToggleConnection = async (appId: string, enabled: boolean) => {
@@ -637,6 +687,33 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                 console.error(`Failed to disconnect ${appId}`, e);
             }
         }
+        if (appId === 'github') {
+            try {
+                const res = await fetch(api('api/github/accounts'), { credentials: 'include' });
+                if (res.ok) {
+                    const data = await res.json();
+                    const accounts = data.accounts || [];
+                    for (const a of accounts) {
+                        const id = a.account_id;
+                        if (id) {
+                            await fetch(api(`api/github/accounts/${encodeURIComponent(id)}`), { method: 'DELETE', credentials: 'include' });
+                        }
+                    }
+                }
+                await fetchGitHubStatus();
+                const localAdmin = ((config?.local_admin_username || 'admin') as string).trim().toLowerCase();
+                const username = (currentUser?.username || '').trim().toLowerCase();
+                if (!username || username === localAdmin) {
+                    onConfigChange('github_config', { accounts: [] });
+                } else {
+                    const byUser = { ...(config?.github_config_by_user || {}) };
+                    byUser[username] = { ...(byUser[username] || {}), accounts: [] };
+                    onConfigChange('github_config_by_user', byUser);
+                }
+            } catch (e) {
+                console.error('Failed to disconnect GitHub', e);
+            }
+        }
     };
 
     const getAppsByCategory = (category: string) => {
@@ -684,6 +761,16 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             const fromConfig = cloudAccountsFromConfig.some((a: any) => a.provider === app.id);
             return fromApi || fromConfig;
         }
+        if (app.id === 'github') {
+            const fromApi = githubAccountsFromApi.length > 0;
+            const fromConfig = Array.isArray(config?.github_config?.accounts) && config.github_config.accounts.length > 0;
+            const byUser = config?.github_config_by_user as Record<string, { accounts?: unknown[] }> | undefined;
+            const username = (currentUser?.username ?? '').trim().toLowerCase();
+            const localAdmin = ((config?.local_admin_username ?? 'admin') as string).trim().toLowerCase();
+            const userAccounts = (!username || username === localAdmin) ? null : byUser?.[currentUser?.username ?? '']?.accounts;
+            const fromConfigUser = Array.isArray(userAccounts) && userAccounts.length > 0;
+            return fromApi || fromConfig || fromConfigUser;
+        }
         const appConfig = config[app.configKey];
         return appConfig?.verified === true;
     };
@@ -710,6 +797,9 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             const fromConfig = cloudAccountsFromConfig.some((a: any) => a.provider === app.id && a.sync_enabled !== false);
             return fromApi || fromConfig;
         }
+        if (app.id === 'github') {
+            return isConfigured(CONNECTION_APPS.find(a => a.id === 'github')!);
+        }
         const appConfig = config[app.configKey];
         return appConfig?.enabled === true;
     };
@@ -735,7 +825,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                 ? (connectionStatus.email ?? ((config?.email_config?.accounts?.length ?? 0) > 0 ? 'connected' : 'disconnected'))
                                 : isCloudApp(app.id)
                                     ? (configured ? 'connected' : 'disconnected')
-                                    : (app.id === 'google_calendar' || app.id === 'outlook_calendar')
+                                    : (app.id === 'google_calendar' || app.id === 'outlook_calendar' || app.id === 'github')
                                         ? (configured ? 'connected' : 'disconnected')
                                         : connectionStatus[app.id];
                             const Icon = app.icon;
@@ -754,12 +844,16 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-3">
                                             <div className={cn(
-                                                "w-10 h-10 rounded-xl flex items-center justify-center text-white",
-                                                configured
-                                                    ? (app.iconColor || "bg-gray-900")
-                                                    : "bg-gray-300 text-gray-500"
+                                                "w-10 h-10 rounded-xl flex items-center justify-center shrink-0",
+                                                app.id === 'github'
+                                                    ? (configured ? "bg-white border border-gray-200 text-gray-900" : "bg-gray-100 text-gray-500")
+                                                    : ("text-white " + (configured ? (app.iconColor || "bg-gray-900") : "bg-gray-300 text-gray-500"))
                                             )}>
-                                                <Icon className="w-5 h-5" />
+                                                {app.id === 'github' ? (
+                                                    <GitHubLogo className="w-6 h-6" />
+                                                ) : (
+                                                    <Icon className="w-5 h-5" />
+                                                )}
                                             </div>
                                             <div>
                                                 <div className="flex items-center gap-2">
@@ -784,7 +878,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                         </span>
                                                     )}
                                                 </div>
-                                                <p className="text-sm text-gray-500">{app.description}</p>
+                                                <p className="text-sm text-gray-500 line-clamp-1">{app.description}</p>
                                                 {configured && app.id === 'discord' && config[app.configKey]?.admin_username && (
                                                     <p className="text-xs text-gray-600 mt-1">
                                                         Admin: @{config[app.configKey].admin_username}
@@ -812,6 +906,11 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                         Calendar uses your {app.id === 'google_calendar' ? 'Gmail' : 'Outlook'} account. The agent can list and create events.
                                                     </p>
                                                 )}
+                                                {configured && app.id === 'github' && githubAccountsFromApi.length > 0 && (
+                                                    <p className="text-xs text-gray-600 mt-1">
+                                                        Connected as @{(githubAccountsFromApi[0] as any)?.login ?? (githubAccountsFromApi[0] as any)?.account_id}. The agent can read repos, list issues/PRs, and optionally commit.
+                                                    </p>
+                                                )}
                                             </div>
                                         </div>
 
@@ -826,8 +925,8 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                 </button>
                                             ) : configured ? (
                                                 <>
-                                                    {/* Toggle Switch (not for calendar: uses email account) */}
-                                                    {(app.id !== 'google_calendar' && app.id !== 'outlook_calendar') && (
+                                                    {/* Toggle Switch (not for calendar or GitHub: no on/off toggle) */}
+                                                    {(app.id !== 'google_calendar' && app.id !== 'outlook_calendar' && app.id !== 'github') && (
                                                         <button
                                                             onClick={() => handleToggleConnection(app.id, !enabled)}
                                                             className={cn(
@@ -867,6 +966,10 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                                 if (onOpenCloudDashboard && configured) onOpenCloudDashboard();
                                                                 else if (onOpenCloudWizard) onOpenCloudWizard(app.id);
                                                             }
+                                                            if (app.id === 'github') {
+                                                                if (onOpenGitHubDashboard && configured) onOpenGitHubDashboard();
+                                                                else fetchGitHubStatus();
+                                                            }
                                                         }}
                                                         className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                                                         title={
@@ -874,7 +977,11 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                                 ? 'Open calendar'
                                                                 : isCloudApp(app.id) && configured
                                                                     ? 'Open cloud dashboard'
-                                                                    : 'Add account'
+                                                                    : app.id === 'github' && configured
+                                                                        ? 'Open GitHub dashboard'
+                                                                        : app.id === 'github'
+                                                                            ? 'Refresh GitHub status'
+                                                                            : 'Add account'
                                                         }
                                                     >
                                                         <Settings className="w-4 h-4 text-gray-500" />
@@ -904,6 +1011,33 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                             else onOpenEmailWizard?.();
                                                         }
                                                         if (isCloudApp(app.id) && onOpenCloudWizard) onOpenCloudWizard(app.id);
+                                                        if (app.id === 'github') {
+                                                            if (onOpenGitHubWizard) {
+                                                                onOpenGitHubWizard();
+                                                            } else {
+                                                                setConnectionStatus(prev => ({ ...prev, github: 'checking' }));
+                                                                const redirectBase = typeof window !== 'undefined' ? window.location.origin : '';
+                                                                fetch(api(`api/github/oauth/start?redirect_base=${encodeURIComponent(redirectBase)}`), { credentials: 'include' })
+                                                                    .then(async (r) => {
+                                                                        const data = await r.json().catch(() => ({}));
+                                                                        if (!r.ok) {
+                                                                            setConnectionStatus(prev => ({ ...prev, github: 'disconnected' }));
+                                                                            alert(data?.detail || r.statusText || 'GitHub connection failed. An admin must set GitHub OAuth Client ID and Secret in Settings first.');
+                                                                            return;
+                                                                        }
+                                                                        const url = data?.authorization_url;
+                                                                        if (url) window.location.href = url;
+                                                                        else {
+                                                                            setConnectionStatus(prev => ({ ...prev, github: 'disconnected' }));
+                                                                            alert(data?.detail || 'Could not start GitHub login.');
+                                                                        }
+                                                                    })
+                                                                    .catch(() => {
+                                                                        setConnectionStatus(prev => ({ ...prev, github: 'disconnected' }));
+                                                                        alert('Request failed. Is the VAF backend running?');
+                                                                    });
+                                                            }
+                                                        }
                                                     }}
                                                     disabled={app.comingSoon || !app.available}
                                                     className={cn(

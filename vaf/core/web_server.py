@@ -293,6 +293,14 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount Cloud routes: {e}")
 
+# Mount GitHub connection routes (OAuth2 + accounts CRUD)
+try:
+    from vaf.api.github_routes import router as github_router
+    app.include_router(github_router)
+    log("WebServer", "GitHub integration routes mounted at /api/github")
+except Exception as e:
+    log("WebServer", f"Failed to mount GitHub routes: {e}")
+
 # Mount Calendar routes (status + events; uses same OAuth as email)
 try:
     from vaf.api.calendar_routes import router as calendar_router

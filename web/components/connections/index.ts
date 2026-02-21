@@ -17,3 +17,5 @@ export type { Contact, ChannelEntry, ContactsDashboardProps } from './ContactsDa
 export { default as CalendarSetupWizard } from './CalendarSetupWizard';
 export { default as CalendarDashboard } from './CalendarDashboard';
 export type { CalendarDashboardProps } from './CalendarDashboard';
+export { default as GitHubSetupWizard } from './GitHubSetupWizard';
+export { default as GitHubDashboard } from './GitHubDashboard';

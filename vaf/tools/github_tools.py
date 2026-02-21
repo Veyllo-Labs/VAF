@@ -8,7 +8,14 @@ Uses user_scope_id and username from agent context to resolve the linked account
 import logging
 from typing import Any, Dict, List, Optional
 
-from github import Github, Auth, GithubException
+try:
+    from github import Github, Auth, GithubException
+    _PYGITHUB_AVAILABLE = True
+except ImportError:
+    Github = None  # type: ignore[assignment,misc]
+    Auth = None  # type: ignore[assignment]
+    GithubException = Exception  # type: ignore[assignment,misc]
+    _PYGITHUB_AVAILABLE = False
 
 from vaf.core.config import Config
 from vaf.github.credential_github import get_github_oauth_token
@@ -39,6 +46,9 @@ def _get_github_account_for_user(
 
 def _get_github_client(kwargs: dict) -> tuple:
     """Return (Github_client, account_dict) or (None, None)."""
+    if not _PYGITHUB_AVAILABLE:
+        logger.warning("PyGithub not installed. Run: pip install 'PyGithub>=2.1.1'")
+        return None, None
     user_scope_id = cred_scope_from_kwargs(kwargs)
     username = cred_username_from_kwargs(kwargs)
     account = _get_github_account_for_user(username=username, user_scope_id=user_scope_id)
@@ -48,7 +58,7 @@ def _get_github_client(kwargs: dict) -> tuple:
     token = get_github_oauth_token(account_id, username=username, user_scope_id=user_scope_id)
     if not token:
         return None, None
-    
+
     auth = Auth.Token(token)
     return Github(auth=auth), account
 

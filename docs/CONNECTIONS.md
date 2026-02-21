@@ -67,6 +67,8 @@ After linking, the agent can use the tools `github_list_repos`, `github_get_file
 
 **Permission model:** By default the link requests full repo access (read and write). The agent only uses write (e.g. commit/push) if the linked account has the corresponding scope; otherwise tools are read-only (list repos, read files, list issues/PRs). To disconnect, use **Disconnect** on the GitHub card in Settings → Connections; credentials are removed and the account is removed from config.
 
+**Multi-user setups:** When using **network mode** (multiple users with different JWT scopes), a GitHub account connected by the admin is automatically available to all other users on the instance via a fallback lookup. The agent first checks per-user config, then falls back to the main config; token lookup tries the user-scoped key first, then the default key `github:default:{account_id}`. This allows **one GitHub connection per instance shared by all users** without per-user re-setup. See [GITHUB_INTEGRATION.md](#multi-user-and-scope-handling) for details.
+
 ## Discord Integration
 
 ### Features
@@ -425,7 +427,7 @@ Telegram uses the same pipeline as the Web UI:
 
 | Tool | Purpose | When to use |
 |------|---------|-------------|
-| `mail_inbox` | List messages in a folder. **Omit `account_id`** to list from **all connected accounts**. Output: a compact list (index, From, Date, Subject, optional account) plus an "IDs by index" block for `read_mail`. When the user asks for a specific number (e.g. "list 15 mails"), call with `max_messages` set to that number and present the tool output as-is; do not reuse an old list or repeat entries. | User asks to check email, show inbox, or "list N mails" → call mail_inbox (with `max_messages=N` when a number is given); use the IDs block to call read_mail by index. |
+| `mail_inbox` | List messages in a folder. **Omit `account_id`** to list from **all connected accounts**. Supports filtering by **`label`** (e.g., `primary`, `social`, `promotions`, or custom labels like `invoice`). Output: a compact list (index, From, Date, Subject, optional account) plus an "IDs by index" block for `read_mail`. | User asks to check email, show inbox, list N mails, or find mails with a specific label (e.g., "show my invoices") → call mail_inbox (with `label="invoice"` and `max_messages=N` if specified). |
 | `find_mail` | Search the synced mailbox by subject or sender (`query`, optional `folder`, `limit`). Returns matches with `account_id`, `message_id`, `provider_message_id`; if exactly one match, returns the full body. | User asks "what does the X mail say?" or "details about the Postman/Twitch/… email" → use find_mail(query="X"); if result includes full body use it, else call read_mail with first match's IDs. |
 | `read_mail` | Return the full body of one message as plain text. Parameters: `account_id`, `message_id`, `folder` (default INBOX), optional `provider_message_id`. Use IDs from the mail_inbox "IDs by index" block or from find_mail. | When the user wants to read a message; use the IDs from the mail_inbox output (by index) or find_mail; do not ask the user for these. |
 | `mark_mail_answered` | Mark a message as answered by the agent (`account_id`, `message_id`, `folder`). Sets a timestamp so the Mail UI shows an answered indicator and the message is not handled twice. | After the agent has processed or replied to an email. |

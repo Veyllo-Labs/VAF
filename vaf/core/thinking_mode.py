@@ -742,6 +742,60 @@ THINKING_PROMPT = """You are the main agent in **Thinking Mode**. The user has b
 When you are done, reply briefly here: what you did (todos processed, automations created, one message sent if any). That concludes this pass."""
 
 
+_SENT_TOOLS = {"send_telegram", "send_whatsapp", "send_discord"}
+
+
+def _detect_and_set_waiting_for_reply(
+    history: List[Dict[str, Any]],
+    user_scope_id: Optional[str],
+    agent: Any = None,
+    recent_only: bool = False,
+) -> bool:
+    """Scan agent history for send_telegram/send_whatsapp/send_discord tool calls.
+
+    If found, call set_waiting_for_reply() with the extracted question_text and return True.
+    When *recent_only* is True, only check the last 3 messages (used per-turn in the loop);
+    otherwise scan the full history (used as post-run fallback).
+    """
+    msgs = (history or [])[-3:] if recent_only else (history or [])
+    for msg in reversed(msgs) if recent_only else msgs:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            name = (tc.get("function") or {}).get("name") or tc.get("name") or ""
+            if name not in _SENT_TOOLS:
+                continue
+            uname = (getattr(agent, "_current_username", None) if agent else None) or "admin"
+            display_name = uname
+            try:
+                from vaf.auth.user_workspace import get_user_workspace
+                ws = get_user_workspace(uname)
+                ui = ws.get_user_identity() or {}
+                display_name = (ui.get("name") or "").strip() or uname
+            except Exception:
+                pass
+            question_text = ""
+            try:
+                args_raw = (tc.get("function") or {}).get("arguments") or ""
+                if isinstance(args_raw, str):
+                    args_parsed = json.loads(args_raw)
+                elif isinstance(args_raw, dict):
+                    args_parsed = args_raw
+                else:
+                    args_parsed = {}
+                question_text = (
+                    args_parsed.get("text")
+                    or args_parsed.get("message")
+                    or args_parsed.get("content")
+                    or ""
+                )
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                pass
+            set_waiting_for_reply(user_scope_id, uname, display_name=display_name, question_text=question_text)
+            return True
+    return False
+
+
 def _run_thinking_for_user(
     user_scope_id: Optional[str],
     run_id: str,
@@ -868,12 +922,29 @@ def _run_thinking_for_user(
             except Exception:
                 memory_context = ""
 
+            _waiting_already_set = False
             for turn in range(max_turns):
                 prompt = THINKING_PROMPT if turn == 0 else (
                     "Continue. When you have finished all you can do for the user, call thinking_done."
                 )
                 mem_ctx = (memory_context or None) if turn == 0 else None
                 agent.chat_step(prompt, stream_callback=None, memory_context=mem_ctx)
+
+                # Immediately set waiting_for_reply when the agent sends a message in this turn.
+                # This must happen NOW (not after the run ends) so that if the user replies quickly
+                # the main agent already has the question_text for context injection.
+                if not _waiting_already_set:
+                    try:
+                        if _detect_and_set_waiting_for_reply(
+                            getattr(agent, "history", []),
+                            user_scope_id,
+                            agent=agent,
+                            recent_only=True,
+                        ):
+                            _waiting_already_set = True
+                    except Exception:
+                        pass
+
                 if _history_has_thinking_done(getattr(agent, "history", [])):
                     break
 
@@ -899,51 +970,18 @@ def _run_thinking_for_user(
                     logger.warning("Could not write vaf_denk.log: %s", log_file_err)
             except Exception as log_err:
                 logger.warning("Thinking run log save failed: %s", log_err)
-            # If agent sent a message (question), wait for reply: nudge at 3 min, skip question after 10 min
-            try:
-                history = getattr(agent, "history", []) or []
-                sent_tools = {"send_telegram", "send_whatsapp", "send_discord"}
-                for msg in history:
-                    if not isinstance(msg, dict) or msg.get("role") != "assistant":
-                        continue
-                    for tc in msg.get("tool_calls") or []:
-                        name = (tc.get("function") or {}).get("name") or tc.get("name") or ""
-                        if name in sent_tools:
-                            uname = getattr(agent, "_current_username", None) or "admin"
-                            display_name = uname
-                            try:
-                                from vaf.auth.user_workspace import get_user_workspace
-                                ws = get_user_workspace(uname)
-                                ui = ws.get_user_identity() or {}
-                                display_name = (ui.get("name") or "").strip() or uname
-                            except Exception:
-                                pass
-                            # Extract the actual message text from tool arguments
-                            question_text = ""
-                            try:
-                                args_raw = (tc.get("function") or {}).get("arguments") or ""
-                                if isinstance(args_raw, str):
-                                    args_parsed = json.loads(args_raw)
-                                elif isinstance(args_raw, dict):
-                                    args_parsed = args_raw
-                                else:
-                                    args_parsed = {}
-                                # Try common parameter names for the message text
-                                question_text = (
-                                    args_parsed.get("text")
-                                    or args_parsed.get("message")
-                                    or args_parsed.get("content")
-                                    or ""
-                                )
-                            except (json.JSONDecodeError, TypeError, AttributeError):
-                                pass
-                            set_waiting_for_reply(user_scope_id, uname, display_name=display_name, question_text=question_text)
-                            break
-                    else:
-                        continue
-                    break
-            except Exception:
-                pass
+            # If agent sent a message (question), wait for reply: nudge at 3 min, skip question after 10 min.
+            # Usually already set during the turn loop above; this is a fallback for edge cases.
+            if not _waiting_already_set:
+                try:
+                    _detect_and_set_waiting_for_reply(
+                        getattr(agent, "history", []),
+                        user_scope_id,
+                        agent=agent,
+                        recent_only=False,
+                    )
+                except Exception:
+                    pass
         except Exception as e:
             logger.exception("Thinking run error for user %s: %s", scope_key[:8] if scope_key != "default" else "default", e)
         finally:

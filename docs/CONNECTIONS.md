@@ -40,6 +40,33 @@ Connect external apps and services to interact with your VAF agent.
 | Dropbox | 🔜 Coming Soon | Sync and access Dropbox files |
 | Nextcloud | 🔜 Coming Soon | Connect to self-hosted Nextcloud via WebDAV |
 
+### Developer
+
+| Platform | Status | Description |
+|----------|--------|-------------|
+| **GitHub** | ✅ Available | Link your GitHub account so the agent can read your repos, list issues/PRs, and optionally commit |
+
+**Setup:** Go to **Settings → Connections → Developer → GitHub** and click **Connect**. 
+
+The recommended way to connect is the **Device Login**:
+1. Select **Device Login (Recommended)** in the wizard.
+2. VAF will generate a unique 8-character code.
+3. Click the code to automatically copy it and open GitHub's verification page.
+4. Paste the code on GitHub and authorize the application.
+5. VAF will automatically detect the authorization and link your account.
+
+Alternatively, you can use a **Personal Access Token (PAT)** for granular control or the **Browser Login (Legacy)** for standard OAuth redirects.
+
+After linking, the agent can use the tools `github_list_repos`, `github_get_file`, `github_list_issues`, and `github_list_pulls`. Tokens are stored securely in the OS keyring or encrypted local storage.
+
+**OAuth app (admin, once per instance):** Create a GitHub OAuth App at [GitHub → Settings → Developer settings → OAuth Apps](https://github.com/settings/developers). 
+- **Important:** Ensure **"Enable Device Flow"** is checked in the app settings on GitHub.
+- Set the authorization callback URL to `http://127.0.0.1:<port>/api/github/oauth/callback` (only needed for Legacy Browser Login).
+- Store the **Client ID** in VAF config (`github_oauth_client_id`). A Client Secret is only required if you intend to use the Legacy Browser Login.
+
+
+**Permission model:** By default the link requests full repo access (read and write). The agent only uses write (e.g. commit/push) if the linked account has the corresponding scope; otherwise tools are read-only (list repos, read files, list issues/PRs). To disconnect, use **Disconnect** on the GitHub card in Settings → Connections; credentials are removed and the account is removed from config.
+
 ## Discord Integration
 
 ### Features

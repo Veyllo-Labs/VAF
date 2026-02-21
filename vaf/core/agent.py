@@ -1095,6 +1095,14 @@ class Agent:
             from vaf.tools.mark_mail_answered import MarkMailAnsweredTool
             from vaf.tools.send_mail import SendMailTool
             from vaf.tools.list_email_accounts import ListEmailAccountsTool
+            from vaf.tools.github_tools import (
+                GitHubListReposTool,
+                GitHubGetFileTool,
+                GitHubListIssuesTool,
+                GitHubListPullsTool,
+                GitHubCreateIssueTool,
+                GitHubUpdateFileTool,
+            )
 
             # UpdateIntent and UpdateWorkingMemory are for Main Agent
             self.tools["update_intent"] = UpdateIntentTool()
@@ -1122,6 +1130,12 @@ class Agent:
             self.tools["create_contact"] = CreateContactTool()
             self.tools["update_contact"] = UpdateContactTool()
             self.tools["delete_contact"] = DeleteContactTool()
+            self.tools["github_list_repos"] = GitHubListReposTool()
+            self.tools["github_get_file"] = GitHubGetFileTool()
+            self.tools["github_list_issues"] = GitHubListIssuesTool()
+            self.tools["github_list_pulls"] = GitHubListPullsTool()
+            self.tools["github_create_issue"] = GitHubCreateIssueTool()
+            self.tools["github_update_file"] = GitHubUpdateFileTool()
 
             # RequestClarification is strictly for Sub-Agents (via coder_only flag),
             # but we register it here so it's available in the system (even if filtered out later for Main Agent).
@@ -3784,6 +3798,21 @@ class Agent:
                 forced_tools.add("git_add_commit")
                 forced_tools.add("git_log")
 
+        # GitHub (remote) Heuristics
+        if any(kw in u_lower for kw in [
+            "github", "repositories", "my repos", "my repositories",
+            "list my repos", "show my repos", "issues", "pull request", " pr ",
+            "open issues", "open pr", "prs", "meine repos", "github repo"
+        ]):
+            if "github_list_repos" in self.tools:
+                forced_tools.add("github_list_repos")
+            if "github_get_file" in self.tools:
+                forced_tools.add("github_get_file")
+            if "github_list_issues" in self.tools:
+                forced_tools.add("github_list_issues")
+            if "github_list_pulls" in self.tools:
+                forced_tools.add("github_list_pulls")
+
         # Cloud Storage Heuristics (before generic "google" in web search)
         if any(kw in u_lower for kw in [
             "google drive", "onedrive", "drive durchsuchen", "cloud storage",
@@ -6278,6 +6307,9 @@ class Agent:
                 if name in ("create_automation", "list_automations", "read_automation", "update_automation", "delete_automation", "restore_automation", "list_trash"):
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("list_calendar_events", "create_calendar_event", "update_calendar_event", "delete_calendar_event"):
+                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name in ("github_list_repos", "github_get_file", "github_list_issues", "github_list_pulls"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 # Pre-write intent/goal before sub-agent invocation for validation/retry

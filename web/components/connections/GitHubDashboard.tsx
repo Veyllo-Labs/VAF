@@ -1,0 +1,407 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { useTranslations } from 'next-intl';
+import { 
+    X, Github, Loader2, UserPlus, RefreshCw, Activity, 
+    Shield, ShieldCheck, Trash2,
+    CheckCircle2, XCircle, Clock, BookOpen, Pencil, GitCommit, Upload
+} from 'lucide-react';
+import { cn, getApiBase } from '@/lib/utils';
+
+const api = (path: string) => {
+    const p = path.startsWith('/') ? path : `/${path}`;
+    return `${getApiBase()}${p}`;
+};
+
+export interface GitHubDashboardProps {
+    isOpen: boolean;
+    onClose: () => void;
+    onOpenAddWizard: () => void;
+    refreshTrigger?: number;
+}
+
+interface GitHubAccount {
+    account_id: string;
+    login: string;
+    scopes: string;
+    allow_write: boolean;
+    enabled: boolean;
+}
+
+interface GitHubActivity {
+    timestamp: number;
+    action: string;
+    details: string;
+    account_id?: string;
+    success: boolean;
+    error?: string;
+}
+
+export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refreshTrigger = 0 }: GitHubDashboardProps) {
+    const t = useTranslations('githubDashboard');
+
+    const [accounts, setAccounts] = useState<GitHubAccount[]>([]);
+    const [activities, setActivities] = useState<GitHubActivity[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [updating, setUpdating] = useState<string | null>(null);
+
+    const fetchData = async () => {
+        setLoading(true);
+        try {
+            const [accRes, actRes] = await Promise.all([
+                fetch(api('api/github/accounts'), { credentials: 'include' }),
+                fetch(api('api/github/activity'), { credentials: 'include' })
+            ]);
+            
+            if (accRes.ok) {
+                const data = await accRes.json();
+                setAccounts(data.accounts || []);
+            }
+            if (actRes.ok) {
+                const data = await actRes.json();
+                setActivities(data.activity || []);
+            }
+        } catch (err) {
+            console.error('Failed to fetch GitHub dashboard data', err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (isOpen) fetchData();
+    }, [isOpen, refreshTrigger]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                onClose();
+            }
+        };
+        window.addEventListener('keydown', onKeyDown, true);
+        return () => window.removeEventListener('keydown', onKeyDown, true);
+    }, [isOpen, onClose]);
+
+    const handleTogglePermissions = async (accountId: string, currentAllowWrite: boolean) => {
+        setUpdating(accountId);
+        try {
+            const res = await fetch(api(`api/github/accounts/${accountId}/permissions`), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ allow_write: !currentAllowWrite })
+            });
+            if (res.ok) {
+                setAccounts(prev => prev.map(a => 
+                    a.account_id === accountId ? { ...a, allow_write: !currentAllowWrite } : a
+                ));
+            }
+        } catch (err) {
+            console.error('Failed to update permissions', err);
+        } finally {
+            setUpdating(null);
+        }
+    };
+
+    const handleDisconnect = async (accountId: string) => {
+        if (!confirm(t('confirmDisconnect'))) return;
+        setUpdating(accountId);
+        try {
+            const res = await fetch(api(`api/github/accounts/${accountId}`), {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+            if (res.ok) {
+                setAccounts(prev => prev.filter(a => a.account_id !== accountId));
+            }
+        } catch (err) {
+            console.error('Failed to disconnect account', err);
+        } finally {
+            setUpdating(null);
+        }
+    };
+
+    const formatTime = (ts: number) => {
+        const date = new Date(ts * 1000);
+        return date.toLocaleString([], { 
+            day: '2-digit', 
+            month: '2-digit', 
+            year: 'numeric', 
+            hour: '2-digit', 
+            minute: '2-digit' 
+        });
+    };
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 md:p-8">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-[95vw] h-[90vh] overflow-hidden flex flex-col border border-gray-200 animate-in fade-in zoom-in duration-300">
+                
+                {/* Header */}
+                <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100 bg-gray-50/50">
+                    <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 rounded-2xl bg-gray-900 flex items-center justify-center shadow-lg shadow-gray-200">
+                            <Github className="w-6 h-6 text-white" />
+                        </div>
+                        <div>
+                            <h2 className="text-2xl font-bold text-gray-900">{t('title')}</h2>
+                            <p className="text-sm text-gray-500">{t('subtitle')}</p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <button 
+                            onClick={fetchData}
+                            className="p-2 hover:bg-gray-200 rounded-xl transition-colors text-gray-500"
+                            title={t('refresh')}
+                        >
+                            <RefreshCw size={20} className={cn(loading && "animate-spin")} />
+                        </button>
+                        <button 
+                            onClick={onClose} 
+                            className="p-2 hover:bg-gray-200 rounded-xl transition-colors text-gray-500"
+                        >
+                            <X size={24} />
+                        </button>
+                    </div>
+                </div>
+
+                {/* Rights overview strip: quick toggle per account */}
+                {accounts.length > 0 && (
+                    <div className="px-6 py-3 border-b border-gray-100 bg-gray-50/70 flex flex-wrap items-center gap-3">
+                        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider shrink-0">{t('rightsOverview')}</span>
+                        {accounts.map(acc => (
+                            <div key={acc.account_id} className="flex items-center gap-2 bg-white rounded-xl border border-gray-200 px-3 py-1.5 shadow-sm">
+                                <span className="text-sm font-medium text-gray-700">@{acc.login}</span>
+                                <div className="flex rounded-lg overflow-hidden border border-gray-200">
+                                    <button
+                                        onClick={() => !acc.allow_write && handleTogglePermissions(acc.account_id, acc.allow_write)}
+                                        disabled={updating === acc.account_id}
+                                        className={cn(
+                                            "px-2.5 py-1 text-[10px] font-bold transition-colors",
+                                            !acc.allow_write ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-500 hover:bg-gray-200",
+                                            updating === acc.account_id && "opacity-50"
+                                        )}
+                                    >
+                                        {t('readOnly')}
+                                    </button>
+                                    <button
+                                        onClick={() => acc.allow_write && handleTogglePermissions(acc.account_id, acc.allow_write)}
+                                        disabled={updating === acc.account_id}
+                                        className={cn(
+                                            "px-2.5 py-1 text-[10px] font-bold transition-colors",
+                                            acc.allow_write ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500 hover:bg-gray-200",
+                                            updating === acc.account_id && "opacity-50"
+                                        )}
+                                    >
+                                        {t('writeAccess')}
+                                    </button>
+                                </div>
+                                {updating === acc.account_id && <Loader2 size={12} className="animate-spin text-gray-400" />}
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
+                    
+                    {/* Left: Accounts + Event timeline */}
+                    <div className="w-full md:w-1/2 border-r border-gray-100 flex flex-col bg-white min-w-0">
+                        <div className="p-4 border-b border-gray-50 flex justify-between items-center shrink-0">
+                            <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                                <Shield size={18} className="text-blue-500" />
+                                {t('connectedAccounts')}
+                            </h3>
+                            <button 
+                                onClick={onOpenAddWizard}
+                                className="p-1.5 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors"
+                                title="Add Account"
+                            >
+                                <UserPlus size={20} />
+                            </button>
+                        </div>
+                        
+                        <div className="flex-1 overflow-hidden flex flex-col md:flex-row min-h-0">
+                            <div className="flex-1 min-h-0 overflow-auto p-4 space-y-4 border-b md:border-b-0 md:border-r border-gray-100">
+                            {loading && accounts.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+                                    <Loader2 className="animate-spin mb-2" />
+                                    <span className="text-sm">Loading accounts...</span>
+                                </div>
+                            ) : accounts.length === 0 ? (
+                                <div className="text-center py-12 px-4">
+                                    <p className="text-sm text-gray-400 italic">{t('noAccounts')}</p>
+                                    <button 
+                                        onClick={onOpenAddWizard}
+                                        className="mt-4 px-4 py-2 bg-gray-900 text-white text-xs font-bold rounded-xl hover:bg-black transition-all"
+                                    >
+                                        Connect GitHub
+                                    </button>
+                                </div>
+                            ) : (
+                                accounts.map(acc => (
+                                    <div key={acc.account_id} className="p-4 rounded-2xl border border-gray-100 bg-gray-50/30 hover:shadow-md transition-all space-y-4">
+                                        <div className="flex justify-between items-start">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-full bg-white border border-gray-200 flex items-center justify-center overflow-hidden">
+                                                    <img 
+                                                        src={`https://github.com/${acc.login}.png`} 
+                                                        alt={acc.login}
+                                                        className="w-full h-full object-cover"
+                                                        onError={(e) => { (e.target as any).src = ''; }}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-gray-900">@{acc.login}</div>
+                                                    <div className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">
+                                                        {acc.scopes ? acc.scopes.replace(/\s+/g, ', ') : 'Limited Access'}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button 
+                                                onClick={() => handleDisconnect(acc.account_id)}
+                                                className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                                            >
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </div>
+
+                                        <div className="pt-2 border-t border-gray-100 flex flex-col gap-3">
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2">
+                                                    {acc.allow_write ? (
+                                                        <ShieldCheck size={16} className="text-green-500" />
+                                                    ) : (
+                                                        <Shield size={16} className="text-blue-500" />
+                                                    )}
+                                                    <span className="text-xs font-medium text-gray-700">
+                                                        {acc.allow_write ? t('writeAccess') : t('readOnly')}
+                                                    </span>
+                                                </div>
+                                                <button
+                                                    onClick={() => handleTogglePermissions(acc.account_id, acc.allow_write)}
+                                                    disabled={updating === acc.account_id}
+                                                    className={cn(
+                                                        "px-3 py-1 rounded-lg text-[10px] font-bold transition-all",
+                                                        acc.allow_write 
+                                                            ? "bg-amber-50 text-amber-700 hover:bg-amber-100" 
+                                                            : "bg-blue-50 text-blue-700 hover:bg-blue-100",
+                                                        updating === acc.account_id && "opacity-50 cursor-not-allowed"
+                                                    )}
+                                                >
+                                                    {updating === acc.account_id ? (
+                                                        <Loader2 size={12} className="animate-spin mx-auto" />
+                                                    ) : (
+                                                        acc.allow_write ? t('toggleReadAccess') : t('toggleWriteAccess')
+                                                    )}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                            </div>
+
+                            {/* Event timeline (newest first, like user identity) */}
+                            <div className="w-full md:w-72 shrink-0 flex flex-col border-t md:border-t-0 border-gray-100 bg-gray-50/50">
+                                <h3 className="text-sm font-semibold text-gray-700 shrink-0 p-4 pb-0">{t('eventTimeline')}</h3>
+                                {activities.length === 0 ? (
+                                    <div className="flex-1 min-h-0 overflow-auto p-4 pt-3">
+                                        <p className="text-gray-500 text-sm">{t('noActivity')}</p>
+                                    </div>
+                                ) : (
+                                    <div className="flex-1 min-h-0 overflow-y-auto p-4 pt-3">
+                                        <div className="relative">
+                                            <div className="absolute left-3 top-2 bottom-2 w-0.5 bg-gradient-to-b from-purple-200 via-purple-300 to-purple-200" />
+                                            <ul className="space-y-0">
+                                                {[...activities]
+                                                    .sort((a, b) => (b.timestamp - a.timestamp))
+                                                    .map((act, i) => {
+                                                        const actionLower = (act.action || '').toLowerCase();
+                                                        const isRead = actionLower.includes('read') || actionLower.includes('list');
+                                                        const isEdit = actionLower.includes('edit') || actionLower.includes('update');
+                                                        const isCommit = actionLower.includes('commit');
+                                                        const isPush = actionLower.includes('push');
+                                                        const Icon = isRead ? BookOpen : isEdit ? Pencil : isCommit ? GitCommit : isPush ? Upload : Activity;
+                                                        const iconColor = act.success ? 'text-green-600 bg-green-100' : 'text-red-600 bg-red-100';
+                                                        return (
+                                                            <li key={i} className="relative flex gap-3 pb-4 last:pb-0">
+                                                                <div className={`relative z-10 w-6 h-6 rounded-full shrink-0 mt-0.5 flex items-center justify-center ${iconColor}`}>
+                                                                    <Icon className="w-3.5 h-3.5" />
+                                                                </div>
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className="text-[10px] text-gray-500 font-mono">{formatTime(act.timestamp)}</p>
+                                                                    <p className="text-xs font-medium text-gray-900 mt-0.5 capitalize">{act.action?.replace(/_/g, ' ') || t('action')}</p>
+                                                                    {act.details && <p className="text-[11px] text-gray-600 truncate" title={act.details}>{act.details}</p>}
+                                                                </div>
+                                                            </li>
+                                                        );
+                                                    })}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Right: Agent activity (compact) */}
+                    <div className="w-full md:w-1/2 flex flex-col bg-gray-50/30 min-w-0">
+                        <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-white shrink-0">
+                            <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                                <Activity size={18} className="text-purple-500" />
+                                {t('agentActivity')}
+                            </h3>
+                        </div>
+                        
+                        <div className="flex-1 min-h-0 overflow-auto p-4 max-h-[min(50vh,360px)]">
+                            {loading && activities.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center py-8 text-gray-400">
+                                    <Loader2 className="animate-spin mb-2" />
+                                    <p className="text-sm">Loading activity history...</p>
+                                </div>
+                            ) : activities.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center py-8 text-gray-400 opacity-60">
+                                    <Clock size={32} className="mb-2 stroke-[1]" />
+                                    <p className="text-sm italic">{t('noActivity')}</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    {[...activities]
+                                        .sort((a, b) => (b.timestamp - a.timestamp))
+                                        .map((act, i) => (
+                                            <div key={i} className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm flex gap-3">
+                                                <div className="mt-0.5 shrink-0">
+                                                    {act.success ? (
+                                                        <CheckCircle2 size={16} className="text-green-500" />
+                                                    ) : (
+                                                        <XCircle size={16} className="text-red-500" />
+                                                    )}
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex justify-between items-start gap-2 mb-0.5">
+                                                        <span className="text-[10px] font-bold text-gray-900 bg-gray-100 px-1.5 py-0.5 rounded uppercase">
+                                                            {act.action?.replace(/_/g, ' ') ?? t('action')}
+                                                        </span>
+                                                        <span className="text-[10px] text-gray-400 font-medium shrink-0">{formatTime(act.timestamp)}</span>
+                                                    </div>
+                                                    <p className="text-xs text-gray-700 leading-snug line-clamp-2">{act.details}</p>
+                                                    {!act.success && act.error && (
+                                                        <p className="mt-1 p-1.5 bg-red-50 rounded border border-red-100 text-[10px] text-red-600 font-mono break-words line-clamp-2">{act.error}</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}

@@ -528,9 +528,15 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
     Return list of user_scope_id that have been idle for at least idle_minutes.
     Reads last_interaction.json (same store as last_interaction module).
     Normalizes so that "default" and local_admin_scope_id count as one user (None).
+
+    IMPORTANT: The local admin user may appear under MULTIPLE keys in last_interaction.json
+    (e.g. both "default" and "f01a10fe-...") because update_last_interaction() uses a simple
+    str(scope_id) key while thinking_mode maps local_admin_scope_id → "default".
+    We must take the NEWEST timestamp across all aliases for the same logical user before
+    deciding whether they are idle — otherwise a stale "default" entry triggers false nudges
+    even though the user was recently active under their UUID key.
     """
     from vaf.core.config import get_local_admin_scope_id
-    from vaf.core.last_interaction import get_last_interaction
     path = Platform.data_dir() / "last_interaction.json"
     if not path.exists():
         return []
@@ -542,7 +548,10 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
         now = time.time()
         threshold = now - (idle_minutes * 60)
         local_admin_scope = str(get_local_admin_scope_id()).strip()
-        out = []
+
+        # Step 1: collect the NEWEST timestamp per logical user (None = local admin).
+        # A logical user may have entries under "default", the UUID, or both.
+        latest_ts: Dict[Optional[str], float] = {}
         for key in data:
             if not isinstance(key, str):
                 continue
@@ -553,22 +562,17 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
             if ts is None:
                 continue
             try:
-                if float(ts) <= threshold:
-                    scope_id = None if key == "default" else key
-                    if scope_id is not None and scope_id == local_admin_scope:
-                        scope_id = None
-                    out.append(scope_id)
+                ts_float = float(ts)
             except (TypeError, ValueError):
                 continue
-        # Deduplicate: one canonical entry per logical user (local admin = None)
-        seen = set()
-        normalized = []
-        for s in out:
-            k = (s is None, s if s is not None else "")
-            if k not in seen:
-                seen.add(k)
-                normalized.append(s)
-        return normalized
+            # Resolve which logical user this key belongs to
+            scope_id = None if (key == "default" or key == local_admin_scope) else key
+            # Keep the newest timestamp seen for this logical user
+            if scope_id not in latest_ts or ts_float > latest_ts[scope_id]:
+                latest_ts[scope_id] = ts_float
+
+        # Step 2: only include users whose NEWEST interaction is older than threshold
+        return [scope_id for scope_id, ts_float in latest_ts.items() if ts_float <= threshold]
     except (json.JSONDecodeError, OSError):
         return []
 

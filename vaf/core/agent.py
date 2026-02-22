@@ -2349,8 +2349,11 @@ class Agent:
             role = str(msg.get("role", ""))
             total_chars += len(content) + len(role) + 20  # 20 for message structure
 
-        # 2. Estimate tool schema tokens
-        if hasattr(self, 'TOOLS') and self.TOOLS:
+        # 2. Estimate tool schema tokens — only for local/server mode.
+        # API backends (Claude, OpenAI, etc.) handle tool schemas server-side and
+        # do NOT count them against the user-visible context window limit.
+        # Including them here causes the 170%+ false display in API mode.
+        if hasattr(self, 'TOOLS') and self.TOOLS and not self.api_backend:
             try:
                 schema_str = json_module.dumps(self.TOOLS)
                 total_chars += len(schema_str)
@@ -2742,8 +2745,8 @@ class Agent:
         if len(self.history) <= 2:
             return "[checkpoint] Nothing to checkpoint (history too short)."
 
-        # Use _context_manager if available, otherwise init one
-        cm = getattr(self, '_context_manager', None)
+        # Use _context_manager if available, fall back to context_manager (always initialized in __init__)
+        cm = getattr(self, '_context_manager', None) or getattr(self, 'context_manager', None)
         if cm is None:
             _, max_tokens = self.get_token_usage()
             cm = ContextManager(max_tokens=max_tokens)
@@ -3945,13 +3948,15 @@ class Agent:
              if "web_search" in self.tools:
                  forced_tools.add("web_search")
 
-        # Multi-step / sequential tasks → activate orchestrator prompt module
+        # Multi-step / sequential tasks → activate orchestrator prompt module.
+        # Keywords must be specific enough to not trigger on normal single-step requests.
+        # Avoid generic terms like "plan", "compare", "alle", "batch", "multiple" —
+        # these appear in everyday messages and cause unnecessary orchestrator activation.
         _multi_step_keywords = [
-            "step by step", "schritt für schritt", "nacheinander",
-            "first then", "erst dann", "and then", "und dann",
-            "for each", "für jeden", "für jede", "alle dateien",
-            "compare", "vergleiche", "summarize all", "zusammenfassen",
-            "batch", "multiple", "mehrere",
+            "step by step", "schritt für schritt", "nacheinander", "sequentially",
+            "for each file", "für jede datei", "für jeden eintrag", "for each item",
+            "dann für jeden", "then for each",
+            "alle dateien nacheinander", "one by one", "eines nach dem anderen",
         ]
         if any(kw in u_lower for kw in _multi_step_keywords):
             if hasattr(self, 'prompt_manager'):
@@ -4160,7 +4165,10 @@ class Agent:
             pass
 
         self.context_manager.decay_state()
-        
+
+        # Reset per-turn orchestrator heavy-call budget (prevents carry-over across turns)
+        self._orchestrator_heavy_calls_this_turn = 0
+
         # Check if any backend is available (local, server, or API)
         if not self.llm and not self.use_server and not self.api_backend:
             UI.error("Agent not initialized. Run 'vaf run' first.")
@@ -6404,7 +6412,9 @@ class Agent:
             "web_search", "web_fetch", "read_file", "github_get_file",
             "librarian_agent", "coding_agent", "research_agent", "document_agent",
             "github_list_repos", "github_list_issues", "github_list_pulls",
-            "tree", "find_files", "search_tools", "mail_inbox", "whatsapp_inbox"
+            "tree", "find_files", "mail_inbox", "whatsapp_inbox"
+            # search_tools excluded: the model needs it to discover update_working_memory
+            # and other plan-writing tools — blocking it prevents plan creation itself
         )
         if tool_name in ORCHESTRATOR_HEAVY_TOOLS:
             pm = getattr(self, "prompt_manager", None)

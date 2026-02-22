@@ -50,6 +50,9 @@ See individual files for detailed documentation.
 ## Quick Start
 
 ### Start Docker Services
+
+The installer (`install.sh` / `install.ps1`) handles this automatically—it detects changes to `docker-compose.memory.yml` after `git pull`, starts Docker if needed, and applies updates. To start services manually:
+
 ```bash
 docker compose -f docker-compose.memory.yml up -d
 ```
@@ -66,6 +69,7 @@ docker ps --filter "name=vaf-"
 | Redis | 6379 | Cache |
 | TTS | 5002 | Text-to-Speech |
 | STT | 5003 | Speech-to-Text |
+| Gotenberg | 5005 | Document conversion (Office→PDF) |
 | Web UI | 3000 | Browser interface |
 | API | 8000 | Backend API |
 

@@ -839,8 +839,37 @@ def quit_app(icon=None, item=None):
 
 def on_config_changed(key, value):
     """Handle dynamic config changes."""
-    # We only care about network binding changes for now
-    if key in ["local_network_enabled", "local_network_port"]:
+    # Context size or GPU layers changed → restart llama-server with new values
+    if key in ["n_ctx", "gpu_layers"]:
+        def _restart_llama():
+            time.sleep(1)  # let config save finish
+            from vaf.core.config import Config
+            provider = Config.get("provider", "local")
+            if provider != "local":
+                return  # cloud providers don't use llama-server
+            n_ctx = Config.get("n_ctx", 8192)
+            gpu_layers = Config.get("gpu_layers", 99)
+            if gpu_layers == -1:
+                gpu_layers = 99
+            model = Config.get("model")
+            log("Tray", f"Config changed ({key}={value}). Restarting llama-server (n_ctx={n_ctx}, gpu_layers={gpu_layers})...")
+            try:
+                server_mgr.stop_server(force_external=True)
+                tray_context.set_model_loaded(False)
+                time.sleep(1)
+                model_path = server_mgr.get_model_path(model)
+                started = server_mgr.start_server(model_path=model_path, port=8080, n_ctx=n_ctx, n_gpu_layers=gpu_layers)
+                if started:
+                    tray_context.set_model_loaded(True)
+                    log("Tray", "llama-server restarted successfully with new settings.")
+                else:
+                    log("Tray", "llama-server restart failed.")
+            except Exception as e:
+                log("Tray", f"llama-server restart error: {e}")
+        threading.Thread(target=_restart_llama, daemon=True).start()
+
+    # Network binding changes → restart uvicorn + frontend
+    elif key in ["local_network_enabled", "local_network_port"]:
         def _restart_job():
             # Delay slightly to allow the config save to complete and response to be sent
             time.sleep(1)

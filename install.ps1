@@ -567,24 +567,79 @@ if ($nodeInstalled) {
 }
 
 # ============================================================================
-# 9. DOCKER SETUP (Memory System)
+# 9. DOCKER SETUP (Memory System) – Smart Update
 # ============================================================================
-if ($dockerInfo.Installed -and $dockerInfo.Running -and $dockerInfo.ComposeAvailable) {
-    Write-Step "Setting up Memory System Database (pgvector)..."
-    
-    $composeFile = Join-Path $PROJECT_ROOT "docker-compose.memory.yml"
-    if (Test-Path $composeFile) {
-        Write-Info "Starting PostgreSQL with pgvector (this may take a minute on first run)..."
+$composeFile = Join-Path $PROJECT_ROOT "docker-compose.memory.yml"
+$composeChanged = $false
+
+# Check if docker-compose.memory.yml changed in the latest commit
+try {
+    $changedFiles = & git diff --name-only HEAD~1 HEAD 2>$null
+    if ($changedFiles -match "docker-compose\.memory\.yml") {
+        $composeChanged = $true
+        Write-Info "docker-compose.memory.yml changed – will update Docker stack"
+    }
+} catch { }
+
+# Also treat as changed if stack is not currently running
+if (-not $composeChanged) {
+    try {
+        $running = & docker ps --filter "name=vaf-memory-db" --format "{{.Names}}" 2>$null
+        if (-not $running) { $composeChanged = $true }
+    } catch { $composeChanged = $true }
+}
+
+if ($dockerInfo.Installed) {
+    Write-Step "Setting up Memory System Docker Stack..."
+
+    # Auto-start Docker Desktop if compose changed but daemon is not running
+    if (-not $dockerInfo.Running -and $composeChanged) {
+        Write-Warn "Docker not running – attempting to start Docker Desktop..."
+        $dockerExe = "${env:ProgramFiles}\Docker\Docker\Docker Desktop.exe"
+        if (Test-Path $dockerExe) {
+            Start-Process $dockerExe
+        } else {
+            # Try alternate location
+            $dockerExeAlt = "${env:LocalAppData}\Docker\Docker Desktop.exe"
+            if (Test-Path $dockerExeAlt) { Start-Process $dockerExeAlt }
+        }
+
+        # Wait up to 60 seconds for Docker daemon to become ready
+        $spinChars = @('|', '/', '-', '\')
+        $spinIndex = 0
+        Write-Host -NoNewline "  [" -ForegroundColor Gray
+        for ($i = 1; $i -le 12; $i++) {
+            Start-Sleep -Seconds 5
+            try {
+                $null = & docker info 2>$null
+                $dockerInfo.Running = $true
+                $dockerInfo.ComposeAvailable = $true
+                Write-Host "`b] Docker daemon is now running!" -ForegroundColor Green
+                break
+            } catch { }
+            Write-Host -NoNewline "`b$($spinChars[$spinIndex])" -ForegroundColor Yellow
+            $spinIndex = ($spinIndex + 1) % 4
+            Write-Info "Waiting for Docker... $($i*5)s/60s"
+        }
+
+        if (-not $dockerInfo.Running) {
+            Write-Host "`b] Docker did not start in time." -ForegroundColor Yellow
+            Write-Warn "Please start Docker Desktop manually, then run:"
+            Write-Info "docker compose -f docker-compose.memory.yml up -d"
+        }
+    }
+
+    if ($dockerInfo.Running -and $dockerInfo.ComposeAvailable -and (Test-Path $composeFile)) {
+        Write-Info "Running: docker compose up -d (adds new services, updates existing ones)..."
         Write-Host -NoNewline "  [" -ForegroundColor Gray
         $dockerStart = Get-Date
-        
+
         try {
-            # Run docker compose in background and show spinner
             $job = Start-Job -ScriptBlock {
-                param($composeFile)
-                & docker compose -f $composeFile up -d 2>&1
+                param($cf)
+                & docker compose -f $cf up -d 2>&1
             } -ArgumentList $composeFile
-            
+
             $spinChars = @('|', '/', '-', '\')
             $spinIndex = 0
             while ($job.State -eq 'Running') {
@@ -592,31 +647,30 @@ if ($dockerInfo.Installed -and $dockerInfo.Running -and $dockerInfo.ComposeAvail
                 $spinIndex = ($spinIndex + 1) % 4
                 Start-Sleep -Milliseconds 200
             }
-            
-            $dockerResult = Receive-Job -Job $job
+            $null = Receive-Job -Job $job
             Remove-Job -Job $job -Force
             $dockerTime = [math]::Round(((Get-Date) - $dockerStart).TotalSeconds, 1)
-            
-            # Check if container is running
+
             Start-Sleep -Seconds 2
             $containerStatus = & docker ps --filter "name=vaf-memory-db" --format "{{.Status}}" 2>$null
             if ($containerStatus -match "Up") {
-                Write-Host "`b] Memory System database started (${dockerTime}s)" -ForegroundColor Green
-                Write-Success "Database URL: postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory"
+                Write-Host "`b] Docker stack updated (${dockerTime}s)" -ForegroundColor Green
+                Write-Success "Database: postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory"
             } else {
-                Write-Host "`b] Container starting... (${dockerTime}s)" -ForegroundColor Yellow
+                Write-Host "`b] Stack starting... (${dockerTime}s)" -ForegroundColor Yellow
                 Write-Info "Check status with: docker ps"
             }
         } catch {
             Write-Host "`b] Failed" -ForegroundColor Red
-            Write-Warn "Failed to start Memory System - run the installer again later:"
-            Write-Info ".\install.bat"
+            Write-Warn "Could not update Docker stack: $_"
+            Write-Info "Run manually: docker compose -f docker-compose.memory.yml up -d"
         }
+    } elseif ($composeChanged -and -not $dockerInfo.Running) {
+        Write-Warn "Docker stack has changes but Docker is offline."
+        Write-Info "Start Docker Desktop, then run: docker compose -f docker-compose.memory.yml up -d"
     }
-} elseif ($dockerInfo.Installed -and -not $dockerInfo.Running) {
-    Write-Step "Memory System Database (pgvector) - Skipped"
-    Write-Warn "Docker is not running. Start Docker Desktop and run the installer again:"
-    Write-Info ".\install.bat"
+} else {
+    Write-Info "Docker not installed – skipping stack setup"
 }
 
 # ============================================================================

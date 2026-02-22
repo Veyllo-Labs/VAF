@@ -545,42 +545,69 @@ if [[ "$NODE_INSTALLED" == "true" ]]; then
 fi
 
 # ============================================================================
-# 9. DOCKER SETUP (Memory System)
+# 9. DOCKER SETUP (Memory System) – Smart Update
 # ============================================================================
-if [[ "$DOCKER_INSTALLED" == "true" && "$DOCKER_RUNNING" == "true" && "$DOCKER_COMPOSE" == "true" ]]; then
-    print_step "Setting up Memory System Database (pgvector)..."
-    
-    if [[ -f "docker-compose.memory.yml" ]]; then
-        print_info "Starting PostgreSQL with pgvector (this may take a minute on first run)..."
-        
-        # Start with spinner animation
-        docker compose -f docker-compose.memory.yml up -d 2>/dev/null || docker-compose -f docker-compose.memory.yml up -d &
-        DOCKER_PID=$!
-        
-        # Simple spinner while waiting
-        spin='-\|/'
-        i=0
-        while kill -0 $DOCKER_PID 2>/dev/null; do
-            i=$(( (i+1) %4 ))
-            printf "\r  [${spin:$i:1}] Starting containers..."
-            sleep .2
+COMPOSE_FILE="docker-compose.memory.yml"
+COMPOSE_CHANGED=false
+
+# Check if docker-compose.memory.yml changed in the latest commit
+if git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -q "$COMPOSE_FILE"; then
+    COMPOSE_CHANGED=true
+    print_info "docker-compose.memory.yml changed – will update Docker stack"
+elif ! docker ps 2>/dev/null | grep -q "vaf-memory-db"; then
+    # Stack not running at all – treat as needing startup
+    COMPOSE_CHANGED=true
+fi
+
+if [[ "$DOCKER_INSTALLED" == "true" ]]; then
+    print_step "Setting up Memory System Docker Stack..."
+
+    # Auto-start Docker if compose changed but daemon is not running
+    if [[ "$DOCKER_RUNNING" != "true" && "$COMPOSE_CHANGED" == "true" ]]; then
+        print_warning "Docker not running – attempting to start automatically..."
+        if [[ "$OS_TYPE" == "macos" ]]; then
+            open -a Docker 2>/dev/null || true
+        elif [[ "$OS_TYPE" == "linux" ]]; then
+            sudo systemctl start docker 2>/dev/null || sudo service docker start 2>/dev/null || true
+        fi
+
+        # Wait up to 60 seconds for Docker daemon to become ready
+        for i in $(seq 1 12); do
+            sleep 5
+            if docker info &>/dev/null; then
+                DOCKER_RUNNING=true
+                DOCKER_COMPOSE=true
+                print_success "Docker daemon is now running"
+                break
+            fi
+            printf "  ⏳ Waiting for Docker daemon... %ds/60s\n" $((i*5))
         done
-        wait $DOCKER_PID
-        printf "\r                                    \r"
-        
-        sleep 2
-        
-        if docker ps | grep -q "vaf-memory-db"; then
-            print_success "Memory System database is running"
-            print_info "Database URL: postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory"
-        else
-            print_warning "Container may still be starting - check with 'docker ps'"
+
+        if [[ "$DOCKER_RUNNING" != "true" ]]; then
+            print_warning "Docker did not start in time. Please start Docker manually."
+            print_info "Then run: docker compose -f docker-compose.memory.yml up -d"
         fi
     fi
-elif [[ "$DOCKER_INSTALLED" == "true" && "$DOCKER_RUNNING" != "true" ]]; then
-    print_step "Memory System Database (pgvector) - Skipped"
-    print_warning "Docker is not running. Start Docker and run the installer again:"
-    print_info "./install.sh"
+
+    if [[ "$DOCKER_RUNNING" == "true" && "$DOCKER_COMPOSE" == "true" ]]; then
+        if [[ -f "$COMPOSE_FILE" ]]; then
+            print_info "Running: docker compose up -d (adds new services, updates existing ones)..."
+            docker compose -f "$COMPOSE_FILE" up -d 2>/dev/null || docker-compose -f "$COMPOSE_FILE" up -d
+
+            sleep 2
+            if docker ps | grep -q "vaf-memory-db"; then
+                print_success "Docker stack is running"
+                print_info "Database: postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory"
+            else
+                print_warning "Containers may still be starting – check with: docker ps"
+            fi
+        fi
+    elif [[ "$COMPOSE_CHANGED" == "true" && "$DOCKER_RUNNING" != "true" ]]; then
+        print_warning "Docker stack has changes but Docker is offline."
+        print_info "Start Docker, then run: docker compose -f docker-compose.memory.yml up -d"
+    fi
+elif [[ "$DOCKER_INSTALLED" != "true" ]]; then
+    print_info "Docker not installed – skipping stack setup"
 fi
 
 # ============================================================================

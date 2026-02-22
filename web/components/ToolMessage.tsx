@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, CheckCircle, AlertCircle, Terminal, ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -29,8 +29,15 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
 }) => {
     const [isExpanded, setIsExpanded] = useState(false);
 
-    // Auto-expand if running
-    // useEffect(() => { if (status === 'running') setIsExpanded(true); }, [status]);
+    // Auto-expand when tool starts running, auto-collapse 1.5s after completion
+    useEffect(() => {
+        if (status === 'running') {
+            setIsExpanded(true);
+        } else if (status === 'completed' || status === 'error') {
+            const timer = setTimeout(() => setIsExpanded(false), 1500);
+            return () => clearTimeout(timer);
+        }
+    }, [status]);
 
     return (
         <div className="w-full my-2">

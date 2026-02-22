@@ -577,6 +577,25 @@ def run_headless_agent():
                         waited_for_server_ready = True  # don't block forever
 
                 # Normal Chat Step
+                # Clear any prior stop request so this task runs (e.g. after a previous stop)
+                tq.clear_stop(task.session_id)
+                # If user already requested stop (e.g. double-click), skip starting chat_step
+                if tq.should_stop(task.session_id):
+                    tq.clear_stop(task.session_id)
+                    try:
+                        get_web_interface().emit_agent_message(
+                            role="assistant",
+                            content="[Generation stopped by user]",
+                            session_id=task.session_id
+                        )
+                        get_web_interface().emit_message_complete(
+                            content="[Generation stopped by user]",
+                            session_id=task.session_id
+                        )
+                    except Exception:
+                        pass
+                    tq.task_done()
+                    continue
                 # usage: chat_step(user_input, ...)
                 _chat_start = time.time()
                 try:

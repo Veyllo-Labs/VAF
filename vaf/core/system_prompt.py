@@ -27,11 +27,7 @@ class SystemPromptManager:
     Dynamically adjusts active modules based on conversation context.
     """
     
-    DECAY_START = 3  # Default turns until module deactivates
-    # Per-module turn count (higher = stays active longer); missing modules use DECAY_START
-    MODULE_DECAY_TURNS: Dict[str, int] = {"coding": 5, "research": 4, "filesystem": 3}
-    
-    def __init__(self, tools: List[Any] = None, model_name: str = "VQ-1", agent_instance: Any = None, username: str = "admin"):
+    def __init__(self, tools: List[Any] = None, model_name: str = "VQ-1", agent_instance: Any = None, username: str = "admin", max_tokens: int = 8192):
         """
         Initialize the prompt manager with available tools and model name.
         
@@ -40,6 +36,7 @@ class SystemPromptManager:
             model_name: The name of the underlying AI model
             agent_instance: Reference to the parent Agent instance (for workspace access)
             username: The current user's username
+            max_tokens: The context token limit (used for dynamic prompt adjustment)
         """
         self.tools = tools or []
         self.active_modules: Dict[str, int] = {}  # module_name -> remaining_turns
@@ -47,6 +44,21 @@ class SystemPromptManager:
         self.model_name = model_name
         self.agent = agent_instance # Store reference
         self.username = username
+        self.max_tokens = max_tokens
+        
+        # DYNAMIC DECAY: React to small context sizes
+        # For 8k: decay 2, coding 3
+        # For 16k: decay 3, coding 4
+        # For >32k: decay 3, coding 5 (default)
+        if max_tokens <= 12000:
+            self.decay_start = 2
+            self.module_decay_turns = {"coding": 3, "research": 2, "filesystem": 2}
+        elif max_tokens <= 20000:
+            self.decay_start = 2
+            self.module_decay_turns = {"coding": 4, "research": 3, "filesystem": 2}
+        else:
+            self.decay_start = 3
+            self.module_decay_turns = {"coding": 5, "research": 4, "filesystem": 3}
         
         # Initialize Persistence Manager (lazy load in build_prompt if needed, or here)
         try:
@@ -1043,7 +1055,7 @@ Use tools proactively to accomplish tasks. Don't ask for permission - just use t
             # Activate module if any keyword is found
             if any(kw in user_lower for kw in keywords):
                 # Reset counter to module-specific or default decay turns
-                self.active_modules[module_name] = self.MODULE_DECAY_TURNS.get(module_name, self.DECAY_START)
+                self.active_modules[module_name] = self.module_decay_turns.get(module_name, self.decay_start)
     
     def get_active_modules(self) -> List[str]:
         """Get list of currently active module names."""
@@ -1052,7 +1064,7 @@ Use tools proactively to accomplish tasks. Don't ask for permission - just use t
     def activate_module(self, module_name: str) -> None:
         """Manually activate a module."""
         if module_name in self.modules:
-            self.active_modules[module_name] = self.MODULE_DECAY_TURNS.get(module_name, self.DECAY_START)
+            self.active_modules[module_name] = self.module_decay_turns.get(module_name, self.decay_start)
     
     def deactivate_module(self, module_name: str) -> None:
         """Manually deactivate a module."""

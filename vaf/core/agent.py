@@ -220,7 +220,7 @@ class Agent:
         
         # We need tools to init prompt manager, but tools are loaded later.
         # So we init it here with empty dict and update it after tools load.
-        self.prompt_manager = SystemPromptManager({}, model_name=self.model_display_name, agent_instance=self) 
+        self.prompt_manager = SystemPromptManager({}, model_name=self.model_display_name, agent_instance=self, max_tokens=context_limit) 
 
         # Initialize State Registry for session state persistence
         from vaf.core.session_state import StateRegistry
@@ -1785,7 +1785,8 @@ class Agent:
 
     def init_chat(self):
         # Initialize Prompt Manager
-        self.prompt_manager = SystemPromptManager(list(self.tools.values()), model_name=self.model_display_name, agent_instance=self)
+        n_ctx = self.config.get("n_ctx", 8192)
+        self.prompt_manager = SystemPromptManager(list(self.tools.values()), model_name=self.model_display_name, agent_instance=self, max_tokens=n_ctx)
                 
         # Build initial prompt (Core + Base Rules)
         # We pass self.filename to determine identity (VQ-1 vs Generic), and current user for User identity block
@@ -2629,21 +2630,37 @@ class Agent:
         from vaf.cli.ui import UI
         from vaf.core.context import ContextManager
         
-        # Initialize context manager if not exists
-        if not hasattr(self, '_context_manager'):
-            max_tokens = self.config.get("n_ctx", 8192)
+        # Determine appropriate context limit
+        current_tokens_calc, max_tokens = self.get_token_usage()
+
+        # Initialize or update context manager if max_tokens changed (e.g. switched to API)
+        if not hasattr(self, '_context_manager') or self._context_manager.max_tokens != max_tokens:
+            UI.event("Context", f"Initializing context manager (limit: {max_tokens} tokens)", style="dim")
             self._context_manager = ContextManager(max_tokens=max_tokens)
         
+        # Ensure prompt manager also has latest limit for dynamic decay
+        if hasattr(self, 'prompt_manager') and self.prompt_manager.max_tokens != max_tokens:
+            self.prompt_manager.max_tokens = max_tokens
+            # Refresh dynamic decay settings
+            if max_tokens <= 12000:
+                self.prompt_manager.decay_start = 2
+                self.prompt_manager.module_decay_turns = {"coding": 3, "research": 2, "filesystem": 2}
+            elif max_tokens <= 20000:
+                self.prompt_manager.decay_start = 2
+                self.prompt_manager.module_decay_turns = {"coding": 4, "research": 3, "filesystem": 2}
+            else:
+                self.prompt_manager.decay_start = 3
+                self.prompt_manager.module_decay_turns = {"coding": 5, "research": 4, "filesystem": 3}
+
         cm = self._context_manager
         
         # Check if compression needed using PRECISE token count (including tools)
-        current_tokens, max_tokens = self.get_token_usage()
-        usage_percent = current_tokens / max_tokens if max_tokens else 0
+        usage_percent = current_tokens_calc / max_tokens if max_tokens else 0
         
         # 1. EMERGENCY PURGE (Hard Reset if > 100%)
         # If we are already over the hard limit, standard compression might be too slow or fail.
         if usage_percent >= 1.0 and len(self.history) > 1:
-            UI.event("Context", f"CRITICAL OVERFLOW ({current_tokens}/{max_tokens}). Emergency purge active!", style="bold red")
+            UI.event("Context", f"CRITICAL OVERFLOW ({current_tokens_calc}/{max_tokens}). Emergency purge active!", style="bold red")
             # Absolute Minimum: System Prompt + LAST message (usually the user prompt that caused the overflow)
             system_msg = [self.history[0]] if self.history and self.history[0].get("role") == "system" else []
             last_msg = [self.history[-1]] if len(self.history) > 1 else []
@@ -3409,9 +3426,25 @@ class Agent:
                     # Return async marker
                     return msg_async_return.format(task_id=task_id, workflow_id=workflow_id, name=template['name'])
             
-            # Execute workflow inline (without defaults parameter)
-            workflow_result = engine.execute(steps, variables=result.variables)
-            
+            # Execute workflow inline (without defaults parameter).
+            # Pass check_stop so user can abort via Stop button (checked between each step).
+            session_id_for_stop = getattr(self, "current_session_id", None) or getattr(self, "_session_id", None)
+            def _workflow_check_stop():
+                if not session_id_for_stop:
+                    return False
+                from vaf.core.task_queue import TaskQueue
+                return TaskQueue().should_stop(session_id_for_stop)
+
+            workflow_result = engine.execute(
+                steps,
+                variables=result.variables,
+                check_stop=_workflow_check_stop,
+            )
+
+            if workflow_result.error == "Stopped by user" and session_id_for_stop:
+                from vaf.core.task_queue import TaskQueue
+                TaskQueue().clear_stop(session_id_for_stop)
+
             # Handle paused workflows (async sub-agent case)
             if workflow_result.paused:
                 UI.event("Workflow", msg_paused_ui.format(task_id=workflow_result.waiting_for_task), style="cyan")
@@ -4041,6 +4074,9 @@ class Agent:
         # Clean old workflow messages from context (prevents clutter)
         self._clean_workflow_context()
 
+        # Initialize context info at the start so it's available in all branches
+        current_tokens, max_tokens = self.get_token_usage()
+
         # ------------------------------------------------------------------
         # Sub-Agent Results: Check for completed async tasks
         # ------------------------------------------------------------------
@@ -4073,7 +4109,7 @@ class Agent:
         # ------------------------------------------------------------------
         # Dynamic Context: Update System Prompt
         # ------------------------------------------------------------------
-        new_prompt = None
+        new_prompt = self.history[0].get("content", "") if self.history and self.history[0].get("role") == "system" else None
         if hasattr(self, 'prompt_manager') and user_input and not skip_input:
             # Detect language first so it can be used in build_prompt (e.g. for localized date)
             # Respect configured language if set
@@ -4101,32 +4137,28 @@ class Agent:
         # ------------------------------------------------------------------
         # Context Compression: Check threshold and compress if needed
         # ------------------------------------------------------------------
+        compression_happened = False
         if hasattr(self, 'context_manager') and self.context_manager.should_compress(self.history):
             UI.event("Context", f"Threshold reached ({self.context_manager.get_usage_percent(self.history):.0%}) - compressing...", style="warning")
             self.history = self.context_manager.compress(self.history)
+            compression_happened = True
             
-            # Inject PROACTIVE CONTEXT GLUE (Stability)
-            if new_prompt is not None:
-                context_glue = self.context_manager._build_context_summary()
-                if context_glue:
+        # Apply updated system prompt + context glue + project context
+        if new_prompt is not None and len(self.history) > 0 and self.history[0].get("role") == "system":
+            # 1. Add Context Glue (if we compressed or if it's generally useful)
+            # Only add glue if we actually have state to report
+            context_glue = self.context_manager._build_context_summary()
+            if context_glue and (compression_happened or self.context_manager.get_usage_percent(self.history) > 0.5):
+                if context_glue not in new_prompt:
                     new_prompt += f"\n\n{context_glue}"
             
-            # Preserve Project Context if it exists
-            if len(self.history) > 0 and self.history[0]["role"] == "system":
-                current_content = self.history[0]["content"]
-                if new_prompt is not None:
-                    if "## PROJECT CONTEXT" in current_content:
-                        project_context_part = current_content.split("## PROJECT CONTEXT", 1)[1]
-                        new_prompt += f"\n\n## PROJECT CONTEXT{project_context_part}"
-                    self.history[0]["content"] = new_prompt
-                # UI.event("Brain", f"Context adjusted: {list(self.prompt_manager.active_modules.keys())}", style="dim")
-        
-        # Apply dynamic system prompt every turn (not only when compressing) so User identity is always current
-        if new_prompt is not None and len(self.history) > 0 and self.history[0].get("role") == "system":
+            # 2. Preserve Project Context (always keep at the bottom of system prompt)
             current_content = self.history[0]["content"]
             if "## PROJECT CONTEXT" in current_content and "## PROJECT CONTEXT" not in new_prompt:
                 project_context_part = current_content.split("## PROJECT CONTEXT", 1)[1]
-                new_prompt = new_prompt + f"\n\n## PROJECT CONTEXT{project_context_part}"
+                new_prompt = new_prompt.strip() + f"\n\n## PROJECT CONTEXT{project_context_part}"
+            
+            # 3. Final Apply
             self.history[0]["content"] = new_prompt
 
         # Keep language pinned to the user's most recent message.
@@ -4138,12 +4170,9 @@ class Agent:
         self._broadcast_context_status()
 
         # 0. Context Management (Trim/Summarize) - BEFORE adding user input
+        # This ensures we have space for the new message and system prompt updates
         self.manage_context()
-        try:
-            append_domain_log("backend", "chat_step_after_manage_context")
-        except Exception:
-            pass
-
+        
         # ═══════════════════════════════════════════════════════════════════════
         # WORKFLOW ENGINE: ENABLED - Try to match workflow templates first
         # ═══════════════════════════════════════════════════════════════════════
@@ -4245,6 +4274,10 @@ class Agent:
                 self.context_manager.update_intent(user_input)
                 self.context_manager.update_state({"role": "user", "content": user_input})
         
+        # 0.5 Context Management - AFTER adding user input and results
+        # Ensures that the context is optimized before we route tools and call the LLM
+        self.manage_context()
+
         # Snapshot history AFTER adding user input. 
         # This index points to the user message we just added.
         # Everything BEFORE and INCLUDING this index is our "safe" context.
@@ -4254,6 +4287,7 @@ class Agent:
         # Only route tools on a new, non-empty input
         if not auto_retry and not skip_input and user_input:
             from vaf.cli.ui import UI
+            
             selected_tools = self._route_tools(user_input)
 
             if selected_tools:
@@ -4294,11 +4328,13 @@ class Agent:
                 # Check if ALL tools fit in context
                 # Temporary set active_tools to None to get 'ALL' count
                 self._active_tools = None
-                current_tokens, max_tokens = self.get_token_usage()
                 
-                # If ALL tools consume > 85% of context, use a "Core" subset instead
+                # If ALL tools consume > threshold of context, use a "Core" subset instead
                 # (prevents HTTP 400 errors on small context models)
-                if current_tokens > (max_tokens * 0.85):
+                is_small = max_tokens <= 20000
+                router_safety_threshold = 0.75 if is_small else 0.85
+                
+                if current_tokens > (max_tokens * router_safety_threshold):
                     CORE_TOOLS = [
                         "web_search", "memory_search", "memory_save", "list_tools",
                         "update_intent", "update_working_memory", "read_file", "list_files",
@@ -4344,10 +4380,13 @@ class Agent:
         else:
             # On retries or for internal steps, use a slightly more generous set if ALL doesn't fit
             self._active_tools = None
-            current_tokens, max_tokens = self.get_token_usage()
-            if current_tokens > (max_tokens * 0.90):
+            is_small = max_tokens <= 20000
+            internal_threshold = 0.80 if is_small else 0.90
+            
+            if current_tokens > (max_tokens * internal_threshold):
                 # Emergency fallback for internal steps/retries
-                self._active_tools = [t for t in ["web_search", "memory_search", "list_tools", "update_intent"] if t in self.tools]
+                UI.event("Router", f"Tight context in internal step ({current_tokens}/{max_tokens}). Using internal subset.", style="warning")
+                self._active_tools = [t for t in ["web_search", "memory_search", "list_tools", "update_intent", "read_file", "list_files"] if t in self.tools]
 
         if not skip_input and user_input:
             # Re-apply after potential compression to ensure the hint stays in history[0].
@@ -4401,6 +4440,9 @@ class Agent:
         
         while empty_retry_count < MAX_EMPTY_RETRIES:
             # 1. Prepare Request
+            # Recalculate token usage at the start of each retry attempt
+            current_tokens, max_tokens = self.get_token_usage()
+
             full_response = ""     # Reset for this turn
             full_content = ""      # Reset for this turn
             full_reasoning = ""    # Reset for this turn
@@ -4648,14 +4690,16 @@ class Agent:
             elif self.use_server:
                 # Proactive Context Management: Compress before request to prevent overflow
                 # CRITICAL: Calculate threshold dynamically - Tools consume context but can't be compressed!
-                current_tokens, max_tokens = self.get_token_usage()
                 
-                # Reserve space for response (at least 10% of context or 1500 tokens)
-                response_buffer = max(1500, int(max_tokens * 0.10))
+                # Reserve space for response (VRAM efficiency / Thinking headroom)
+                # For small contexts (e.g. 11k-16k), we need more % for output
+                is_small = max_tokens <= 20000
+                buffer_percent = 0.25 if is_small else 0.10
+                response_buffer = max(2000 if is_small else 1500, int(max_tokens * buffer_percent))
                 safe_limit = max_tokens - response_buffer
                 
                 if current_tokens > safe_limit:
-                    UI.event("Context", f"Proactive compression: {current_tokens}/{max_tokens} tokens", style="warning")
+                    UI.event("Context", f"Proactive compression ({current_tokens}/{max_tokens}, buffer={response_buffer})", style="warning")
                     self.manage_context()
                     
                     # Double-check after compression
@@ -4664,20 +4708,21 @@ class Agent:
                         # Still too big - aggressive pruning needed
                         UI.event("Context", "Standard compression insufficient. Pruning aggressively...", style="warning")
                         
-                        # Emergency tool reduction if using ALL tools
-                        if self._active_tools is None:
-                             UI.event("Context", "Too many tools active. Switching to CORE subset.", style="warning")
-                             CORE_FALLBACK = ["web_search", "memory_search", "memory_save", "list_tools", "update_intent", "read_file", "list_files"]
+                        # Emergency tool reduction
+                        if self._active_tools is None or len(self._active_tools) > 15:
+                             UI.event("Context", "Tight context: Using CORE tool subset to save VRAM.", style="warning")
+                             CORE_FALLBACK = ["web_search", "memory_search", "memory_save", "list_tools", "update_intent", "read_file", "list_files", "librarian_agent", "coding_agent"]
                              self._active_tools = [t for t in CORE_FALLBACK if t in self.tools]
                              # Re-calculate after tool reduction
                              current_tokens, _ = self.get_token_usage()
 
                         if current_tokens > safe_limit:
-                            # Keep only system + last 4 messages
-                            if len(self.history) > 5:
+                            # Keep only system + fewer messages for small context
+                            keep_count = 4 if is_small else 6
+                            if len(self.history) > keep_count + 1:
                                 system_msg = [self.history[0]] if self.history and self.history[0].get("role") == "system" else []
-                                self.history = system_msg + self.history[-4:]
-                                UI.event("Context", f"Reduced to {len(self.history)} messages", style="info")
+                                self.history = system_msg + self.history[-keep_count:]
+                                UI.event("Context", f"Aggressive reduction: kept system + {keep_count} recent messages", style="info")
                                 # Notify UI
                                 self._broadcast_context_status()
                 
@@ -4794,47 +4839,43 @@ class Agent:
                                 self.manage_context()
                                 
                                 # 2. Aggressive Content Truncation (if Standard wasn't enough)
+                                is_small = max_tokens <= 20000
+                                trunc_limit = 3000 if is_small else 6000
                                 truncated = False
                                 for msg in self.history:
                                     if msg.get("role") != "system":
                                         content = str(msg.get("content", ""))
-                                        if len(content) > 6000:
-                                            msg["content"] = content[:6000] + "... [TRUNCATED FOR RECOVERY]"
+                                        if len(content) > trunc_limit:
+                                            msg["content"] = content[:trunc_limit] + "... [TRUNCATED FOR RECOVERY]"
                                             truncated = True
                                 
                                 if truncated:
-                                    UI.event("Context", "Truncated large messages for recovery.", style="info")
+                                    UI.event("Context", f"Truncated messages to {trunc_limit} chars.", style="info")
 
                                 # 3. Message Pruning (existing logic)
-                                if len(self.history) > 20:
-                                    # Keep system prompt, last user message, and last 10 messages
-                                    system_msgs = [m for m in self.history if m.get("role") == "system"]
-                                    user_msgs = [m for m in self.history if m.get("role") == "user"]
-                                    assistant_msgs = [m for m in self.history if m.get("role") == "assistant"]
-                                    
-                                    # Keep system prompt + last 6 messages (preserving order and alternation)
-                                    # This ensures we don't break User -> Assistant -> User flow
+                                if len(self.history) > (10 if is_small else 20):
+                                    # Keep system prompt + last N messages (preserving order and alternation)
+                                    keep_n = 4 if is_small else 6
                                     new_history = []
                                     
                                     # 1. System Prompt
                                     if self.history and self.history[0].get("role") == "system":
                                         new_history.append(self.history[0])
                                     
-                                    # 2. Last 6 messages (User/Assistant/Tool)
-                                    # Ensure we include the latest interaction
-                                    recent = self.history[-6:]
+                                    # 2. Last N messages (User/Assistant/Tool)
+                                    recent = self.history[-keep_n:]
                                     
-                                    # Truncate heavy messages in the recent block to save space
+                                    # Truncate heavy messages in the recent block
+                                    small_trunc = 1000 if is_small else 2000
                                     for msg in recent:
-                                        # Use copy to avoid mutating if we refer to same dict objects
                                         msg_copy = msg.copy()
                                         content = str(msg_copy.get("content", ""))
-                                        if len(content) > 2000:
-                                             msg_copy["content"] = content[:2000] + "... [TRUNCATED]"
+                                        if len(content) > small_trunc:
+                                             msg_copy["content"] = content[:small_trunc] + "... [TRUNCATED]"
                                         new_history.append(msg_copy)
                                     
                                     self.history = new_history
-                                    UI.event("Context", f"Compressed to {len(self.history)} messages (Aggressive Pruning - Order Preserved).", style="info")
+                                    UI.event("Context", f"Pruned to system + {len(recent)} messages.", style="info")
                                 
                                 UI.event("Context", "Retrying request with optimized context...", style="success")
                                 # Retry the request with compressed context (payload will be rebuilt in next iteration)
@@ -4850,63 +4891,61 @@ class Agent:
                                     # 1. Standard Compression
                                     self.manage_context()
                                     
-                                    # 2. Aggressive Content Truncation (if Standard wasn't enough or history is short but fat)
-                                    # Truncate very large messages to ensure we fit
+                                    # 2. Aggressive Content Truncation
+                                    is_small = max_tokens <= 20000
+                                    trunc_limit = 3000 if is_small else 6000
                                     truncated = False
                                     for msg in self.history:
                                         if msg.get("role") != "system": # Protect system prompt
                                             content = str(msg.get("content", ""))
-                                            if len(content) > 6000: # 6000 chars ~ 2000 tokens
-                                                msg["content"] = content[:6000] + "... [TRUNCATED FOR RECOVERY]"
+                                            if len(content) > trunc_limit:
+                                                msg["content"] = content[:trunc_limit] + "... [TRUNCATED FOR RECOVERY]"
                                                 truncated = True
                                     
                                     if truncated:
-                                        UI.event("Context", "Truncated large messages for recovery.", style="info")
+                                        UI.event("Context", f"Truncated messages to {trunc_limit} chars.", style="info")
 
-                                    # 3. Message Pruning (existing logic for long history)
-                                    if len(self.history) > 20:
-                                        # Keep system prompt, last user message, and last 10 messages
-                                        system_msgs = [m for m in self.history if m.get("role") == "system"]
-                                        user_msgs = [m for m in self.history if m.get("role") == "user"]
-                                        assistant_msgs = [m for m in self.history if m.get("role") == "assistant"]
-                                        
-                                        # Keep system prompt + last 6 messages (preserving order and alternation)
-                                        # This ensures we don't break User -> Assistant -> User flow
+                                    # 3. Message Pruning
+                                    if len(self.history) > (10 if is_small else 20):
+                                        keep_n = 4 if is_small else 6
                                         new_history = []
                                         
                                         # 1. System Prompt
                                         if self.history and self.history[0].get("role") == "system":
                                             new_history.append(self.history[0])
                                         
-                                        # 2. Last 6 messages (User/Assistant/Tool)
-                                        recent = self.history[-6:]
+                                        # 2. Last N messages
+                                        recent = self.history[-keep_n:]
                                         
                                         # Truncate heavy messages
+                                        small_trunc = 1000 if is_small else 2000
                                         for msg in recent:
                                             msg_copy = msg.copy()
                                             content = str(msg_copy.get("content", ""))
-                                            if len(content) > 2000:
-                                                 msg_copy["content"] = content[:2000] + "... [TRUNCATED]"
+                                            if len(content) > small_trunc:
+                                                 msg_copy["content"] = content[:small_trunc] + "... [TRUNCATED]"
                                             new_history.append(msg_copy)
                                         
                                         self.history = new_history
-                                        UI.event("Context", f"Compressed to {len(self.history)} messages (Aggressive Pruning - Order Preserved).", style="info")
+                                        UI.event("Context", f"Pruned to system + {len(recent)} messages.", style="info")
                                     
                                     UI.event("Context", "Retrying request with optimized context...", style="success")
                                     # Retry the request with compressed context (payload will be rebuilt in next iteration)
                                     continue
                             except (json.JSONDecodeError, KeyError):
                                 pass  # Not a context size error, try generic 400 recovery below
-                            # Any 400 (e.g. server doesn't report "exceed"): try one round of compression and truncate last user message (sidebar docs)
+                            # Any 400 (e.g. server doesn't report "exceed"): try one round of compression and truncate last user message
                             if _attempt < 3:
                                 UI.event("Context", "Request rejected (400). Compressing context...", style="warning")
                                 self.manage_context()
+                                is_small = max_tokens <= 20000
+                                user_trunc = 4000 if is_small else 8000
                                 for msg in reversed(self.history):
                                     if msg.get("role") == "user":
                                         content = str(msg.get("content", ""))
-                                        if len(content) > 8000:
-                                            msg["content"] = content[:8000] + "\n\n... [Document content truncated to fit context]"
-                                            UI.event("Context", "Truncated document block in last message.", style="info")
+                                        if len(content) > user_trunc:
+                                            msg["content"] = content[:user_trunc] + "\n\n... [Document content truncated to fit context]"
+                                            UI.event("Context", f"Truncated user message to {user_trunc} chars.", style="info")
                                         break
                                 UI.event("Context", "Retrying request...", style="success")
                                 continue

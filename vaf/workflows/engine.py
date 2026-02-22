@@ -96,19 +96,21 @@ class WorkflowEngine:
         self.context_manager = ContextManager(max_tokens=8192)
     
     def execute(
-        self, 
-        steps: List[WorkflowStep], 
+        self,
+        steps: List[WorkflowStep],
         variables: Dict[str, Any] = None,
-        stop_on_error: bool = True
+        stop_on_error: bool = True,
+        check_stop: Optional[Callable[[], bool]] = None,
     ) -> WorkflowResult:
         """
         Execute a workflow with the given steps.
-        
+
         Args:
             steps: List of workflow steps to execute
             variables: Initial variables (user inputs)
             stop_on_error: Stop workflow on first error (default: True)
-            
+            check_stop: Optional callback; if it returns True, workflow aborts (e.g. user clicked Stop).
+
         Returns:
             WorkflowResult with all outputs and status
         """
@@ -151,6 +153,12 @@ class WorkflowEngine:
             if _jump_count > _max_jumps:
                 UI.error(f"  [FAIL] Workflow aborted: too many step jumps (possible infinite loop). Limit={_max_jumps}")
                 error = "Workflow aborted: too many step jumps (possible infinite loop)"
+                break
+
+            # User requested stop (e.g. Stop button in Web UI)
+            if check_stop and check_stop():
+                UI.event("System", "Workflow stopped by user", style="warning")
+                error = "Stopped by user"
                 break
 
             step = steps[_step_idx]

@@ -185,18 +185,30 @@ class GitHubGetFileTool(BaseTool):
             repo = g.get_repo(f"{owner}/{repo_name}")
             # ref can be passed to get_contents
             content_file = repo.get_contents(path, ref=ref)
-            
+
             if isinstance(content_file, list):
-                msg = f"Path '{path}' is a directory containing {len(content_file)} items."
+                # Path is a directory — list contents to help the model pick the right file
+                items = [f"{'📁' if item.type == 'dir' else '📄'} {item.path}" for item in content_file]
                 log_github_activity(username, "get_file", f"Attempted to read directory: {owner}/{repo_name}/{path}", account_id=account_id)
-                return f"{msg} Please specify a file path."
-            
-            content = content_file.decoded_content.decode("utf-8", errors="replace")
+                return f"'{path}' is a directory. Contents:\n" + "\n".join(items)
+
+            raw = content_file.decoded_content
+            if raw is None:
+                # Large files (>1 MB) have decoded_content=None — fall back to download_url
+                download_url = getattr(content_file, "download_url", None)
+                if download_url:
+                    import urllib.request
+                    with urllib.request.urlopen(download_url, timeout=15) as resp:  # noqa: S310
+                        raw = resp.read()
+                else:
+                    return f"File '{path}' is too large to read via API (>1 MB) and no download URL available."
+
+            content = raw.decode("utf-8", errors="replace")
             log_github_activity(
-                username, 
-                "get_file", 
+                username,
+                "get_file",
                 f"Read file: {owner}/{repo_name}/{path} (ref={ref or 'default'})",
-                account_id=account_id
+                account_id=account_id,
             )
             return content
         except GithubException as e:
@@ -204,7 +216,9 @@ class GitHubGetFileTool(BaseTool):
                 err_msg = f"File or repository not found: {owner}/{repo_name}/{path}"
                 log_github_activity(username, "get_file", f"File not found: {owner}/{repo_name}/{path}", account_id=account_id, success=False, error=err_msg)
                 return err_msg
-            err_msg = f"GitHub API error: {e.status} {e.data.get('message', str(e))}"
+            data = getattr(e, "data", {}) or {}
+            api_msg = data.get("message") or str(e)
+            err_msg = f"GitHub API error {e.status}: {api_msg}"
             log_github_activity(username, "get_file", f"Failed to read file: {owner}/{repo_name}/{path}", account_id=account_id, success=False, error=err_msg)
             return err_msg
         except Exception as e:

@@ -4183,9 +4183,6 @@ class Agent:
 
         self.context_manager.decay_state()
 
-        # Reset per-turn orchestrator heavy-call budget (prevents carry-over across turns)
-        self._orchestrator_heavy_calls_this_turn = 0
-
         # Check if any backend is available (local, server, or API)
         if not self.llm and not self.use_server and not self.api_backend:
             UI.error("Agent not initialized. Run 'vaf run' first.")
@@ -6422,41 +6419,6 @@ class Agent:
             result = run_multi_tool_use(args if isinstance(args, dict) else {})
             emit({"type": "tool_end", "tool": name})
             return result
-
-        # Conditional hard enforcement: when orchestrator is active, require a plan
-        tool_name = normalize_tool_name(name) or name
-        ORCHESTRATOR_HEAVY_TOOLS = (
-            "web_search", "web_fetch", "read_file", "github_get_file",
-            "librarian_agent", "coding_agent", "research_agent", "document_agent",
-            "github_list_repos", "github_list_issues", "github_list_pulls",
-            "tree", "find_files", "mail_inbox", "whatsapp_inbox"
-            # search_tools excluded: the model needs it to discover update_working_memory
-            # and other plan-writing tools — blocking it prevents plan creation itself
-        )
-        if tool_name in ORCHESTRATOR_HEAVY_TOOLS:
-            pm = getattr(self, "prompt_manager", None)
-            orchestrator_active = bool(pm and "orchestrator" in (pm.get_active_modules() or []))
-            if orchestrator_active:
-                wm = {}
-                if getattr(self, "main_persistence", None):
-                    try:
-                        wm = self.main_persistence.get_working_memory() or {}
-                    except Exception:
-                        pass
-                plan = wm.get("plan") or []
-                if len(plan) == 0:
-                    return (
-                        "[ORCHESTRATOR BLOCK] Stop. You are in Multi-Step mode. "
-                        "You MUST call update_working_memory(plan=[...]) first to outline your strategy "
-                        "before using heavy tools like '{tool_name}'."
-                    )
-                # Plan exists; enforce turn budget (max 2 heavy calls per turn).
-                count = getattr(self, "_orchestrator_heavy_calls_this_turn", 0)
-                self._orchestrator_heavy_calls_this_turn = count + 1
-                if self._orchestrator_heavy_calls_this_turn > 2:
-                    return (
-                        "Turn budget reached. Please summarize your current progress and use checkpoint_context if needed before continuing."
-                    )
 
         # Gate risky tools with once/always/cancel (no persistent deny)
         if should_gate_tool(name):

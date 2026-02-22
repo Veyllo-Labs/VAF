@@ -2725,6 +2725,61 @@ class Agent:
         # Broadcast update to WebUI
         self._broadcast_context_status()
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PROACTIVE CHECKPOINT (Plan-Act-Summarize support)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def checkpoint_and_reset(self, summary: str = "") -> str:
+        """
+        Agent-initiated checkpoint: archive history, compress, keep only
+        system prompt + context glue + working memory injection.
+        Called by the checkpoint_context tool after a multi-step plan checkpoint.
+        Returns confirmation string.
+        """
+        from vaf.core.context import ContextManager
+
+        if len(self.history) <= 2:
+            return "[checkpoint] Nothing to checkpoint (history too short)."
+
+        # Use _context_manager if available, otherwise init one
+        cm = getattr(self, '_context_manager', None)
+        if cm is None:
+            _, max_tokens = self.get_token_usage()
+            cm = ContextManager(max_tokens=max_tokens)
+            self._context_manager = cm
+
+        # 1. Archive full history (same as compress does)
+        cm._archive_history(self.history)
+
+        # 2. Update intent and state from all messages
+        for msg in self.history:
+            if msg.get("role") == "user":
+                cm.update_intent(msg.get("content", ""))
+            cm.update_state(msg)
+
+        # 3. If caller provided a summary, use it as the narrative
+        if summary:
+            cm.state.narrative_summary = summary
+
+        # 4. Build compressed history (system prompt + glue + last 2 messages)
+        system_msg = self.history[0] if self.history else None
+        recent = self.history[-2:] if len(self.history) >= 2 else self.history[:]
+
+        context_summary = cm._build_context_summary()
+        glue_msg = {"role": "user", "content": f"[CONTEXT RESTORED]\n{context_summary}"}
+
+        new_history = []
+        if system_msg and system_msg.get("role") == "system":
+            new_history.append(system_msg)
+        new_history.append(glue_msg)
+        new_history.extend(recent)
+
+        old_len = len(self.history)
+        self.history = new_history
+
+        logger.info("Checkpoint: %d → %d messages (archived full history)", old_len, len(new_history))
+        return f"[checkpoint] Context reset: {old_len} → {len(new_history)} messages. Plan and working memory preserved."
+
     def _broadcast_context_status(self):
         """Send context debug info to WebUI (X-Ray Vision)."""
         try:
@@ -3876,7 +3931,7 @@ class Agent:
 
         # Web Search Heuristics
         if any(kw in u_lower for kw in [
-            "search", "find", "google", "look up", "news", "weather", 
+            "search", "find", "google", "look up", "news", "weather",
             "wetter", "nachrichten", "suche", "wer ist", "who is", "what is",
             "wer oder was", "who or what", "tell me about", "explain", "erkläre",
             "info", "information", "definition", "meaning", "bedeutung",
@@ -3884,6 +3939,18 @@ class Agent:
         ]):
              if "web_search" in self.tools:
                  forced_tools.add("web_search")
+
+        # Multi-step / sequential tasks → activate orchestrator prompt module
+        _multi_step_keywords = [
+            "step by step", "schritt für schritt", "nacheinander",
+            "first then", "erst dann", "and then", "und dann",
+            "for each", "für jeden", "für jede", "alle dateien",
+            "compare", "vergleiche", "summarize all", "zusammenfassen",
+            "batch", "multiple", "mehrere",
+        ]
+        if any(kw in u_lower for kw in _multi_step_keywords):
+            if hasattr(self, 'prompt_manager'):
+                self.prompt_manager.activate_module("orchestrator")
 
         # 1. Create a simplified list of tools
         tool_info = []
@@ -6361,6 +6428,9 @@ class Agent:
                     tool_args["_agent"] = self  # lets send_whatsapp detect front_office_mode
                 if name in ("python_sandbox", "python_exec"):
                     # Inject agent reference so with_vaf_tools=True can call back into the tool registry.
+                    tool_args["_agent"] = self
+                if name == "checkpoint_context":
+                    # Inject agent reference so checkpoint_context can call agent.checkpoint_and_reset()
                     tool_args["_agent"] = self
                 if name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"

@@ -267,6 +267,7 @@
       "frequency": "Frequency",
       "time": "Time",
       "edit": "Edit",
+      "editSlotTooltip": "Edit {name}",
       "confirmDelete": "Delete this automation?",
       "delete": "Delete"
     },

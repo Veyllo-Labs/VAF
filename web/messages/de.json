@@ -267,6 +267,7 @@
       "frequency": "Wiederholung",
       "time": "Uhrzeit",
       "edit": "Bearbeiten",
+      "editSlotTooltip": "Bearbeiten: {name}",
       "confirmDelete": "Diese Automatisierung wirklich löschen?",
       "delete": "Löschen"
     },

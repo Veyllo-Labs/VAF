@@ -4445,7 +4445,6 @@ class Agent:
                                     tc["type"] = "function"
                                 # Fix missing 'id'
                                 if isinstance(tc, dict) and ("id" not in tc or tc.get("id") is None):
-                                    import os
                                     tc["id"] = f"call_{os.urandom(4).hex()}"
                     
                     

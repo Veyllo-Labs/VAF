@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 class BaseTool(ABC):
     """
@@ -48,13 +48,25 @@ class BaseTool(ABC):
     # Set to True to make this tool available ONLY to the Coder Sub-Agent
     # Useful for: file operations, shell commands, code-specific tools
     coder_only: bool = False
-    
+
     # JSON Schema for parameters (optional but recommended)
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {},
         "required": []
     }
+
+    # Optional: 1–3 example calls that illustrate correct usage.
+    # Each entry is a dict of parameter name → value (matching the parameters schema).
+    # These are injected into the description so every provider/backend benefits.
+    # Leave empty (default) to skip.
+    #
+    # Example:
+    #   input_examples: List[Dict[str, Any]] = [
+    #       {"query": "current weather in Berlin"},
+    #       {"query": "population of Tokyo", "language": "de"},
+    #   ]
+    input_examples: List[Dict[str, Any]] = []
     
     # ═══════════════════════════════════════════════════════════════════════════
     # ABSTRACT METHOD
@@ -182,13 +194,33 @@ class BaseTool(ABC):
         except Exception:
             return None
 
+    def get_description_with_examples(self) -> str:
+        """Return description with optional input_examples appended as text.
+
+        Provider-agnostic: examples are embedded in the description string so
+        every backend (OpenAI, Anthropic, Google, local) sees them without
+        requiring special API fields.
+        """
+        desc = self.description or ""
+        examples = getattr(self, "input_examples", None) or []
+        if not examples:
+            return desc
+        import json
+        lines = [desc, "", "Examples:"]
+        for ex in examples[:3]:  # cap at 3 to avoid bloat
+            try:
+                lines.append(f"  {self.name}({json.dumps(ex, ensure_ascii=False)})")
+            except Exception:
+                pass
+        return "\n".join(lines)
+
     def get_schema(self) -> Dict[str, Any]:
-        """Get the tool schema for the model."""
+        """Get the tool schema for the model (description includes examples)."""
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description,
+                "description": self.get_description_with_examples(),
                 "parameters": self.parameters
             }
         }

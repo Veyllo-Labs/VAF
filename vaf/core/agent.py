@@ -4298,9 +4298,11 @@ class Agent:
             # Decay AFTER merge so tools stay for the full N turns
             self._decay_recent_tools()
 
-            # list_tools is ALWAYS included when we have a restricted set (agent can discover other tools).
-            if selected_tools and "list_tools" in self.tools and "list_tools" not in selected_tools:
-                selected_tools = list(selected_tools) + ["list_tools"]
+            # list_tools and search_tools are ALWAYS included when we have a restricted set
+            # so the model can discover other tools on-demand (provider-agnostic Tool Search).
+            for _discovery_tool in ("list_tools", "search_tools"):
+                if selected_tools and _discovery_tool in self.tools and _discovery_tool not in selected_tools:
+                    selected_tools = list(selected_tools) + [_discovery_tool]
 
             # Memory/identity tools are ALWAYS included when we have a restricted set (no duplicates).
             # Only skipped when Safety Net = ALL tools (would be redundant).
@@ -4336,7 +4338,7 @@ class Agent:
                 
                 if current_tokens > (max_tokens * router_safety_threshold):
                     CORE_TOOLS = [
-                        "web_search", "memory_search", "memory_save", "list_tools",
+                        "web_search", "memory_search", "memory_save", "list_tools", "search_tools",
                         "update_intent", "update_working_memory", "read_file", "list_files",
                         "coding_agent", "librarian_agent", "research_agent"
                     ]
@@ -4386,7 +4388,7 @@ class Agent:
             if current_tokens > (max_tokens * internal_threshold):
                 # Emergency fallback for internal steps/retries
                 UI.event("Router", f"Tight context in internal step ({current_tokens}/{max_tokens}). Using internal subset.", style="warning")
-                self._active_tools = [t for t in ["web_search", "memory_search", "list_tools", "update_intent", "read_file", "list_files"] if t in self.tools]
+                self._active_tools = [t for t in ["web_search", "memory_search", "list_tools", "search_tools", "update_intent", "read_file", "list_files"] if t in self.tools]
 
         if not skip_input and user_input:
             # Re-apply after potential compression to ensure the hint stays in history[0].
@@ -6344,6 +6346,9 @@ class Agent:
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                     tool_args["_agent"] = self  # lets send_whatsapp detect front_office_mode
+                if name in ("python_sandbox", "python_exec"):
+                    # Inject agent reference so with_vaf_tools=True can call back into the tool registry.
+                    tool_args["_agent"] = self
                 if name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
@@ -6384,6 +6389,26 @@ class Agent:
                 result = f"Error: Unknown tool '{name}'"
         except Exception as e:
             result = f"Tool Error: {e}"
+
+        # search_tools post-hook: expand _active_tools with discovered tool names so the
+        # model can call them in the very next turn without a router round-trip.
+        if name == "search_tools" and isinstance(result, str) and ":" in result:
+            try:
+                discovered = []
+                for line in result.splitlines():
+                    line = line.strip().lstrip("-").lstrip(" ")
+                    if ":" in line:
+                        candidate = line.split(":")[0].strip()
+                        if candidate and candidate in self.tools:
+                            discovered.append(candidate)
+                if discovered and self._active_tools is not None:
+                    current = list(self._active_tools)
+                    for t in discovered:
+                        if t not in current:
+                            current.append(t)
+                    self._active_tools = current
+            except Exception:
+                pass
 
         # If python_sandbox blocked the request, offer a gated fallback to python_exec
         # (once/always/cancel) so the user can explicitly override sandbox restrictions.
@@ -6795,13 +6820,22 @@ class Agent:
             if name not in self.tools or name in excluded:
                 continue
             tool = self.tools[name]
-            
-            description = tool.description
-            
-            # Context Optimization: Truncate descriptions for small contexts
-            if is_small_context and description and len(description) > 150:
-                description = description[:147] + "..."
-            
+
+            # Use get_description_with_examples() when available (BaseTool subclasses),
+            # which appends up to 3 inline example calls so every provider sees usage patterns.
+            if hasattr(tool, "get_description_with_examples"):
+                description = tool.get_description_with_examples()
+            else:
+                description = tool.description
+
+            # Context Optimization: Truncate descriptions for small contexts.
+            # When examples are present we allow a wider budget (300 chars) so at
+            # least one example survives the truncation.
+            if is_small_context and description:
+                budget = 300 if (getattr(tool, "input_examples", None)) else 150
+                if len(description) > budget:
+                    description = description[:budget - 3] + "..."
+
             schema.append({
                 "type": "function",
                 "function": {

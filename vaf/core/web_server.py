@@ -11,6 +11,8 @@ import threading
 import inspect
 import html
 import os
+import time
+import queue
 log("WebServer", "Basic imports done")
 
 from vaf.core.web_interface import get_web_interface
@@ -28,6 +30,9 @@ log("WebServer", "VAF imports done")
 log_uvicorn = logging.getLogger("uvicorn")
 
 app = FastAPI(title="VAF Local Server")
+
+# Active model download cancel events keyed by websocket id (for cancel_model_download)
+_active_model_download_cancels: dict[int, threading.Event] = {}
 
 
 @app.exception_handler(Exception)
@@ -2096,6 +2101,75 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         "models": models
                     })
 
+                elif type == "get_model_preview":
+                    repo_id = (cmd.get("repo_id") or "").strip()
+                    if not repo_id:
+                        await websocket.send_json({
+                            "type": "model_preview",
+                            "repo_id": "",
+                            "error": "repo_id is required (e.g. Nanbeige/Nanbeige4.1-3B)"
+                        })
+                    else:
+                        try:
+                            from huggingface_hub import HfApi
+                            try:
+                                from huggingface_hub import ModelCard
+                            except ImportError:
+                                ModelCard = None
+                            api = HfApi()
+                            model_info = api.model_info(repo_id=repo_id, files_metadata=True)
+                            siblings = getattr(model_info, "siblings", [])
+                            gguf_files = []
+                            for f in siblings:
+                                rfilename = getattr(f, "rfilename", f) if not isinstance(f, str) else f
+                                if isinstance(rfilename, str) and rfilename.endswith(".gguf"):
+                                    size_bytes = getattr(f, "size", None) or 0
+                                    gguf_files.append({"filename": rfilename, "size_bytes": size_bytes})
+                            gguf_files.sort(key=lambda x: x["size_bytes"])
+                            card_content = None
+                            if ModelCard is not None:
+                                try:
+                                    card = ModelCard.load(repo_id)
+                                    card_content = getattr(card, "content", None) or getattr(card, "text", None) or ""
+                                except Exception:
+                                    pass
+                            if not gguf_files:
+                                try:
+                                    all_files = api.list_repo_files(repo_id=repo_id)
+                                    gguf_from_list = [p for p in all_files if isinstance(p, str) and p.endswith(".gguf")]
+                                    if gguf_from_list:
+                                        gguf_files = [{"filename": p, "size_bytes": 0} for p in gguf_from_list]
+                                except Exception:
+                                    pass
+                                if not gguf_files:
+                                    await websocket.send_json({
+                                        "type": "model_preview",
+                                        "repo_id": repo_id,
+                                        "error": f"No GGUF files found in {repo_id}. This repo may be a base model (safetensors only). Try a GGUF repo instead, e.g. search on Hugging Face for \"<model name> GGUF\".",
+                                        "gguf_files": []
+                                    })
+                                else:
+                                    await websocket.send_json({
+                                        "type": "model_preview",
+                                        "repo_id": repo_id,
+                                        "card_content": card_content,
+                                        "gguf_files": gguf_files
+                                    })
+                            else:
+                                await websocket.send_json({
+                                    "type": "model_preview",
+                                    "repo_id": repo_id,
+                                    "card_content": card_content,
+                                    "gguf_files": gguf_files
+                                })
+                        except Exception as e:
+                            await websocket.send_json({
+                                "type": "model_preview",
+                                "repo_id": repo_id,
+                                "error": str(e),
+                                "gguf_files": []
+                            })
+
                 elif type == "download_model":
                     repo_id = (cmd.get("repo_id") or "").strip()
                     filename = (cmd.get("filename") or "").strip() or None
@@ -2109,12 +2183,49 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     else:
                         project_root = Path(__file__).parent.parent.parent
                         models_dir = project_root / "models"
+                        progress_queue: queue.Queue = queue.Queue()
+                        cancel_event = threading.Event()
+                        ws_id = id(websocket)
+                        _active_model_download_cancels[ws_id] = cancel_event
+
+                        def make_progress_tqdm(pq: queue.Queue, ce: threading.Event):
+                            class ProgressTqdm:
+                                def __init__(self, total=None, **kwargs):
+                                    self.n = 0
+                                    self.total = total or 0
+                                    self._pq = pq
+                                    self._ce = ce
+                                    self._start = time.time()
+                                def update(self, n=1):
+                                    self.n += n
+                                    if self._ce.is_set():
+                                        raise InterruptedError("Download cancelled")
+                                    if self.total and self._pq is not None:
+                                        pct = 100.0 * self.n / self.total
+                                        elapsed = time.time() - self._start
+                                        speed = self.n / elapsed if elapsed > 0 else 0
+                                        if speed >= 1024 * 1024:
+                                            speed_str = f"{speed / (1024 * 1024):.2f} MB/s"
+                                        else:
+                                            speed_str = f"{speed / 1024:.2f} KB/s"
+                                        try:
+                                            self._pq.put_nowait({
+                                                "bytes_done": self.n, "bytes_total": self.total,
+                                                "progress_pct": round(pct, 2), "speed_str": speed_str
+                                            })
+                                        except queue.Full:
+                                            pass
+                                def close(self): pass
+                                def __enter__(self): return self
+                                def __exit__(self, *a): return None
+                            return ProgressTqdm
 
                         def _do_download() -> tuple[bool, str | None, list]:
                             try:
                                 from huggingface_hub import HfApi, hf_hub_download
                                 models_dir.mkdir(parents=True, exist_ok=True)
                                 api = HfApi()
+                                tqdm_class = make_progress_tqdm(progress_queue, cancel_event)
                                 if not filename:
                                     try:
                                         model_info = api.model_info(repo_id=repo_id, files_metadata=True)
@@ -2132,29 +2243,77 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     gguf.sort(key=lambda x: getattr(x, "size", 0) or 0)
                                     chosen = gguf[0]
                                     fname = getattr(chosen, "rfilename", chosen) if not isinstance(chosen, str) else chosen
-                                    hf_hub_download(repo_id=repo_id, filename=fname, local_dir=str(models_dir))
+                                    hf_hub_download(repo_id=repo_id, filename=fname, local_dir=str(models_dir), tqdm_class=tqdm_class)
                                 else:
-                                    hf_hub_download(repo_id=repo_id, filename=filename, local_dir=str(models_dir))
+                                    hf_hub_download(repo_id=repo_id, filename=filename, local_dir=str(models_dir), tqdm_class=tqdm_class)
                                 new_models = [f.name for f in models_dir.glob("*.gguf")]
                                 return True, None, new_models
+                            except InterruptedError:
+                                return False, "Download cancelled", []
                             except Exception as e:
                                 return False, str(e), []
 
-                        try:
-                            success, err, new_models = await asyncio.to_thread(_do_download)
-                            await websocket.send_json({
-                                "type": "model_download_done",
-                                "success": success,
-                                "error": err,
-                                "models": new_models
-                            })
-                        except Exception as e:
-                            await websocket.send_json({
-                                "type": "model_download_done",
-                                "success": False,
-                                "error": str(e),
-                                "models": []
-                            })
+                        async def run_download():
+                            nonlocal progress_queue, ws_id
+                            download_task = asyncio.create_task(asyncio.to_thread(_do_download))
+
+                            async def drain_progress():
+                                while not download_task.done():
+                                    await asyncio.sleep(0.2)
+                                    while True:
+                                        try:
+                                            msg = progress_queue.get_nowait()
+                                            await websocket.send_json({
+                                                "type": "model_download_progress",
+                                                "progress_pct": msg.get("progress_pct"),
+                                                "bytes_done": msg.get("bytes_done"),
+                                                "bytes_total": msg.get("bytes_total"),
+                                                "speed_str": msg.get("speed_str")
+                                            })
+                                        except queue.Empty:
+                                            break
+                                # Final drain
+                                while True:
+                                    try:
+                                        msg = progress_queue.get_nowait()
+                                        await websocket.send_json({
+                                            "type": "model_download_progress",
+                                            "progress_pct": msg.get("progress_pct"),
+                                            "bytes_done": msg.get("bytes_done"),
+                                            "bytes_total": msg.get("bytes_total"),
+                                            "speed_str": msg.get("speed_str")
+                                        })
+                                    except queue.Empty:
+                                        break
+
+                            drain_task = asyncio.create_task(drain_progress())
+                            try:
+                                success, err, new_models = await download_task
+                            except Exception as e:
+                                success, err, new_models = False, str(e), []
+                            finally:
+                                _active_model_download_cancels.pop(ws_id, None)
+                                drain_task.cancel()
+                                try:
+                                    await drain_task
+                                except asyncio.CancelledError:
+                                    pass
+                            try:
+                                await websocket.send_json({
+                                    "type": "model_download_done",
+                                    "success": success,
+                                    "error": err,
+                                    "models": new_models
+                                })
+                            except Exception:
+                                pass
+
+                        asyncio.create_task(run_download())
+
+                elif type == "cancel_model_download":
+                    ws_id = id(websocket)
+                    if ws_id in _active_model_download_cancels:
+                        _active_model_download_cancels[ws_id].set()
 
                 elif type == "get_api_models":
                     # Fetch available models from API providers

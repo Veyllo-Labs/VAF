@@ -395,11 +395,14 @@ when you know many more steps remain.
                 "sub-agent", "subagent", "background task"
             ],
             "orchestrator": [
-                "step by step", "schritt für schritt", "plan", "workflow",
-                "multiple files", "mehrere dateien", "nacheinander", "sequentially",
+                "step by step", "schritt für schritt", "schritt-für-schritt", "plan", "planen", "planung", "workflow",
+                "multiple files", "mehrere dateien", "nacheinander", "sequentially", "sequentiell",
                 "first then", "erst dann", "analyze and then", "analysiere und dann",
                 "compare", "vergleiche", "zusammenfassen", "summarize all",
                 "for each", "für jeden", "für jede", "batch", "alle",
+                "codebase", "quellcode", "architektur", "projekt verstehen",
+                "review", "analyse", "analysis", "analyze", "analysiere", "recherchiere umfassend",
+                "vorgehen", "strategie", "ausarbeiten"
             ],
         }
     

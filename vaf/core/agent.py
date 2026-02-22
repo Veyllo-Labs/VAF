@@ -4084,12 +4084,20 @@ class Agent:
         clean_str = re.sub(r'^(answer|result|selected|tools|relevant|output):\s*', '', clean_str, flags=re.IGNORECASE).strip()
         tool_names = [name.strip() for name in clean_str.split(',') if name.strip()]
         # Only accept parsed tokens that are actual tool names (never show chat as "LLM-based")
-        valid_from_llm = [n for n in tool_names if n in self.tools]
+        valid_from_llm = []
+        for name in tool_names:
+            n = name.strip()
+            if n in self.tools and n not in valid_from_llm:
+                valid_from_llm.append(n)
+        
         # Fallback: if LLM chatted instead of listing, scan response for tool name substrings
+        # Deduplicate and limit to prevents runaway context if LLM is repetitive
         if not valid_from_llm and clean_str:
             for t in sorted(self.tools.keys(), key=len, reverse=True):
                 if t in clean_str and t not in valid_from_llm:
                     valid_from_llm.append(t)
+                if len(valid_from_llm) >= 20: # Safety cap
+                    break
         
         from vaf.cli.ui import UI
         if forced_tools:
@@ -4101,8 +4109,10 @@ class Agent:
         elif not forced_tools:
             UI.event("Router", "No tools selected", style="dim")
         
-        combined_tools = set(valid_from_llm) | forced_tools
-        valid_tools = [name for name in combined_tools if name in self.tools]
+        # Final deduplication and merging with forced tools
+        combined_set = set(valid_from_llm) | set(forced_tools or [])
+        # Ensure we only return tools that actually exist
+        valid_tools = [name for name in combined_set if name in self.tools]
         
         return valid_tools
 
@@ -4393,9 +4403,14 @@ class Agent:
             # Memory/identity tools are ALWAYS included when we have a restricted set (no duplicates).
             # Only skipped when Safety Net = ALL tools (would be redundant).
             if selected_tools:
+                # Convert to set for efficient deduplication
+                tools_set = set(selected_tools)
+                
+                # Add core tools
                 for name in ("update_intent", "update_working_memory", "memory_search", "memory_save", "update_user_identity"):
-                    if name in self.tools and name not in selected_tools:
-                        selected_tools = list(selected_tools) + [name]
+                    if name in self.tools:
+                        tools_set.add(name)
+                
                 # Messaging tools: only add those for which the user has the connection
                 try:
                     from vaf.core.messaging_connections import get_messaging_connections
@@ -4405,10 +4420,13 @@ class Agent:
                     )
                     for ch in conn.get("available") or []:
                         tool_name = {"telegram": "send_telegram", "discord": "send_discord", "slack": "send_slack", "whatsapp": "send_whatsapp"}.get(ch)
-                        if tool_name and tool_name in self.tools and tool_name not in selected_tools:
-                            selected_tools = list(selected_tools) + [tool_name]
+                        if tool_name and tool_name in self.tools:
+                            tools_set.add(tool_name)
                 except Exception:
                     pass
+                
+                # Convert back to list
+                selected_tools = list(tools_set)
 
             # SAFETY NET: If router returns empty list, fallback to sensible tools
             # Otherwise the model gets 0 tools and hallucinates using them.
@@ -6391,7 +6409,7 @@ class Agent:
             n_ctx = self.config.get("n_ctx", 8192) or 8192
             pm = getattr(self, "prompt_manager", None)
             orchestrator_active = bool(pm and "orchestrator" in (pm.get_active_modules() or []))
-            if n_ctx <= 12288 and orchestrator_active:
+            if orchestrator_active:
                 wm = {}
                 if getattr(self, "main_persistence", None):
                     try:
@@ -6401,8 +6419,9 @@ class Agent:
                 plan = wm.get("plan") or []
                 if len(plan) == 0:
                     return (
-                        "[ORCHESTRATOR BLOCK] Stop. You are in Multi-Step mode with limited context. "
-                        "You MUST call update_working_memory(plan=[...]) first before using this tool to ensure task stability."
+                        "[ORCHESTRATOR BLOCK] Stop. You are in Multi-Step mode. "
+                        "You MUST call update_working_memory(plan=[...]) first to outline your strategy "
+                        "before using heavy tools like '{tool_name}'."
                     )
                 # Plan exists; enforce turn budget (max 2 heavy calls per turn).
                 count = getattr(self, "_orchestrator_heavy_calls_this_turn", 0)

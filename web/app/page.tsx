@@ -756,7 +756,17 @@ function VAFDashboardContent() {
     const [editName, setEditName] = useState('');
     const [config, setConfig] = useState<any>({});
     const [availableModels, setAvailableModels] = useState<string[]>([]);
-    const [downloadModelStatus, setDownloadModelStatus] = useState<{ status: 'idle' | 'downloading' | 'done' | 'error'; message?: string }>({ status: 'idle' });
+    const [downloadModelStatus, setDownloadModelStatus] = useState<{
+        status: 'idle' | 'downloading' | 'done' | 'error';
+        message?: string;
+        progress_pct?: number;
+        bytes_done?: number;
+        bytes_total?: number;
+        speed_str?: string;
+        repo_id?: string;
+    }>({ status: 'idle' });
+    const [modelPreviewData, setModelPreviewData] = useState<{ repo_id: string; card_content?: string; gguf_files: { filename: string; size_bytes: number }[]; error?: string } | null>(null);
+    const [downloadToast, setDownloadToast] = useState<{ show: boolean; message: string; success: boolean }>({ show: false, message: '', success: false });
     const [apiModels, setApiModels] = useState<Record<string, string[]>>({});
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [settingsInitialTab, setSettingsInitialTab] = useState<string | null>(null);
@@ -1922,9 +1932,32 @@ function VAFDashboardContent() {
                 else if (data.type === 'models_list') {
                     setAvailableModels(data.models || []);
                 }
+                else if (data.type === 'model_preview') {
+                    if (data.error && !data.gguf_files?.length) {
+                        setModelPreviewData({ repo_id: data.repo_id || '', gguf_files: [], error: data.error });
+                    } else {
+                        setModelPreviewData({
+                            repo_id: data.repo_id || '',
+                            card_content: data.card_content,
+                            gguf_files: data.gguf_files || [],
+                            error: data.error
+                        });
+                    }
+                }
+                else if (data.type === 'model_download_progress') {
+                    setDownloadModelStatus(prev => prev.status === 'downloading' ? {
+                        ...prev,
+                        progress_pct: data.progress_pct,
+                        bytes_done: data.bytes_done,
+                        bytes_total: data.bytes_total,
+                        speed_str: data.speed_str
+                    } : prev);
+                }
                 else if (data.type === 'model_download_done') {
                     setAvailableModels(data.models || []);
                     setDownloadModelStatus(data.success ? { status: 'done' } : { status: 'error', message: data.error || 'Download failed' });
+                    setDownloadToast({ show: true, message: data.success ? 'Model downloaded.' : (data.error || 'Download failed'), success: data.success });
+                    setTimeout(() => setDownloadToast(prev => ({ ...prev, show: false })), 4000);
                     if (data.success) setTimeout(() => setDownloadModelStatus({ status: 'idle' }), 3000);
                     if (!data.success) setTimeout(() => setDownloadModelStatus({ status: 'idle' }), 5000);
                 }
@@ -2709,11 +2742,21 @@ function VAFDashboardContent() {
         ws?.send(JSON.stringify({ type: 'get_models' }));
     };
 
-    const downloadModel = (repoId: string) => {
+    const requestModelPreview = (repoId: string) => {
         const trimmed = repoId.trim();
         if (!trimmed) return;
-        setDownloadModelStatus({ status: 'downloading' });
-        ws?.send(JSON.stringify({ type: 'download_model', repo_id: trimmed }));
+        ws?.send(JSON.stringify({ type: 'get_model_preview', repo_id: trimmed }));
+    };
+
+    const downloadModel = (repoId: string, filename?: string) => {
+        const trimmed = repoId.trim();
+        if (!trimmed) return;
+        setDownloadModelStatus({ status: 'downloading', repo_id: trimmed });
+        ws?.send(JSON.stringify({ type: 'download_model', repo_id: trimmed, ...(filename ? { filename } : {}) }));
+    };
+
+    const cancelModelDownload = () => {
+        ws?.send(JSON.stringify({ type: 'cancel_model_download' }));
     };
 
     const subAgentStatusLower = subAgentState.status.toLowerCase();
@@ -3431,6 +3474,33 @@ function VAFDashboardContent() {
                                     </div>
                                 )}
 
+                                {/* Model download progress (visible when downloading, e.g. after closing Settings) */}
+                                {downloadModelStatus?.status === 'downloading' && (
+                                    <div className={cn(chatWidthClass, "mx-auto mb-2")}>
+                                        <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 bg-white shadow-sm">
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                                                    <span className="truncate">{downloadModelStatus.repo_id ? `Downloading ${downloadModelStatus.repo_id}` : 'Downloading model…'}</span>
+                                                    {downloadModelStatus.speed_str && <span className="shrink-0 ml-2">{downloadModelStatus.speed_str}</span>}
+                                                </div>
+                                                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                                    <div
+                                                        className="h-full bg-gray-900 rounded-full transition-[width] duration-300"
+                                                        style={{ width: `${downloadModelStatus.progress_pct ?? 0}%` }}
+                                                    />
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={cancelModelDownload}
+                                                className="text-xs font-medium text-red-600 hover:text-red-700 shrink-0"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
                                 {/* Token Stats (Clickable) + RAG Badge */}
                                 <div className={cn(chatWidthClass, "mx-auto mb-1 flex justify-end items-baseline gap-2 min-h-[16px]")}>
                                     {ragResults?.sources?.length > 0 && (
@@ -3895,6 +3965,18 @@ function VAFDashboardContent() {
                 </div>
             )}
 
+            {/* Model download toast (success / error) */}
+            {downloadToast.show && (
+                <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[85] animate-in fade-in slide-in-from-bottom-4 duration-300">
+                    <div className={cn(
+                        "px-4 py-3 rounded-xl shadow-lg border text-sm font-medium",
+                        downloadToast.success ? "bg-green-50 border-green-200 text-green-800" : "bg-red-50 border-red-200 text-red-800"
+                    )}>
+                        {downloadToast.message}
+                    </div>
+                </div>
+            )}
+
             {/* Changing model overlay (API ↔ Local): show ~5s then reload */}
             {showChangingModelOverlay && (
                 <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
@@ -3923,8 +4005,12 @@ function VAFDashboardContent() {
                 apiModels={apiModels}
                 onFetchApiModels={fetchApiModels}
                 onRefreshLocalModels={refreshLocalModels}
-                onDownloadModel={downloadModel}
+                onRequestModelPreview={requestModelPreview}
+                onConfirmModelDownload={downloadModel}
+                onCloseModelPreview={() => setModelPreviewData(null)}
+                modelPreviewData={modelPreviewData}
                 downloadModelStatus={downloadModelStatus}
+                onCancelModelDownload={cancelModelDownload}
                 tools={tools}
                 onRefreshTools={() => ws?.send(JSON.stringify({ type: 'get_tools' }))}
                 workflows={workflows}

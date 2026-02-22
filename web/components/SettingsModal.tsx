@@ -118,6 +118,8 @@ import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 import CreateAutomationPopup, { type EditAutomationTask } from './CreateAutomationPopup';
 import { vafLicenseText, thirdPartyLicenses } from '@/lib/licenses_data';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export interface SettingsModalProps {
     isOpen: boolean;
@@ -128,10 +130,26 @@ export interface SettingsModalProps {
     apiModels: Record<string, string[]>;
     onFetchApiModels: (provider: string, apiKey: string) => void;
     onRefreshLocalModels: () => void;
-    /** Download a GGUF model from Hugging Face by repo id (e.g. Nanbeige/Nanbeige4.1-3B). */
-    onDownloadModel?: (repoId: string) => void;
-    /** Status of the last model download (idle / downloading / done / error). */
-    downloadModelStatus?: { status: 'idle' | 'downloading' | 'done' | 'error'; message?: string };
+    /** Request model preview (card + GGUF list) before download. */
+    onRequestModelPreview?: (repoId: string) => void;
+    /** Confirm download after preview: start download with chosen filename. */
+    onConfirmModelDownload?: (repoId: string, filename?: string) => void;
+    /** Close the model preview dialog. */
+    onCloseModelPreview?: () => void;
+    /** Data for the "Download this model?" dialog (repo_id, card_content, gguf_files, error). */
+    modelPreviewData?: { repo_id: string; card_content?: string; gguf_files: { filename: string; size_bytes: number }[]; error?: string } | null;
+    /** Status of the last model download (idle / downloading / done / error) and progress. */
+    downloadModelStatus?: {
+        status: 'idle' | 'downloading' | 'done' | 'error';
+        message?: string;
+        progress_pct?: number;
+        bytes_done?: number;
+        bytes_total?: number;
+        speed_str?: string;
+        repo_id?: string;
+    };
+    /** Cancel the current model download. */
+    onCancelModelDownload?: () => void;
     tools?: Array<{ name: string; description: string; category: string }>;
     /** Request fresh tool list from backend (e.g. after installing PyGithub and restarting VAF). */
     onRefreshTools?: () => void;
@@ -229,7 +247,7 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 ];
 
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onDownloadModel, downloadModelStatus, tools = [], onRefreshTools, workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -250,6 +268,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [changed, setChanged] = useState(false);
     const [hfQuery, setHfQuery] = useState('');
     const [hfDownloadRepo, setHfDownloadRepo] = useState('');
+    const [selectedPreviewFilename, setSelectedPreviewFilename] = useState<string | null>(null);
     const [fetchingProvider, setFetchingProvider] = useState<string | null>(null);
     
     // Modals State
@@ -365,6 +384,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // Local network: real host/port from browser (no dummy)
     const [displayHost, setDisplayHost] = useState('');
     const [displayPort, setDisplayPort] = useState('3000');
+
+    // Sync selected GGUF file when model preview dialog opens
+    useEffect(() => {
+        if (modelPreviewData?.gguf_files?.length) {
+            setSelectedPreviewFilename(modelPreviewData.gguf_files[0].filename);
+        } else {
+            setSelectedPreviewFilename(null);
+        }
+    }, [modelPreviewData?.repo_id, modelPreviewData?.gguf_files?.length]);
 
     // Logout flow
     const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -1487,7 +1515,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </div>
                                         <p className="text-xs text-gray-400 mt-1 mb-4">{tAi('modelsDir')}</p>
 
-                                        {onDownloadModel && (
+                                        {onRequestModelPreview && (
                                             <div className="mb-4">
                                                 <div className="flex gap-2 items-end">
                                                     <div className="flex-1">
@@ -1502,7 +1530,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     </div>
                                                     <button
                                                         type="button"
-                                                        onClick={() => { onDownloadModel(hfDownloadRepo); }}
+                                                        onClick={() => { onRequestModelPreview(hfDownloadRepo); }}
                                                         disabled={!hfDownloadRepo.trim() || downloadModelStatus?.status === 'downloading'}
                                                         className="px-3 bg-gray-900 text-white hover:bg-black disabled:bg-gray-300 disabled:text-gray-500 rounded-lg transition-colors h-10 flex items-center justify-center gap-2 min-w-[100px]"
                                                         title={tAi('downloadModelButton')}
@@ -1515,6 +1543,33 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         {downloadModelStatus?.status === 'downloading' ? tAi('downloadModelDownloading') : tAi('downloadModelButton')}
                                                     </button>
                                                 </div>
+                                                {downloadModelStatus?.status === 'downloading' && (
+                                                    <div className="mt-3 space-y-2">
+                                                        <div className="flex items-center justify-between text-xs text-gray-600">
+                                                            <span>
+                                                                {downloadModelStatus.bytes_done != null && downloadModelStatus.bytes_total != null
+                                                                    ? `${(downloadModelStatus.bytes_done / (1024 * 1024)).toFixed(2)} MB / ${(downloadModelStatus.bytes_total / (1024 * 1024)).toFixed(2)} MB`
+                                                                    : downloadModelStatus.progress_pct != null ? `${Math.round(downloadModelStatus.progress_pct)}%` : ''}
+                                                            </span>
+                                                            {downloadModelStatus.speed_str && <span>{downloadModelStatus.speed_str}</span>}
+                                                        </div>
+                                                        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                                                            <div
+                                                                className="h-full bg-gray-900 rounded-full transition-[width] duration-300"
+                                                                style={{ width: `${downloadModelStatus.progress_pct ?? 0}%` }}
+                                                            />
+                                                        </div>
+                                                        {onCancelModelDownload && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={onCancelModelDownload}
+                                                                className="text-xs font-medium text-red-600 hover:text-red-700"
+                                                            >
+                                                                {tAi('downloadModelCancel')}
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
                                                 {downloadModelStatus?.status === 'error' && downloadModelStatus?.message && (
                                                     <p className="text-xs text-red-600 mt-1">{downloadModelStatus.message}</p>
                                                 )}
@@ -2444,6 +2499,74 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         </button>
                     </div>
                 </div>
+
+                {/* Model preview dialog: "Download this model?" with card + GGUF list — fixed overlay so entire window is dimmed */}
+                {modelPreviewData && (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                        <div
+                            className="bg-white rounded-2xl border border-gray-200 shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
+                                <h3 className="text-lg font-semibold text-gray-900">{tAi('downloadModelConfirmTitle')}</h3>
+                                <button type="button" onClick={onCloseModelPreview} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors">
+                                    <X size={20} />
+                                </button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                                {modelPreviewData.error && !modelPreviewData.gguf_files?.length ? (
+                                    <p className="text-sm text-red-600">{modelPreviewData.error}</p>
+                                ) : (
+                                    <>
+                                        {modelPreviewData.card_content && (
+                                            <div>
+                                                <h4 className="text-sm font-medium text-gray-700 mb-2">{tAi('downloadModelCardLabel')}</h4>
+                                                <div className="prose prose-sm max-w-none max-h-48 overflow-y-auto rounded-lg border border-gray-100 bg-gray-50/50 p-4 text-gray-800">
+                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{modelPreviewData.card_content}</ReactMarkdown>
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div>
+                                            <h4 className="text-sm font-medium text-gray-700 mb-2">{tAi('downloadModelGGUFListLabel')}</h4>
+                                            <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                                                {modelPreviewData.gguf_files.map((f) => {
+                                                    const sizeStr = f.size_bytes >= 1e9 ? `${(f.size_bytes / 1e9).toFixed(2)} GB` : f.size_bytes >= 1e6 ? `${(f.size_bytes / 1e6).toFixed(1)} MB` : f.size_bytes >= 1e3 ? `${(f.size_bytes / 1e3).toFixed(1)} KB` : `${f.size_bytes} B`;
+                                                    const isSelected = selectedPreviewFilename === f.filename;
+                                                    return (
+                                                        <label key={f.filename} className={cn("flex items-center gap-3 p-2 rounded-lg border cursor-pointer transition-colors", isSelected ? "border-gray-900 bg-gray-50" : "border-gray-200 hover:bg-gray-50/50")}>
+                                                            <input type="radio" name="gguf_file" checked={isSelected} onChange={() => setSelectedPreviewFilename(f.filename)} className="rounded-full border-gray-300 text-gray-900 focus:ring-gray-500" />
+                                                            <span className="text-sm font-mono truncate flex-1">{f.filename}</span>
+                                                            <span className="text-xs text-gray-500 shrink-0">{sizeStr}</span>
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 shrink-0">
+                                <button type="button" onClick={onCloseModelPreview} className="px-4 py-2 rounded-xl font-medium text-gray-600 hover:bg-gray-100 transition-colors">
+                                    {tCommon('cancel')}
+                                </button>
+                                {modelPreviewData.gguf_files?.length > 0 && onConfirmModelDownload && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const filename = selectedPreviewFilename ?? modelPreviewData.gguf_files?.[0]?.filename;
+                                            onConfirmModelDownload(modelPreviewData.repo_id, filename);
+                                            onCloseModelPreview?.();
+                                        }}
+                                        className="px-4 py-2 rounded-xl font-medium bg-gray-900 text-white hover:bg-black transition-colors flex items-center gap-2"
+                                    >
+                                        <Download size={18} />
+                                        {tAi('downloadModelButton')}
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Logout confirm / Have a nice day overlay */}
                 {(showLogoutConfirm || isLoggingOut) && (

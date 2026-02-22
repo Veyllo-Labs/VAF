@@ -1278,6 +1278,15 @@ def run_headless_agent():
                             send_discord_reply(str(meta_err["discord_channel_id"]), err_text)
                         elif task_source_err == "whatsapp" and meta_err.get("whatsapp_chat_jid"):
                             from vaf.core.whatsapp_reply import send_whatsapp_reply
+                            # Clear any pending voice reply so error messages are sent as text, not TTS'd
+                            try:
+                                from vaf.api.whatsapp_bridge import _voice_reply_pending, _voice_reply_lock
+                                _err_username = meta_err.get("username") or "admin"
+                                _err_jid = str(meta_err["whatsapp_chat_jid"])
+                                with _voice_reply_lock:
+                                    _voice_reply_pending.pop(f"{_err_username}|{_err_jid}", None)
+                            except Exception:
+                                pass
                             send_whatsapp_reply(
                                 meta_err.get("username") or "admin",
                                 str(meta_err["whatsapp_chat_jid"]),

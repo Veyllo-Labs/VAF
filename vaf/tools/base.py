@@ -109,7 +109,6 @@ class BaseTool(ABC):
         
         config = Config.load()
         provider = config.get("provider", "local")
-        provider = config.get("provider", "local")
         # FIX: Use correct model ID for the selected provider
         # (Previously it used 'model' which is the LOCAL model ID, causing 400 errors with APIs)
         if provider != "local":

@@ -85,11 +85,16 @@ class SearchToolsTool(BaseTool):
                 matches.append((score, tool_name, tool))
 
         if not matches:
-            # Fallback: return first line of all tools so the model can browse
-            lines = ["No close matches found. All available tools:"]
-            for tool_name, tool in sorted(self.available_tools.items()):
+            # Fallback: return a capped list so the model can browse without
+            # flooding context (50+ tools would be too much).
+            _CAP = 20
+            all_tools = sorted(self.available_tools.items())
+            lines = [f"No close matches for '{query}'. Showing first {min(_CAP, len(all_tools))} of {len(all_tools)} tools:"]
+            for tool_name, tool in all_tools[:_CAP]:
                 short = (getattr(tool, "description", "") or "").split("\n")[0][:100]
                 lines.append(f"  {tool_name}: {short}")
+            if len(all_tools) > _CAP:
+                lines.append(f"  … and {len(all_tools) - _CAP} more tools. Refine your query to narrow results.")
             return "\n".join(lines)
 
         # Sort by score descending, cap at 10 results

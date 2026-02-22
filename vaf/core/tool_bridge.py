@@ -33,7 +33,6 @@ from __future__ import annotations
 import json
 import logging
 import platform
-import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Callable, Dict, Optional
@@ -206,21 +205,19 @@ class ToolBridgeServer:
 
     def _resolve_host_gateway(self) -> str:
         """
-        Docker containers reach the host via host.docker.internal (Windows/Mac)
-        or 172.17.0.1 (Linux Docker bridge).  We bind to 0.0.0.0 and return
-        the right address for the sandbox env var.
+        Docker containers reach the host via:
+          - host.docker.internal  (Windows / macOS Docker Desktop)
+          - 172.17.0.1            (Linux Docker bridge gateway)
+
+        On Linux we always return the bridge gateway address because the host's
+        LAN IP (what getsockname would return) is NOT reachable from inside the
+        container — only the bridge gateway is.
         """
         system = platform.system()
-        if system in ("Windows", "Darwin"):
-            return "host.docker.internal"
-        # Linux: use the Docker bridge gateway IP
-        try:
-            # Probe: connect to something outside and read the local addr
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect(("8.8.8.8", 80))
-                return s.getsockname()[0]
-        except Exception:
+        if system == "Linux":
             return "172.17.0.1"
+        # Windows and macOS Docker Desktop expose a stable DNS alias.
+        return "host.docker.internal"
 
     def start(self) -> None:
         """Start the bridge server on a random free port."""

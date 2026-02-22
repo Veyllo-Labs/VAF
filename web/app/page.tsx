@@ -717,6 +717,7 @@ function VAFDashboardContent() {
     const [ws, setWs] = useState<WebSocket | null>(null);
     const [loading, setLoading] = useState(false);
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
+    const [activeToolName, setActiveToolName] = useState(''); // Currently-running tool name for loading bubble
 
     const pendingCreateAutomationResolveRef = useRef<((r: { ok: boolean; error?: string }) => void) | null>(null);
     const pendingUpdateAutomationResolveRef = useRef<((r: { ok: boolean; error?: string }) => void) | null>(null);
@@ -1335,6 +1336,14 @@ function VAFDashboardContent() {
                     const { subType, toolId, name, data: eventData, timestamp } = data;
                     const toolName = String(name || '').toLowerCase();
                     const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding)_agent(?:$|[^a-z])/.test(toolName);
+
+                    // Track active tool for loading bubble
+                    if (subType === 'start') {
+                        setActiveToolName(String(name || '').replace(/_/g, ' '));
+                    } else if (subType === 'end' || subType === 'error') {
+                        setActiveToolName('');
+                    }
+
                     if (subType === 'start' && isSubAgentTool) {
                         subAgentUserClosedRef.current = false;  // New task - user wants to see it
                         openSubAgentWindow(false);
@@ -1472,6 +1481,7 @@ function VAFDashboardContent() {
 
                     setLoading(false);
                     setStatusMessage(''); // Clear status when answer starts
+                    setActiveToolName(''); // Clear active tool when answer starts
 
                     // Update per-session loading state
                     if (activeSessionId) {
@@ -3388,16 +3398,30 @@ function VAFDashboardContent() {
                                     });
                                 })()}
 
-                                {loading && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
-                                    <div className="flex gap-4 justify-center animate-pulse pt-4">
+                                {loading && messages.length > 0 && !(
+                                    // Hide loading bubble only when a tool is actively running
+                                    // (the tool card itself shows the spinner in that case)
+                                    messages[messages.length - 1].role === 'tool' &&
+                                    messages[messages.length - 1].toolStatus === 'running'
+                                ) && (
+                                    <div className="flex gap-4 justify-center pt-4">
                                         <div className="w-full max-w-[85%] flex gap-4">
                                             <div className="w-9 h-9 rounded-xl bg-gray-200 flex items-center justify-center text-gray-400 shrink-0"><Bot size={18} /></div>
                                             <div className="flex flex-col gap-1">
-                                                <div className="bg-gray-100 px-4 py-2 rounded-2xl rounded-tl-none w-fit flex gap-1">
-                                                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
-                                                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
-                                                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150"></span>
-                                                </div>
+                                                {activeToolName ? (
+                                                    // Tool just finished / between tools: show tool name with spinner
+                                                    <div className="bg-gray-100 px-4 py-2 rounded-2xl rounded-tl-none flex items-center gap-2 text-xs text-gray-500">
+                                                        <Loader2 size={12} className="animate-spin shrink-0" />
+                                                        <span className="capitalize">{activeToolName}</span>
+                                                    </div>
+                                                ) : (
+                                                    // Thinking / between calls: bouncing dots
+                                                    <div className="bg-gray-100 px-4 py-2 rounded-2xl rounded-tl-none w-fit flex gap-1 animate-pulse">
+                                                        <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
+                                                        <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
+                                                        <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150"></span>
+                                                    </div>
+                                                )}
                                                 {statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && <span className="text-[10px] text-gray-400 ml-2">{statusMessage}</span>}
                                             </div>
                                         </div>

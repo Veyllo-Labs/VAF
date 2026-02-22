@@ -2657,14 +2657,17 @@ class Agent:
         # 1. EMERGENCY PURGE (Hard Reset if > 100%)
         # If we are already over the hard limit, standard compression might be too slow or fail.
         if usage_percent >= 1.0 and len(self.history) > 1:
-            UI.event("Context", f"CRITICAL OVERFLOW ({current_tokens_calc}/{max_tokens}). Emergency purge active!", style="bold red")
+            msg = f"CRITICAL OVERFLOW ({current_tokens_calc}/{max_tokens}). Emergency purge active!"
+            UI.event("Context", msg, style="bold red")
+            try:
+                from vaf.core.web_interface import get_web_interface
+                get_web_interface().log("Context limit reached! Performing emergency cleanup...", level="warning", source="System", session_id=getattr(self, 'current_session_id', None))
+            except: pass
+
             # Absolute Minimum: System Prompt + LAST message (usually the user prompt that caused the overflow)
             system_msg = [self.history[0]] if self.history and self.history[0].get("role") == "system" else []
             last_msg = [self.history[-1]] if len(self.history) > 1 else []
             self.history = system_msg + last_msg
-            
-            # If even System + Last is too big, we have a problem with Tool overhead or one massive message
-            # Standard compression below will handle Tool reduction if configured.
             
             # Force UI update
             self._broadcast_context_status()
@@ -2674,6 +2677,12 @@ class Agent:
 
         if usage_percent < cm.trigger_threshold:
             return
+
+        # Notify WebUI about standard compression
+        try:
+            from vaf.core.web_interface import get_web_interface
+            get_web_interface().log(f"Context usage at {usage_percent:.0%}. Optimizing memory...", level="info", source="System", session_id=getattr(self, 'current_session_id', None))
+        except: pass
 
         # LLM-based Summarization Logic
         # We want to summarize the "middle" chunk that is about to be compressed away.
@@ -2704,8 +2713,15 @@ class Agent:
                     UI.event("Context", "Summary updated.", style="dim")
 
         # Compress with Cursor-style algorithm (now includes the new narrative_summary)
+        old_count = len(self.history)
         self.history = cm.compress(self.history)
+        new_count = len(self.history)
         
+        try:
+            from vaf.core.web_interface import get_web_interface
+            get_web_interface().log(f"Context optimized: {old_count} messages reduced to {new_count}. Stable progress preserved.", level="success", source="System", session_id=getattr(self, 'current_session_id', None))
+        except: pass
+
         # Broadcast update to WebUI
         self._broadcast_context_status()
 

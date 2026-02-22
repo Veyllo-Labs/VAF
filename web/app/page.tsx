@@ -1825,14 +1825,14 @@ function VAFDashboardContent() {
                         loadingMessageId: isActive ? (data.messages?.length || 0) : null
                     };
 
-                    // Parse server messages
+                    // Parse server messages and preserve server order (index) so sort is stable
                     const serverMsgs = data.messages
                         .filter((m: any) => m.role !== 'system') // Hide raw system prompts from server (we have better local logs)
-                        .map((m: any) => ({
+                        .map((m: any, idx: number) => ({
                             role: m.role,
                             content: m.content,
                             timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
-                            // Preserve minimal fields
+                            _order: idx,
                             toolId: m.toolId,
                             toolName: m.toolName
                         }));
@@ -1843,15 +1843,14 @@ function VAFDashboardContent() {
 
                     const cachedMsgs = sessionCache.current[data.sessionId] || [];
 
-                    const hydratedServerMsgs = serverMsgs.map((srvMsg: Message) => {
+                    const hydratedServerMsgs = serverMsgs.map((srvMsg: Message & { _order?: number }) => {
                         if (srvMsg.role === 'tool') {
-                            // Find matching tool in cache by Content
                             const match = cachedMsgs.find(cm =>
                                 cm.role === 'tool' &&
                                 cm.content === srvMsg.content
                             );
                             if (match) {
-                                return { ...srvMsg, ...match }; // Restore rich metadata
+                                return { ...srvMsg, ...match, _order: srvMsg._order };
                             }
                         }
                         return srvMsg;
@@ -1859,29 +1858,26 @@ function VAFDashboardContent() {
 
                     // Find Orphans: Messages in Cache but NOT in Server
                     const orphans = cachedMsgs.filter(cMsg => {
-                        // Always keep System logs (Server never sends them)
                         if (cMsg.role === 'system') return true;
 
-                        // For User/Assistant/Tool, check if they exist in the Server list
-                        // heuristic: Timestamp proximity (2s) OR Content exact match
-                        // This prevents duplicates while preserving pending checks
                         const existsInServer = hydratedServerMsgs.some((sMsg: Message) => {
                             if (sMsg.role !== cMsg.role) return false;
-
-                            // Check exact content match (strongest signal)
                             if (sMsg.content === cMsg.content) return true;
-
-                            // Check timestamp proximity (for messages created roughly same time)
                             if (Math.abs(sMsg.timestamp - cMsg.timestamp) < 2000) return true;
-
                             return false;
                         });
 
                         return !existsInServer;
-                    });
+                    }).map((m, idx) => ({ ...m, _order: 100000 + idx })); // So orphans sort after server when timestamps tie
 
-                    // Combine and Sort
-                    let finalMsgs = [...hydratedServerMsgs, ...orphans].sort((a, b) => a.timestamp - b.timestamp);
+                    // Sort by timestamp first, then by _order so server order is preserved (fixes user message appearing below assistant after refresh/session switch)
+                    let finalMsgs = [...hydratedServerMsgs, ...orphans].sort((a, b) => {
+                        const t = (a.timestamp ?? 0) - (b.timestamp ?? 0);
+                        if (t !== 0) return t;
+                        return ((a as any)._order ?? 0) - ((b as any)._order ?? 0);
+                    });
+                    // Strip _order before setting state
+                    finalMsgs = finalMsgs.map(({ _order, ...msg }) => msg) as Message[];
 
                     // Deduplicate: when switching back to a session, cache + server can both contribute
                     // the same messages (server content cleaned, timestamps differ), causing duplicates

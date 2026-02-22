@@ -19,6 +19,10 @@ class GetContactTool(BaseTool):
         "and personal file (preferred_language, how_to_address, birthday, notes). "
         "Use for queries like 'has Max written to me?' – get_contact(name='Max') then read_whatsapp_chat(chat_id=contact's whatsapp_phone) or find_mail/find_whatsapp_messages."
     )
+    input_examples = [
+        {"name": "Max"},
+        {"name": "Anna Müller"},
+    ]
     parameters = {
         "type": "object",
         "properties": {

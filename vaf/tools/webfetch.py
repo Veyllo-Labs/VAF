@@ -13,20 +13,16 @@ class WebFetchTool(BaseTool):
     """Fetch content from URLs and convert to readable text."""
     
     name = "webfetch"
-    description = """Fetch content from a URL and convert it to readable text/markdown.
+    description = (
+        "Fetch content from a URL and convert it to readable text/markdown. "
+        "Use to read documentation pages, API references, GitHub READMEs, blog posts, "
+        "or any publicly available web page."
+    )
+    input_examples = [
+        {"url": "https://docs.python.org/3/tutorial/"},
+        {"url": "https://github.com/user/repo", "extract_main": False},
+    ]
 
-Use this tool to:
-- Read documentation pages
-- Fetch API references
-- Get content from GitHub READMEs
-- Read blog posts or articles
-- Access any publicly available web page
-
-Examples:
-- webfetch(url="https://docs.python.org/3/tutorial/") - Python docs
-- webfetch(url="https://github.com/user/repo") - GitHub repo
-- webfetch(url="https://api.example.com/docs") - API documentation"""
-    
     parameters = {
         "type": "object",
         "properties": {

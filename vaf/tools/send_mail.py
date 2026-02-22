@@ -39,6 +39,11 @@ class SendMailTool(BaseTool):
         "When account_id is omitted, uses the first connected account. Use list_email_accounts to see connected accounts. "
         "For documents (invoice, contract, PDF), pass attachment_paths with full file paths."
     )
+    input_examples = [
+        {"to": "max@example.com", "subject": "Meeting tomorrow", "body": "Hi Max, are you free at 10am?"},
+        {"to": "client@example.com", "subject": "Invoice Q1", "body": "Please find the invoice attached.",
+         "attachment_paths": ["/home/user/invoices/q1_2025.pdf"]},
+    ]
     parameters = {
         "type": "object",
         "properties": {

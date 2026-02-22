@@ -2096,6 +2096,66 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         "models": models
                     })
 
+                elif type == "download_model":
+                    repo_id = (cmd.get("repo_id") or "").strip()
+                    filename = (cmd.get("filename") or "").strip() or None
+                    if not repo_id:
+                        await websocket.send_json({
+                            "type": "model_download_done",
+                            "success": False,
+                            "error": "repo_id is required (e.g. Nanbeige/Nanbeige4.1-3B)",
+                            "models": []
+                        })
+                    else:
+                        project_root = Path(__file__).parent.parent.parent
+                        models_dir = project_root / "models"
+
+                        def _do_download() -> tuple[bool, str | None, list]:
+                            try:
+                                from huggingface_hub import HfApi, hf_hub_download
+                                models_dir.mkdir(parents=True, exist_ok=True)
+                                api = HfApi()
+                                if not filename:
+                                    try:
+                                        model_info = api.model_info(repo_id=repo_id, files_metadata=True)
+                                        siblings = getattr(model_info, "siblings", [])
+                                    except Exception:
+                                        siblings = []
+                                        for f in api.list_repo_files(repo_id=repo_id):
+                                            class _F:
+                                                rfilename = f
+                                                size = 0
+                                            siblings.append(_F())
+                                    gguf = [f for f in siblings if (getattr(f, "rfilename", f) if not isinstance(f, str) else f).endswith(".gguf")]
+                                    if not gguf:
+                                        return False, f"No GGUF files in {repo_id}", []
+                                    gguf.sort(key=lambda x: getattr(x, "size", 0) or 0)
+                                    chosen = gguf[0]
+                                    fname = getattr(chosen, "rfilename", chosen) if not isinstance(chosen, str) else chosen
+                                    hf_hub_download(repo_id=repo_id, filename=fname, local_dir=str(models_dir))
+                                else:
+                                    hf_hub_download(repo_id=repo_id, filename=filename, local_dir=str(models_dir))
+                                new_models = [f.name for f in models_dir.glob("*.gguf")]
+                                return True, None, new_models
+                            except Exception as e:
+                                return False, str(e), []
+
+                        try:
+                            success, err, new_models = await asyncio.to_thread(_do_download)
+                            await websocket.send_json({
+                                "type": "model_download_done",
+                                "success": success,
+                                "error": err,
+                                "models": new_models
+                            })
+                        except Exception as e:
+                            await websocket.send_json({
+                                "type": "model_download_done",
+                                "success": False,
+                                "error": str(e),
+                                "models": []
+                            })
+
                 elif type == "get_api_models":
                     # Fetch available models from API providers
                     provider = cmd.get("provider", "openai")

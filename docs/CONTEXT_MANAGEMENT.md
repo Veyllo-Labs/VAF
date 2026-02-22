@@ -564,6 +564,8 @@ The Main Agent can now decompose complex tasks into steps and execute them one a
 **Activation:**
 The Orchestrator prompt module activates automatically when the tool router detects multi-step keywords (e.g. "step by step", "compare", "for each", "batch", "summarize all"). It can also be activated manually via `prompt_manager.activate_module("orchestrator")`.
 
+**Conditional hard enforcement (small context):** When the orchestrator module is active and context is small (`n_ctx` ≤ 12k), the agent enforces that a plan exists in working memory before allowing "heavy" tools (e.g. `read_file`, `web_search`, sub-agents such as `librarian_agent`, `coding_agent`, `research_agent`). If the model tries to call a heavy tool without a plan, it receives a block message and must call `update_working_memory(plan=[...])` first. In addition, at most 2 heavy tool calls per turn are allowed; on the 3rd, the model is asked to summarize progress and use `checkpoint_context` if needed. This prevents small-context models from skipping the plan and flooding the context with tool output.
+
 ### Small context (e.g. llama.cpp with low n_ctx)
 
 When `n_ctx` is small (e.g. 4k–12k), fewer messages are kept raw and compression is more aggressive. To reduce "context loss" (e.g. the model forgetting that it already used GitHub or other tools):

@@ -105,7 +105,7 @@ function applyCollisionDetection(nodes: any[]): any[] {
 }
 import {
     X, Globe, Cpu, Volume2, Monitor, Shield, Save, RotateCcw,
-    Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch,
+    Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch, Loader2,
     Brain, Database, Link2, MessageSquare, Network, Users, User, Lock, Server, Laptop, Smartphone,
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar
 } from 'lucide-react';
@@ -128,6 +128,10 @@ export interface SettingsModalProps {
     apiModels: Record<string, string[]>;
     onFetchApiModels: (provider: string, apiKey: string) => void;
     onRefreshLocalModels: () => void;
+    /** Download a GGUF model from Hugging Face by repo id (e.g. Nanbeige/Nanbeige4.1-3B). */
+    onDownloadModel?: (repoId: string) => void;
+    /** Status of the last model download (idle / downloading / done / error). */
+    downloadModelStatus?: { status: 'idle' | 'downloading' | 'done' | 'error'; message?: string };
     tools?: Array<{ name: string; description: string; category: string }>;
     /** Request fresh tool list from backend (e.g. after installing PyGithub and restarting VAF). */
     onRefreshTools?: () => void;
@@ -225,7 +229,7 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 ];
 
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, tools = [], onRefreshTools, workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onDownloadModel, downloadModelStatus, tools = [], onRefreshTools, workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -245,6 +249,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [activeTab, setActiveTab] = useState('general');
     const [changed, setChanged] = useState(false);
     const [hfQuery, setHfQuery] = useState('');
+    const [hfDownloadRepo, setHfDownloadRepo] = useState('');
     const [fetchingProvider, setFetchingProvider] = useState<string | null>(null);
     
     // Modals State
@@ -1481,6 +1486,43 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             </button>
                                         </div>
                                         <p className="text-xs text-gray-400 mt-1 mb-4">{tAi('modelsDir')}</p>
+
+                                        {onDownloadModel && (
+                                            <div className="mb-4">
+                                                <div className="flex gap-2 items-end">
+                                                    <div className="flex-1">
+                                                        <Input
+                                                            label={tAi('downloadModelFromHf')}
+                                                            value={hfDownloadRepo}
+                                                            onChange={(v: string) => setHfDownloadRepo(v)}
+                                                            type="text"
+                                                            placeholder={tAi('downloadModelPlaceholder')}
+                                                            disabled={downloadModelStatus?.status === 'downloading'}
+                                                        />
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => { onDownloadModel(hfDownloadRepo); }}
+                                                        disabled={!hfDownloadRepo.trim() || downloadModelStatus?.status === 'downloading'}
+                                                        className="px-3 bg-gray-900 text-white hover:bg-black disabled:bg-gray-300 disabled:text-gray-500 rounded-lg transition-colors h-10 flex items-center justify-center gap-2 min-w-[100px]"
+                                                        title={tAi('downloadModelButton')}
+                                                    >
+                                                        {downloadModelStatus?.status === 'downloading' ? (
+                                                            <Loader2 size={18} className="animate-spin" />
+                                                        ) : (
+                                                            <Download size={18} />
+                                                        )}
+                                                        {downloadModelStatus?.status === 'downloading' ? tAi('downloadModelDownloading') : tAi('downloadModelButton')}
+                                                    </button>
+                                                </div>
+                                                {downloadModelStatus?.status === 'error' && downloadModelStatus?.message && (
+                                                    <p className="text-xs text-red-600 mt-1">{downloadModelStatus.message}</p>
+                                                )}
+                                                {downloadModelStatus?.status === 'done' && (
+                                                    <p className="text-xs text-green-600 mt-1">{tAi('downloadModelSuccess')}</p>
+                                                )}
+                                            </div>
+                                        )}
 
                                         <div className="grid grid-cols-2 gap-4 mt-4">
                                             <Input

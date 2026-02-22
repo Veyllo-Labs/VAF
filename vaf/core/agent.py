@@ -158,6 +158,7 @@ class Agent:
 
         # Trust gating state (session-only)
         self._allow_once_tools = set()
+        self._orchestrator_heavy_calls_this_turn = 0  # Reset each turn; used when orchestrator + small n_ctx
         self._noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip() in ("1", "true", "yes")
         self._event_sink = None  # optional callable(dict)
         
@@ -4277,6 +4278,7 @@ class Agent:
         # Always add user input if provided, even if skip_input=True (which skips analysis/overhead)
         if user_input:
             self.history.append({"role": "user", "content": user_input})
+            self._orchestrator_heavy_calls_this_turn = 0  # New turn: reset heavy-tool budget for orchestrator gate
             
             # ═══════════════════════════════════════════════════════════════════════
             # FIRST-TIME USER: Automatic Greeting & Language Detection
@@ -6377,6 +6379,38 @@ class Agent:
             result = run_multi_tool_use(args if isinstance(args, dict) else {})
             emit({"type": "tool_end", "tool": name})
             return result
+
+        # Conditional hard enforcement: when orchestrator is active and context is small,
+        # require a plan before heavy tools and limit to 2 heavy calls per turn.
+        tool_name = normalize_tool_name(name) or name
+        ORCHESTRATOR_HEAVY_TOOLS = (
+            "web_search", "web_fetch", "read_file", "github_get_file",
+            "librarian_agent", "coding_agent", "research_agent", "document_agent",
+        )
+        if tool_name in ORCHESTRATOR_HEAVY_TOOLS:
+            n_ctx = self.config.get("n_ctx", 8192) or 8192
+            pm = getattr(self, "prompt_manager", None)
+            orchestrator_active = bool(pm and "orchestrator" in (pm.get_active_modules() or []))
+            if n_ctx <= 12288 and orchestrator_active:
+                wm = {}
+                if getattr(self, "main_persistence", None):
+                    try:
+                        wm = self.main_persistence.get_working_memory() or {}
+                    except Exception:
+                        pass
+                plan = wm.get("plan") or []
+                if len(plan) == 0:
+                    return (
+                        "[ORCHESTRATOR BLOCK] Stop. You are in Multi-Step mode with limited context. "
+                        "You MUST call update_working_memory(plan=[...]) first before using this tool to ensure task stability."
+                    )
+                # Plan exists; enforce turn budget (max 2 heavy calls per turn).
+                count = getattr(self, "_orchestrator_heavy_calls_this_turn", 0)
+                self._orchestrator_heavy_calls_this_turn = count + 1
+                if self._orchestrator_heavy_calls_this_turn > 2:
+                    return (
+                        "Turn budget reached. Please summarize your current progress and use checkpoint_context if needed before continuing."
+                    )
 
         # Gate risky tools with once/always/cancel (no persistent deny)
         if should_gate_tool(name):

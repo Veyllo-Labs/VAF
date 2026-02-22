@@ -756,6 +756,7 @@ function VAFDashboardContent() {
     const [editName, setEditName] = useState('');
     const [config, setConfig] = useState<any>({});
     const [availableModels, setAvailableModels] = useState<string[]>([]);
+    const [downloadModelStatus, setDownloadModelStatus] = useState<{ status: 'idle' | 'downloading' | 'done' | 'error'; message?: string }>({ status: 'idle' });
     const [apiModels, setApiModels] = useState<Record<string, string[]>>({});
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [settingsInitialTab, setSettingsInitialTab] = useState<string | null>(null);
@@ -1870,12 +1871,10 @@ function VAFDashboardContent() {
                         return !existsInServer;
                     }).map((m, idx) => ({ ...m, _order: 100000 + idx })); // So orphans sort after server when timestamps tie
 
-                    // Sort by timestamp first, then by _order so server order is preserved (fixes user message appearing below assistant after refresh/session switch)
-                    let finalMsgs = [...hydratedServerMsgs, ...orphans].sort((a, b) => {
-                        const t = (a.timestamp ?? 0) - (b.timestamp ?? 0);
-                        if (t !== 0) return t;
-                        return ((a as any)._order ?? 0) - ((b as any)._order ?? 0);
-                    });
+                    // Sort by _order only so server order is strict (fixes user message appearing below assistant when backend timestamps differ or are equal)
+                    let finalMsgs = [...hydratedServerMsgs, ...orphans].sort((a, b) =>
+                        ((a as any)._order ?? 0) - ((b as any)._order ?? 0)
+                    );
                     // Strip _order before setting state
                     finalMsgs = finalMsgs.map(({ _order, ...msg }) => msg) as Message[];
 
@@ -1922,6 +1921,12 @@ function VAFDashboardContent() {
                 }
                 else if (data.type === 'models_list') {
                     setAvailableModels(data.models || []);
+                }
+                else if (data.type === 'model_download_done') {
+                    setAvailableModels(data.models || []);
+                    setDownloadModelStatus(data.success ? { status: 'done' } : { status: 'error', message: data.error || 'Download failed' });
+                    if (data.success) setTimeout(() => setDownloadModelStatus({ status: 'idle' }), 3000);
+                    if (!data.success) setTimeout(() => setDownloadModelStatus({ status: 'idle' }), 5000);
                 }
                 else if (data.type === 'api_models' || data.type === 'api_models_list') {
                     setApiModels(prev => ({ ...prev, [data.provider]: data.models }));
@@ -2704,8 +2709,16 @@ function VAFDashboardContent() {
         ws?.send(JSON.stringify({ type: 'get_models' }));
     };
 
+    const downloadModel = (repoId: string) => {
+        const trimmed = repoId.trim();
+        if (!trimmed) return;
+        setDownloadModelStatus({ status: 'downloading' });
+        ws?.send(JSON.stringify({ type: 'download_model', repo_id: trimmed }));
+    };
+
     const subAgentStatusLower = subAgentState.status.toLowerCase();
     const hasRunningSubAgentStep = subAgentState.steps.some(step => step.status === 'running');
+    const isSubAgentRunning = subAgentState.presence === 'online' || hasRunningSubAgentStep || subAgentStatusLower.includes('running') || subAgentStatusLower.includes('pending');
     const hasCompletedOrDoneStep = subAgentState.steps.some(
         (step: { status?: string }) =>
             step.status === 'completed' || step.status === 'failed' || step.status === 'timeout'
@@ -3456,10 +3469,10 @@ function VAFDashboardContent() {
                                     )}
                                 </div>
 
-                                {/* Stop button left of message box — show when chat is loading OR a workflow is running */}
+                                {/* Stop button left of message box — show when chat is loading, a workflow is running, or a sub-agent is active */}
                                 <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
                                     <div className="w-9 shrink-0 flex items-center justify-center">
-                                        {(loading || isWorkflowRunning) && (
+                                        {(loading || isWorkflowRunning || isSubAgentRunning) && (
                                             <button
                                                 type="button"
                                                 onClick={stopGeneration}
@@ -3910,6 +3923,8 @@ function VAFDashboardContent() {
                 apiModels={apiModels}
                 onFetchApiModels={fetchApiModels}
                 onRefreshLocalModels={refreshLocalModels}
+                onDownloadModel={downloadModel}
+                downloadModelStatus={downloadModelStatus}
                 tools={tools}
                 onRefreshTools={() => ws?.send(JSON.stringify({ type: 'get_tools' }))}
                 workflows={workflows}

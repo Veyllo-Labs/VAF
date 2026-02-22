@@ -183,8 +183,8 @@ class GitHubGetFileTool(BaseTool):
         
         try:
             repo = g.get_repo(f"{owner}/{repo_name}")
-            # ref can be passed to get_contents
-            content_file = repo.get_contents(path, ref=ref)
+            # PyGithub's get_contents() asserts ref is str — do NOT pass None
+            content_file = repo.get_contents(path) if not ref else repo.get_contents(path, ref=ref)
 
             if isinstance(content_file, list):
                 # Path is a directory — list contents to help the model pick the right file

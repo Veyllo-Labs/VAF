@@ -121,6 +121,18 @@ _INTERNAL_PHRASES = [
     "contact preferred_language",
 ]
 
+# Regex to strip [WORKFLOW_ASYNC:...] lines so the rest of the message can be sent if only that line is internal.
+_WORKFLOW_ASYNC_LINE = re.compile(r"^\[WORKFLOW_ASYNC:[^\]]+\][^\n]*\n?", re.MULTILINE)
+
+
+def _strip_workflow_async_from_message(text: str) -> str:
+    """Remove [WORKFLOW_ASYNC:...] status lines from text so they are never sent to contacts."""
+    if not text or not text.strip():
+        return text
+    cleaned = _WORKFLOW_ASYNC_LINE.sub("", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
 
 def _sanitize_outgoing_message(text: str) -> str:
     """
@@ -854,10 +866,15 @@ def run_headless_agent():
                                 f.write(f"{_dt.now().isoformat()} CHAT_STEP_CALL session_id={task.session_id}\n")
                     except Exception:
                         pass
+                    # Do not run workflow matching for contact messages (WhatsApp/Telegram/Discord).
+                    # Workflows are for the account owner in Web/CLI; contact chat should be normal LLM reply only.
+                    task_source = getattr(task, "source", None) or ""
+                    disable_workflows = str(task_source).lower() in ("whatsapp", "telegram", "discord")
                     response = agent.chat_step(
                         user_input=effective_input,
                         stream_callback=webui_stream_callback,  # Stream to WebUI!
                         skip_input=False,
+                        disable_workflows=disable_workflows,
                         memory_context=memory_context or None,
                     )
                     try:
@@ -906,20 +923,16 @@ def run_headless_agent():
                         # and do NOT send to any external channel (Telegram/WhatsApp/Discord)
                         final_text = response_text.replace("[SYSTEM_LOG_ONLY]", "").strip()
                     else:
-                        # Final response broadcast (in case streaming missed the final state)
+                        # Final response broadcast: always send full content once so UI has complete message.
+                        # (Streaming is throttled, so the last chunk(s) may never have been emitted.)
                         final_text = "".join(response_parts) if response_parts else response_text
                         if not final_text or not str(final_text).strip():
                             final_text = "[Error] No response was produced. The server may have rejected the request (e.g. context too large). Try closing the Document Editor or starting a new chat."
-                        # Avoid duplicate assistant message: if we already streamed this exact content,
-                        # skip the final emit. Otherwise a system log (e.g. "Context usage...") can be
-                        # pushed between last stream chunk and this, so frontend would append instead of replace.
-                        streamed_full = "".join(response_parts).strip() if response_parts else ""
-                        if streamed_full != str(final_text).strip():
-                            get_web_interface().emit_agent_message(
-                                role="assistant",
-                                content=str(final_text),
-                                session_id=task.session_id
-                            )
+                        get_web_interface().emit_agent_message(
+                            role="assistant",
+                            content=str(final_text),
+                            session_id=task.session_id
+                        )
 
                     # Emit message_complete event for Auto-TTS (skip speaking for SYSTEM_LOG_ONLY)
                     try:
@@ -961,11 +974,12 @@ def run_headless_agent():
                             pass
                         if task_source == "telegram" and chat_id:
                             from vaf.core.telegram_reply import send_telegram_reply
-                            # Strip <think>...</think>, raw tool_calls JSON, and internal phrases
+                            # Strip <think>...</think>, raw tool_calls JSON, workflow-async lines, and internal phrases
                             out = str(final_text)
                             out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
                             out = _strip_tool_calls_json(out)
                             out = re.sub(r'\n{3,}', '\n\n', out).strip()
+                            out = _strip_workflow_async_from_message(out)
                             out = _sanitize_outgoing_message(out)
                             if not out:
                                 try:
@@ -992,6 +1006,7 @@ def run_headless_agent():
                                 out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
                                 out = _strip_tool_calls_json(out)
                                 out = re.sub(r'\n{3,}', '\n\n', out).strip()
+                                out = _strip_workflow_async_from_message(out)
                                 out = _sanitize_outgoing_message(out)
                                 if out:
                                     send_discord_reply(str(discord_channel_id), out)
@@ -1020,6 +1035,7 @@ def run_headless_agent():
                                 out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
                                 out = _strip_tool_calls_json(out)
                                 out = re.sub(r'\n{3,}', '\n\n', out).strip()
+                                out = _strip_workflow_async_from_message(out)
                                 out = _sanitize_outgoing_message(out)
                                 if out:
                                     send_whatsapp_reply(username, str(chat_jid), out, user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None)

@@ -80,20 +80,13 @@ VAF uses a **modular system prompt** that loads only what's needed:
 
 ### Module retention (decay)
 
-Modules remain active for a number of turns after they are triggered instead of being removed immediately. This avoids rapid switching when the user alternates between topics. The default retention is 3 turns; selected modules (e.g. coding, research) can use a longer retention via `MODULE_DECAY_TURNS`.
+Modules remain active for a number of turns after they are triggered instead of being removed immediately. This avoids rapid switching when the user alternates between topics. The system uses **Dynamic Decay** based on your context limit (`n_ctx`):
 
-```python
-# Default: 3 turns; override per module as needed
-DECAY_START = 3
-MODULE_DECAY_TURNS = {"coding": 5, "research": 4, "filesystem": 3}
-
-# Example:
-User: "Create a Python script"     → coding active (5 turns)
-User: "Add error handling"         → coding reset to 5
-User: "What's the weather?"        → coding 4, research 4
-User: "Thanks!"                    → coding 3, research 3
-User: "Bye"                        → coding 2, research 2
-```
+| Context Limit | Base Decay | Coding Module | Research/Filesystem |
+|---------------|------------|---------------|----------------------|
+| **Small (≤ 12k)** | 2 turns | 3 turns | 2 turns |
+| **Medium (≤ 20k)**| 2 turns | 4 turns | 2-3 turns |
+| **Large (> 20k)** | 3 turns | 5 turns | 3-4 turns (Default) |
 
 ### Implementation
 
@@ -101,44 +94,22 @@ Implemented in `vaf/core/system_prompt.py`:
 
 ```python
 class SystemPromptManager:
-    DECAY_START = 3  # Default turns until module is deactivated
-    MODULE_DECAY_TURNS = {"coding": 5, "research": 4, "filesystem": 3}
+    # Retention counts are now dynamic (initialized in __init__ based on max_tokens)
     
-    def __init__(self, agent_tools):
-        self.tools = agent_tools
-        self.active_modules = {}  # module_name -> remaining_turns
-        
-    def analyze_context(self, user_input: str):
-        """Update active modules from user input."""
-        # 1. Decrement remaining turns; remove when zero
-        for mod in list(self.active_modules.keys()):
-            self.active_modules[mod] -= 1
-            if self.active_modules[mod] <= 0:
-                del self.active_modules[mod]
-        
-        # 2. Activate or reset modules from keyword triggers
-        if any(kw in user_input.lower() for kw in ["code", "script", "create"]):
-            self.active_modules["coding"] = self.MODULE_DECAY_TURNS.get("coding", self.DECAY_START)
-        if any(kw in user_input.lower() for kw in ["search", "who is", "weather"]):
-            self.active_modules["research"] = self.MODULE_DECAY_TURNS.get("research", self.DECAY_START)
-        # ... etc
-    
-    def build_prompt(self, filename: str) -> str:
-        """Build prompt from active modules only."""
-        prompt = self._build_core()
-        if "research" in self.active_modules:
-            prompt += MODULE_RESEARCHER
-        if "coding" in self.active_modules:
-            prompt += MODULE_CODER
-        # ... etc
-        return prompt
+    def __init__(self, agent_tools, max_tokens=8192):
+        self.max_tokens = max_tokens
+        # Dynamic limits are set here...
+        if max_tokens <= 12000:
+            self.decay_start = 2
+            self.module_decay_turns = {"coding": 3, "research": 2, "filesystem": 2}
+        # ...
 ```
 
 ## Context Management
 
 ### Overview
 
-VAF uses a **Cursor-style context management system** that tracks, compresses, and archives conversation history.
+VAF uses a **Cursor-style context management system** that tracks, compresses, and archives conversation history. The system is **VRAM-aware**, meaning it adapts its behavior based on your configured context limit (`n_ctx`).
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -146,12 +117,11 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  📊 TOKEN TRACKING                                  │    │
-│  │  ├─ Text: ~4 chars/token                            │    │
-│  │  ├─ Code: ~3.5 chars/token                          │    │
-│  │  ├─ Tools: DYNAMIC CALCULATION (Realtime)           │    │
-│  │  │  └─ Calculates exact overhead of active tools    │    │
-│  │  └─ 10% safety margin for special tokens            │    │
+│  │  📊 ADAPTIVE TOKEN TRACKING                         │    │
+│  │  ├─ Dynamic Ratios: 2.5 - 3.0 chars/token           │    │
+│  │  ├─ Dynamic Thresholds: 70% - 85% (Triggers)        │    │
+│  │  ├─ Tool Overhead: Precise calculation              │    │
+│  │  └─ Safety: Proactive tool reduction (Core set)     │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                          │                                  │
 │                          ▼                                  │
@@ -180,6 +150,16 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### VRAM-Aware Efficiency
+
+To support systems with limited VRAM (e.g., 11k or 16k context limits), the manager dynamically adjusts its aggressive levels:
+
+| Context Limit (`n_ctx`) | Compression Trigger | Recent Memory | Strategy |
+|-------------------------|---------------------|---------------|----------|
+| **Small (≤ 12k)**       | **70%** usage       | **6 messages**| Aggressive pruning, Core tools only |
+| **Medium (≤ 20k)**      | **75%** usage       | **8 messages**| Proactive compression, 25% output buffer |
+| **Large (> 20k)**       | **85%** usage       | **10 messages**| Standard Cursor-style (Default) |
 
 ### RAG and memory context (pre-generation injection)
 
@@ -450,12 +430,12 @@ Each web page is processed in a **separate LLM call** to prevent context polluti
 def answer_question_with_page(user_question: str, page_content: str) -> str:
     """Use separate LLM context to answer question based on single page."""
     
-    prompt = f"""User Question: "{user_question}"
+    prompt = f\"\"\"User Question: \"{user_question}\"
 
 Page Content:
 {page_content}
 
-Based ONLY on this page, answer the question."""
+Based ONLY on this page, answer the question.\"\"\"
 
     # Separate LLM call with isolated context (~400 tokens max)
     res = requests.post(
@@ -484,7 +464,10 @@ Based ONLY on this page, answer the question."""
 
 ### Trigger
 
-Compression is triggered when context usage reaches **85%** (configurable).
+Compression is triggered by **Adaptive Thresholds** based on your context limit:
+- **≤ 12k**: 70% usage
+- **≤ 20k**: 75% usage
+- **Default**: 85% usage
 
 ### Process
 
@@ -501,27 +484,28 @@ BEFORE COMPRESSION (100 messages, 7,500 tokens):
 
                 ⬇️ COMPRESSION ⬇️
 
-AFTER COMPRESSION (12 messages, 2,000 tokens):
+AFTER COMPRESSION (8 messages, 2,000 tokens):
 ┌─────────────────────────────────────────────────┐
 │ System Prompt (kept)                            │
 │ ─────────────────────────────────────────────   │
-│ [COMPRESSED CONTEXT]                            │
+│ [CONTEXT GLUE]                                  │
 │ 🎯 Intent: Create website with contact form     │
 │ 📁 State: Created index.html, style.css         │
 │ 📝 Summary: User requested website creation...  │
 │ ─────────────────────────────────────────────   │
 │ User: "Add a contact form" (recent)             │
 │ Assistant: [Response...] (recent)               │
-│ ... (last 10 messages kept raw)                 │
+│ ... (last 6-10 messages kept raw)               │
 └─────────────────────────────────────────────────┘
 ```
 
 ### Strategy
 
 1. **Archive**: Full history saved to `~/.vaf/context_archive/` (restorable via `/restore`)
-2. **Keep**: System prompt + last 10 messages (raw)
+2. **Keep**: System prompt + dynamic recent window (6-10 messages)
 3. **Compress**: Old messages → Intent Context + State Context + Narrative Summary
-4. **Result**: ~70% token reduction while preserving critical information
+4. **Density**: Small context limits trigger **High-Density Summary** mode
+5. **Result**: ~70% token reduction while preserving critical information
 
 ### Implementation
 
@@ -529,30 +513,24 @@ See `vaf/core/context.py`:
 
 ```python
 def compress(self, history: List[Dict]) -> List[Dict]:
-    """Cursor-style compression."""
+    """Adaptive Cursor-style compression."""
     # 1. Archive full history for restoration
     self._archive_history(history)
     
     # 2. Update Intent and State from ALL messages
     for msg in history:
         if msg.get("role") == "user":
-            self.update_intent(msg.get("content", ""))  # Session goal (user_intent), not preferences/language
+            self.update_intent(msg.get("content", ""))
         self.update_state(msg)
     
     # 3. Build compressed history
-    system_prompt = history[0]  # Always keep
-    recent_messages = history[-self.recent_memory_size:]  # Keep raw
+    system_prompt = history[0]
+    recent_messages = history[-self.recent_memory_size:]
     
-    # 4. Build context summary
+    # 4. Build context summary (High-Density if n_ctx is small)
     context_summary = self._build_context_summary()
     
-    # 5. Construct new history
-    new_history = [system_prompt]
-    if context_summary:
-        new_history.append({"role": "system", "content": context_summary})
-    new_history.extend(recent_messages)
-    
-    return new_history
+    # ...
 ```
 
 ---
@@ -564,10 +542,10 @@ VAF's architecture is designed around **context efficiency**:
 | Component | Strategy | Token Savings |
 |-----------|----------|---------------|
 | System Prompt | Dynamic modules | 40-80% |
+| Module Decay | Dynamic retention | token preservation |
 | Sub-Agents | Isolated contexts | No overflow |
 | Web Search | Per-page processing | 80% |
 | Deep Research | Topic-by-topic | No overflow |
-| Compression | Cursor-style | 70% |
+| Compression | Adaptive triggers | 70% |
 
 **Result**: You can have longer, more productive conversations without hitting context limits!
-

@@ -975,7 +975,7 @@ function VAFDashboardContent() {
     };
 
     // Workflow Store
-    const { workflow: activeWorkflow, isOpen: workflowPanelOpen, loadWorkflow, updateStepStatus, appendWorkflowLine } = useWorkflowStore();
+    const { workflow: activeWorkflow, isOpen: workflowPanelOpen, loadWorkflow, updateStepStatus, appendWorkflowLine, clearWorkflow } = useWorkflowStore();
     // Check if a workflow is actively running
     const isWorkflowRunning = activeWorkflow?.status === 'running';
 
@@ -2045,6 +2045,8 @@ function VAFDashboardContent() {
                     if (!data.sessionId || data.sessionId === activeSessionId) {
                         setLoading(false);
                         setLoadingMessageId(null);
+                        // Clear workflow runtime so stop button hides (workflow was stopped)
+                        clearWorkflow();
                     }
                 }
                 else if (data.type === 'memory_learning') {
@@ -3443,10 +3445,10 @@ function VAFDashboardContent() {
                                     )}
                                 </div>
 
-                                {/* Stop button left of message box — fixed-width slot so message box doesn't shrink when button appears */}
+                                {/* Stop button left of message box — show when chat is loading OR a workflow is running */}
                                 <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
                                     <div className="w-9 shrink-0 flex items-center justify-center">
-                                        {loading && (
+                                        {(loading || isWorkflowRunning) && (
                                             <button
                                                 type="button"
                                                 onClick={stopGeneration}

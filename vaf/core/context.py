@@ -68,8 +68,20 @@ class ContextManager:
     
     def __init__(self, max_tokens: int = 8192):
         self.max_tokens = max_tokens
-        self.trigger_threshold = 0.85  # Trigger at 85% (increased from 70% to prevent overflow)
-        self.recent_memory_size = 10   # Keep last N messages raw
+        
+        # DYNAMIC LIMITS: React to small context sizes (VRAM efficiency)
+        # For 8k: threshold 0.75, recent 6
+        # For 16k: threshold 0.80, recent 8
+        # For >32k: threshold 0.85, recent 10 (default)
+        if max_tokens <= 12000:
+            self.trigger_threshold = 0.70
+            self.recent_memory_size = 6
+        elif max_tokens <= 20000:
+            self.trigger_threshold = 0.75
+            self.recent_memory_size = 8
+        else:
+            self.trigger_threshold = 0.85
+            self.recent_memory_size = 10
         
         # Context layers
         self.intent = IntentContext()
@@ -93,18 +105,24 @@ class ContextManager:
         - Add 10% safety margin for special tokens, formatting, etc.
         """
         total = base_tokens
+        
+        # Conservative estimation for small contexts
+        is_small = self.max_tokens <= 16384
+        text_ratio = 2.5 if is_small else 3.0
+        code_ratio = 2.0 if is_small else 2.5
+        
         for msg in messages:
             content = str(msg.get("content", ""))
             # Count role tokens (e.g., "user", "assistant", "system")
             role = msg.get("role", "")
             if role:
-                total += len(role) / 3.0  # Estimate role tokens
+                total += len(role) / text_ratio  # Estimate role tokens
             
             # Count content tokens
             if "```" in content:
-                total += len(content) / 2.5
+                total += len(content) / code_ratio
             else:
-                total += len(content) / 3.0
+                total += len(content) / text_ratio
         
         # Add 10% safety margin for special tokens, formatting, etc.
         total = int(total * 1.1)
@@ -189,16 +207,20 @@ class ContextManager:
         content = str(message.get("content", ""))
         role = message.get("role", "")
         
+        # Dynamic TTL based on context size
+        is_small = self.max_tokens <= 16384
+        default_ttl = 3 if is_small else 5
+        
         def update_file_list(file_list: List[tuple[str, int]], new_files: List[str]):
             for f in new_files:
                 found = False
                 for i, (path, ttl) in enumerate(file_list):
                     if path == f:
-                        file_list[i] = (path, 5)
+                        file_list[i] = (path, default_ttl)
                         found = True
                         break
                 if not found:
-                    file_list.append((f, 5))
+                    file_list.append((f, default_ttl))
             return file_list[-15:]
 
         # 1. Proactive Fact Extraction (The "Glue")
@@ -386,40 +408,50 @@ class ContextManager:
     def _build_context_summary(self) -> str:
         """Build a high-density structured context summary (The 'Glue')."""
         parts = []
+        is_small = self.max_tokens <= 16384
         
         # 1. NARRATIVE (High Priority)
         if self.state.narrative_summary:
-            parts.append(f"### 📝 RECENT SUMMARY\n{self.state.narrative_summary}")
+            header = "## RECENT SUMMARY" if is_small else "### 📝 RECENT SUMMARY"
+            parts.append(f"{header}\n{self.state.narrative_summary}")
 
         # 2. PROJECT STATE
         state_parts = []
+        file_limit = 5 if is_small else 8
         if self.state.files_created:
-            state_parts.append(f"**Created:** {', '.join([p for p, t in self.state.files_created[-8:]])}")
+            state_parts.append(f"**Created:** {', '.join([p for p, t in self.state.files_created[-file_limit:]])}")
         if self.state.files_modified:
-            state_parts.append(f"**Modified:** {', '.join([p for p, t in self.state.files_modified[-8:]])}")
+            state_parts.append(f"**Modified:** {', '.join([p for p, t in self.state.files_modified[-file_limit:]])}")
         if self.state.files_read:
-            state_parts.append(f"**Read:** {', '.join([p for p, t in self.state.files_read[-8:]])}")
+            state_parts.append(f"**Read:** {', '.join([p for p, t in self.state.files_read[-file_limit:]])}")
         
         if state_parts:
-            parts.append("### 📁 PROJECT STATE\n" + "\n".join(state_parts))
+            header = "## PROJECT STATE" if is_small else "### 📁 PROJECT STATE"
+            parts.append(f"{header}\n" + "\n".join(state_parts))
 
         # 3. ERRORS (Critical)
         if self.state.errors_encountered:
-            parts.append("### ⚠️ ERRORS ENCOUNTERED\n• " + "\n• ".join(self.state.errors_encountered[-5:]))
+            err_limit = 3 if is_small else 5
+            header = "## ERRORS" if is_small else "### ⚠️ ERRORS ENCOUNTERED"
+            parts.append(f"{header}\n• " + "\n• ".join(self.state.errors_encountered[-err_limit:]))
 
         # 4. DECISIONS & PROGRESS
         if self.state.key_decisions:
-            parts.append("### 🎯 DECISIONS & PROGRESS\n• " + "\n• ".join(self.state.key_decisions[-5:]))
+            dec_limit = 3 if is_small else 5
+            header = "## DECISIONS" if is_small else "### 🎯 DECISIONS & PROGRESS"
+            parts.append(f"{header}\n• " + "\n• ".join(self.state.key_decisions[-dec_limit:]))
         
         # 5. INTENT (Goal)
         if self.intent.primary_goal:
-            parts.append(f"### 🎯 PRIMARY GOAL\n{self.intent.primary_goal}")
+            header = "## PRIMARY GOAL" if is_small else "### 🎯 PRIMARY GOAL"
+            parts.append(f"{header}\n{self.intent.primary_goal}")
         
         if not parts:
             return ""
         
+        main_header = "## CONTEXT GLUE" if is_small else "### COMPRESSED CONTEXT STATE (STABLE PROGRESS GLUE)"
         return (
-            "### COMPRESSED CONTEXT STATE (STABLE PROGRESS GLUE)\n\n"
+            f"{main_header}\n\n"
             + "\n\n".join(parts)
         )
     

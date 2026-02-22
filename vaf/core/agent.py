@@ -2785,8 +2785,25 @@ class Agent:
         old_len = len(self.history)
         self.history = new_history
 
-        logger.info("Checkpoint: %d → %d messages (archived full history)", old_len, len(new_history))
-        return f"[checkpoint] Context reset: {old_len} → {len(new_history)} messages. Plan and working memory preserved."
+        import logging as _logging
+        _logging.getLogger(__name__).info(
+            "Checkpoint: %d -> %d messages (archived full history)", old_len, len(new_history)
+        )
+
+        # Notify WebUI that history was intentionally compressed so it clears its
+        # local cache and doesn't re-inject orphaned old messages on next history_update.
+        try:
+            from vaf.core.web_interface import get_web_interface
+            session_id = getattr(self, "current_session_id", None)
+            get_web_interface()._push_session_update(session_id, {
+                "type": "context_checkpoint",
+                "old_count": old_len,
+                "new_count": len(new_history),
+            })
+        except Exception:
+            pass
+
+        return f"[checkpoint] Context reset: {old_len} -> {len(new_history)} messages. Plan and working memory preserved."
 
     def _broadcast_context_status(self):
         """Send context debug info to WebUI (X-Ray Vision)."""

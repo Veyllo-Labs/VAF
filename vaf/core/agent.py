@@ -1095,9 +1095,6 @@ class Agent:
                 except Exception:
                     pass
 
-        # DEBUG: Always print active tools during this debugging session
-        print(f"[DEBUG] Active Tools: {list(self.tools.keys())}")
-
         # Track active async sub-agent tasks
         self._async_subagent_tasks = {}  # task_id -> {"agent_type": str, "task": str, "started_at": datetime}
 

@@ -431,7 +431,7 @@ class Config:
             
         # Detect and notify changes for critical keys
         # local_network_* for server restart; provider for tray VRAM load/unload
-        critical_keys = ["local_network_enabled", "local_network_port", "local_network_port_frontend", "provider"]
+        critical_keys = ["local_network_enabled", "local_network_port", "local_network_port_frontend", "provider", "n_ctx", "gpu_layers"]
         
         for key in critical_keys:
             old_val = existing_config.get(key)

@@ -15,7 +15,8 @@ VAF includes a persistent background service managed by a system tray applicatio
 - **Instant Wake-on-Demand**: The server wakes up instantly when you run a CLI command (`vaf run`) or open the Web UI.
 - **Graceful Shutdown**: Checks for active CLI sessions before quitting to prevent data loss.
 - **Single HTTP Backend**: The tray manages a single `llama-server` on `127.0.0.1:8080`. Other components reuse it instead of spawning duplicates.
-- **Provider-Wechsel**: Beim Wechsel des Providers in den Einstellungen (Local ↔ API) wird das lokale Modell sofort aus dem VRAM entladen (Local → API) bzw. auf Anforderung geladen (API → Local). Siehe [MODELL_UND_PROVIDER_WECHSEL.md](MODELL_UND_PROVIDER_WECHSEL.md).
+- **Hot-Reload Settings**: Changing `n_ctx` (context size) or `gpu_layers` in the Web UI settings automatically restarts the `llama-server` with the new values — no full app restart required.
+- **Provider Switch**: Switching the provider in settings (Local ↔ API) immediately unloads the local model from VRAM (Local → API) or loads it on demand (API → Local).
 
 ## Usage
 
@@ -50,7 +51,21 @@ Settings are managed in `~/.vaf/config.json`:
 | `server_idle_timeout` | `15` | Seconds to wait before unloading model |
 | `persist_server` | `false` | If true, model stays loaded (same as checkbox) |
 | `tray_autostart` | `false` | Auto-start tray app on OS login |
+| `n_ctx` | `8192` | Context window size (tokens). **Hot-reloaded**: changing this in Settings auto-restarts the `llama-server`. |
+| `gpu_layers` | `-1` | Number of layers offloaded to GPU (`-1` = all). **Hot-reloaded**: changing this in Settings auto-restarts the `llama-server`. |
 | `llama_cache_ram` | `4096` | Prompt cache size in MB for the local llama-server. Set to `0` to disable caching; set to `-1` to use 40% of free system RAM (capped at 8192 MB). Takes effect after the next server start. |
+
+### Hot-Reload Behavior
+
+Certain settings trigger an automatic server restart when changed in the Web UI:
+
+| Setting | Effect |
+| :--- | :--- |
+| `n_ctx`, `gpu_layers` | Stops and restarts `llama-server` with new values (local provider only). |
+| `local_network_enabled`, `local_network_port` | Restarts both uvicorn backend and Next.js frontend with new network binding. |
+| `provider` | Switches between local model and API backend; unloads/loads VRAM as needed. |
+
+This is implemented via the Config observer pattern: `Config.save()` detects changes to critical keys and notifies `on_config_changed()` in `tray.py`, which performs the restart in a background thread.
 
 ## Architecture
 

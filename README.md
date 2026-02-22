@@ -59,10 +59,11 @@ The auto-installer handles everything:
 
 1. ✅ **System Detection** - OS, GPU (NVIDIA/AMD/Apple Silicon), package manager
 2. ✅ **Python Setup** - Virtual environment, all dependencies
-3. ✅ **Docker Check** - Detection for Memory System database
+3. ✅ **Docker Smart Update** - Detects changes to `docker-compose.memory.yml` after `git pull`, auto-starts Docker if needed, and applies stack updates (new services, configuration changes). See [docs/DOCKER_SERVICES.md](docs/DOCKER_SERVICES.md).
 4. ✅ **Node.js Check** - For Web UI
 5. ✅ **Shortcuts** - Desktop/Start Menu (Windows), App Bundle (macOS), Desktop Entry (Linux)
 6. ✅ **Shell Alias** - `vaf` command added to your shell
+
 
 ### Installation Options
 

@@ -2620,18 +2620,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     f.write(f"{_dt.now().isoformat()} QUEUE_ADD session_id={session_id} preview={repr((content or '')[:60])} queue_size_after={qsize}\n")
                         except Exception:
                             pass
-                        # Ack to console
+                        # Ack to console only; do not push to chat UI (avoids duplicating user message as system "Queued input...")
                         file_info = f" [{len(files)} file(s)]" if files else ""
                         print(f"[WebUI] Queued input{file_info} for session {session_id}: {content[:50]}...")
-                        try:
-                            manager.log(
-                                f"Queued input{file_info} for session {session_id}: {content[:50]}...",
-                                level="info",
-                                source="System",
-                                session_id=session_id
-                            )
-                        except Exception:
-                            pass
 
                 elif type == "set_sidebar_documents":
                     session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)

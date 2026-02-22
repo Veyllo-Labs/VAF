@@ -1319,9 +1319,7 @@ function VAFDashboardContent() {
                         // This catches "...", ". . .", "___", etc.
                         if (displayMsg.replace(/[\W_]/g, '').length === 0) return;
 
-                        // Set status message for the ghost loader
-                        setStatusMessage(`${src}: ${displayMsg}`);
-
+                        // Do not set statusMessage here: we add this as a system step below; showing it again as ghost loader causes duplicate (prominent + faded).
                         setMessages(prev => {
                             const last = prev[prev.length - 1];
                             const newContent = `${src}: ${cleanMsg}`;
@@ -1897,6 +1895,15 @@ function VAFDashboardContent() {
                     );
                     // Strip _order before setting state
                     finalMsgs = finalMsgs.map(({ _order, ...msg }) => msg) as Message[];
+
+                    // Fix order after reload: cached system messages (orphans) were appended at end. Move trailing system block before the last assistant so system steps appear before the reply.
+                    const lastAssistantIdx = finalMsgs.map((m, i) => ({ role: m.role, i })).filter(({ role }) => role === 'assistant').pop()?.i ?? -1;
+                    let trailingSystemStart = finalMsgs.length;
+                    while (trailingSystemStart > 0 && finalMsgs[trailingSystemStart - 1].role === 'system') trailingSystemStart--;
+                    if (lastAssistantIdx >= 0 && trailingSystemStart < finalMsgs.length && trailingSystemStart > lastAssistantIdx) {
+                        const systemBlock = finalMsgs.splice(trailingSystemStart, finalMsgs.length - trailingSystemStart);
+                        finalMsgs.splice(lastAssistantIdx, 0, ...systemBlock);
+                    }
 
                     // Deduplicate: when switching back to a session, cache + server can both contribute
                     // the same messages (server content cleaned, timestamps differ), causing duplicates
@@ -3399,10 +3406,11 @@ function VAFDashboardContent() {
                                 })()}
 
                                 {loading && messages.length > 0 && !(
-                                    // Hide loading bubble only when a tool is actively running
-                                    // (the tool card itself shows the spinner in that case)
-                                    messages[messages.length - 1].role === 'tool' &&
-                                    messages[messages.length - 1].toolStatus === 'running'
+                                    // Hide loading bubble when a tool is actively running (tool card shows spinner)
+                                    (messages[messages.length - 1].role === 'tool' &&
+                                    messages[messages.length - 1].toolStatus === 'running') ||
+                                    // Or when last message is a system step (RAG, Router, Final tools, etc.) – no redundant avatar + dots row
+                                    messages[messages.length - 1].role === 'system'
                                 ) && (
                                     <div className="flex gap-4 justify-center pt-4">
                                         <div className="w-full max-w-[85%] flex gap-4">

@@ -1050,10 +1050,15 @@ class Agent:
                         if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
                             if instance.name in ("git_add_commit", "git_status", "git_log", "memory_save"):
                                 continue
-                        # thinking_done / thinking_note_add: only in thinking mode; skip when not in thinking mode
-                        if instance.name in ("thinking_done", "thinking_note_add"):
+                        # thinking_done: ONLY in thinking mode — the main agent must never call this
+                        if instance.name == "thinking_done":
                             if os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes"):
                                 continue
+                            self.tools[instance.name] = instance
+                            continue
+                        # thinking_note_add: available in both modes — agent can save notes during
+                        # normal chat for the next thinking pass (e.g. "user confirmed X, don't ask again")
+                        if instance.name == "thinking_note_add":
                             self.tools[instance.name] = instance
                             continue
                         if is_coder_only:

@@ -1690,8 +1690,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         log("API", f"WebSocket handshake failed: {e}")
         raise e
     try:
+        # Get user scope for filtering sessions
+        user_scope_id = manager.get_connection_user(websocket)
+        
         # Send initial session list (only Web UI chats; channel sessions appear in their dashboards)
-        sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
+        sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
         web_sessions = _web_ui_sessions(sessions)
         await websocket.send_json({
             "type": "session_list",
@@ -1734,79 +1737,98 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         # Auto-load latest Web UI session so WebUI gets a valid sessionId immediately (not a channel chat)
         if web_sessions:
             sid = web_sessions[0]["id"]
+        else:
+            # Create a new default session for the user if they have none
+            new_sess = session_mgr.new(user_scope_id=user_scope_id)
+            session_mgr.save(new_sess)
+            sid = new_sess.id
+            # Refresh the list for the client so they see the new session
+            sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
+            web_sessions = _web_ui_sessions(sessions)
+            await websocket.send_json({
+                "type": "session_list",
+                "sessions": [
+                    {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
+                    for s in web_sessions
+                ]
+            })
+
+        try:
+            # Subscribe this connection to the session for scoped updates
+            manager.subscribe_to_session(websocket, sid)
+
             try:
-                # Subscribe this connection to the session for scoped updates
-                manager.subscribe_to_session(websocket, sid)
-
-                # Load from disk and send history update
                 loaded = session_mgr.load(sid)
+            except FileNotFoundError:
+                # Should not happen for newly created session, but safety first
+                loaded = Session(id=sid, name="New Chat")
 
-                import re
-                def clean_history_text(text):
-                    if not text: return ""
-                    text = re.sub(r'\[dim\]', '<think>', text, flags=re.IGNORECASE)
-                    text = re.sub(r'\[white dim\]', '<think>', text, flags=re.IGNORECASE)
-                    text = re.sub(r'\[.*?dim.*?\]', '<think>', text, flags=re.IGNORECASE)
-                    text = text.replace('[/dim]', '</think>')
-                    if '<think>' in text and '</think>' not in text:
-                        text = text.replace('[/]', '</think>')
-                    text = re.sub(r'\[\/?[^\]]+\]', '', text)
-                    return text
+            import re
+            def clean_history_text(text):
+                if not text: return ""
+                text = re.sub(r'\[dim\]', '<think>', text, flags=re.IGNORECASE)
+                text = re.sub(r'\[white dim\]', '<think>', text, flags=re.IGNORECASE)
+                text = re.sub(r'\[.*?dim.*?\]', '<think>', text, flags=re.IGNORECASE)
+                text = text.replace('[/dim]', '</think>')
+                if '<think>' in text and '</think>' not in text:
+                    text = text.replace('[/]', '</think>')
+                text = re.sub(r'\[\/?[^\]]+\]', '', text)
+                return text
 
-                frontend_messages = []
-                for msg in loaded.messages:
-                    role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "user")
-                    content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
-                    timestamp = msg.get("timestamp") if isinstance(msg, dict) else getattr(msg, "timestamp", None)
-                    meta = msg.get("metadata") if isinstance(msg, dict) else getattr(msg, "metadata", None) or {}
-                    if role == "assistant":
-                        content = clean_history_text(content)
-                    entry = {"role": role, "content": content, "timestamp": timestamp}
-                    if role == "tool" and meta:
-                        if meta.get("toolName") is not None:
-                            entry["toolName"] = meta["toolName"]
-                        if meta.get("toolId") is not None:
-                            entry["toolId"] = meta["toolId"]
-                        if meta.get("toolStatus") is not None:
-                            entry["toolStatus"] = meta["toolStatus"]
-                    frontend_messages.append(entry)
+            frontend_messages = []
+            for msg in loaded.messages:
+                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "user")
+                content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+                timestamp = msg.get("timestamp") if isinstance(msg, dict) else getattr(msg, "timestamp", None)
+                meta = msg.get("metadata") if isinstance(msg, dict) else getattr(msg, "metadata", None) or {}
+                if role == "assistant":
+                    content = clean_history_text(content)
+                entry = {"role": role, "content": content, "timestamp": timestamp}
+                if role == "tool" and meta:
+                    if meta.get("toolName") is not None:
+                        entry["toolName"] = meta["toolName"]
+                    if meta.get("toolId") is not None:
+                        entry["toolId"] = meta["toolId"]
+                    if meta.get("toolStatus") is not None:
+                        entry["toolStatus"] = meta["toolStatus"]
+                frontend_messages.append(entry)
 
-                # If this is a thinking session and we have a stored user reply, append it once
-                if sid and str(sid).startswith("thinking_"):
-                    try:
-                        from vaf.core.thinking_mode import pop_user_reply_for_session
-                        reply_data = pop_user_reply_for_session(sid)
-                        if reply_data:
-                            preview = (reply_data.get("reply") or "").strip()
-                            if preview:
-                                frontend_messages.append({
-                                    "role": "user",
-                                    "content": f"User replied: {preview}",
-                                    "timestamp": reply_data.get("at"),
-                                })
-                    except Exception:
-                        pass
-
-                is_active = False
+            # If this is a thinking session and we have a stored user reply, append it once
+            if sid and str(sid).startswith("thinking_"):
                 try:
-                    if (manager.agent_instance and
-                        getattr(manager.agent_instance, '_session_id', None) == sid and
-                        manager.latest_state.get("status") != "idle"):
-                        is_active = True
-                except: pass
+                    from vaf.core.thinking_mode import pop_user_reply_for_session
+                    reply_data = pop_user_reply_for_session(sid)
+                    if reply_data:
+                        preview = (reply_data.get("reply") or "").strip()
+                        if preview:
+                            frontend_messages.append({
+                                "role": "user",
+                                "content": f"User replied: {preview}",
+                                "timestamp": reply_data.get("at"),
+                            })
+                except Exception:
+                    pass
 
-                await websocket.send_json({
-                    "type": "history_update",
-                    "messages": frontend_messages,
-                    "sessionId": sid,
-                    "isActive": is_active,
-                    "currentStatus": manager.latest_state.get("status", "idle") if is_active else "idle"
-                })
-                artifact_payload = _build_artifact_payload(loaded, sid)
-                if artifact_payload:
-                    await websocket.send_json(artifact_payload)
-            except Exception as e:
-                log("WebServer", f"Auto-load session failed: {e}")
+            is_active = False
+            try:
+                if (manager.agent_instance and
+                    getattr(manager.agent_instance, '_session_id', None) == sid and
+                    manager.latest_state.get("status") != "idle"):
+                    is_active = True
+            except: pass
+
+            await websocket.send_json({
+                "type": "history_update",
+                "messages": frontend_messages,
+                "sessionId": sid,
+                "isActive": is_active,
+                "currentStatus": manager.latest_state.get("status", "idle") if is_active else "idle"
+            })
+            artifact_payload = _build_artifact_payload(loaded, sid)
+            if artifact_payload:
+                await websocket.send_json(artifact_payload)
+        except Exception as e:
+            log("WebServer", f"Auto-load session failed: {e}")
 
         while True:
             # Listen for client commands
@@ -1819,7 +1841,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 # --- SESSION MANAGEMENT ---
                 
                 if type == "get_sessions":
-                    sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
+                    # user_scope_id is required for correct RAG scope and filtered session listing
+                    user_scope_id = manager.get_connection_user(websocket)
+                    sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                     web_sessions = _web_ui_sessions(sessions)
                     await websocket.send_json({
                         "type": "session_list",
@@ -1830,7 +1854,24 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     })                
                 elif type == "load_session":
                     sid = cmd.get("id")
+                    user_scope_id = manager.get_connection_user(websocket)
                     try:
+                        # 1. Load from disk (to check ownership before subscribing)
+                        loaded = session_mgr.load(sid)
+                        
+                        # Verify ownership: matches OR session has no scope (legacy) OR user is local admin
+                        session_scope = (loaded.metadata or {}).get("user_scope_id")
+                        from vaf.core.config import get_local_admin_scope_id
+                        local_admin_scope = get_local_admin_scope_id()
+                        
+                        is_owner = not session_scope or str(session_scope) == str(user_scope_id)
+                        is_admin = str(user_scope_id) == str(local_admin_scope)
+                        
+                        if not is_owner and not is_admin:
+                            log("API", f"Access denied: Session {sid} (scope {session_scope}) does not belong to user {user_scope_id}")
+                            await websocket.send_json({"type": "error", "message": "Access denied"})
+                            continue
+
                         # Subscribe this connection to the session for scoped updates
                         manager.subscribe_to_session(websocket, sid)
                         
@@ -1838,9 +1879,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         from vaf.core.task_queue import TaskQueue
                         tq = TaskQueue()
                         tq.add(session_id="system", input_text=f"__CMD__:LOAD_SESSION:{sid}", source="web")
-                        
-                        # 1. Load from disk (just to send history to frontend immediately)
-                        loaded = session_mgr.load(sid)
                         
                         # Helper to clean historical messages (same logic as run.py)
                         import re
@@ -1950,11 +1988,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "delete_session":
                     sid = cmd.get("id")
+                    user_scope_id = manager.get_connection_user(websocket)
                     session_mgr.delete(sid)
-                    # Broadcast update
-                    sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
+                    # Broadcast update ONLY to this user's connections
+                    sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                     web_sessions = _web_ui_sessions(sessions)
-                    await manager.broadcast({
+                    await manager.broadcast_to_user(user_scope_id, {
                         "type": "session_list",
                         "sessions": [
                             {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
@@ -1964,10 +2003,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "hide_session":
                     sid = cmd.get("id")
+                    user_scope_id = manager.get_connection_user(websocket)
                     if sid and session_mgr.hide(sid):
-                        sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
+                        sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                         web_sessions = _web_ui_sessions(sessions)
-                        await manager.broadcast({
+                        await manager.broadcast_to_user(user_scope_id, {
                             "type": "session_list",
                             "sessions": [
                                 {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
@@ -1976,20 +2016,21 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         })
 
                 elif type == "new_session":
+                    user_scope_id = manager.get_connection_user(websocket)
                     # Push command to main loop to create new session
                     from vaf.core.task_queue import TaskQueue
                     tq = TaskQueue()
-                    tq.add(session_id="system", input_text="__CMD__:NEW_SESSION", source="web")
+                    tq.add(session_id="system", input_text="__CMD__:NEW_SESSION", source="web", metadata={"user_scope_id": user_scope_id})
                     
                     # Create new session object AND SAVE IT IMMEDIATELY (temp, main loop will take over)
-                    new_sess = session_mgr.new()
+                    new_sess = session_mgr.new(user_scope_id=user_scope_id)
                     session_mgr.save(new_sess)
                     
                     # Subscribe this connection to the new session for scoped updates
                     manager.subscribe_to_session(websocket, new_sess.id)
                     
                     # Refresh list
-                    sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
+                    sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                     web_sessions = _web_ui_sessions(sessions)
                     await websocket.send_json({
                         "type": "session_list",
@@ -2008,6 +2049,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "rename_session":
                     sid = cmd.get("id")
                     new_name = cmd.get("newName")
+                    user_scope_id = manager.get_connection_user(websocket)
                     if sid and new_name:
                         session_mgr.rename(sid, new_name)
                         # Notify Main Loop to update in-memory object
@@ -2015,10 +2057,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         tq = TaskQueue()
                         tq.add(session_id="system", input_text=f"__CMD__:RENAME_SESSION:{sid}:{new_name}", source="web")
                         
-                        # Broadcast update
-                        sessions = session_mgr.list(limit=SESSION_LIST_LIMIT)
+                        # Broadcast update ONLY to this user's connections
+                        sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                         web_sessions = _web_ui_sessions(sessions)
-                        await manager.broadcast({
+                        await manager.broadcast_to_user(user_scope_id, {
                             "type": "session_list",
                             "sessions": [
                                 {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
@@ -2184,8 +2226,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 
                 elif type == "artifact_edit":
                     session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                    user_scope_id = manager.get_connection_user(websocket)
                     if not session_id:
-                        session_id = "web-default"
+                        # Use user-scoped default to prevent crosstalk
+                        safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
+                        session_id = f"web-default-{safe_scope}"
                     file = cmd.get("file", "")
                     code = cmd.get("code", "")
                     source = cmd.get("source", "web")
@@ -2261,8 +2306,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         
                         # Get session ID: prefer from message, then connection, then fallback
                         session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                        user_scope_id = manager.get_connection_user(websocket)
                         if not session_id:
-                            session_id = "web-default"
+                            # Use user-scoped default to prevent crosstalk
+                            safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
+                            session_id = f"web-default-{safe_scope}"
 
                         # Editor document: prepend to this turn so agent has current editor content (like Document Viewer)
                         editor_doc = cmd.get("editorDocument")
@@ -2368,8 +2416,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "set_sidebar_documents":
                     session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                    user_scope_id = manager.get_connection_user(websocket)
                     if not session_id:
-                        session_id = "web-default"
+                        # Use user-scoped default to prevent crosstalk
+                        safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
+                        session_id = f"web-default-{safe_scope}"
                     documents = cmd.get("documents") or []
                     try:
                         if not documents:

@@ -38,6 +38,8 @@ Singleton pattern manager that:
 - `connect(websocket)`: Accept new WebSocket connection
 - `disconnect(websocket)`: Remove connection
 - `broadcast(message)`: Send message to all clients
+- `broadcast_to_session(session_id, message)`: Send only to connections subscribed to that session
+- `broadcast_to_user(user_id, message)`: Send only to connections for that user (e.g. session list refresh)
 - `push_update(data)`: Thread-safe update from CLI to Web UI
 - `register_agent(agent)`: Link agent instance for control
 
@@ -70,8 +72,8 @@ Singleton pattern manager that:
 - **Load Sessions**: Switch between existing conversations
 - **Delete Sessions**: Remove unwanted sessions
 - **Auto-Save**: Sessions persist automatically
-- **Session List**: Displays recent 20 sessions
-- **Thinking mode:** When the agent runs in the background (idle thinking), its output is appended to your main chat session (`web-default`) so you see it in the same conversation. Legacy thinking-only sessions are hidden from the sidebar. The message input stays available so you can reply. See [Thinking-Mode.md](Thinking-Mode.md).
+- **Session List**: Displays recent sessions for the current user only (filtered by `user_scope_id`). Loading a session checks ownership; other users' sessions are not accessible.
+- **Thinking mode:** When the agent runs in the background (idle thinking), its output is appended to your main chat session (user-scoped default, e.g. `web-default-<scope>`) so you see it in the same conversation. Legacy thinking-only sessions are hidden from the sidebar. The message input stays available so you can reply. See [Thinking-Mode.md](Thinking-Mode.md).
 
 ### 3. Status Indicators
 

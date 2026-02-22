@@ -117,9 +117,9 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  📊 ADAPTIVE TOKEN TRACKING                         │    │
-│  │  ├─ Dynamic Ratios: 2.5 - 3.0 chars/token           │    │
-│  │  ├─ Dynamic Thresholds: 70% - 85% (Triggers)        │    │
+│  │  📊 REAL-TIME TOKEN TRACKING (Self-Calibration)     │    │
+│  │  ├─ Precise API usage: From OpenAI/DeepSeek/Claude  │    │
+│  │  ├─ Dynamic n_ctx: Auto-boosts to 128k for APIs    │    │
 │  │  ├─ Tool Overhead: Precise calculation              │    │
 │  │  └─ Safety: Proactive tool reduction (Core set)     │    │
 │  └─────────────────────────────────────────────────────┘    │
@@ -150,6 +150,15 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Real-Time API Token Tracking (Self-Calibration)
+
+Unlike local models where VAF uses a local tokenizer, API providers (OpenAI, DeepSeek, Anthropic, Google) provide exact usage data after each request. VAF now utilizes this data for "Self-Calibration":
+
+1. **Facts over Estimation**: After every API call, VAF captures the exact `input_tokens` and `output_tokens` reported by the provider.
+2. **Context Persistence**: The context bar in the Web UI now reflects the *actual* state of the API's context window, including the exact cost of tool schemas and system prompts.
+3. **Dynamic Context Windows**: When an API backend is active, VAF automatically adjusts the context limit (`n_ctx`) to **128,000 tokens** (unless manually set higher). This prevents premature compression and allows full use of modern "Long Context" models.
+4. **Transparent Continuation**: If a response is cut off due to the output token limit (`finish_reason: length`), VAF's API backend transparently requests a continuation, stitching the parts together seamlessly for the user.
 
 ### VRAM-Aware Efficiency
 

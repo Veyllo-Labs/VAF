@@ -227,6 +227,204 @@ class GitHubGetFileTool(BaseTool):
             return f"Error reading file: {e}"
 
 
+class GitHubListDirectoryTool(BaseTool):
+    """List the contents of a directory in a GitHub repository."""
+    name = "github_list_directory"
+    category = "github"
+    description = (
+        "List the contents of a directory in a GitHub repository. Use to explore the project structure. "
+        "Parameters: owner, repo, path (folder path, default root ''), ref (branch/tag/SHA). "
+        "Returns a list of files and subdirectories."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "owner": {"type": "string", "description": "Repository owner."},
+            "repo": {"type": "string", "description": "Repository name."},
+            "path": {"type": "string", "description": "Directory path (e.g. 'src', 'docs'). Default is root."},
+            "ref": {"type": "string", "description": "Branch, tag, or commit SHA. Omit for default branch."},
+        },
+        "required": ["owner", "repo"],
+    }
+
+    def run(self, **kwargs) -> str:
+        username = cred_username_from_kwargs(kwargs)
+        g, account = _get_github_client(kwargs)
+        if not g:
+            return _no_github_message()
+        
+        account_id = account.get("account_id") if account else None
+        owner = (kwargs.get("owner") or "").strip()
+        repo_name = (kwargs.get("repo") or "").strip()
+        path = (kwargs.get("path") or "").strip()
+        ref = (kwargs.get("ref") or "").strip() or None
+        
+        if not owner or not repo_name:
+            return "Missing required parameters: owner, repo."
+        
+        try:
+            repo = g.get_repo(f"{owner}/{repo_name}")
+            contents = repo.get_contents(path) if not ref else repo.get_contents(path, ref=ref)
+            
+            if not isinstance(contents, list):
+                return f"'{path}' is a file, not a directory. Use github_get_file to read it."
+            
+            lines = []
+            for item in contents:
+                icon = "📁" if item.type == "dir" else "📄"
+                lines.append(f"{icon} {item.path}")
+            
+            log_github_activity(
+                username, 
+                "list_directory", 
+                f"Listed directory: {owner}/{repo_name}/{path} ({len(lines)} items)",
+                account_id=account_id
+            )
+            return "\n".join(lines) if lines else f"Directory '{path}' is empty."
+        except GithubException as e:
+            if e.status == 404:
+                return f"Directory or repository not found: {owner}/{repo_name}/{path}"
+            err_msg = f"GitHub API error: {e.status} {e.data.get('message', str(e))}"
+            log_github_activity(username, "list_directory", f"Failed to list directory: {owner}/{repo_name}/{path}", account_id=account_id, success=False, error=err_msg)
+            return err_msg
+        except Exception as e:
+            logger.exception("github_list_directory failed")
+            log_github_activity(username, "list_directory", f"Failed to list directory: {owner}/{repo_name}/{path}", account_id=account_id, success=False, error=str(e))
+            return f"Error listing directory: {e}"
+
+
+class GitHubSearchFilesTool(BaseTool):
+    """Search for files in a GitHub repository."""
+    name = "github_search_files"
+    category = "github"
+    description = (
+        "Search for files in a GitHub repository by name or extension. "
+        "Parameters: owner, repo, query (e.g. 'filename:README', 'extension:py'). "
+        "Returns a list of matching file paths."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "owner": {"type": "string", "description": "Repository owner."},
+            "repo": {"type": "string", "description": "Repository name."},
+            "query": {"type": "string", "description": "Search query. Supports GitHub search qualifiers like 'extension:py' or 'filename:config'."},
+        },
+        "required": ["owner", "repo", "query"],
+    }
+
+    def run(self, **kwargs) -> str:
+        username = cred_username_from_kwargs(kwargs)
+        g, account = _get_github_client(kwargs)
+        if not g:
+            return _no_github_message()
+        
+        account_id = account.get("account_id") if account else None
+        owner = (kwargs.get("owner") or "").strip()
+        repo_name = (kwargs.get("repo") or "").strip()
+        query = (kwargs.get("query") or "").strip()
+        
+        if not owner or not repo_name or not query:
+            return "Missing required parameters: owner, repo, query."
+        
+        try:
+            # Construct search query restricted to this repo
+            full_query = f"{query} repo:{owner}/{repo_name}"
+            files = g.search_code(query=full_query)
+            
+            lines = []
+            # Code search is limited to 1000 results, we'll take top 30
+            for i, f in enumerate(files):
+                if i >= 30:
+                    break
+                lines.append(f"📄 {f.path}")
+            
+            log_github_activity(
+                username, 
+                "search_files", 
+                f"Searched files in {owner}/{repo_name} with query: {query} (found {len(lines)})",
+                account_id=account_id
+            )
+            return "\n".join(lines) if lines else f"No files found for query: {query}"
+        except GithubException as e:
+            err_msg = f"GitHub API error: {e.status} {e.data.get('message', str(e))}"
+            log_github_activity(username, "search_files", f"Failed to search files in {owner}/{repo_name}", account_id=account_id, success=False, error=err_msg)
+            return err_msg
+        except Exception as e:
+            logger.exception("github_search_files failed")
+            log_github_activity(username, "search_files", f"Failed to search files in {owner}/{repo_name}", account_id=account_id, success=False, error=str(e))
+            return f"Error searching files: {e}"
+
+
+class GitHubGetTreeTool(BaseTool):
+    """Get the full file tree of a GitHub repository (recursive)."""
+    name = "github_get_tree"
+    category = "github"
+    description = (
+        "Get a recursive list of all files in a GitHub repository. Use to get a bird's eye view of the project. "
+        "Parameters: owner, repo, ref (branch/SHA), recursive (bool, default true). "
+        "Returns a tree structure of paths."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "owner": {"type": "string", "description": "Repository owner."},
+            "repo": {"type": "string", "description": "Repository name."},
+            "ref": {"type": "string", "description": "Branch or commit SHA. Default is the main branch."},
+            "recursive": {"type": "boolean", "description": "Whether to fetch the tree recursively. Default is true."},
+        },
+        "required": ["owner", "repo"],
+    }
+
+    def run(self, **kwargs) -> str:
+        username = cred_username_from_kwargs(kwargs)
+        g, account = _get_github_client(kwargs)
+        if not g:
+            return _no_github_message()
+        
+        account_id = account.get("account_id") if account else None
+        owner = (kwargs.get("owner") or "").strip()
+        repo_name = (kwargs.get("repo") or "").strip()
+        ref = (kwargs.get("ref") or "").strip() or None
+        recursive = kwargs.get("recursive", True)
+        
+        if not owner or not repo_name:
+            return "Missing required parameters: owner, repo."
+        
+        try:
+            repo = g.get_repo(f"{owner}/{repo_name}")
+            
+            # If ref is not provided, we need to get the default branch's tree
+            if not ref:
+                ref = repo.default_branch
+            
+            # get_git_tree needs a SHA, but we can pass a branch name
+            tree = repo.get_git_tree(ref, recursive=recursive)
+            
+            lines = []
+            for item in tree.tree:
+                icon = "📁" if item.type == "tree" else "📄"
+                lines.append(f"{icon} {item.path}")
+                if len(lines) >= 300: # Safety limit for large repos
+                    lines.append("... (limit reached)")
+                    break
+            
+            log_github_activity(
+                username, 
+                "get_tree", 
+                f"Fetched tree for {owner}/{repo_name} (ref={ref}, recursive={recursive})",
+                account_id=account_id
+            )
+            return "\n".join(lines) if lines else "Tree is empty."
+        except GithubException as e:
+            err_msg = f"GitHub API error: {e.status} {e.data.get('message', str(e))}"
+            log_github_activity(username, "get_tree", f"Failed to get tree for {owner}/{repo_name}", account_id=account_id, success=False, error=err_msg)
+            return err_msg
+        except Exception as e:
+            logger.exception("github_get_tree failed")
+            log_github_activity(username, "get_tree", f"Failed to get tree for {owner}/{repo_name}", account_id=account_id, success=False, error=str(e))
+            return f"Error getting tree: {e}"
+
+
 class GitHubListIssuesTool(BaseTool):
     """List issues for a GitHub repository."""
     name = "github_list_issues"

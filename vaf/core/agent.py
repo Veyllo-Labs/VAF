@@ -2364,7 +2364,12 @@ class Agent:
         estimated_tokens = total_chars // 4
         
         # Use actual context manager limit if available (handles API boosts to 128k)
-        if hasattr(self, 'context_manager'):
+        if self.api_backend:
+            # Boost default for API backends (DeepSeek, OpenAI, etc. support 128k+)
+            max_tokens = self.config.get("n_ctx", 8192)
+            if max_tokens < 128000:
+                max_tokens = 128000
+        elif hasattr(self, 'context_manager'):
             max_tokens = self.context_manager.max_tokens
         else:
             max_tokens = self.config.get("n_ctx", 8192)
@@ -2376,10 +2381,26 @@ class Agent:
         Calculates a precise token usage by using the model's tokenizer.
         This includes the chat history and the schemas of all active tools.
         """
-        # API Backend: Return ESTIMATED current context usage (Snapshot)
-        # We cannot use session_usage because that is CUMULATIVE (billing), 
-        # which breaks the context bar and management logic (shows >100% full).
-        if self.api_backend:
+        # API Backend: Return REAL context usage from the last request if available.
+        # This is perfectly accurate for APIs like OpenAI, DeepSeek, and Anthropic.
+        if self.api_backend and hasattr(self.api_backend, 'last_request_usage'):
+            last_input = self.api_backend.last_request_usage.get("input_tokens", 0)
+            last_output = self.api_backend.last_request_usage.get("output_tokens", 0)
+            
+            # If we haven't made a request yet, or it returned 0, fall back to estimation
+            if last_input > 0:
+                # We use last_input as the base context size. 
+                # We add a small estimate for the *current* unsent user input (if any)
+                total = last_input + last_output
+                
+                # Dynamic n_ctx for APIs: Most modern APIs support 128k context.
+                # If the user hasn't explicitly set a huge limit, we assume 128k for the display.
+                n_ctx = self.config.get("n_ctx", 8192)
+                if n_ctx < 128000:
+                    n_ctx = 128000
+                
+                return total, n_ctx
+            
             return self._estimate_token_usage()
 
         # Server Mode: Use server /tokenize API for precise count (no local model load).

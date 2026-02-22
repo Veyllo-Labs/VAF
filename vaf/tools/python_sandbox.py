@@ -19,12 +19,12 @@ returns to the model context; intermediate tool results are consumed inside
 the running script and never become chat messages.
 
   python_sandbox(
-      code="""
-  import vaf_tools
-  weather = vaf_tools.call("web_search", {"query": "Berlin weather today"})
-  orders  = vaf_tools.call("get_orders", {"limit": 5})
-  print(f"Weather: {weather}\\nOrders: {orders}")
-  """,
+      code=\"\"\"
+import vaf_tools
+weather = vaf_tools.call("web_search", {"query": "Berlin weather today"})
+orders  = vaf_tools.call("get_orders", {"limit": 5})
+print(f"Weather: {weather}\\nOrders: {orders}")
+\"\"\",
       with_vaf_tools=True,
   )
 

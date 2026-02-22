@@ -2164,7 +2164,7 @@ function VAFDashboardContent() {
         if (ws && status === 'connected' && input.length >= 2) {
             const timeoutId = setTimeout(() => {
                 ws.send(JSON.stringify({ type: 'get_autosuggest', text: input }));
-            }, 100);
+            }, 300);
             return () => clearTimeout(timeoutId);
         } else {
             setSuggestion('');

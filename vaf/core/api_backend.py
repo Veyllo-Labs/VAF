@@ -17,7 +17,7 @@ logger = logging.getLogger("vaf.api_backend")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ABSTRACT BASE PROVIDER
-# ═══════════════════════════════════════════════════════════════════════════════
+# ════───────────────────────────────────────────────────────────────────────────
 
 class BaseAIProvider(ABC):
     """Abstract base class for all AI providers."""
@@ -26,6 +26,7 @@ class BaseAIProvider(ABC):
         self.provider_name = provider_name
         self.api_key = api_key
         self.usage = {"input_tokens": 0, "output_tokens": 0}
+        self.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
 
     @abstractmethod
     def chat_completion(
@@ -118,6 +119,8 @@ class OpenAIProvider(BaseAIProvider):
                     if hasattr(chunk, 'usage') and chunk.usage:
                         self.usage["input_tokens"] += chunk.usage.prompt_tokens
                         self.usage["output_tokens"] += chunk.usage.completion_tokens
+                        self.last_request_usage["input_tokens"] = chunk.usage.prompt_tokens
+                        self.last_request_usage["output_tokens"] = chunk.usage.completion_tokens
                 
                 if is_reasoning:
                     yield "</think>"
@@ -141,6 +144,8 @@ class OpenAIProvider(BaseAIProvider):
                 if response.usage:
                     self.usage["input_tokens"] += response.usage.prompt_tokens
                     self.usage["output_tokens"] += response.usage.completion_tokens
+                    self.last_request_usage["input_tokens"] = response.usage.prompt_tokens
+                    self.last_request_usage["output_tokens"] = response.usage.completion_tokens
                     
         except Exception as e:
             UI.error(f"{self.provider_name.upper()} Provider Error: {e}")
@@ -208,6 +213,8 @@ class AnthropicProvider(BaseAIProvider):
                     final_msg = response.get_final_message()
                     self.usage["input_tokens"] += final_msg.usage.input_tokens
                     self.usage["output_tokens"] += final_msg.usage.output_tokens
+                    self.last_request_usage["input_tokens"] = final_msg.usage.input_tokens
+                    self.last_request_usage["output_tokens"] = final_msg.usage.output_tokens
                     
                     # Handle tool use if any
                     for tool_use in response.get_final_message().content:
@@ -223,6 +230,8 @@ class AnthropicProvider(BaseAIProvider):
                 
                 self.usage["input_tokens"] += response.usage.input_tokens
                 self.usage["output_tokens"] += response.usage.output_tokens
+                self.last_request_usage["input_tokens"] = response.usage.input_tokens
+                self.last_request_usage["output_tokens"] = response.usage.output_tokens
                 
         except Exception as e:
             UI.error(f"Anthropic Provider Error: {e}")
@@ -317,6 +326,8 @@ class GoogleProvider(BaseAIProvider):
                 usage = response.usage_metadata
                 self.usage["input_tokens"] += usage.prompt_token_count
                 self.usage["output_tokens"] += usage.candidates_token_count
+                self.last_request_usage["input_tokens"] = usage.prompt_token_count
+                self.last_request_usage["output_tokens"] = usage.candidates_token_count
             else:
                 response = client.generate_content(contents, generation_config=config)
                 if response.text:
@@ -326,6 +337,8 @@ class GoogleProvider(BaseAIProvider):
                 usage = response.usage_metadata
                 self.usage["input_tokens"] += usage.prompt_token_count
                 self.usage["output_tokens"] += usage.candidates_token_count
+                self.last_request_usage["input_tokens"] = usage.prompt_token_count
+                self.last_request_usage["output_tokens"] = usage.candidates_token_count
                 
         except Exception as e:
             UI.error(f"Google Provider Error: {e}")
@@ -344,6 +357,7 @@ class APIBackendManager:
         self.api_key = Config.get_api_key(provider)
         self.provider = self._create_provider()
         self.session_usage = {"input_tokens": 0, "output_tokens": 0}
+        self.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
 
     def _create_provider(self) -> BaseAIProvider:
         # Local/Ollama provider doesn't need an API key
@@ -399,6 +413,8 @@ class APIBackendManager:
             # Sync usage stats back to manager
             self.session_usage["input_tokens"] = self.provider.usage["input_tokens"]
             self.session_usage["output_tokens"] = self.provider.usage["output_tokens"]
+            self.last_request_usage["input_tokens"] = self.provider.last_request_usage["input_tokens"]
+            self.last_request_usage["output_tokens"] = self.provider.last_request_usage["output_tokens"]
             yield chunk
 
     def chat_completion_stream(self, messages, temperature=0.7, max_tokens=4096, model=None, tools=None, tool_choice=None):

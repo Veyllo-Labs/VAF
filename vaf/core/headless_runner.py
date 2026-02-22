@@ -253,7 +253,9 @@ def run_headless_agent():
                     usage = api_backend.session_usage
                     input_tokens = int(usage.get("input_tokens", 0))
                     output_tokens = int(usage.get("output_tokens", 0))
-                    used = input_tokens + output_tokens
+                    # NOTE: Do NOT overwrite `used` with session_usage here.
+                    # session_usage is CUMULATIVE (billing) and grows unboundedly.
+                    # get_token_usage() already returns the correct context snapshot.
                 stats = {
                     "used": used,
                     "total": total,
@@ -543,7 +545,9 @@ def run_headless_agent():
                         usage = api_backend.session_usage
                         input_tokens = int(usage.get("input_tokens", 0))
                         output_tokens = int(usage.get("output_tokens", 0))
-                        used = input_tokens + output_tokens
+                        # NOTE: Do NOT overwrite `used` with session_usage here.
+                        # session_usage is CUMULATIVE (billing) and grows unboundedly.
+                        # get_token_usage() already returns the correct context snapshot.
                     stats = {
                         "used": used,
                         "total": total,
@@ -1046,7 +1050,9 @@ def run_headless_agent():
                             usage = api_backend.session_usage
                             input_tokens = int(usage.get("input_tokens", 0))
                             output_tokens = int(usage.get("output_tokens", 0))
-                            used = input_tokens + output_tokens
+                            # NOTE: Do NOT overwrite `used` with session_usage here.
+                            # session_usage is CUMULATIVE (billing) and grows unboundedly.
+                            # get_token_usage() already returns the correct context snapshot.
                         stats = {
                             "used": used,
                             "total": total,

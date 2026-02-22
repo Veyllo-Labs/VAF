@@ -2831,8 +2831,10 @@ class Agent:
                 else:
                     history_tokens += msg_tokens
 
-            # Estimate tool schema tokens
-            if hasattr(self, 'TOOLS') and self.TOOLS:
+            # Estimate tool schema tokens — only for local/server mode.
+            # API backends handle schemas server-side; don't count them here
+            # or the X-Ray bar will show >100% (e.g. 186%) in API mode.
+            if hasattr(self, 'TOOLS') and self.TOOLS and not self.api_backend:
                 try:
                     import json
                     schema_str = json.dumps(self.TOOLS)
@@ -4478,16 +4480,14 @@ class Agent:
             else:
                 self._active_tools = selected_tools
 
-            # ALWAYS show final tools as system message for debugging consistency
+            # Show final tools once in Web UI (single source; CLI/router logs above already show selection)
             actual_tools = self._active_tools if self._active_tools is not None else list(self.tools.keys())
             final_list = ", ".join(actual_tools)
             if self._active_tools is None:
                 final_list = f"ALL ({len(actual_tools)})"
             elif not selected_tools:
                 final_list = f"CORE ({len(actual_tools)})"
-            
-            UI.event("Router", f"Final tools: {final_list}", style="dim")
-            # Push to Web UI directly so it is never dropped by log throttle (skip in thinking mode)
+            # Single display path: push to Web UI only (avoids duplicate with UI.event→log in Web)
             if _emit_to_web_ui():
                 try:
                     from vaf.core.web_interface import get_web_interface

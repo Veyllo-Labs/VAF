@@ -398,15 +398,24 @@ def _sender_loop() -> None:
                             _jid_digits = "".join(c for c in (chat_jid or "").split("@")[0] if c.isdigit())
                             for _lid, _e164 in _lid_map.items():
                                 _e164_digits = "".join(c for c in str(_e164) if c.isdigit())
-                                if _e164_digits and _jid_digits and _e164_digits.endswith(_jid_digits) or _jid_digits.endswith(_e164_digits):
-                                    voice_jid = _lid
-                                    logger.info("WhatsApp voice: resolved %s → %s via lid_to_e164", chat_jid, voice_jid)
-                                    try:
-                                        from vaf.core.log_helper import log_whatsapp_reply
-                                        log_whatsapp_reply(f"VOICE_LID_RESOLVE {chat_jid} → {voice_jid}")
-                                    except Exception:
-                                        pass
-                                    break
+                                if not (_e164_digits and _jid_digits):
+                                    continue
+                                if not (_e164_digits.endswith(_jid_digits) or _jid_digits.endswith(_e164_digits)):
+                                    continue
+                                # Only use genuine LIDs: a real LID has different digits than the phone number.
+                                # If lid_digits == phone_digits it was incorrectly stored (phone@lid, not a real LID).
+                                _lid_digits = "".join(c for c in (_lid or "").split("@")[0] if c.isdigit())
+                                if _lid_digits == _jid_digits:
+                                    logger.info("WhatsApp voice: skipping fake LID %s (lid digits == phone digits)", _lid)
+                                    continue
+                                voice_jid = _lid
+                                logger.info("WhatsApp voice: resolved %s → %s via lid_to_e164", chat_jid, voice_jid)
+                                try:
+                                    from vaf.core.log_helper import log_whatsapp_reply
+                                    log_whatsapp_reply(f"VOICE_LID_RESOLVE {chat_jid} → {voice_jid}")
+                                except Exception:
+                                    pass
+                                break
                         except Exception:
                             pass
                     p = Path(voice_path)
@@ -458,17 +467,23 @@ def _sender_loop() -> None:
                         _jid_digits = "".join(c for c in (chat_jid or "").split("@")[0] if c.isdigit())
                         for _lid, _e164 in _lid_map.items():
                             _e164_digits = "".join(c for c in str(_e164) if c.isdigit())
-                            if _e164_digits and _jid_digits and (
-                                _e164_digits.endswith(_jid_digits) or _jid_digits.endswith(_e164_digits)
-                            ):
-                                text_jid = _lid
-                                logger.info("WhatsApp text: resolved %s → %s via lid_to_e164", chat_jid, text_jid)
-                                try:
-                                    from vaf.core.log_helper import log_whatsapp_reply
-                                    log_whatsapp_reply(f"TEXT_LID_RESOLVE {chat_jid} → {text_jid}")
-                                except Exception:
-                                    pass
-                                break
+                            if not (_e164_digits and _jid_digits):
+                                continue
+                            if not (_e164_digits.endswith(_jid_digits) or _jid_digits.endswith(_e164_digits)):
+                                continue
+                            # Only use genuine LIDs (real LID digits ≠ phone digits).
+                            _lid_digits = "".join(c for c in (_lid or "").split("@")[0] if c.isdigit())
+                            if _lid_digits == _jid_digits:
+                                logger.info("WhatsApp text: skipping fake LID %s (lid digits == phone digits)", _lid)
+                                continue
+                            text_jid = _lid
+                            logger.info("WhatsApp text: resolved %s → %s via lid_to_e164", chat_jid, text_jid)
+                            try:
+                                from vaf.core.log_helper import log_whatsapp_reply
+                                log_whatsapp_reply(f"TEXT_LID_RESOLVE {chat_jid} → {text_jid}")
+                            except Exception:
+                                pass
+                            break
                     except Exception:
                         pass
                 chunks = chunk_whatsapp_text(text)
@@ -891,18 +906,24 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             resolved_digits = (from_jid or "").split("@")[0].strip() or "lid"
         else:
             resolved_digits = ""
-        # Persist LID→E.164 so dashboard can show this chat under the contact's phone (Web UI session/history)
+        # Persist LID→E.164 so dashboard can show this chat under the contact's phone (Web UI session/history).
+        # GUARD: only store genuine LIDs — a real LID has different digits than the phone number.
+        # If lid_digits == e164_digits it means Node sent phone@lid (not a real privacy LID) → skip.
         if from_e164 and (from_jid or "").endswith("@lid"):
             try:
-                cfg = Config.load()
-                wc = cfg.get("whatsapp_config") or {}
-                if isinstance(wc, dict):
-                    wc = dict(wc)
-                    lid_map = dict(wc.get("lid_to_e164") or {})
-                    lid_map[str(from_jid)] = _to_e164_display(from_e164)
-                    wc["lid_to_e164"] = lid_map
-                    cfg["whatsapp_config"] = wc
-                    Config.save(cfg)
+                _lid_digits = "".join(c for c in (from_jid or "").split("@")[0] if c.isdigit())
+                _e164_digits = "".join(c for c in (from_e164 or "") if c.isdigit())
+                _is_genuine_lid = bool(_lid_digits and _e164_digits and _lid_digits != _e164_digits)
+                if _is_genuine_lid:
+                    cfg = Config.load()
+                    wc = cfg.get("whatsapp_config") or {}
+                    if isinstance(wc, dict):
+                        wc = dict(wc)
+                        lid_map = dict(wc.get("lid_to_e164") or {})
+                        lid_map[str(from_jid)] = _to_e164_display(from_e164)
+                        wc["lid_to_e164"] = lid_map
+                        cfg["whatsapp_config"] = wc
+                        Config.save(cfg)
             except Exception:
                 pass
         _append_chat_activity(chat_id, user_scope_id, "in")

@@ -1915,6 +1915,14 @@ function VAFDashboardContent() {
                         }));
                     }
                 }
+                else if (data.type === 'context_checkpoint') {
+                    // Backend intentionally compressed history — clear local session cache so
+                    // old messages are not re-injected as "orphans" on the next history_update.
+                    const sid = data.session_id || currentSessionIdRef.current;
+                    if (sid) {
+                        sessionCache.current[sid] = [];
+                    }
+                }
                 else if (data.type === 'config_update') {
                     setConfig(data.config);
                 }

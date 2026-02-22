@@ -1018,22 +1018,56 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                     metadata["from_contact"] = True
                 if voice_lang:
                     metadata["voice_lang"] = voice_lang
-                    with _voice_reply_lock:
-                        _voice_reply_pending[f"{username}|{from_jid}"] = voice_lang
-                tq = TaskQueue()
-                tq.add(
-                    session_id=session_id,
-                    input_text=body,
-                    source="whatsapp",
-                    metadata=metadata,
-                )
+
+                # --- 7-second debounce (like Telegram 5s rule) ---
+                # Accumulate follow-up messages for WA_DEBOUNCE_SECONDS, then flush all at once.
+                pending_key = f"{username}|{from_jid}"
+                with _wa_pending_lock:
+                    existing = _wa_pending.get(pending_key)
+                    if existing:
+                        # Reset timer: cancel old, append text
+                        old_timer: Optional[threading.Timer] = existing.get("timer")
+                        if old_timer is not None:
+                            old_timer.cancel()
+                        sep = "\n" if existing["body"] else ""
+                        existing["body"] = existing["body"] + sep + body
+                        existing["parts"] = existing.get("parts", 1) + 1
+                        # Last voice_lang wins (so reply is in the language of the most recent voice msg)
+                        if voice_lang:
+                            existing["voice_lang"] = voice_lang
+                            existing["metadata"]["voice_lang"] = voice_lang
+                        action = "DEBOUNCE_RESET"
+                        parts = existing["parts"]
+                    else:
+                        # First message for this chat: create new record
+                        _wa_pending[pending_key] = {
+                            "session_id": session_id,
+                            "username": username,
+                            "from_jid": from_jid,
+                            "body": body,
+                            "parts": 1,
+                            "voice_lang": voice_lang,
+                            "metadata": metadata,
+                            "timer": None,  # set below
+                        }
+                        existing = _wa_pending[pending_key]
+                        action = "DEBOUNCE_START"
+                        parts = 1
+
+                    # Start/restart the flush timer (outside lock scope would be cleaner but
+                    # we assign back to existing dict which is already in the map, so fine here)
+                    new_timer = threading.Timer(WA_DEBOUNCE_SECONDS, _wa_flush, args=[pending_key])
+                    new_timer.daemon = True
+                    new_timer.start()
+                    existing["timer"] = new_timer
+
                 try:
                     from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
-                    log_whatsapp_inbound(f"ENQUEUED session={session_id} user={username}")
-                    log_whatsapp_qr(f"[inbound] ENQUEUED session={session_id} from={from_jid}")
+                    log_whatsapp_inbound(f"{action} session={session_id} user={username} parts={parts} body_len={len(body)}")
+                    log_whatsapp_qr(f"[inbound] {action} session={session_id} parts={parts} from={from_jid}")
                 except Exception:
                     pass
-                logger.info("WhatsApp message enqueued from %s for user %s", from_jid, username)
+                logger.info("WhatsApp debounce %s: from=%s parts=%s user=%s (flush in %ss)", action, from_jid, parts, username, WA_DEBOUNCE_SECONDS)
         else:
             logger.debug("WhatsApp inbound not forwarded to agent (inbound_to_agent=false); user still reachable for sends.")
     elif typ == "chats":

@@ -57,6 +57,13 @@ _voice_reply_lock = threading.Lock()
 _pending_sends: Dict[str, queue.Queue] = {}
 _pending_sends_lock = threading.Lock()
 
+# Per-chat inbound debounce (like Telegram 5s rule but 7s for WhatsApp).
+# Key: "username|from_jid" → accumulated state dict.
+# When a new message arrives we reset the timer; when it fires we flush to TaskQueue.
+_wa_pending: Dict[str, Dict[str, Any]] = {}
+_wa_pending_lock = threading.Lock()
+WA_DEBOUNCE_SECONDS = 7
+
 
 def _wa_bridge_path() -> Path:
     """Path to wa-bridge.js."""
@@ -683,6 +690,43 @@ def _read_user_process(
             log_whatsapp_qr(f"[Python] FATAL read loop: {type(e).__name__}: {e}")
         except Exception:
             pass
+
+
+def _wa_flush(pending_key: str) -> None:
+    """Debounce timer fired: flush accumulated messages for this chat to TaskQueue."""
+    with _wa_pending_lock:
+        rec = _wa_pending.pop(pending_key, None)
+    if not rec:
+        return
+    body = rec.get("body", "").strip()
+    if not body:
+        return
+    session_id = rec["session_id"]
+    metadata = rec["metadata"]
+    username = rec["username"]
+    from_jid = rec["from_jid"]
+    voice_lang = rec.get("voice_lang")
+
+    # Set voice_reply_pending for the *final* combined message (last voice_lang wins)
+    if voice_lang:
+        with _voice_reply_lock:
+            _voice_reply_pending[f"{username}|{from_jid}"] = voice_lang
+
+    tq = TaskQueue()
+    tq.add(
+        session_id=session_id,
+        input_text=body,
+        source="whatsapp",
+        metadata=metadata,
+    )
+    try:
+        from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
+        parts = rec.get("parts", 1)
+        log_whatsapp_inbound(f"DEBOUNCE_FLUSH session={session_id} user={username} parts={parts} body_len={len(body)}")
+        log_whatsapp_qr(f"[inbound] DEBOUNCE_FLUSH session={session_id} parts={parts}")
+    except Exception:
+        pass
+    logger.info("WhatsApp debounce flush: %s parts → session %s user %s", rec.get("parts", 1), session_id, username)
 
 
 def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dict[str, Any]) -> None:

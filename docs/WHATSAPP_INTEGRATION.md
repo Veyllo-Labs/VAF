@@ -149,6 +149,17 @@ If a number you did not add appears as admin and the agent writes to it:
 
 The whitelist is the only source for the "admin" label; removing the entry stops that number from being treated as admin and from being allowed to receive/send via the bridge.
 
+### Troubleshooting: Reply went to "Unbekannte Nummer" (unknown number) instead of the contact
+
+**Symptom:** The agent sent a voice reply but it appeared in WhatsApp as coming from an unknown number, not the known contact.
+
+**Root cause – fake LID in `lid_to_e164`:** WhatsApp sometimes sends messages with a JID like `4917642996812@lid` where the numeric part equals the actual phone digits. This is *not* a real privacy LID (a genuine LID looks like `55877994332394@lid` with completely different digits). If such a fake entry ends up in `whatsapp_config.lid_to_e164`, the sender loop would resolve the outbound JID to that fake `@lid` and send there — WhatsApp has no account under that address, so the message appears from "Unbekannte Nummer".
+
+**Fix (applied automatically in bridge code):**
+- The bridge now **rejects** any new `lid_to_e164` entry where the LID digits equal the phone digits (i.e. only genuine LIDs are persisted).
+- Both `VOICE_LID_RESOLVE` and `TEXT_LID_RESOLVE` in the sender loop skip any map entry where `lid_digits == phone_digits`.
+- If you have stale fake entries in config, remove them manually: open `whatsapp_config.lid_to_e164` in your VAF config and delete entries where the key (before `@lid`) has the same digits as the value (E.164 phone number). Example — **remove**: `"4917642996812@lid": "+4917642996812"`. **Keep**: `"55877994332394@lid": "+4915256564444"` (digits differ → genuine LID).
+
 ### Troubleshooting: Strange number or LID – agent replied to someone I didn't add
 
 If the agent wrote to a "number" that is a long digit string and not a real phone number (e.g. `+12345678901234` or similar), it is likely a **WhatsApp LID** (the numeric part of a `…@lid` chat). Previously, the bridge accepted **any** unresolved @lid when any whitelist/contact existed, so unknown senders could get through. That is fixed: unresolved @lid are now **rejected** unless the sender is matched by resolved E.164 or whitelist/contact.
@@ -173,6 +184,25 @@ The contact must have that E.164 number in whitelist or in Front Office with “
 **Why the bridge often has no number for a LID:** We use whatever the Linked Device API (Baileys) gives us via `lidMapping.getPNForLID`. If WhatsApp never sends that LID→number mapping to the linked device, we have no way to “ask WhatsApp for the number” – there is no such API. That can happen even if the contact is **saved on your phone**: the phone app may show name/number (WhatsApp resolves there), but the multi-device protocol does not always sync that resolution to linked devices. So the dashboard shows an info that the chat has no number from WhatsApp; to allow the agent to reply, you can add a mapping in config (`whatsapp_config.lid_to_e164`). When Baileys does receive the mapping later (e.g. after more traffic), we show the chat as resolved and no config change is needed.
 
 **Event-based LID resolution:** The Node bridge also builds a LID→E.164 map from events, so more chats can be resolved without config: (1) **senderPn** – when an incoming message has `remoteJid` ending with `@lid`, Baileys sometimes includes a Sender Phone Number (`msg.key.senderPn`); we store that and use it for resolution and for `getLidMappings`. (2) **chats.phoneNumberShare** – Baileys can emit this event with `lid` and `jid` (phone JID); we store that pair and re-emit the chat list so the dashboard shows the resolved number. This map is in-memory (per Node process); `getLidMappings` returns both Baileys `lidMapping` results and these event-derived entries, so the dashboard and inbound logic see all resolved LIDs.
+
+### Troubleshooting: Agent sent duplicate messages or reported "I sent Anne a message" in voice
+
+**Symptom:** When a contact (e.g. Anne) sends a voice message, the agent sends 2–3 extra voice messages proactively *to* Anne (via `send_whatsapp(to_phone=...)` tool calls) and then also sends the normal headless reply. The agent's final text reply includes phrases like "I have sent Anne a message via WhatsApp."
+
+**Root cause:** The agent sees the contact's phone number in the front-office contact block and uses the `send_whatsapp` tool to "send the reply" — instead of just writing the reply as plain text (which the headless runner delivers automatically).
+
+**Fix (applied in code):**
+1. **Prompt guard:** The front-office input now explicitly states: *"CRITICAL: Do NOT call send_whatsapp — your reply text is automatically delivered to the contact. Just write your reply as plain text."*
+2. **Tool guard:** `send_whatsapp` checks `_agent._front_office_mode` at the top of `run()`. When the agent is handling an inbound contact message (no explicit `to_phone`) and `_front_office_mode` is `True`, the tool returns `[TOOL BLOCKED]` immediately instead of sending.
+3. **Sanitize filter:** `[TOOL BLOCKED]` is in `_INTERNAL_PHRASES` so it is never delivered to the contact even if the agent quotes the blocked message.
+
+### Troubleshooting: Error message was read aloud as voice ("Sorry, something went wrong: …")
+
+**Symptom:** The agent crashes mid-response; the error handler sends an error text, but it is TTS-synthesized in the contact's language and sent as a voice note.
+
+**Root cause:** The crash happened *before* the normal reply consumed `_voice_reply_pending` (the per-chat language flag set when a voice message is received). So the error-handler's text also gets TTS'd.
+
+**Fix:** The error handler in `headless_runner.py` now explicitly pops `_voice_reply_pending` for the affected chat before calling `send_whatsapp_reply`, so error messages are always sent as plain text.
 
 ### Troubleshooting: Voice reply contained raw JSON (tool_calls)
 

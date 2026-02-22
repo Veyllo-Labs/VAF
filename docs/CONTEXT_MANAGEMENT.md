@@ -508,6 +508,62 @@ AFTER COMPRESSION (8 messages, 2,000 tokens):
 4. **Density**: Small context limits trigger **High-Density Summary** mode
 5. **Result**: ~70% token reduction while preserving critical information
 
+### Plan-Act-Summarize Pattern (Recursive Task Decomposition)
+
+The Main Agent can now decompose complex tasks into steps and execute them one at a time, surviving arbitrary context lengths. This is the same principle the Coder Agent uses (`create_fresh_context_for_task`), but applied to the Main Agent via an **Orchestrator Prompt Module** and a **checkpoint tool**.
+
+**Loop:**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│         PLAN-ACT-SUMMARIZE LOOP (Main Agent)                │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. PLAN: Write step-by-step plan to working_memory         │
+│     └─ update_working_memory(plan=["Step 1", "Step 2", …]) │
+│                          │                                  │
+│                          ▼                                  │
+│  2. ACT: Execute ONE step using appropriate tools           │
+│     └─ e.g. web_search, read_file, python_sandbox           │
+│                          │                                  │
+│                          ▼                                  │
+│  3. PERSIST: Save result to working_memory                  │
+│     └─ update_working_memory(add_notes=["Step 1 result…"])  │
+│                          │                                  │
+│                          ▼                                  │
+│  4. CHECKPOINT (optional): Free context space               │
+│     └─ checkpoint_context(summary="Steps 1-3 done…")        │
+│     └─ Archives history, keeps system prompt + glue          │
+│                          │                                  │
+│                          ▼                                  │
+│  5. NEXT STEP: Continue from working_memory plan             │
+│     └─ Plan + notes survive → agent knows where it left off  │
+│                                                             │
+│  Repeat until all steps complete.                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Building Blocks:**
+
+| Component | Role |
+|-----------|------|
+| `user_intent.md` | Stores the original request (Intent Lock — never changes mid-task) |
+| `working_memory.json` | Stores plan, notes, tasks (survives compression + checkpoint) |
+| `update_working_memory` | Tool to write plan steps, add notes, mark tasks done |
+| `checkpoint_context` | Tool to archive history and start fresh (proactive wiping) |
+| Orchestrator Prompt Module | Activated by router for multi-step keywords; instructs Plan-Act-Summarize |
+| Context Compression | Existing reactive compression (70–85% threshold) as a safety net |
+
+**Why this works for small models:**
+- The plan lives in `working_memory.json`, not in chat history
+- Each step's result is persisted as a note before the next step
+- `checkpoint_context` proactively frees context (instead of waiting for the 70–85% threshold)
+- After a checkpoint, the context glue restores the narrative summary, so the model knows what happened
+- A 4k-context model can complete a 20-step task this way
+
+**Activation:**
+The Orchestrator prompt module activates automatically when the tool router detects multi-step keywords (e.g. "step by step", "compare", "for each", "batch", "summarize all"). It can also be activated manually via `prompt_manager.activate_module("orchestrator")`.
+
 ### Small context (e.g. llama.cpp with low n_ctx)
 
 When `n_ctx` is small (e.g. 4k–12k), fewer messages are kept raw and compression is more aggressive. To reduce "context loss" (e.g. the model forgetting that it already used GitHub or other tools):
@@ -558,5 +614,6 @@ VAF's architecture is designed around **context efficiency**:
 | Web Search | Per-page processing | 80% |
 | Deep Research | Topic-by-topic | No overflow |
 | Compression | Adaptive triggers | 70% |
+| Plan-Act-Summarize | Persistent plan + step results | Unbounded steps |
 
 **Result**: You can have longer, more productive conversations without hitting context limits!

@@ -123,6 +123,10 @@ When `task_done` is called:
 *   **Stability:** The prompt size stays constant (~2k-4k tokens), regardless of project size.
 *   **Accuracy:** The agent doesn't "hallucinate" files; it sees them listed in the Glue Block.
 
+### Main Agent: Plan-Act-Summarize with `checkpoint_context`
+
+The Coder Agent has used task checkpointing from the start (`create_fresh_context_for_task`). The **Main Agent** now has the same capability via the `checkpoint_context` tool and the **Orchestrator Prompt Module**. When a complex task requires multiple steps, the agent writes a plan to `working_memory.json`, executes one step at a time, persists each result as a working memory note, and calls `checkpoint_context(summary="...")` to archive the history and start fresh. The plan and notes survive because they live on disk, not in chat history. This enables unbounded multi-step execution even on small-context models. See `CONTEXT_MANAGEMENT.md` → "Plan-Act-Summarize Pattern" for the full architecture.
+
 ---
 
 ## Implementation Details

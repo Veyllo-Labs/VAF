@@ -274,6 +274,51 @@ User: "Kannst du die Datei ansehen?"
 Sub-agents run asynchronously - results arrive later
 - Don't guess sub-agent results - wait for them
 """,
+
+            "orchestrator": """
+## Multi-Step Task Orchestration (Plan-Act-Summarize)
+
+When a task requires multiple distinct steps (3+ tool calls, multi-file operations,
+sequential dependencies), you MUST use the Plan-Act-Summarize pattern:
+
+### 1. PLAN — Write your plan FIRST
+Before acting, call update_working_memory with a clear step-by-step plan:
+```
+update_working_memory(plan=["Step 1: ...", "Step 2: ...", "Step 3: ..."])
+```
+Use add_task for each checkable step so you can mark them done as you go.
+
+### 2. ACT — Execute ONE step at a time
+- Execute the current step using the appropriate tool(s)
+- After each step, persist the result:
+```
+update_working_memory(add_notes=["Step 1 result: ..."], mark_task_done=0)
+```
+
+### 3. SUMMARIZE — After completing a step
+- Mark the step done in working memory
+- If context is getting large, your older messages will be compressed automatically —
+  but your plan and notes in working_memory survive compression
+- Continue with the next step
+
+### Checkpoint — Free context space
+After completing a major step, you can call checkpoint_context(summary="...") to
+archive your conversation history and free context space. Your plan and working
+memory notes survive — only the chat messages are compressed. Use this proactively
+when you know many more steps remain.
+
+### Why this matters
+- Your plan survives context compression (it's in working_memory, not chat history)
+- Each step's result is persisted — if something fails, you can resume from the last checkpoint
+- Small context models can complete arbitrarily long tasks this way
+
+### When to use this pattern
+- Research + synthesize from multiple sources
+- Multi-file operations (read A, transform, write B, verify)
+- Sequential API calls that depend on each other
+- Comparing or batch-processing multiple items
+- Any task where you'd need to remember intermediate results
+""",
         }
         
         #
@@ -348,6 +393,13 @@ Sub-agents run asynchronously - results arrive later
             "subagent": [
                 "research agent", "coding agent", "librarian", "delegate",
                 "sub-agent", "subagent", "background task"
+            ],
+            "orchestrator": [
+                "step by step", "schritt für schritt", "plan", "workflow",
+                "multiple files", "mehrere dateien", "nacheinander", "sequentially",
+                "first then", "erst dann", "analyze and then", "analysiere und dann",
+                "compare", "vergleiche", "zusammenfassen", "summarize all",
+                "for each", "für jeden", "für jede", "batch", "alle",
             ],
         }
     
@@ -472,7 +524,13 @@ Sub-agents run asynchronously - results arrive later
             persona_parts.append("**NEVER claim an action was done unless you actually called a tool that performs it.** "
                 "update_working_memory/update_intent do NOT rename, send, or delete. No tool call = no success. "
                 "If you planned to rename a file but did not call move_file or librarian_agent, say you will do it and call the tool – do NOT say \"Done\" or \"Ich habe die Datei umbenannt\".")
-            persona_parts.append("**Working memory hygiene:** On a new user task or after completing a task, replace or clear notes/plan via update_working_memory so working memory does not grow without bound. Use tasks (add_task, mark_task_done) for checkable steps; done tasks are auto-removed after 12h.")
+            persona_parts.append(
+                "**Working memory hygiene:** On a new user task or after completing a task, "
+                "replace or clear notes/plan via update_working_memory so working memory does not grow without bound. "
+                "Use tasks (add_task, mark_task_done) for checkable steps; done tasks are auto-removed after 12h. "
+                "For complex multi-step tasks, write your plan to working memory FIRST, "
+                "then execute step by step — your plan survives context compression."
+            )
             parts.append("\n".join(persona_parts))
             persona_loaded = True
             soul_len = len(soul) if soul else 0

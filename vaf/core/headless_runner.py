@@ -906,11 +906,16 @@ def run_headless_agent():
                         final_text = "".join(response_parts) if response_parts else response_text
                         if not final_text or not str(final_text).strip():
                             final_text = "[Error] No response was produced. The server may have rejected the request (e.g. context too large). Try closing the Document Editor or starting a new chat."
-                        get_web_interface().emit_agent_message(
-                            role="assistant",
-                            content=str(final_text),
-                            session_id=task.session_id
-                        )
+                        # Avoid duplicate assistant message: if we already streamed this exact content,
+                        # skip the final emit. Otherwise a system log (e.g. "Context usage...") can be
+                        # pushed between last stream chunk and this, so frontend would append instead of replace.
+                        streamed_full = "".join(response_parts).strip() if response_parts else ""
+                        if streamed_full != str(final_text).strip():
+                            get_web_interface().emit_agent_message(
+                                role="assistant",
+                                content=str(final_text),
+                                session_id=task.session_id
+                            )
 
                     # Emit message_complete event for Auto-TTS (skip speaking for SYSTEM_LOG_ONLY)
                     try:

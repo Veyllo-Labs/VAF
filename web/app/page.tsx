@@ -3122,6 +3122,15 @@ function VAFDashboardContent() {
                                                 {showDaySeparator && <DaySeparator endDate={prevMsg.timestamp} startDate={msg.timestamp} />}
                                                 {/* Message content */}
                                                 {(() => {
+                                                    // Skip duplicate consecutive assistant messages (same visible answer) to avoid duplicated thinking + error text
+                                                    if (msg.role === 'assistant' && prevMsg?.role === 'assistant') {
+                                                        const prevAnswer = parseContent(prevMsg.content).answer.trim();
+                                                        const currAnswer = parseContent(msg.content).answer.trim();
+                                                        if (prevAnswer && currAnswer && prevAnswer === currAnswer) return null;
+                                                    }
+                                                    // Skip duplicate consecutive system messages (e.g. same "Context usage..." twice)
+                                                    if (msg.role === 'system' && prevMsg?.role === 'system' && String(msg.content ?? '') === String(prevMsg.content ?? '')) return null;
+
                                                     // Render System Steps (Timeline Style)
                                                     if (msg.role === 'system') {
                                                         const isLast = i === filteredMessages.length - 1;

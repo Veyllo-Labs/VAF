@@ -140,6 +140,15 @@ async def get_memory(
 
 The `get_current_user_scope` dependency reads from `request.state.user` (the consolidated dict set by `AuthMiddleware`). When no user is authenticated (localhost mode), this dict is absent and the dependency falls back to the local admin scope.
 
+### Web UI session isolation
+
+Chat sessions in the Web UI are isolated by `user_scope_id`:
+
+- **Session list:** `SessionManager.list(limit, user_scope_id=...)` is called with the connection's user scope (from `manager.get_connection_user(websocket)`). Users only see sessions that have matching `metadata.user_scope_id` or no scope (legacy/local admin).
+- **Load session:** Before subscribing to a session, the backend verifies ownership: the session's `metadata.user_scope_id` must match the current user, or the user must be the local admin. Otherwise the server responds with "Access denied".
+- **Default session:** When no session is selected, the fallback session ID is per-user (`web-default-<scope>`), not a shared global ID.
+- **Broadcasting:** Updates are sent only to connections subscribed to that session (`broadcast_to_session`); session list refreshes are sent only to that user's connections (`broadcast_to_user`). See [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md).
+
 ## 3. Cache Isolation (Redis)
 
 All Redis cache keys include the user scope to prevent cross-user cache poisoning:

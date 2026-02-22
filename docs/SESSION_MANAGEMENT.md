@@ -54,11 +54,13 @@ ws.send(JSON.stringify({
 ### 2. Backend Processing
 
 ```python
-# vaf/core/web_server.py (line 395-399)
-# Priority: message sessionId > connection sessionId > fallback
+# vaf/core/web_server.py
+# Priority: message sessionId > connection sessionId > user-scoped fallback
 session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
 if not session_id:
-    session_id = "web-default"  # Last resort fallback
+    # Per-user default so multiple users do not share one chat
+    safe_scope = str(manager.get_connection_user(websocket) or "default").replace("-", "")[:8]
+    session_id = f"web-default-{safe_scope}"
 ```
 
 ### 3. Task Queue → Agent
@@ -88,11 +90,16 @@ def _push_session_update(self, session_id: str, data: dict):
     # ... broadcast via WebSocket
 ```
 
-### 5. Frontend Filtering
+### 5. User isolation (multi-user)
+
+- **Session list:** The backend filters sessions by the connection's `user_scope_id` (`SessionManager.list(..., user_scope_id=...)`). Users only see their own sessions and legacy sessions (no scope).
+- **Load session:** Before subscribing to a session, the backend checks ownership: the session's `metadata.user_scope_id` must match the current user, or the user must be the local admin. Otherwise the server responds with `Access denied`.
+- **Default session:** When no session is selected, the fallback session ID is per-user (`web-default-<scope>`), not a single global `web-default`.
+
 ### 6. Initial Session Bootstrap
 
-On WebSocket connect, the backend sends `session_list` and immediately follows with
-`history_update` for the most recent session. The frontend should set
+On WebSocket connect, the backend sends a **user-filtered** `session_list` and immediately follows with
+`history_update` for the first session in that list (or a newly created session for that user if the list is empty). The frontend should set
 `currentSessionId` from that update so that `agent_message_update` is not filtered out.
 
 

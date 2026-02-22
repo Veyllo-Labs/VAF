@@ -185,12 +185,17 @@ class SessionManager:
         """Get current active session."""
         return self._current
     
-    def new(self, name: str = None, model: str = "", project_path: str = "") -> Session:
+    def new(self, name: str = None, model: str = "", project_path: str = "", user_scope_id: str = None) -> Session:
         """Create a new session."""
+        metadata = {}
+        if user_scope_id:
+            metadata["user_scope_id"] = user_scope_id
+            
         session = Session(
             name=name or f"Session {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             model=model,
             project_path=project_path,
+            metadata=metadata
         )
         self._current = session
         return session
@@ -283,13 +288,27 @@ class SessionManager:
         
         raise FileNotFoundError(f"Session not found: {session_id}")
     
-    def list(self, limit: int = 50) -> List[Dict]:
-        """List all sessions."""
+    def list(self, limit: int = 50, user_scope_id: str = None) -> List[Dict]:
+        """
+        List all sessions, optionally filtered by user_scope_id.
+        
+        Args:
+            limit: Maximum sessions to return
+            user_scope_id: Optional ID to filter by. If provided, returns:
+                          1. Sessions matching this user_scope_id
+                          2. Sessions without any user_scope_id (legacy/local admin)
+        """
         sessions = []
+        
+        # Normalize user_scope_id for comparison
+        target_scope = str(user_scope_id).strip() if user_scope_id else None
         
         for filepath in sorted(self.storage_dir.glob("*.json*"), 
                                key=lambda p: p.stat().st_mtime, 
-                               reverse=True)[:limit]:
+                               reverse=True):
+            if len(sessions) >= limit:
+                break
+                
             try:
                 if filepath.suffix == '.gz':
                     with gzip.open(filepath, 'rt', encoding='utf-8') as f:
@@ -301,6 +320,14 @@ class SessionManager:
                 meta = data.get("metadata") or {}
                 if meta.get("hidden_from_list"):
                     continue  # Hide from list (e.g. thinking session "removed" by user); GC can delete later
+                
+                # Filter by user_scope_id if provided
+                if target_scope:
+                    session_scope = meta.get("user_scope_id")
+                    # Show if: matches OR session has no scope (legacy)
+                    if session_scope and str(session_scope).strip() != target_scope:
+                        continue
+                
                 sessions.append({
                     "id": data.get("id"),
                     "name": data.get("name"),
@@ -375,7 +402,7 @@ class SessionManager:
             model="",
             project_path="",
             messages=messages,
-            metadata={"source": "thinking"},
+            metadata={"source": "thinking", "user_scope_id": user_scope_id},
         )
         self.save(session, sync_state=False)
         return sid
@@ -449,7 +476,7 @@ class SessionManager:
                 model="",
                 project_path="",
                 messages=new_messages,
-                metadata={"source": "thinking"},
+                metadata={"source": "thinking", "user_scope_id": user_scope_id},
             )
             self.save(session, sync_state=False)
 

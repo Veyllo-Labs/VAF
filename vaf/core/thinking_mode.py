@@ -1033,14 +1033,10 @@ def _run_thinking_for_user(
                 jid = get_whatsapp_chat_jid(user_scope_id, uname)
                 if jid:
                     chat_session_id = f"whatsapp_{jid}"
-            # Fallback: local admin uses web-default
+            # Fallback: user-scoped default session
             if not chat_session_id:
-                is_local_admin = (
-                    user_scope_id is None
-                    or str(user_scope_id).strip() == str(get_local_admin_scope_id()).strip()
-                )
-                if is_local_admin:
-                    chat_session_id = "web-default"
+                safe_scope = scope_key.replace("-", "")[:8]
+                chat_session_id = f"web-default-{safe_scope}"
 
             if chat_session_id:
                 try:

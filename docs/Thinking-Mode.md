@@ -9,7 +9,7 @@ Thinking mode runs the main agent in the background while the user is idle. It a
 - **When it runs:** After `thinking_idle_minutes` of no activity. Opening the Web UI or sending a message resets the idle timer.
 - **What it does:** One run = multiple agent turns with full tool access (except `memory_save` and Git tools). The agent must call `thinking_done` when finished. It may send at most one message per run; if it asks a question, the system waits for a reply (nudge after 3 min, skip after 10 min).
 - **Per user:** Idle is tracked per `user_scope_id`. One run at a time per user (serialized by lock). Cooldown between runs: `thinking_cooldown_minutes` (default 60 min).
-- **Context:** The agent loads the user's full chat session (Telegram/WhatsApp/web-default) at the start of each run — it has the same context as the normal agent.
+- **Context:** The agent loads the user's full chat session (Telegram/WhatsApp or user-scoped web default, e.g. `web-default-<scope>`) at the start of each run — it has the same context as the normal agent.
 - **Output:** Runs are logged to `logs/vaf_denk.log` (human-readable) and to JSON run logs under `~/.vaf/thinking_mode_logs/`. They are **not** shown in the Web UI chat list.
 
 ---
@@ -41,7 +41,7 @@ All keys live in the main config (Settings → Advanced or `config.json`). Defau
 4. **Run:** `_run_thinking_for_user()` runs in a daemon thread:
    - Sets `VAF_THINKING_MODE=1` and `VAF_THINKING_SCOPE_ID=<scope_key>` (loads thinking-only tools)
    - Creates an `Agent`, loads model, calls `init_chat()`
-   - **Loads user's chat session** (`telegram_<id>` / `whatsapp_<jid>` / `web-default`) via `agent.load_session_context()` — same context as the normal agent
+   - **Loads user's chat session** (`telegram_<id>` / `whatsapp_<jid>` / user-scoped `web-default-<scope>`) via `agent.load_session_context()` — same context as the normal agent
    - Appends a "THINKING MODE" notice to the system prompt, including:
      - Summary of the last 3 runs
      - User's reply to the last question (if any)

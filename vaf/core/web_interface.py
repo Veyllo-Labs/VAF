@@ -176,10 +176,29 @@ class WebInterfaceManager:
         disconnected = []
         for connection in self.active_connections:
             conn_session = self.connection_sessions.get(connection)
-            # Send if:
-            # 1. Connection is subscribed to this session, OR
-            # 2. Connection is not subscribed to any session yet (new connection)
-            if conn_session is None or conn_session == session_id:
+            # Send ONLY if connection is explicitly subscribed to this session.
+            # This ensures privacy and prevents "message leakage" to new connections.
+            if conn_session == session_id:
+                try:
+                    await connection.send_text(json.dumps(message))
+                except Exception:
+                    disconnected.append(connection)
+        
+        for conn in disconnected:
+            self.disconnect(conn)
+
+    async def broadcast_to_user(self, user_id: str, message: dict):
+        """
+        Broadcast a message only to clients authenticated as a specific user.
+        """
+        if not user_id:
+            return
+            
+        disconnected = []
+        target_id = str(user_id).strip()
+        for connection in self.active_connections:
+            conn_user = self.connection_users.get(connection)
+            if conn_user and str(conn_user).strip() == target_id:
                 try:
                     await connection.send_text(json.dumps(message))
                 except Exception:

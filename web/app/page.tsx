@@ -1402,6 +1402,21 @@ function VAFDashboardContent() {
                     // Update stats if session matches OR if it's a global update (no sessionId)
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
                     setTokenStats(data.stats);
+                    // Also drive the context bar (X / Y Tokens) from stats so it's never stuck at 0
+                    // when context_status is not received (e.g. headless only sends stats)
+                    const s = data.stats;
+                    if (s && typeof s.used === 'number' && typeof s.total === 'number') {
+                        const percent = s.percent != null ? s.percent : (s.total ? Math.round((s.used / s.total) * 1000) / 10 : 0);
+                        setContextStats((prev: any) => ({
+                            ...(prev || {}),
+                            tokens: s.used,
+                            max_tokens: s.total,
+                            percent,
+                            message_count: prev?.message_count ?? 0,
+                            ...(s.input_tokens != null && { input_tokens: s.input_tokens }),
+                            ...(s.output_tokens != null && { output_tokens: s.output_tokens }),
+                        }));
+                    }
                 }
                 else if (data.type === 'contact_reply_pending') {
                     setPendingContactReplies(prev => [...prev, {

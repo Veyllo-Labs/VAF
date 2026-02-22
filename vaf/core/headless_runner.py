@@ -257,7 +257,7 @@ def run_headless_agent():
                 stats = {
                     "used": used,
                     "total": total,
-                    "percent": (used / total) if total else 0.0,
+                    "percent": round((used / total) * 100, 1) if total else 0.0,
                     "api": bool(api_backend),
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens
@@ -547,7 +547,7 @@ def run_headless_agent():
                     stats = {
                         "used": used,
                         "total": total,
-                        "percent": (used / total) if total else 0.0,
+                        "percent": round((used / total) * 100, 1) if total else 0.0,
                         "api": bool(api_backend),
                         "input_tokens": input_tokens,
                         "output_tokens": output_tokens
@@ -1045,7 +1045,7 @@ def run_headless_agent():
                         stats = {
                             "used": used,
                             "total": total,
-                            "percent": (used / total) if total else 0.0,
+                            "percent": round((used / total) * 100, 1) if total else 0.0,
                             "api": bool(api_backend),
                             "input_tokens": input_tokens,
                             "output_tokens": output_tokens
@@ -1669,7 +1669,7 @@ def _handle_command(cmd_str, agent, session_mgr):
                     stats = {
                         "used": used,
                         "total": total,
-                        "percent": (used / total) if total else 0.0,
+                        "percent": round((used / total) * 100, 1) if total else 0.0,
                         "api": bool(getattr(agent, 'api_backend', False))
                     }
                     get_web_interface().emit_stats(stats)

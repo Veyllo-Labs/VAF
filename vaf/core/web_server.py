@@ -1971,7 +1971,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             stats = {
                                 "used": est_tokens,
                                 "total": max_ctx,
-                                "percent": (est_tokens / max_ctx) if max_ctx else 0.0,
+                                "percent": round((est_tokens / max_ctx) * 100, 1) if max_ctx else 0.0,
                                 "api": is_api
                             }
                             await websocket.send_json({

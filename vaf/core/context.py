@@ -70,10 +70,12 @@ class ContextManager:
         self.max_tokens = max_tokens
         
         # DYNAMIC LIMITS: React to small context sizes (VRAM efficiency)
-        # For 8k: threshold 0.75, recent 6
-        # For 16k: threshold 0.80, recent 8
-        # For >32k: threshold 0.85, recent 10 (default)
-        if max_tokens <= 12000:
+        # Very small (e.g. 4k–8k): keep more raw so 1–2 turns visible after tool use
+        # For 12k: recent 6; For 16k: recent 8; For >32k: recent 10 (default)
+        if max_tokens <= 8192:
+            self.trigger_threshold = 0.70
+            self.recent_memory_size = 8
+        elif max_tokens <= 12000:
             self.trigger_threshold = 0.70
             self.recent_memory_size = 6
         elif max_tokens <= 20000:
@@ -341,7 +343,11 @@ class ContextManager:
         from vaf.cli.ui import UI
 
         if preserve_tools is None:
-            preserve_tools = ["set_todos", "write_file", "read_file"]
+            preserve_tools = [
+                "set_todos", "write_file", "read_file",
+                "github_list_repos", "github_get_file", "github_list_issues", "github_list_pulls",
+                "web_search",
+            ]
 
         # REMOVED: history length check. If tokens are full, we MUST compress.
         # But we still need at least system + 1 message to make sense.
@@ -445,6 +451,11 @@ class ContextManager:
         if self.intent.primary_goal:
             header = "## PRIMARY GOAL" if is_small else "### 🎯 PRIMARY GOAL"
             parts.append(f"{header}\n{self.intent.primary_goal}")
+
+        # 6. TOOLS USED (small context only — reduces "forgot I was connected" confusion)
+        if is_small and self.state.tools_used:
+            tools_str = ", ".join(self.state.tools_used[-10:])
+            parts.append(f"## TOOLS USED THIS SESSION\n{tools_str}")
         
         if not parts:
             return ""

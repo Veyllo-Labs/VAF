@@ -839,8 +839,8 @@ def quit_app(icon=None, item=None):
 
 def on_config_changed(key, value):
     """Handle dynamic config changes."""
-    # Context size or GPU layers changed → restart llama-server with new values
-    if key in ["n_ctx", "gpu_layers"]:
+    # Model, context size, or GPU layers changed → restart llama-server with new values
+    if key in ["model", "n_ctx", "gpu_layers"]:
         def _restart_llama():
             time.sleep(1)  # let config save finish
             from vaf.core.config import Config
@@ -852,7 +852,11 @@ def on_config_changed(key, value):
             if gpu_layers == -1:
                 gpu_layers = 99
             model = Config.get("model")
-            log("Tray", f"Config changed ({key}={value}). Restarting llama-server (n_ctx={n_ctx}, gpu_layers={gpu_layers})...")
+            msg = f"Config changed ({key}={value}). Restarting llama-server"
+            if key == "model":
+                msg += f" with model {model}"
+            msg += f" (n_ctx={n_ctx}, gpu_layers={gpu_layers})..."
+            log("Tray", msg)
             try:
                 server_mgr.stop_server(force_external=True)
                 tray_context.set_model_loaded(False)

@@ -430,8 +430,8 @@ class Config:
             json.dump(config, f, indent=4)
             
         # Detect and notify changes for critical keys
-        # local_network_* for server restart; provider for tray VRAM load/unload
-        critical_keys = ["local_network_enabled", "local_network_port", "local_network_port_frontend", "provider", "n_ctx", "gpu_layers"]
+        # local_network_* for server restart; provider for tray VRAM load/unload; model for llama-server reload
+        critical_keys = ["local_network_enabled", "local_network_port", "local_network_port_frontend", "provider", "n_ctx", "gpu_layers", "model"]
         
         for key in critical_keys:
             old_val = existing_config.get(key)

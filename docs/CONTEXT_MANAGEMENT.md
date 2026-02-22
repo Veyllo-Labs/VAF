@@ -157,6 +157,7 @@ To support systems with limited VRAM (e.g., 11k or 16k context limits), the mana
 
 | Context Limit (`n_ctx`) | Compression Trigger | Recent Memory | Strategy |
 |-------------------------|---------------------|---------------|----------|
+| **Very small (≤ 8k)**   | **70%** usage       | **8 messages**| More raw turns kept; GitHub/web_search results preserved |
 | **Small (≤ 12k)**       | **70%** usage       | **6 messages**| Aggressive pruning, Core tools only |
 | **Medium (≤ 20k)**      | **75%** usage       | **8 messages**| Proactive compression, 25% output buffer |
 | **Large (> 20k)**       | **85%** usage       | **10 messages**| Standard Cursor-style (Default) |
@@ -506,6 +507,16 @@ AFTER COMPRESSION (8 messages, 2,000 tokens):
 3. **Compress**: Old messages → Intent Context + State Context + Narrative Summary
 4. **Density**: Small context limits trigger **High-Density Summary** mode
 5. **Result**: ~70% token reduction while preserving critical information
+
+### Small context (e.g. llama.cpp with low n_ctx)
+
+When `n_ctx` is small (e.g. 4k–12k), fewer messages are kept raw and compression is more aggressive. To reduce "context loss" (e.g. the model forgetting that it already used GitHub or other tools):
+
+- **Very small (≤ 8k):** The manager keeps **8** recent messages raw (instead of 6) so roughly 1–2 full tool-using turns remain visible.
+- **Preserved tool results:** Besides `set_todos`, `write_file`, `read_file`, the compressed history preserves truncated results from **GitHub tools** (`github_list_repos`, `github_get_file`, `github_list_issues`, `github_list_pulls`) and **web_search**. So the model can retain that it already accessed e.g. the repo.
+- **Tools used in summary:** For small contexts (≤ 16k), the context summary includes a "Tools used this session" line (last 10 tools). This reduces confusion about connectivity or which tools were already called.
+
+**Recommendation:** Use `n_ctx` ≥ 8k (ideally 12k+) for tool-heavy conversations; the above mitigations help when you must use a lower limit.
 
 ### Implementation
 

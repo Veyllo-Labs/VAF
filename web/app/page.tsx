@@ -2987,7 +2987,7 @@ function VAFDashboardContent() {
                                 fetch(`${getApiBase()}/api/calendar/ensure-daily-check-automation`, { method: 'POST', credentials: 'include' })
                                     .then((r) => r.json())
                                     .then((data) => { if (data?.ok && ws?.readyState === WebSocket.OPEN) ws?.send(JSON.stringify({ type: 'get_automations' })); })
-                                    .catch(() => {});
+                                    .catch(() => { });
                             }}
                             className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/automation transition-all justify-start"
                             title="Automation"
@@ -3011,7 +3011,7 @@ function VAFDashboardContent() {
                                 fetch(`${getApiBase()}/api/calendar/ensure-daily-check-automation`, { method: 'POST', credentials: 'include' })
                                     .then((r) => r.json())
                                     .then((data) => { if (data?.ok && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_automations' })); })
-                                    .catch(() => {});
+                                    .catch(() => { });
                             }}
                             className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/settings transition-all justify-start"
                             title={tNav('settings')}
@@ -3097,22 +3097,22 @@ function VAFDashboardContent() {
                                                                     <div className="flex-1 min-w-0">
                                                                         <div className="max-w-[95%]">
                                                                             <ToolMessage
-                                                                key={`tool-${trueIndex}`}
-                                                                id={msg.toolId || `tool-${trueIndex}`}
-                                                                name={msg.toolName || 'Unknown Tool'}
-                                                                status={msg.toolStatus || 'completed'}
-                                                                result={msg.content}
-                                                                args={msg.toolArgs}
-                                                                startTime={msg.toolStartTime}
-                                                                endTime={msg.toolEndTime}
-                                                                onToggleScroll={preserveChatScroll}
-                                                                onToggle={isSubAgentTool ? (nextExpanded) => {
-                                                                    if (nextExpanded) {
-                                                                        openSubAgentWindow(true);
-                                                                    } else {
-                                                                        closeSubAgentWindow(true);
-                                                                    }
-                                                                } : undefined}
+                                                                                key={`tool-${trueIndex}`}
+                                                                                id={msg.toolId || `tool-${trueIndex}`}
+                                                                                name={msg.toolName || 'Unknown Tool'}
+                                                                                status={msg.toolStatus || 'completed'}
+                                                                                result={msg.content}
+                                                                                args={msg.toolArgs}
+                                                                                startTime={msg.toolStartTime}
+                                                                                endTime={msg.toolEndTime}
+                                                                                onToggleScroll={preserveChatScroll}
+                                                                                onToggle={isSubAgentTool ? (nextExpanded) => {
+                                                                                    if (nextExpanded) {
+                                                                                        openSubAgentWindow(true);
+                                                                                    } else {
+                                                                                        closeSubAgentWindow(true);
+                                                                                    }
+                                                                                } : undefined}
                                                                             />
                                                                         </div>
                                                                     </div>
@@ -3303,15 +3303,17 @@ function VAFDashboardContent() {
                                 })()}
 
                                 {loading && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
-                                    <div className="flex gap-4 items-center justify-center animate-pulse pt-4">
-                                        <div className="w-9 h-9 rounded-xl bg-gray-200 flex items-center justify-center text-gray-400"><Bot size={18} /></div>
-                                        <div className="flex flex-col gap-1">
-                                            <div className="bg-gray-100 px-4 py-2 rounded-2xl rounded-tl-none w-fit flex gap-1">
-                                                <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
-                                                <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
-                                                <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150"></span>
+                                    <div className="flex gap-4 justify-center animate-pulse pt-4">
+                                        <div className="w-full max-w-[85%] flex gap-4">
+                                            <div className="w-9 h-9 rounded-xl bg-gray-200 flex items-center justify-center text-gray-400 shrink-0"><Bot size={18} /></div>
+                                            <div className="flex flex-col gap-1">
+                                                <div className="bg-gray-100 px-4 py-2 rounded-2xl rounded-tl-none w-fit flex gap-1">
+                                                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
+                                                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
+                                                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150"></span>
+                                                </div>
+                                                {statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && <span className="text-[10px] text-gray-400 ml-2">{statusMessage}</span>}
                                             </div>
-                                            {statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && <span className="text-[10px] text-gray-400 ml-2">{statusMessage}</span>}
                                         </div>
                                     </div>
                                 )}

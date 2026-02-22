@@ -6304,6 +6304,7 @@ class Agent:
                 if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                    tool_args["_agent"] = self  # lets send_whatsapp detect front_office_mode
                 if name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)

@@ -110,6 +110,7 @@ def _strip_tool_calls_json(text: str) -> str:
 _INTERNAL_PHRASES = [
     "[SYSTEM_LOG_ONLY]",
     "[FRONT OFFICE",
+    "[TOOL BLOCKED]",
     "MESSAGE FROM A CONTACT",
     "NOT FROM THE ACCOUNT OWNER",
     "API returned empty responses",
@@ -770,6 +771,7 @@ def run_headless_agent():
                             "[FRONT OFFICE – MESSAGE FROM A CONTACT, NOT FROM THE ACCOUNT OWNER.] "
                             "The following message was sent by a contact to your front office. "
                             "You must respond directly TO this contact (they will receive your reply). "
+                            "CRITICAL: Do NOT call send_whatsapp, send_telegram, or any messaging tool — your reply text is automatically delivered to the contact. Just write your reply as normal text. "
                             "Do NOT report to the account owner (e.g. do not say 'I sent X to the contact' or 'I have sent Anne...'). "
                             "Do NOT repeat or echo the contact's message back; give a helpful reply.\n\n"
                             "Contact details (use Language / How to address / Notes when replying):\n"

@@ -66,6 +66,30 @@ class SendWhatsAppTool(BaseTool):
         username = kwargs.get("username") or "admin"
         user_scope_id = kwargs.get("user_scope_id")
 
+        # GUARD: When the current task is an inbound WhatsApp message from a contact,
+        # the reply is delivered automatically by the headless runner — the agent must
+        # NOT call send_whatsapp in addition (would cause duplicate / wrong-JID sends).
+        # Block the tool when there is no explicit to_phone recipient AND the agent is
+        # currently handling a front-office (from_contact) inbound session.
+        to_phone = (kwargs.get("to_phone") or kwargs.get("phone_number") or "").strip()
+        if not to_phone:
+            # No explicit recipient → sending to the owner's own stored JID.
+            # During an inbound contact session this is redundant — the headless reply
+            # path already delivers the response.  Block to prevent duplicates.
+            try:
+                # The agent exposes _front_office_mode when handling a contact message.
+                # Access it via the tool's owner agent if available (injected as _agent kwarg),
+                # or fall back to checking the global front-office flag on the agent instance.
+                _agent = kwargs.get("_agent")
+                if _agent is not None and getattr(_agent, "_front_office_mode", False):
+                    return (
+                        "[TOOL BLOCKED] You are replying to an inbound WhatsApp message from a contact. "
+                        "Do NOT call send_whatsapp — your reply is delivered automatically. "
+                        "Just write your answer as plain text."
+                    )
+            except Exception:
+                pass
+
         try:
             from vaf.core.messaging_connections import get_whatsapp_chat_jid
             from vaf.api.whatsapp_bridge import (

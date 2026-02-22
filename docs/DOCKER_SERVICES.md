@@ -250,19 +250,38 @@ docker compose -f docker-compose.memory.yml restart tts
 
 ---
 
-## Auto-Start with VAF
+## Auto-Start & Smart Update
 
-When you start VAF (Desktop shortcut or `vaf tray`), the tray will automatically bring up the Docker stack if Docker is available.
+### During Installation (`install.sh` / `install.ps1`)
+
+The installer automatically manages the Docker stack:
+
+1. **Change Detection**: After a `git pull`, the installer checks whether `docker-compose.memory.yml` has changed (via `git diff HEAD~1 HEAD`).
+2. **Auto-Start Docker Daemon**: If Docker is installed but not running, the installer attempts to start it automatically:
+   - **macOS**: `open -a Docker` (launches Docker Desktop)
+   - **Linux**: `sudo systemctl start docker` (or `sudo service docker start`)
+   - **Windows**: Launches `Docker Desktop.exe` from Program Files
+3. **Wait for Readiness**: The installer waits up to 60 seconds for the Docker daemon to become responsive.
+4. **Apply Changes**: Runs `docker compose -f docker-compose.memory.yml up -d`, which:
+   - Starts new services (e.g., Gotenberg after an update that adds it)
+   - Recreates services whose configuration changed
+   - Leaves unchanged, running services untouched
+
+> **Note:** Data in named volumes (e.g., `vaf_memory_pgdata`) is never lost during `up -d`. Only container images and configuration are updated.
+
+### When VAF Starts (`vaf tray`)
+
+When you start VAF (Desktop shortcut or `vaf tray`), the tray will also bring up the Docker stack if Docker is available.
 
 ### If Docker Wasn't Running During Install
 
-1. Start Docker Desktop (Windows/macOS) or Docker daemon (Linux)
-2. From VAF project root:
-   ```bash
-   docker compose -f docker-compose.memory.yml up -d
-   ```
+Start Docker, then apply the latest stack manually:
 
----
+```bash
+docker compose -f docker-compose.memory.yml up -d
+```
+
+
 
 ## Configuration
 

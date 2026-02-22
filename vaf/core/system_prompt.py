@@ -467,22 +467,32 @@ when you know many more steps remain.
         last_interaction: Optional[Dict[str, Any]] = None,
         front_office: bool = False,
     ) -> str:
-        """
-        Build the complete system prompt.
-
-        Args:
-            filename: Script filename (used to determine VQ-1 vs Generic identity)
-            username: Current user's username (for identity.json and User identity block)
-            user_scope_id: Current user's scope ID (for cached profile summary from RAG)
-            current_source: Current channel: "web", "telegram", or "cli" (for "Currently chatting in ...")
-            last_interaction: Optional dict with "ts", "source", "preview", "voice" from last_interaction store
-            front_office: If True, add Front Office role and anti-prompt-injection blocks (contact is not the owner)
-
-        Returns:
-            Complete system prompt string
-        """
+        """Build the complete system prompt."""
         parts = []
         
+        # 0. MISSION STATUS (Orchestrator feedback)
+        if "orchestrator" in self.active_modules:
+            plan_exists = False
+            if self.mpm:
+                try:
+                    wm = self.mpm.get_working_memory()
+                    plan_exists = bool(wm.get("plan"))
+                except Exception:
+                    pass
+            
+            status_part = [
+                "## 🎯 MISSION STATUS: ORCHESTRATOR ACTIVE",
+                f"PLAN LOADED: {'✅ Yes' if plan_exists else '❌ NO'}"
+            ]
+            if not plan_exists:
+                status_part.append("⚠️ **SYSTEM LOCKED:** All heavy tools are disabled.")
+                status_part.append("REQUIRED ACTION: Call `update_working_memory(plan=['Step 1: ...', ...])` now.")
+                status_part.append("**Protocol:** You cannot act or search until a plan is persisted in working memory.")
+            else:
+                status_part.append("💡 Plan is active. Execute one step at a time. Use `checkpoint_context` after completing a major task.")
+            
+            parts.append("\n".join(status_part) + "\n")
+
         # 1. CORE IDENTITY & PERSONA (Soul)
         
         def _log_soul(msg: str) -> None:

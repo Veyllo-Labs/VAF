@@ -6398,15 +6398,15 @@ class Agent:
             emit({"type": "tool_end", "tool": name})
             return result
 
-        # Conditional hard enforcement: when orchestrator is active and context is small,
-        # require a plan before heavy tools and limit to 2 heavy calls per turn.
+        # Conditional hard enforcement: when orchestrator is active, require a plan
         tool_name = normalize_tool_name(name) or name
         ORCHESTRATOR_HEAVY_TOOLS = (
             "web_search", "web_fetch", "read_file", "github_get_file",
             "librarian_agent", "coding_agent", "research_agent", "document_agent",
+            "github_list_repos", "github_list_issues", "github_list_pulls",
+            "tree", "find_files", "search_tools", "mail_inbox", "whatsapp_inbox"
         )
         if tool_name in ORCHESTRATOR_HEAVY_TOOLS:
-            n_ctx = self.config.get("n_ctx", 8192) or 8192
             pm = getattr(self, "prompt_manager", None)
             orchestrator_active = bool(pm and "orchestrator" in (pm.get_active_modules() or []))
             if orchestrator_active:

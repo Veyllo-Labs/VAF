@@ -2751,10 +2751,14 @@ class Agent:
         # 1. Archive full history (same as compress does)
         cm._archive_history(self.history)
 
-        # 2. Update intent and state from all messages
+        # 2. Intent: use persisted user intent so the glue block keeps the original goal
+        #    (not the last user message, e.g. "do step 2")
+        if getattr(self, "main_persistence", None):
+            intent_text = self.main_persistence.get_user_intent()
+            if intent_text:
+                cm.update_intent(intent_text)
+        # State: update from messages so glue has files/errors/decisions
         for msg in self.history:
-            if msg.get("role") == "user":
-                cm.update_intent(msg.get("content", ""))
             cm.update_state(msg)
 
         # 3. If caller provided a summary, use it as the narrative

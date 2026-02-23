@@ -50,7 +50,7 @@ All keys live in the main config (Settings → Advanced or `config.json`). Defau
    - Multi-turn loop: each turn calls `chat_step()` until `thinking_done` is called or `thinking_max_turns` is reached
 5. **After run:**
    - JSON run log saved under `~/.vaf/thinking_mode_logs/<scope_key>/`
-   - Human-readable log appended to `logs/vaf_denk.log`
+   - Human-readable log appended to `logs/vaf_denk_YYYY-MM-DD.log`
    - If agent sent a question → `set_waiting_for_reply()` is called
 6. **Unlock:** `release_lock()` called in `finally`; cooldown timestamp recorded.
 
@@ -176,9 +176,9 @@ Debug log: `logs/vaf_denk.log` (human-readable, all users in one file)
 | `thinking_done` tool | `vaf/tools/thinking_done.py` | `ThinkingDoneTool` |
 | `thinking_note_add` tool | `vaf/tools/thinking_note_add.py` | `ThinkingNoteAddTool` |
 | Tool loading | `vaf/core/agent.py` | `_load_tools()` — thinking-mode-only tools gated by `VAF_THINKING_MODE=1` |
-| Debug log | `vaf/core/log_helper.py` | `log_thinking_run()` → `logs/vaf_denk.log` |
+| Debug log | `vaf/core/log_helper.py` | `log_thinking_run()` → `logs/vaf_denk_YYYY-MM-DD.log` |
 | Session context | `vaf/core/agent.py` | `load_session_context()` |
-| GC | `vaf/core/garbage_collector.py` | `_clean_old_thinking_sessions()` |
+| GC | `vaf/core/garbage_collector.py` | `_clean_old_thinking_sessions()`; dated log files deleted by date in filename (older than gc_max_age_hours) |
 
 ---
 

@@ -186,7 +186,7 @@ def set_email_oauth_tokens(
     user_scope_id: Optional[str] = None,
 ) -> None:
     """Store OAuth tokens for an account. Prefer keyring; fallback to encrypted file. Optional username/user_scope_id for multi-user scope."""
-    key = _credential_key(account_id, provider, username, user_scope_id=user_scope_id)
+    key = _credential_key(account_id, provider, _cred_key_username(username), user_scope_id=_cred_key_scope(user_scope_id))
     value = json.dumps({
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -212,7 +212,7 @@ def set_email_imap_password(
     user_scope_id: Optional[str] = None,
 ) -> None:
     """Store IMAP/SMTP password for an account. Prefer keyring; fallback to encrypted file. Optional username/user_scope_id for multi-user scope."""
-    key = _credential_key(account_id, "imap", username, user_scope_id=user_scope_id)
+    key = _credential_key(account_id, "imap", _cred_key_username(username), user_scope_id=_cred_key_scope(user_scope_id))
     value = json.dumps({"password": password, "type": "imap"})
     if _keyring_available():
         try:
@@ -237,14 +237,16 @@ def delete_email_credentials(
     If provider is None, deletes both email:* and email:imap:* keys for this account_id.
     Optional username/user_scope_id for multi-user scope.
     """
+    safe_username = _cred_key_username(username)
+    safe_scope = _cred_key_scope(user_scope_id)
     keys_to_delete = []
     if provider:
-        keys_to_delete.append(_credential_key(account_id, provider, username, user_scope_id=user_scope_id))
+        keys_to_delete.append(_credential_key(account_id, provider, safe_username, user_scope_id=safe_scope))
     else:
-        keys_to_delete.append(_credential_key(account_id, "email", username, user_scope_id=user_scope_id))
-        keys_to_delete.append(_credential_key(account_id, "imap", username, user_scope_id=user_scope_id))
+        keys_to_delete.append(_credential_key(account_id, "email", safe_username, user_scope_id=safe_scope))
+        keys_to_delete.append(_credential_key(account_id, "imap", safe_username, user_scope_id=safe_scope))
         for p in ("gmail", "microsoft", "outlook", "apple", "icloud"):
-            keys_to_delete.append(_credential_key(account_id, p, username, user_scope_id=user_scope_id))
+            keys_to_delete.append(_credential_key(account_id, p, safe_username, user_scope_id=safe_scope))
 
     if _keyring_available():
         try:

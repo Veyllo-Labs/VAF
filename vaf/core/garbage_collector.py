@@ -2,13 +2,17 @@
 VAF Garbage Collector – periodic cleanup of temporary files, logs, and cache.
 
 Runs as a daemon thread every gc_interval_hours (default 12).
-Deletes files older than gc_max_age_hours (default 48).
-Controlled via config keys: gc_enabled, gc_interval_hours, gc_max_age_hours.
+- Log files: use dated names (basename_YYYY-MM-DD.log / .txt). GC deletes any such file
+  whose date in the filename is older than gc_max_age_hours (default 48).
+- Temp files: deletes by mtime (older than gc_max_age_hours).
+- Cache dir: deletes by mtime. Thinking sessions: deleted by thinking_gc_hours.
+Controlled via config: gc_enabled, gc_interval_hours, gc_max_age_hours, thinking_gc_hours.
 """
 
 import gzip
 import json
 import logging
+import re
 import shutil
 import tempfile
 import threading
@@ -18,26 +22,9 @@ from typing import Dict
 
 logger = logging.getLogger("vaf.gc")
 
-# Log filenames safe to delete (allowlist – no wildcards).
-KNOWN_LOG_FILES = frozenset({
-    "backend.log",
-    "webui.log",
-    "web_debug.log",
-    "server.log",
-    "server_cmd.log",
-    "queue.log",
-    "memory.log",
-    "workflow_debug.log",
-    "telegram_reply.log",
-    "rag.log",
-    "prompt.log",
-    "headless.log",
-    "startup_trace.txt",
-    "platform_subprocess.log",
-    "tray_debug.log",
-    "tray_startup.txt",
-    "callback_debug.txt",
-})
+# Pattern for dated log files: basename_YYYY-MM-DD.log or basename_YYYY-MM-DD.txt
+# GC deletes files whose date in the name is older than gc_max_age_hours.
+DATED_LOG_PATTERN = re.compile(r"^(.+)_(\d{4}-\d{2}-\d{2})\.(log|txt)$", re.IGNORECASE)
 
 # Temp-file prefixes used by VAF (see tempfile calls across the codebase).
 VAF_TEMP_PREFIXES = ("vaf_",)
@@ -181,7 +168,7 @@ class GarbageCollector:
             except Exception as exc:
                 logger.debug("[GC] Skip session %s: %s", sid, exc)
 
-    # -- Log files -------------------------------------------------------
+    # -- Log files (dated names: basename_YYYY-MM-DD.log / .txt) -------------
 
     def _clean_log_files(self, cutoff: datetime, stats: Dict[str, int]):
         try:
@@ -191,8 +178,37 @@ class GarbageCollector:
             return
         if not log_dir.exists():
             return
-        for filename in KNOWN_LOG_FILES:
-            self._delete_if_old(log_dir / filename, cutoff, stats)
+        try:
+            for entry in log_dir.iterdir():
+                if not entry.is_file():
+                    continue
+                m = DATED_LOG_PATTERN.match(entry.name)
+                if m:
+                    self._delete_log_if_date_old(entry, cutoff, stats)
+        except PermissionError:
+            stats["errors"] += 1
+
+    @staticmethod
+    def _delete_log_if_date_old(filepath: Path, cutoff: datetime, stats: Dict[str, int]):
+        """Delete a dated log file if the date in its name is before cutoff."""
+        try:
+            if not filepath.is_file():
+                return
+            m = DATED_LOG_PATTERN.match(filepath.name)
+            if not m:
+                return
+            date_str = m.group(2)
+            file_date = datetime.strptime(date_str, "%Y-%m-%d")
+            if file_date >= cutoff:
+                return
+            size = filepath.stat().st_size
+            filepath.unlink()
+            stats["deleted"] += 1
+            stats["freed_bytes"] += size
+            logger.debug("[GC] Deleted dated log %s (%d bytes)", filepath, size)
+        except Exception as exc:
+            logger.debug("[GC] Failed to delete %s: %s", filepath, exc)
+            stats["errors"] += 1
 
     # -- System temp files -----------------------------------------------
 

@@ -10,7 +10,7 @@ import ctypes
 from datetime import datetime
 from pathlib import Path
 from vaf.core.config import Config
-from vaf.core.log_helper import is_debug_logging_enabled
+from vaf.core.log_helper import get_dated_log_path, is_debug_logging_enabled
 
 class FrontendManager:
     """Manages the lifecycle of the Next.js Frontend."""
@@ -237,11 +237,10 @@ class FrontendManager:
                     f.write(str(port))
             except: pass
 
-            # Log file (only when Debug Logs enabled)
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            log_dir = os.path.join(base_dir, "logs")
-            os.makedirs(log_dir, exist_ok=True)
-            log_file = os.path.join(log_dir, "web_debug.log")
+            # Log file (only when Debug Logs enabled): web_debug_YYYY-MM-DD.log
+            log_path = get_dated_log_path("web_debug", "log")
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_file = str(log_path)
             use_debug_log = is_debug_logging_enabled()
 
             # Pass backend connection info as environment variables for next.config.js

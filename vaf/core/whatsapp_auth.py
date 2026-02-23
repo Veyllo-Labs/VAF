@@ -13,6 +13,7 @@ def get_whatsapp_auth_dir(username: str) -> Path:
     """
     Return the WhatsApp auth directory for the given VAF username.
     Credentials (creds.json, Baileys multi-file state) are stored here.
+    Includes fallback for local admin when primary username has no auth.
 
     Args:
         username: VAF username (e.g. from session or local_admin_username)
@@ -20,7 +21,18 @@ def get_whatsapp_auth_dir(username: str) -> Path:
     Returns:
         Path to user's WhatsApp auth directory
     """
-    return Config.APP_DIR / "users" / username / "whatsapp"
+    primary = Config.APP_DIR / "users" / username / "whatsapp"
+    if (primary / "creds.json").exists():
+        return primary
+    
+    # Fallback for local admin (single-user setups where name might vary)
+    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    if username.lower() != local_admin:
+        fallback = Config.APP_DIR / "users" / local_admin / "whatsapp"
+        if (fallback / "creds.json").exists():
+            return fallback
+            
+    return primary
 
 
 def whatsapp_auth_exists(username: str) -> bool:

@@ -210,7 +210,9 @@ def get_state_provider(state: str) -> Optional[str]:
     return entry.get("provider")
 
 
-def get_authorization_url(provider: str, redirect_uri: str) -> Tuple[str, str]:
+def get_authorization_url(
+    provider: str, redirect_uri: str, username: Optional[str] = None, user_scope_id: Optional[str] = None
+) -> Tuple[str, str]:
     """
     Build OAuth authorization URL with PKCE and store state/code_verifier.
     Returns (authorization_url, state). Raises ValueError if provider or client_id missing.
@@ -244,6 +246,8 @@ def get_authorization_url(provider: str, redirect_uri: str) -> Tuple[str, str]:
         "provider": provider,
         "code_verifier": verifier,
         "redirect_uri": redirect_uri,
+        "username": username,
+        "user_scope_id": user_scope_id,
         "created_at": time.time(),
     }
     _save_states(states)
@@ -269,6 +273,11 @@ def exchange_code_for_tokens(
     code_verifier = entry.get("code_verifier")
     if not code_verifier:
         raise ValueError("Missing code_verifier for state.")
+
+    # Retrieve scoped user info from state so tokens land in the right bucket
+    username = entry.get("username")
+    user_scope_id = entry.get("user_scope_id")
+
     # Use the exact redirect_uri from the auth request (Google requires character-for-character match)
     exchange_redirect_uri = entry.get("redirect_uri") or redirect_uri
     if provider not in PROVIDERS:
@@ -310,8 +319,8 @@ def exchange_code_for_tokens(
     expires_in = data.get("expires_in")
     expires_at = time.time() + int(expires_in) if expires_in else None
     account_id = _get_account_id_from_tokens(provider, access, data)
-    set_email_oauth_tokens(account_id, provider, access, refresh or "", expires_at)
-    return {**data, "account_id": account_id}
+    set_email_oauth_tokens(account_id, provider, access, refresh or "", expires_at, username=username, user_scope_id=user_scope_id)
+    return {**data, "account_id": account_id, "username": username, "user_scope_id": user_scope_id}
 
 
 def get_oauth_callback_redirect_uri(request_base_url: str) -> str:
@@ -327,9 +336,31 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
     Returns None if credentials missing, invalid, or refresh fails.
     Optional username/user_scope_id for multi-user credential scope.
     """
+    # Fallback logic for credential lookup (aligned with email_transport Candidates)
+    # This allows tools to find tokens even when the chat scope (JWT/WebSocket) differs from the Dashboard scope.
     creds = get_email_credentials(account_id, provider, username, user_scope_id=user_scope_id)
+    effective_scope = user_scope_id
+
+    if not (creds and creds.get("type") == "oauth"):
+        # Try legacy scope (None)
+        creds = get_email_credentials(account_id, provider, username, user_scope_id=None)
+        if creds and creds.get("type") == "oauth":
+            effective_scope = None
+
+    if not (creds and creds.get("type") == "oauth"):
+        # Try single scope with accounts if only one exists
+        by_scope = Config.get("email_config_by_scope") or {}
+        if isinstance(by_scope, dict):
+            scopes_with_accounts = [sid for sid, ec in by_scope.items() if isinstance(ec, dict) and (ec.get("accounts") or [])]
+            if len(scopes_with_accounts) == 1:
+                try_scope = str(scopes_with_accounts[0]).strip()
+                creds = get_email_credentials(account_id, provider, username, user_scope_id=try_scope)
+                if creds and creds.get("type") == "oauth":
+                    effective_scope = try_scope
+
     if not creds or creds.get("type") != "oauth":
         return None
+
     access = creds.get("access_token")
     refresh = creds.get("refresh_token")
     expires_at = creds.get("expires_at")
@@ -363,7 +394,8 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
             return access
         expires_in = data.get("expires_in")
         new_expires_at = time.time() + int(expires_in) if expires_in else None
-        set_email_oauth_tokens(account_id, provider, new_access, refresh, new_expires_at, username, user_scope_id=user_scope_id)
+        # Save refreshed token back to the EFFECTIVE scope (where it was found)
+        set_email_oauth_tokens(account_id, provider, new_access, refresh, new_expires_at, username, user_scope_id=effective_scope)
         return new_access
     except Exception as e:
         logger.warning("Token refresh error for %s: %s", provider, e)

@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.panel import Panel
 from vaf.core.agent import Agent
 from vaf.cli.ui import UI
+from vaf.core.log_helper import get_dated_log_path
 from vaf.core.web_server import start_background_server
 from vaf.core.web_interface import get_web_interface
 import threading
@@ -1958,18 +1959,14 @@ Created: {current_session.created_at}
         except Exception as e:
             tui.error(f"Error in interaction loop: {e}")
             import traceback
-            # Save traceback to log for debugging (use absolute path)
+            # Save traceback to log for debugging (crash_YYYY-MM-DD.log)
             try:
-                # Ensure logs directory exists first
-                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-                log_dir = os.path.join(base_dir, "logs")
-                os.makedirs(log_dir, exist_ok=True)
-                
-                crash_log = os.path.join(log_dir, "crash.log")
-                with open(crash_log, "a", encoding="utf-8") as f:
+                crash_path = get_dated_log_path("crash", "log")
+                crash_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(crash_path, "a", encoding="utf-8") as f:
                     f.write(f"\n--- {datetime.now().isoformat()} ---\n")
                     f.write(traceback.format_exc())
-                tui.info(f"Traceback saved to {crash_log}")
+                tui.info(f"Traceback saved to {crash_path}")
             except Exception:
                 # If logging fails, just print traceback
                 traceback.print_exc()
@@ -2100,11 +2097,14 @@ def _process_agent_message(agent, user_input: str, tui, session):
         def _cleanup_ws(m): return m.group(1) or ""
         clean_text = re.sub(r'^(\s*<think>[\s\S]*?</think>)?\s+', _cleanup_ws, clean_text)
 
-        # DEBUG: Log to file what's being sent to WebUI
+        # DEBUG: Log to file what's being sent to WebUI (stream_debug_YYYY-MM-DD.txt)
         try:
-            with open("D:/VAF/logs/stream_debug.txt", "a", encoding="utf-8") as f:
+            stream_log = get_dated_log_path("stream_debug", "txt")
+            stream_log.parent.mkdir(parents=True, exist_ok=True)
+            with open(stream_log, "a", encoding="utf-8") as f:
                 f.write(f"[CHUNK] text={repr(text[:30] if len(text)>30 else text)} | clean={repr(clean_text[:50] if len(clean_text)>50 else clean_text)} | will_emit={bool(clean_text and clean_text.strip())}\n")
-        except: pass
+        except Exception:
+            pass
 
         # Force update to ensure frontend knows we are answering
         # Only emit if there is meaningful content (prevent empty bubbles)

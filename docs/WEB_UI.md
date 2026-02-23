@@ -80,7 +80,7 @@ Singleton pattern manager that:
 - **Connection Status**: Visual indicator (green/red) in header
 - **Local Model Idle**: Shows `Idle` when the local model is unloaded and waiting for a prompt
 - **Loading States**: Animated dots during agent processing
-- **Workflow Steps**: Real-time display of Router, Workflow, System, and Info events
+- **Workflow Steps**: Real-time display of Router, Workflow, System, and Info events. The **Router** step shows which tools were selected for the turn (e.g. `Router: LLM-based: list_calendar_events` or `Router: Script-based: web_search`), so you can see when and which tools the agent is using.
 - **Inline Tool Status**: Visual cards for running/completed tools directly in the chat stream
 
 ### 4. Sub-Agent Panel & Tool Cards
@@ -99,7 +99,7 @@ Singleton pattern manager that:
 
 **System Steps**:
 - Timeline-style visualization
-- Icons for different step types (Router, Workflow, Safety)
+- Icons for different step types (Router, Workflow, Safety). Router steps show the selected tool name(s) (LLM-based or script-based selection; see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md)).
 - Automatic filtering of redundant messages
 
 ### 6. Settings
@@ -424,6 +424,12 @@ The Web UI runs alongside the CLI interface:
 3. Port 3000+ available: `lsof -i :3000`
 
 **Logs**: `logs/web_debug.log`
+
+### Server not reachable (full-screen message)
+
+When the backend is down or unreachable, the Web UI shows a full-screen message: *"Server not reachable. Make sure VAF is running (e.g. \"vaf run\")."* with a **Try again** button. This appears when the initial auth/health check to the backend fails (e.g. VAF not started, or port 8001 not reachable).
+
+**What to do**: Start VAF (`vaf run` or open Web UI from the system tray). Ensure nothing else is using port 8001. Then click **Try again** or refresh the page.
 
 ### WebSocket Connection Failed
 

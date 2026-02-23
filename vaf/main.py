@@ -308,11 +308,11 @@ app.command(name="install-gpu")(info.install_gpu)
 def tray_command():
     """Start the VAF System Tray application (Persistent Background Service)."""
     def _log_tray_error(msg: str, err: str = ""):
-        """Write to logs/tray_startup.txt for diagnostics (works even before tray import)."""
+        """Write to logs/tray_startup_YYYY-MM-DD.txt for diagnostics (works even before tray import)."""
         try:
-            log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
-            os.makedirs(log_dir, exist_ok=True)
-            fpath = os.path.join(log_dir, "tray_startup.txt")
+            from vaf.core.log_helper import get_dated_log_path
+            fpath = get_dated_log_path("tray_startup", "txt")
+            fpath.parent.mkdir(parents=True, exist_ok=True)
             import datetime
             ts = datetime.datetime.now().isoformat()
             with open(fpath, "a", encoding="utf-8") as f:

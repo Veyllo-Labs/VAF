@@ -231,7 +231,8 @@ def _get_email_config(
     user_scope_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Return email config for the given user. When username is None or local admin, use legacy email_config.
-    If user_scope_id is set, email_config_by_scope is tried first; then legacy for local admin scope."""
+    If user_scope_id is set, email_config_by_scope is tried first; then legacy for local admin scope.
+    Includes fallbacks for local mode where accounts might live in legacy or a single scope."""
     from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
     local_admin_scope = get_local_admin_scope_id()
     if user_scope_id:
@@ -240,11 +241,27 @@ def _get_email_config(
             ec = by_scope.get(str(user_scope_id).strip())
             if isinstance(ec, dict) and ec.get("accounts") is not None:
                 return ec
+
+        # Fallback: if current scope empty, but exactly ONE scope has accounts, use it (aligns with Dashboard)
+        if isinstance(by_scope, dict):
+            scopes_with_accounts = [
+                sid for sid, ec in by_scope.items()
+                if isinstance(ec, dict) and (ec.get("accounts") or [])
+            ]
+            if len(scopes_with_accounts) == 1:
+                return by_scope[scopes_with_accounts[0]]
+
         if str(user_scope_id).strip() == str(local_admin_scope).strip():
             raw = Config.get("email_config")
             if isinstance(raw, dict):
                 return raw
             return {"accounts": []}
+
+        # Fallback: try legacy config if current scope found nothing
+        raw = Config.get("email_config")
+        if isinstance(raw, dict) and raw.get("accounts"):
+            return raw
+
     local_admin = get_local_admin_username().lower()
     if not username or username.strip().lower() == local_admin:
         raw = Config.get("email_config")
@@ -463,9 +480,10 @@ def _fetch_mail_gmail(
     since: Optional[str] = None,
     max_messages: int = 50,
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Fetch mail via Gmail API. Returns list of dicts with subject, from, date, message_id."""
-    token = get_valid_access_token(account_id, "gmail", username)
+    token = get_valid_access_token(account_id, "gmail", username, user_scope_id=user_scope_id)
     if not token:
         logger.warning("No valid Gmail token for account %s", account_id[:8] + "***")
         return []
@@ -536,9 +554,11 @@ def _fetch_mail_gmail(
         return []
 
 
-def _get_body_gmail(account_id: str, provider_message_id: str, username: Optional[str] = None) -> Optional[str]:
+def _get_body_gmail(
+    account_id: str, provider_message_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None
+) -> Optional[str]:
     """Fetch full message body from Gmail API as plain text. Prefer text/plain; if only HTML, strip to plain."""
-    token = get_valid_access_token(account_id, "gmail", username)
+    token = get_valid_access_token(account_id, "gmail", username, user_scope_id=user_scope_id)
     if not token:
         return None
     try:
@@ -631,13 +651,14 @@ def _send_mail_gmail(
     body: str,
     subtype: str = "plain",
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
     attachments: Optional[List[Dict[str, str]]] = None,
 ) -> bool:
     """Send mail via Gmail API (users.messages.send with raw RFC 2822)."""
-    acc = get_account(account_id, username)
+    acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
         return False
-    token = get_valid_access_token(account_id, "gmail", username)
+    token = get_valid_access_token(account_id, "gmail", username, user_scope_id=user_scope_id)
     if not token:
         logger.warning("No valid Gmail token for account %s", account_id[:8] + "***")
         return False
@@ -682,9 +703,10 @@ def _fetch_mail_microsoft(
     since: Optional[str] = None,
     max_messages: int = 50,
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Fetch mail via Microsoft Graph (GET /me/mailFolders/.../messages)."""
-    token = get_valid_access_token(account_id, "microsoft", username)
+    token = get_valid_access_token(account_id, "microsoft", username, user_scope_id=user_scope_id)
     if not token:
         logger.warning("No valid Microsoft token for account %s", account_id[:8] + "***")
         return []
@@ -725,9 +747,11 @@ def _fetch_mail_microsoft(
         return []
 
 
-def _get_body_microsoft(account_id: str, provider_message_id: str, username: Optional[str] = None) -> Optional[str]:
+def _get_body_microsoft(
+    account_id: str, provider_message_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None
+) -> Optional[str]:
     """Fetch full message body from Microsoft Graph as plain text. Strip HTML if needed."""
-    token = get_valid_access_token(account_id, "microsoft", username)
+    token = get_valid_access_token(account_id, "microsoft", username, user_scope_id=user_scope_id)
     if not token:
         return None
     try:
@@ -764,13 +788,14 @@ def _send_mail_microsoft(
     body: str,
     subtype: str = "plain",
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
     attachments: Optional[List[Dict[str, str]]] = None,
 ) -> bool:
     """Send mail via Microsoft Graph (POST /me/sendMail)."""
-    acc = get_account(account_id, username)
+    acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
         return False
-    token = get_valid_access_token(account_id, "microsoft", username)
+    token = get_valid_access_token(account_id, "microsoft", username, user_scope_id=user_scope_id)
     if not token:
         logger.warning("No valid Microsoft token for account %s", account_id[:8] + "***")
         return False
@@ -904,9 +929,9 @@ def get_message_body_plain(
     provider = (acc.get("provider") or "imap").lower()
     result: Optional[str] = None
     if provider == "gmail" and provider_message_id:
-        result = _get_body_gmail(account_id, provider_message_id, username)
+        result = _get_body_gmail(account_id, provider_message_id, username, user_scope_id=user_scope_id)
     elif provider == "microsoft" and provider_message_id:
-        result = _get_body_microsoft(account_id, provider_message_id, username)
+        result = _get_body_microsoft(account_id, provider_message_id, username, user_scope_id=user_scope_id)
     elif provider == "imap":
         result = _get_body_imap(account_id, message_id, folder, username, user_scope_id=user_scope_id)
     elif provider == "microsoft" and message_id:
@@ -956,9 +981,9 @@ def fetch_mail(
         return []
     provider = (acc.get("provider") or "imap").lower()
     if provider == "gmail":
-        return _fetch_mail_gmail(account_id, folder, since, max_messages, username)
+        return _fetch_mail_gmail(account_id, folder, since, max_messages, username, user_scope_id=user_scope_id)
     if provider == "microsoft":
-        return _fetch_mail_microsoft(account_id, folder, since, max_messages, username)
+        return _fetch_mail_microsoft(account_id, folder, since, max_messages, username, user_scope_id=user_scope_id)
     conn = _imap_connect(account_id, username=username, user_scope_id=user_scope_id)
     if not conn:
         return []
@@ -1025,9 +1050,9 @@ def send_mail(
         return False
     provider = (acc.get("provider") or "imap").lower()
     if provider == "gmail":
-        return _send_mail_gmail(account_id, to, subject, body, subtype, username, attachments)
+        return _send_mail_gmail(account_id, to, subject, body, subtype, username, user_scope_id=user_scope_id, attachments=attachments)
     if provider == "microsoft":
-        return _send_mail_microsoft(account_id, to, subject, body, subtype, username, attachments)
+        return _send_mail_microsoft(account_id, to, subject, body, subtype, username, user_scope_id=user_scope_id, attachments=attachments)
     conn = _smtp_connect(account_id, username, user_scope_id=user_scope_id)
     if not conn:
         return False

@@ -81,9 +81,16 @@ class ContextManager:
         elif max_tokens <= 20000:
             self.trigger_threshold = 0.75
             self.recent_memory_size = 8
-        else:
+        elif max_tokens <= 64000:
             self.trigger_threshold = 0.85
-            self.recent_memory_size = 10
+            self.recent_memory_size = 50
+        elif max_tokens <= 128000:
+            self.trigger_threshold = 0.85
+            self.recent_memory_size = 100
+        else:
+            # Ultra-large windows (e.g. Gemini 1M+, Claude 200k)
+            self.trigger_threshold = 0.90
+            self.recent_memory_size = 200
         
         # Context layers
         self.intent = IntentContext()
@@ -304,7 +311,7 @@ class ContextManager:
         # 3. Aggressive Pruning for large outputs
         pruned_msg = f"[SEAMLESS COMPRESSION: Tool '{tool_name}' output pruned ({char_count} chars, {line_count} lines)]\n"
         
-        if tool_name in ["read_file", "list_files", "web_search", "web_fetch", "github_get_file", "github_list_repos"]:
+        if tool_name in ["read_file", "list_files", "web_search", "web_fetch", "github_get_file", "github_list_repos", "mail_inbox", "whatsapp_inbox", "list_email_accounts", "telegram_inbox"]:
             # Dynamic pruning window
             head_lines = 5 if is_small_context else 15
             tail_lines = 5 if is_small_context else 10

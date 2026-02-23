@@ -31,7 +31,7 @@ except ImportError:
 from vaf.core.config import Config
 from vaf.core.backend import ServerManager
 from vaf.core.platform import Platform
-from vaf.core.log_helper import append_domain_log
+from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_tool_use
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
 from vaf.tools.search import WebSearchTool, get_web_search_results
@@ -1784,6 +1784,12 @@ class Agent:
     def init_chat(self):
         # Initialize Prompt Manager
         n_ctx = self.config.get("n_ctx", 8192)
+        
+        # If running in API mode, use a much larger default context limit
+        if self.provider != "local":
+             if n_ctx <= 16384:
+                 n_ctx = 128000
+                 
         self.prompt_manager = SystemPromptManager(list(self.tools.values()), model_name=self.model_display_name, agent_instance=self, max_tokens=n_ctx)
                 
         # Build initial prompt (Core + Base Rules)
@@ -2790,9 +2796,10 @@ class Agent:
         if summary:
             cm.state.narrative_summary = summary
 
-        # 4. Build compressed history (system prompt + glue + last 2 messages)
+        # 4. Build compressed history (system prompt + glue + last 6 messages)
         system_msg = self.history[0] if self.history else None
-        recent = self.history[-2:] if len(self.history) >= 2 else self.history[:]
+        # Keep more than 2 messages to maintain conversational flow (approx 3 turns)
+        recent = self.history[-6:] if len(self.history) >= 6 else self.history[:]
 
         context_summary = cm._build_context_summary()
         glue_msg = {"role": "user", "content": f"[CONTEXT RESTORED]\n{context_summary}"}
@@ -3448,13 +3455,12 @@ class Agent:
             # because large intermediate results (like HTML reports) never
             # touch the main agent's context.
 
-            # DEBUG: Log workflow execution path
+            # DEBUG: Log workflow execution path (workflow_debug_YYYY-MM-DD.log)
             try:
-                from pathlib import Path
                 import datetime
-                log_dir = Path(__file__).resolve().parents[2] / "logs"
-                log_dir.mkdir(parents=True, exist_ok=True)
-                with open(log_dir / "workflow_debug.log", "a", encoding="utf-8") as f:
+                path = get_dated_log_path("workflow_debug", "log")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(path, "a", encoding="utf-8") as f:
                     ts = datetime.datetime.now().isoformat()
                     sep_terminals = self.config.get("sub_agents_in_separate_terminals", False)
                     in_wf = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "NOT SET")
@@ -3477,12 +3483,11 @@ class Agent:
                         # DEBUG: Log each step
                         def _debug_log(msg):
                             try:
-                                from pathlib import Path
                                 import datetime
-                                log_dir = Path(__file__).resolve().parents[2] / "logs"
-                                with open(log_dir / "workflow_debug.log", "a", encoding="utf-8") as f:
+                                path = get_dated_log_path("workflow_debug", "log")
+                                with open(path, "a", encoding="utf-8") as f:
                                     f.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
-                            except:
+                            except Exception:
                                 pass
 
                         _debug_log("STEP 1: Creating IPC task...")
@@ -5607,6 +5612,16 @@ class Agent:
                     try:
                         arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                     except: arguments = {}
+
+                    # Debug: log tool use with session/scope for user-isolation debugging (only when debug logs on)
+                    try:
+                        from vaf.core.subagent_ipc import get_current_session_id
+                        _sid = get_current_session_id() or getattr(self, "current_session_id", None)
+                        _scope = getattr(self, "_current_user_scope_id", None)
+                        _args_preview = json.dumps(arguments, ensure_ascii=False) if arguments else ""
+                        log_tool_use(function_name, session_id=_sid, user_scope_id=_scope, arguments_preview=_args_preview)
+                    except Exception:
+                        pass
 
                     UI.event("Tool", f"{function_name}", style="highlight")
                     

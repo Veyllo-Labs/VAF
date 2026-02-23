@@ -112,6 +112,22 @@ The agent can send you messages via Telegram (e.g. "send me the result via Teleg
 
 ---
 
+## Message Handling
+
+### Inbound Messages
+
+- **Debouncing**: Incoming messages are buffered per chat. After each message, the bridge waits a short period (default 5 seconds, configurable). If another message arrives in that period, the timer resets and the new text is appended. When no further message arrives for the full period, the combined text is sent as a single prompt.
+- **Cross-Channel Synchronization**: **New:** Activity on Telegram is now synchronized with Thinking Mode.
+  1. **History Sync:** If the background Thinking Agent asks you a question via Telegram, that question is automatically persisted to your Telegram chat history. When you reply, the Main Agent sees the full context of the background question.
+  2. **Unified Activity (No Interruptions):** Sending a Telegram message immediately resets the idle timer for your entire logical user (including WebUI and Admin aliases), ensuring Thinking Mode does not start during an active conversation.
+
+### Replies
+
+- **Internal Filtering**: You receive only the agent’s final reply. Internal reasoning blocks (e.g. `<think>...</think>`) and raw tool-call JSON are automatically removed from replies.
+- **System Log Suppression**: Pure internal system logs (e.g. "API returned empty responses") are never sent to Telegram.
+
+---
+
 ## Voice Message Support
 
 ### Incoming Voice Messages

@@ -20,7 +20,7 @@ from vaf.core.session import SessionManager, Session
 from vaf.cli.autosuggest import SmartAutoSuggest
 import json
 from vaf.core.config import Config
-from vaf.core.log_helper import append_domain_log, is_debug_logging_enabled
+from vaf.core.log_helper import append_domain_log, get_dated_log_path, is_debug_logging_enabled
 from pathlib import Path
 from typing import Optional, List
 import logging
@@ -2613,10 +2613,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         try:
                             if is_debug_logging_enabled():
                                 from datetime import datetime as _dt
-                                qlog_dir = Path(os.environ.get("VAF_LOG_DIR", str(Path(__file__).resolve().parents[2] / "logs")))
-                                qlog_dir.mkdir(parents=True, exist_ok=True)
+                                qpath = get_dated_log_path("queue", "log")
+                                qpath.parent.mkdir(parents=True, exist_ok=True)
                                 qsize = tq.get_queue_size()
-                                with open(qlog_dir / "queue.log", "a", encoding="utf-8") as f:
+                                with open(qpath, "a", encoding="utf-8") as f:
                                     f.write(f"{_dt.now().isoformat()} QUEUE_ADD session_id={session_id} preview={repr((content or '')[:60])} queue_size_after={qsize}\n")
                         except Exception:
                             pass

@@ -20,6 +20,8 @@
     "navigateSelect": "↑↓ Navigate · Enter Select",
     "totalContextConsumed": "Total context consumed",
     "remainingCapacity": "Remaining capacity",
+    "ofUsed": "of used",
+    "ofCapacity": "of capacity",
     "memoryLearning": "Memory Learning",
     "ragSnippetsThisTurn": "RAG snippets (this turn)",
     "ragHits": "RAG: {count} hit(s)",

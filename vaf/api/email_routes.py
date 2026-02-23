@@ -243,7 +243,7 @@ def _oauth_callback_base_url() -> str:
 
 
 @router.get("/oauth/start")
-async def oauth_start(request: Request, provider: str = "gmail"):
+async def oauth_start(request: Request, provider: str = "gmail", _user: Dict[str, Any] = Depends(_get_current_user)):
     """
     Start OAuth2 PKCE flow. Returns authorization_url and state.
     Frontend opens authorization_url in browser; callback will run on this server.
@@ -252,8 +252,10 @@ async def oauth_start(request: Request, provider: str = "gmail"):
         raise HTTPException(status_code=400, detail="provider must be gmail, microsoft, or apple")
     base_url = _oauth_callback_base_url()
     redirect_uri = f"{base_url}/api/email/oauth/callback"
+    _username = _user.get("username")
+    _user_scope_id = _user.get("user_scope_id")
     try:
-        auth_url, state = get_authorization_url(provider, redirect_uri)
+        auth_url, state = get_authorization_url(provider, redirect_uri, username=_username, user_scope_id=_user_scope_id)
         return {"authorization_url": auth_url, "state": state, "redirect_uri": redirect_uri}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -282,8 +284,11 @@ async def oauth_callback(
             return _redirect_error("Invalid or expired state. Please start the login again.")
         data = exchange_code_for_tokens(provider, code, state, redirect_uri)
         account_id = data.get("account_id") or "unknown"
-        _add_account(account_id, provider, account_id if "@" in account_id else account_id, enabled=True)
-        logger.info("email oauth callback: account added account_id=%s provider=%s", account_id, provider)
+        # Use retrieved scope/user from OAuth state to add the account
+        _username = data.get("username")
+        _user_scope_id = data.get("user_scope_id")
+        _add_account(account_id, provider, account_id if "@" in account_id else account_id, enabled=True, username=_username, user_scope_id=_user_scope_id)
+        logger.info("email oauth callback: account added account_id=%s provider=%s scope=%s", account_id, provider, _user_scope_id)
         try:
             from vaf.core.log_helper import append_domain_log
             append_domain_log("backend", f"[EMAIL_OAUTH] account added account_id={account_id} provider={provider}")

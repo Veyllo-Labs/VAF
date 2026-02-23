@@ -147,6 +147,8 @@ Model: search_tools(query="calendar appointment")
 | `None` | Use ALL registered tools (router failure / retry / internal step) |
 | `[list]` | Use only these tool names (normal operation, post-router) |
 
+**Visibility in the Web UI:** The selected tools (e.g. `LLM-based: list_calendar_events` or `Script-based: web_search`) are shown in the chat as a Router system step so you can see which tools were chosen for each turn. See [WEB_UI.md](WEB_UI.md) → Workflow Steps / System Steps.
+
 ---
 
 ## 5. Feature 3 — Programmatic Tool Calling (`with_vaf_tools=True`)
@@ -246,3 +248,16 @@ User: "What is the weather?"
 `web_search`, `memory_search`, `memory_save`, `list_tools`, `search_tools`,
 `update_intent`, `update_working_memory`, `read_file`, `list_files`,
 `coding_agent`, `librarian_agent`, `research_agent`
+
+---
+
+## 8. Tool-use debug log (user-scope isolation)
+
+When **Debug Logs** are enabled (Advanced → Debug Logs), each tool execution is written to `logs/tool_use_YYYY-MM-DD.log` with:
+
+- `tool` — tool name
+- `session_id` — current chat session ID
+- `user_scope_id` — user-scope UUID used for RAG/memory isolation (may be empty on local/single-user)
+- `args_preview` — truncated arguments (first 200 chars)
+
+Use this to verify which user scope UUID is used for each tool call when debugging local vs multi-user or isolation issues. Log files are dated and cleaned by the garbage collector like other app logs.

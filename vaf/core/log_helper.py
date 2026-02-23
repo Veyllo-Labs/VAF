@@ -43,56 +43,88 @@ def get_app_log_dir() -> Path:
     return Path.cwd()
 
 
-def log_telegram_reply(message: str) -> None:
-    """Always append to logs/telegram_reply.log (for diagnosing Telegram delivery). No-op on error."""
+def get_dated_log_path(basename: str, ext: str = "log") -> Path:
+    """Return path for a log file with today's date in the name: {basename}_YYYY-MM-DD.{ext}.
+    Same day always uses the same file (append). GC deletes files whose date is older than gc_max_age_hours."""
+    log_dir = get_app_log_dir()
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    return log_dir / f"{basename}_{date_str}.{ext}"
+
+
+def log_tool_use(
+    tool_name: str,
+    session_id: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+    arguments_preview: Optional[str] = None,
+) -> None:
+    """When debug_logs_enabled, append one line to tool_use_YYYY-MM-DD.log for user-scope isolation debugging.
+    Logs which session_id and user_scope_id (UUID) were active for each tool call. No-op when debug off or on error."""
+    if not is_debug_logging_enabled():
+        return
     try:
-        log_dir = get_app_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
-        with open(log_dir / "telegram_reply.log", "a", encoding="utf-8") as f:
+        path = get_dated_log_path("tool_use", "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().isoformat()
+        sid = session_id or ""
+        scope = user_scope_id or ""
+        args = (arguments_preview or "")[:200].replace("\n", " ")
+        line = f"{ts} tool={tool_name} session_id={sid} user_scope_id={scope} args_preview={args}\n"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass
+
+
+def log_telegram_reply(message: str) -> None:
+    """Always append to logs/telegram_reply_YYYY-MM-DD.log (for diagnosing Telegram delivery). No-op on error."""
+    try:
+        path = get_dated_log_path("telegram_reply", "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now().isoformat()} {message}\n")
     except Exception:
         pass
 
 
 def log_discord_reply(message: str) -> None:
-    """Always append to logs/discord_reply.log (for diagnosing Discord delivery). No-op on error."""
+    """Always append to logs/discord_reply_YYYY-MM-DD.log (for diagnosing Discord delivery). No-op on error."""
     try:
-        log_dir = get_app_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
-        with open(log_dir / "discord_reply.log", "a", encoding="utf-8") as f:
+        path = get_dated_log_path("discord_reply", "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now().isoformat()} {message}\n")
     except Exception:
         pass
 
 
 def log_whatsapp_qr(message: str) -> None:
-    """Always append to logs/whatsapp_qr.log (for diagnosing QR/link failures). No-op on error."""
+    """Always append to logs/whatsapp_qr_YYYY-MM-DD.log (for diagnosing QR/link failures). No-op on error."""
     try:
-        log_dir = get_app_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
-        with open(log_dir / "whatsapp_qr.log", "a", encoding="utf-8") as f:
+        path = get_dated_log_path("whatsapp_qr", "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now().isoformat()} {message}\n")
     except Exception:
         pass
 
 
 def log_whatsapp_inbound(message: str) -> None:
-    """Always append to logs/whatsapp_inbound.log (for diagnosing inbound/self-chat). No-op on error."""
+    """Always append to logs/whatsapp_inbound_YYYY-MM-DD.log (for diagnosing inbound/self-chat). No-op on error."""
     try:
-        log_dir = get_app_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
-        with open(log_dir / "whatsapp_inbound.log", "a", encoding="utf-8") as f:
+        path = get_dated_log_path("whatsapp_inbound", "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now().isoformat()} {message}\n")
     except Exception:
         pass
 
 
 def log_whatsapp_reply(message: str) -> None:
-    """Always append to logs/whatsapp_reply.log (for diagnosing WhatsApp delivery). No-op on error."""
+    """Always append to logs/whatsapp_reply_YYYY-MM-DD.log (for diagnosing WhatsApp delivery). No-op on error."""
     try:
-        log_dir = get_app_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
-        with open(log_dir / "whatsapp_reply.log", "a", encoding="utf-8") as f:
+        path = get_dated_log_path("whatsapp_reply", "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now().isoformat()} {message}\n")
     except Exception:
         pass
@@ -100,17 +132,17 @@ def log_whatsapp_reply(message: str) -> None:
 
 def append_domain_log(domain: str, message: str) -> None:
     """
-    Append one timestamped line to {domain}.log.
+    Append one timestamped line to {domain}_YYYY-MM-DD.log.
     domain: one of rag, memory, webui, prompt, headless, backend.
     No-op if debug_logs_enabled is False. Silently ignores errors.
     """
     if not is_debug_logging_enabled() or domain not in ALLOWED_DOMAINS:
         return
     try:
-        log_dir = get_app_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
+        path = get_dated_log_path(domain, "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().isoformat()
-        with open(log_dir / f"{domain}.log", "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"{ts} {message}\n")
     except Exception:
         pass
@@ -118,17 +150,17 @@ def append_domain_log(domain: str, message: str) -> None:
 
 def append_domain_log_always(domain: str, message: str) -> None:
     """
-    Append one timestamped line to {domain}.log even when debug_logs_enabled is False.
+    Append one timestamped line to {domain}_YYYY-MM-DD.log even when debug_logs_enabled is False.
     Use only for important diagnostics (e.g. [CALENDAR] status, [EMAIL_OAUTH]) so users
     can see what the backend did without enabling Debug Logs.
     """
     if domain not in ALLOWED_DOMAINS:
         return
     try:
-        log_dir = get_app_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
+        path = get_dated_log_path(domain, "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().isoformat()
-        with open(log_dir / f"{domain}.log", "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"{ts} {message}\n")
     except Exception:
         pass
@@ -137,16 +169,16 @@ def append_domain_log_always(domain: str, message: str) -> None:
 def append_domain_log_block(domain: str, first_line: str, rest_lines: Optional[List[str]] = None) -> None:
     """
     Append a timestamped first line and optional continuation lines (indented, no extra timestamp).
-    Use for multi-line blocks (e.g. full system prompt dump) into {domain}.log.
+    Use for multi-line blocks (e.g. full system prompt dump) into {domain}_YYYY-MM-DD.log.
     No-op if debug_logs_enabled is False.
     """
     if not is_debug_logging_enabled() or domain not in ALLOWED_DOMAINS:
         return
     try:
-        log_dir = get_app_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
+        path = get_dated_log_path(domain, "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().isoformat()
-        with open(log_dir / f"{domain}.log", "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"{ts} {first_line}\n")
             for line in rest_lines or []:
                 f.write(f"    {line}\n")
@@ -168,8 +200,6 @@ def log_thinking_run(
     and a human-readable summary of what the agent did.
     """
     try:
-        log_dir = get_app_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().isoformat()
 
         lines: list[str] = []
@@ -214,7 +244,9 @@ def log_thinking_run(
 
         lines.append("")
 
-        with open(log_dir / "vaf_denk.log", "a", encoding="utf-8") as f:
+        path = get_dated_log_path("vaf_denk", "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
     except Exception:
         pass

@@ -34,6 +34,16 @@ When running in single-user / localhost mode (no network auth), or when using th
 
 **Important:** The local admin is identified by `local_admin_scope_id`, NOT by the string `"admin"`. A network user whose username happens to be `"admin"` is a different user with a different `user_scope_id`.
 
+### Robust UUID Matching & Fallbacks
+
+In local mode, browser session data or fresh installs can sometimes lead to UUID mismatches (where the Agent's active `user_scope_id` differs from the one used when connections were set up). To prevent tools from "losing" their connections, VAF implements a **Robust Fallback Chain**:
+
+1.  **Primary Scope:** The system first looks for data (credentials, synced mail, contacts) using the current `user_scope_id`.
+2.  **Legacy Scope (None):** If nothing is found, it checks the legacy/unscoped location (used by older versions or CLI).
+3.  **Single-Scope Fallback:** In single-user setups, if only exactly one other scope has connected accounts, the system automatically bridges to that scope.
+
+This ensures that your Email, Calendar, and WhatsApp connections remain active even if your session ID changes, while still maintaining strict isolation in real multi-user environments.
+
 ---
 
 ## How Identity Flows Through the Stack

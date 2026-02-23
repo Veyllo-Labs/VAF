@@ -11,7 +11,7 @@ from pathlib import Path
 from vaf.cli.ui import UI
 from vaf.core.config import Config
 from vaf.core.gpu_detection import get_primary_gpu
-from vaf.core.log_helper import is_debug_logging_enabled
+from vaf.core.log_helper import get_app_log_dir, get_dated_log_path, is_debug_logging_enabled
 from vaf.core.platform import Platform
 
 class ServerManager:
@@ -642,13 +642,13 @@ class ServerManager:
         cmd.extend(["--cache-ram", str(cache_ram_mb)])
         UI.event("Server", f"Prompt cache: {cache_ram_mb} MB", style="dim")
         
-        # Log the command and server output only when Debug Logs is enabled
-        log_dir = Path(self.base_dir) / "logs"
+        # Log the command and server output only when Debug Logs is enabled (server_cmd_YYYY-MM-DD.log, server_YYYY-MM-DD.log)
         debug_logs = is_debug_logging_enabled()
         if debug_logs:
             try:
+                log_dir = get_app_log_dir()
                 log_dir.mkdir(parents=True, exist_ok=True)
-                cmd_log = log_dir / "server_cmd.log"
+                cmd_log = get_dated_log_path("server_cmd", "log")
                 cmd_log.write_text(
                     f"# n_parallel (slots) = {final_parallel}\n" + " ".join(cmd),
                     encoding="utf-8",
@@ -663,9 +663,10 @@ class ServerManager:
              creationflags = subprocess.CREATE_NO_WINDOW
         
         try:
-            log_file = log_dir / "server.log"
             if debug_logs:
+                log_dir = get_app_log_dir()
                 log_dir.mkdir(parents=True, exist_ok=True)
+                log_file = get_dated_log_path("server", "log")
                 self._log_file = open(log_file, 'w', encoding='utf-8', errors='replace')
                 stdout_err = self._log_file
                 stderr_err = self._log_file

@@ -500,8 +500,8 @@ async def get_whatsapp_dashboard(request: Request):
     connected = get_connection_status(username, wait_timeout=5.0) if running else False
 
     try:
-        from vaf.core.log_helper import get_app_log_dir
-        log_path = str(get_app_log_dir() / "whatsapp_qr.log")
+        from vaf.core.log_helper import get_dated_log_path
+        log_path = str(get_dated_log_path("whatsapp_qr", "log"))
     except Exception:
         log_path = "logs/whatsapp_qr.log"
 
@@ -795,9 +795,9 @@ def _run_qr_login(username: str) -> None:
 
 @router.get("/qr/log-path")
 async def get_qr_log_path(request: Request):
-    """Return path to whatsapp_qr.log for debugging."""
-    from vaf.core.log_helper import get_app_log_dir
-    return {"path": str(get_app_log_dir() / "whatsapp_qr.log")}
+    """Return path to whatsapp_qr_YYYY-MM-DD.log for debugging."""
+    from vaf.core.log_helper import get_dated_log_path
+    return {"path": str(get_dated_log_path("whatsapp_qr", "log"))}
 
 
 @router.get("/qr")

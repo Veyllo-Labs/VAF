@@ -49,17 +49,28 @@ class MarkMailAnsweredTool(BaseTool):
         folder = (kwargs.get("folder") or "INBOX").strip()
         if not account_id or not message_id:
             return "account_id and message_id are required. Use mail_inbox to get message_id."
-        if not get_account(account_id, username=cred_username, user_scope_id=user_scope_id):
-            return f"Account '{account_id}' not found. Connected accounts: {', '.join(list_accounts_for_user(cred_username, user_scope_id=user_scope_id))}."
-        init_store(store_username, user_scope_id)
-        ok = update_message_answered(
-            username=store_username,
-            account_id=account_id,
-            folder=folder,
-            message_id=message_id,
-            answered_at=None,  # use now
-            user_scope_id=user_scope_id,
-        )
-        if ok:
-            return "Message marked as answered. It will show 'Benatwortet am ...' in the Mail UI."
+
+        # Try same store/cred fallback as mail_inbox/find_mail/read_mail so we find the message when it lives in legacy/single-scope
+        found_account = False
+        for try_username, try_scope_id in store_candidates_for_mail(store_username, user_scope_id):
+            acc = get_account(account_id, username=try_username, user_scope_id=try_scope_id)
+            if not acc:
+                continue
+            found_account = True
+            init_store(try_username, try_scope_id)
+            ok = update_message_answered(
+                username=try_username,
+                account_id=account_id,
+                folder=folder,
+                message_id=message_id,
+                answered_at=None,  # use now
+                user_scope_id=try_scope_id,
+            )
+            if ok:
+                return "Message marked as answered. It will show 'Benatwortet am ...' in the Mail UI."
+
+        if not found_account:
+            accounts = list_accounts_for_user(cred_username, user_scope_id=user_scope_id)
+            return f"Account '{account_id}' not found. Connected accounts: {', '.join(accounts)}."
+        
         return "Message not found in the synced mailbox. Sync the account in Settings → Connections → Email first."

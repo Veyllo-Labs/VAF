@@ -513,9 +513,11 @@ class Platform:
         import datetime
 
         # CRITICAL: Log IMMEDIATELY at function entry - NO try/except to ensure we see this
-        log_dir = Path(__file__).resolve().parents[2] / "logs"
+        log_dir = Path(os.environ.get("VAF_LOG_DIR", str(Path(__file__).resolve().parents[2] / "logs")))
+        log_dir = Path(log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
-        platform_log = log_dir / "platform_subprocess.log"
+        date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        platform_log = log_dir / f"platform_subprocess_{date_str}.log"
         with open(platform_log, "a", encoding="utf-8") as f:
             ts = datetime.datetime.now().isoformat()
             webui_check = os.environ.get("VAF_WEBUI_ACTIVE", "NOT SET")

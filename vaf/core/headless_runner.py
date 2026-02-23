@@ -20,7 +20,7 @@ from vaf.core.session import SessionManager, Session
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
 from vaf.core.platform import Platform
-from vaf.core.log_helper import append_domain_log, is_debug_logging_enabled
+from vaf.core.log_helper import append_domain_log, get_app_log_dir, get_dated_log_path, is_debug_logging_enabled
 from vaf.core.config import Config
 from pathlib import Path
 
@@ -31,27 +31,6 @@ MEMORY_CRITICAL_MB = 4096  # Force aggressive cleanup above 4GB
 
 # Throttle stream updates to WebUI so the UI does not lag behind (max ~12 updates/sec)
 STREAM_EMIT_THROTTLE_SEC = 0.08
-
-def _get_debug_log_dir():
-    """Resolve log dir so queue.log, callback_debug.txt, etc. land in project logs (e.g. d:\\VAF\\logs)."""
-    candidates = []
-    env_dir = os.environ.get("VAF_LOG_DIR")
-    if env_dir:
-        candidates.append(Path(env_dir))
-    # Prefer repo root / logs so all debug logs sit in one place
-    repo_logs = Path(__file__).resolve().parents[2] / "logs"
-    candidates.append(repo_logs)
-    candidates.append(Platform.data_dir() / "logs")
-    candidates.append(Platform.vaf_dir() / "logs")
-    candidates.append(Path(__file__).resolve().parents[1] / "logs")
-    for candidate in candidates:
-        try:
-            candidate.mkdir(parents=True, exist_ok=True)
-            return candidate
-        except Exception:
-            continue
-    return Path.cwd()
-
 
 def _strip_tool_calls_json(text: str) -> str:
     """Remove raw tool_calls JSON blobs from reply text so bridges/TTS never send them to users."""
@@ -213,8 +192,8 @@ def run_headless_agent():
     Run a headless agent loop that processes tasks from the TaskQueue.
     This is designed to run in a background thread within the Tray App.
     """
-    # IMMEDIATE: Create log dir and write startup marker (consolidated in headless.log)
-    log_dir = _get_debug_log_dir()
+    # IMMEDIATE: Create log dir and write startup marker (consolidated in headless_YYYY-MM-DD.log)
+    log_dir = get_app_log_dir()
     try:
         append_domain_log("headless", "[STARTUP] Headless Runner STARTING")
         append_domain_log("headless", f"[STARTUP] PID: {os.getpid()}")
@@ -226,7 +205,7 @@ def run_headless_agent():
     try:
         from vaf.core.memory_profiler import start_profiler
         start_profiler()
-        print(f"[Headless] Memory Profiler started - logging to {log_dir / 'memory.log'}")
+        print(f"[Headless] Memory Profiler started - logging to {get_dated_log_path('memory', 'log')}")
     except Exception as e:
         print(f"[Headless] Memory Profiler failed to start: {e}")
         append_domain_log("headless", f"[STARTUP] Memory Profiler FAILED: {e}")
@@ -399,7 +378,7 @@ def run_headless_agent():
                 try:
                     if is_debug_logging_enabled():
                         from datetime import datetime as _dt
-                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                        with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                             prev = (task.input_text or "")[:60]
                             f.write(f"{_dt.now().isoformat()} QUEUE_GET session_id={task.session_id} preview={repr(prev)} queue_size_after={tq.get_queue_size()}\n")
                 except Exception:
@@ -476,7 +455,7 @@ def run_headless_agent():
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
-                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                 f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (cmd)\n")
                     except Exception:
                         pass
@@ -504,7 +483,7 @@ def run_headless_agent():
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
-                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                 f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (compaction)\n")
                     except Exception:
                         pass
@@ -524,7 +503,7 @@ def run_headless_agent():
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
-                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                 f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (relay)\n")
                     except Exception:
                         pass
@@ -618,7 +597,7 @@ def run_headless_agent():
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
-                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                 f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_START session_id={task.session_id}\n")
                     except Exception:
                         pass
@@ -650,7 +629,7 @@ def run_headless_agent():
                                 _rag_t0 = time.time()
                                 if is_debug_logging_enabled():
                                     from datetime import datetime as _dt
-                                    with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                    with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                         f.write(f"{_dt.now().isoformat()} RAG_START session_id={task.session_id} query_len={len(task.input_text or '')}\n")
                             except Exception:
                                 _rag_t0 = time.time()
@@ -663,7 +642,7 @@ def run_headless_agent():
                                 _rag_dur = time.time() - _rag_t0
                                 if is_debug_logging_enabled():
                                     from datetime import datetime as _dt
-                                    with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                    with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                         f.write(f"{_dt.now().isoformat()} RAG_DONE session_id={task.session_id} duration_sec={_rag_dur:.1f} snippet_count={memory_context.count('[Source ') if memory_context else 0}\n")
                             except Exception:
                                 pass
@@ -862,7 +841,7 @@ def run_headless_agent():
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
-                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                 f.write(f"{_dt.now().isoformat()} CHAT_STEP_CALL session_id={task.session_id}\n")
                     except Exception:
                         pass
@@ -880,7 +859,7 @@ def run_headless_agent():
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
-                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                 f.write(f"{_dt.now().isoformat()} CHAT_STEP_RETURNED session_id={task.session_id} response_len={len(str(response)) if response else 0}\n")
                     except Exception:
                         pass
@@ -1094,7 +1073,7 @@ def run_headless_agent():
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
-                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                 f.write(f"{_dt.now().isoformat()} SESSION_SAVE_START session_id={task.session_id}\n")
                     except Exception:
                         pass
@@ -1174,7 +1153,7 @@ def run_headless_agent():
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
-                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                 f.write(f"{_dt.now().isoformat()} SESSION_SAVE_END session_id={task.session_id} ok={_post_chat_ok}\n")
                     except Exception:
                         pass
@@ -1186,7 +1165,7 @@ def run_headless_agent():
                         try:
                             if is_debug_logging_enabled():
                                 from datetime import datetime as _dt
-                                with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                     f.write(f"{_dt.now().isoformat()} AUTO_CAPTURE_START session_id={task.session_id}\n")
                         except Exception:
                             pass
@@ -1209,7 +1188,7 @@ def run_headless_agent():
                         try:
                             if is_debug_logging_enabled():
                                 from datetime import datetime as _dt
-                                with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                     f.write(f"{_dt.now().isoformat()} AUTO_CAPTURE_END session_id={task.session_id}\n")
                         except Exception:
                             pass
@@ -1220,7 +1199,7 @@ def run_headless_agent():
                         try:
                             if is_debug_logging_enabled():
                                 from datetime import datetime as _dt
-                                with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                     f.write(f"{_dt.now().isoformat()} COMPACTION_CHECK_START session_id={task.session_id}\n")
                         except Exception:
                             pass
@@ -1234,7 +1213,7 @@ def run_headless_agent():
                                 if is_debug_logging_enabled():
                                     from datetime import datetime as _dt
                                     try:
-                                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                        with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                             f.write(f"{_dt.now().isoformat()} COMPACTION_SKIP session_id={task.session_id} reason=contact_chat_dsgvo\n")
                                     except Exception:
                                         pass
@@ -1264,7 +1243,7 @@ def run_headless_agent():
                         try:
                             if is_debug_logging_enabled():
                                 from datetime import datetime as _dt
-                                with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                                with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                     f.write(f"{_dt.now().isoformat()} COMPACTION_CHECK_END session_id={task.session_id}\n")
                         except Exception:
                             pass
@@ -1274,7 +1253,7 @@ def run_headless_agent():
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
-                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                 f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_END session_id={task.session_id} duration_sec={_duration:.1f}\n")
                     except Exception:
                         pass
@@ -1290,7 +1269,7 @@ def run_headless_agent():
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
                             err_preview = str(e).replace("\n", " ")[:120]
-                            with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                                 f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_FAIL session_id={task.session_id} duration_sec={_duration:.1f} error={repr(err_preview)}\n")
                     except Exception:
                         pass
@@ -1349,7 +1328,7 @@ def run_headless_agent():
                 try:
                     if is_debug_logging_enabled():
                         from datetime import datetime as _dt
-                        with open(log_dir / "queue.log", "a", encoding="utf-8") as f:
+                        with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                             f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (chat)\n")
                 except Exception:
                     pass

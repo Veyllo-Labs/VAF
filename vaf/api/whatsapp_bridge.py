@@ -311,17 +311,32 @@ def _get_users_to_run() -> List[Tuple[str, str, Path]]:
         return result
     whitelist = whatsapp_config.get("whitelist") or []
 
+    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
+    admin_auth_exists = whatsapp_auth_exists(local_admin)
+
+    processed_usernames = set()
+
     for entry in whitelist:
         if not isinstance(entry, dict):
             continue
         if not entry.get("phone_number"):
             continue
         username = (entry.get("vaf_username") or "admin").strip()
-        scope = entry.get("user_scope_id") or get_local_admin_scope_id()
-        if not whatsapp_auth_exists(username):
+        if username in processed_usernames:
             continue
+            
+        scope = entry.get("user_scope_id") or get_local_admin_scope_id()
         auth_dir = get_whatsapp_auth_dir(username)
-        result.append((str(scope), username, auth_dir))
+        
+        # Check if auth exists for this user OR we can fallback to admin
+        if (auth_dir / "creds.json").exists():
+            result.append((str(scope), username, auth_dir))
+            processed_usernames.add(username)
+        elif admin_auth_exists and username.lower() != local_admin:
+            # Fallback to local admin auth for this user
+            admin_auth_dir = Config.APP_DIR / "users" / local_admin / "whatsapp"
+            result.append((str(scope), username, admin_auth_dir))
+            processed_usernames.add(username)
 
     return result
 

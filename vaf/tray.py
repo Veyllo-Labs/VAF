@@ -41,11 +41,10 @@ except Exception:
 
 
 def _tray_startup_log(msg: str, error: str = ""):
-    """Always write to tray_startup.txt for diagnostics (even when Debug Logs is off)."""
+    """Always write to tray_startup_YYYY-MM-DD.txt for diagnostics (even when Debug Logs is off)."""
     try:
-        log_dir = Path(__file__).resolve().parents[1] / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        fpath = log_dir / "tray_startup.txt"
+        fpath = get_dated_log_path("tray_startup", "txt")
+        fpath.parent.mkdir(parents=True, exist_ok=True)
         ts = __import__("datetime").datetime.now().isoformat()
         with open(fpath, "a", encoding="utf-8") as f:
             f.write(f"[{ts}] {msg}")
@@ -62,6 +61,7 @@ import signal
 import platform
 import webbrowser
 from vaf.core.config import Config
+from vaf.core.log_helper import get_dated_log_path
 from vaf.core.backend import ServerManager
 from vaf.core.web_server import app
 from vaf.core.tray_context import TrayContext
@@ -75,12 +75,12 @@ except ImportError:
 
 import logging
 
-# Configure Logging (only write tray_debug.log when Debug Logs is enabled)
+# Configure Logging (only write tray_debug_YYYY-MM-DD.log when Debug Logs is enabled)
 logger = logging.getLogger("VAF_Tray")
 logger.setLevel(logging.DEBUG)
 if Config.get("debug_logs_enabled", False):
-    log_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "tray_debug.log")
     try:
+        log_file = str(get_dated_log_path("tray_debug", "log"))
         fh = logging.FileHandler(log_file)
         fh.setLevel(logging.DEBUG)
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')

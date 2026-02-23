@@ -162,14 +162,27 @@ Unlike local models where VAF uses a local tokenizer, API providers (OpenAI, Dee
 
 ### VRAM-Aware Efficiency
 
-To support systems with limited VRAM (e.g., 11k or 16k context limits), the manager dynamically adjusts its aggressive levels:
+The Context Manager dynamically adjusts its behavior based on the configured context limit (`n_ctx`). This ensures that small local models remain stable while large-context APIs can leverage their full potential.
 
-| Context Limit (`n_ctx`) | Compression Trigger | Recent Memory | Strategy |
-|-------------------------|---------------------|---------------|----------|
-| **Very small (≤ 8k)**   | **70%** usage       | **8 messages**| More raw turns kept; GitHub/web_search results preserved |
-| **Small (≤ 12k)**       | **70%** usage       | **6 messages**| Aggressive pruning, Core tools only |
-| **Medium (≤ 20k)**      | **75%** usage       | **8 messages**| Proactive compression, 25% output buffer |
-| **Large (> 20k)**       | **85%** usage       | **10 messages**| Standard Cursor-style (Default) |
+| Context Limit (`n_ctx`) | Trigger | Recent Memory | Strategy |
+|-------------------------|---------|---------------|----------|
+| **Very small (≤ 8k)**   | **70%** | **8 messages**| Maximum pruning; core tools only preserved. |
+| **Small (≤ 12k)**       | **70%** | **6 messages**| Aggressive compression; minimal recent window. |
+| **Medium (≤ 20k)**      | **75%** | **8 messages**| Proactive compression; balanced history. |
+| **Large (≤ 64k)**       | **85%** | **50 msgs**   | Extended raw history for local long-context models. |
+| **API Boost (≤ 128k)**  | **85%** | **100 msgs**  | **Standard API Mode.** Preserves ~50 full turns raw. |
+| **Ultra (> 128k)**      | **90%** | **200 msgs**  | Maximum retention for Gemini 1.5 Pro / Claude 3.5. |
+
+### Seamless Tool Compression
+
+To prevent the context window from being flooded by large tool outputs (which would trigger aggressive history pruning), VAF implements **Seamless Compression**. Certain tools have their output pruned *before* entering the chat history, while key facts are extracted into the permanent State Context.
+
+**Supported Tools:**
+- **Filesystem:** `read_file`, `list_files`, `github_get_file`, `github_list_repos`
+- **Search:** `web_search`, `web_fetch`
+- **Communication:** `mail_inbox`, `whatsapp_inbox`, `telegram_inbox`, `list_email_accounts`
+
+**Best Practice:** When dealing with large datasets (e.g., reading a 2000-line log file or listing 50 emails), the agent sees a pruned version (head/tail) in history, but knows the full content is processed. This maintains conversational continuity without losing context "depth".
 
 ### RAG and memory context (pre-generation injection)
 
@@ -236,9 +249,14 @@ This two-phase approach reduces endless “think-only” loops while still using
 
 **False promise retry:** When the model says it will use a tool (e.g. "Let me search…") but does not emit a tool call, the agent treats this as a false promise, appends a correction to history and retries. As with empty-response retry, the backend sends `clear_last_assistant` so the Web UI removes the faulty assistant message; only the retry response is shown.
 
-### Configuration
+### Best Practices for Long Conversations
 
-- **Default Limit**: 8,192 tokens (configurable via `vaf settings`)
+To maintain maximum "depth" and accuracy in very long sessions (especially when using API providers like DeepSeek or OpenAI):
+
+1. **Leverage the 128k Boost:** Ensure your `provider` is set to an API service. VAF automatically boosts the internal `n_ctx` to 128,000, allowing the system to keep up to **100 messages** raw before compression even starts.
+2. **Use `checkpoint_context` for Milestones:** If you are working on a massive multi-step task (e.g., building a full app), use the `checkpoint_context` tool after completing a major phase. This archives the "noise" of implementation details while keeping your plan and high-level progress in the "Stable Progress Glue".
+3. **Trust Seamless Compression:** Don't worry about reading large files or listing many emails. VAF prunes these automatically. If you need the model to "remember" a specific detail from a large output, simply acknowledge it in chat (e.g., "I see the error on line 452")—this saves the fact into the State Context.
+4. **Prefer `memory_save` for Permanent Facts:** For information that should survive even across different chat sessions (e.g., your birthday, server IP addresses, specific project paths), use the `memory_save` tool. This moves data from transient chat context into the permanent RAG database.
 
 
 VAF uses specialized sub-agents for complex tasks. Each sub-agent has its **own isolated context**.

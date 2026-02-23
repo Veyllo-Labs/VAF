@@ -92,6 +92,21 @@ When running locally without authentication (CLI or Web UI without JWT), VAF use
 
 Use `get_local_admin_scope_id()` and `get_local_admin_username()` from `vaf.core.config` instead of reading config directly. This keeps data scoped consistently and avoids a split between "logged-in" and "local" identities.
 
+### Hybrid Scoping Strategy (Local Mode Stability)
+
+To bridge the gap between strict multi-tenant isolation and a seamless local UX, VAF uses a **Hybrid Scoping Strategy**. This is especially important for long-lived connections like Email and WhatsApp.
+
+**The Problem:** In local mode, a user might set up Email under one UUID, then clear their browser cache, getting a new UUID. Without fallbacks, the Agent would think no accounts are connected.
+
+**The Solution:**
+- **Read Operations (Lookup):** Tools follow a lookup chain (Scope → Legacy → Single-other-scope). This makes the system "self-healing" against UUID changes in local mode.
+- **Write Operations (Update/Auth):** When tokens are refreshed or new data is synced, the system writes back to the **effective scope** (where the credentials were actually found). This prevents data fragmentation.
+
+**Best Practices for Developers:**
+1.  **Trust the Fallbacks:** Use helpers like `get_valid_access_token()` or `_get_email_config()` which already implement the fallback logic. Do not implement manual string comparisons with `"admin"`.
+2.  **Propagate the ID:** Always pass the `user_scope_id` down to internal transport functions so they can choose the correct credential bucket.
+3.  **Use Effective Scopes:** If you find data in a fallback scope, ensure any updates (like token refreshes) are saved back to that same fallback scope to maintain consistency.
+
 ## 2. Memory System Isolation
 
 The memory system is the most data-sensitive component. Every memory operation is scoped.

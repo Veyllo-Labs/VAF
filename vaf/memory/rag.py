@@ -879,143 +879,149 @@ def run_session_compaction_sync(
         return
     _compaction_log("COMPACTION_START", session_id=session_id, turn_count=str(current_turn_count), last=str(last), interval=str(interval))
 
-    # Broadcast to WebUI: Memory Learning started
-    try:
-        from vaf.core.web_interface import get_web_interface
-        get_web_interface().push_update({
-            "type": "memory_learning",
-            "status": "started",
-            "session_id": session_id,
-            "message": "Memory Learning in progress... Analyzing conversation for important facts."
-        })
-    except Exception:
-        pass
+    # Track whether we sent a terminal UI update (completed/error). Finally-block will send one if we didn't, so the UI never stays stuck.
+    ui_terminated = [False]  # list to allow assignment in nested function
 
-    date_str = datetime.utcnow().strftime("%Y-%m-%d")
-    conversation = _build_compaction_conversation_excerpt(agent)
-    if conversation:
-        prompt = (
-            "You are storing durable memories from this chat. Read the conversation below and output concrete facts worth remembering: "
-            "user preferences, name, decisions, events, technical choices, or anything the user would want recalled later. "
-            'Output each fact as: MEMORY: "fact in English" [tag1, tag2]. '
-            "Use 1-3 relevant tags per memory (e.g. preferences, work, personal, project-x, decisions). Tags help filter in the memory graph. "
-            "Do not output meta-commentary (e.g. no \"final check\", \"compliance\", or \"retention policy\"). "
-            f"Reply with exactly NO_REPLY if there is nothing concrete to store.\n\n"
-            "--- Conversation ---\n"
-            f"{conversation}\n"
-            "---\n\n"
-            "Output MEMORY: \"...\" [tags] lines or NO_REPLY."
-        )
-    else:
-        prompt = (
-            "Session nearing compaction. Store durable memories now. "
-            f"Write any lasting notes to memory/{date_str}.md. "
-            'Output each fact as MEMORY: "fact in English" [tag1, tag2]. Use 1-3 tags per memory. Reply with NO_REPLY if nothing to store.'
-        )
-    try:
-        reply = agent._generate_for_compaction(prompt)
-    except Exception as e:
-        logger.warning("Compaction LLM call failed: %s", e)
-        _compaction_log("COMPACTION_LLM_FAIL", session_id=session_id, error=str(e)[:200])
-        # Broadcast to WebUI: Learning failed
+    def _notify_ui(status: str, message: str, memories_saved: int = 0) -> None:
         try:
             from vaf.core.web_interface import get_web_interface
             get_web_interface().push_update({
                 "type": "memory_learning",
-                "status": "error",
+                "status": status,
                 "session_id": session_id,
-                "message": "Memory Learning failed. Will retry later."
+                "memories_saved": memories_saved,
+                "message": message,
+            })
+            ui_terminated[0] = True
+        except Exception:
+            pass
+
+    try:
+        # Broadcast to WebUI: Memory Learning started
+        try:
+            from vaf.core.web_interface import get_web_interface
+            get_web_interface().push_update({
+                "type": "memory_learning",
+                "status": "started",
+                "session_id": session_id,
+                "message": "Memory Learning in progress... Analyzing conversation for important facts."
             })
         except Exception:
             pass
-        return
-    memory_tuples = _parse_memory_reply(reply)
-    if not memory_tuples:
-        _compaction_log("COMPACTION_NO_REPLY", session_id=session_id)
+
+        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        conversation = _build_compaction_conversation_excerpt(agent)
+        if conversation:
+            prompt = (
+                "You are storing durable memories from this chat. Read the conversation below and output concrete facts worth remembering: "
+                "user preferences, name, decisions, events, technical choices, or anything the user would want recalled later. "
+                'Output each fact as: MEMORY: "fact in English" [tag1, tag2]. '
+                "Use 1-3 relevant tags per memory (e.g. preferences, work, personal, project-x, decisions). Tags help filter in the memory graph. "
+                "Do not output meta-commentary (e.g. no \"final check\", \"compliance\", or \"retention policy\"). "
+                f"Reply with exactly NO_REPLY if there is nothing concrete to store.\n\n"
+                "--- Conversation ---\n"
+                f"{conversation}\n"
+                "---\n\n"
+                "Output MEMORY: \"...\" [tags] lines or NO_REPLY."
+            )
+        else:
+            prompt = (
+                "Session nearing compaction. Store durable memories now. "
+                f"Write any lasting notes to memory/{date_str}.md. "
+                'Output each fact as MEMORY: "fact in English" [tag1, tag2]. Use 1-3 tags per memory. Reply with NO_REPLY if nothing to store.'
+            )
+        try:
+            reply = agent._generate_for_compaction(prompt)
+        except Exception as e:
+            logger.warning("Compaction LLM call failed: %s", e)
+            _compaction_log("COMPACTION_LLM_FAIL", session_id=session_id, error=str(e)[:200])
+            _notify_ui("error", "Memory Learning failed. Will retry later.")
+            return
+        memory_tuples = _parse_memory_reply(reply)
+        if not memory_tuples:
+            _compaction_log("COMPACTION_NO_REPLY", session_id=session_id)
+            state[session_id] = current_turn_count
+            _save_compaction_state(state)
+            _notify_ui("completed", "Memory Learning complete! No new facts to remember.", 0)
+            # Run refresh in background so we never block the queue worker or risk affecting the web server
+            def _refresh_bg():
+                try:
+                    refresh_user_profile_summary(user_scope_id)
+                except Exception as ex:
+                    logger.debug("User profile summary refresh failed: %s", ex)
+            threading.Thread(target=_refresh_bg, daemon=True).start()
+            return
+        async def _ingest_all() -> None:
+            async with get_db() as db:
+                pipeline = RagPipeline(db)
+                for content, tags in memory_tuples:
+                    if not content or not content.strip():
+                        continue
+                    meta: Dict[str, Any] = {
+                        "source": f"memory/{date_str}",
+                        "type": "conversation",  # From 15-message compaction; orange in graph
+                    }
+                    if tags:
+                        meta["tags"] = tags
+                    else:
+                        meta["tags"] = ["compaction"]  # Fallback so memories are filterable
+                    await pipeline.ingest(
+                        content=content.strip(),
+                        metadata=meta,
+                        user_scope_id=user_scope_id,
+                        auto_connect=False,
+                    )
+
+        # Run in a daemon thread with timeout - never block the queue worker
+        def _run_ingest():
+            try:
+                asyncio.run(_ingest_all())
+            except Exception as e:
+                logger.warning("Compaction ingest inner error: %s", e)
+
+        try:
+            thread = threading.Thread(target=_run_ingest, daemon=True)
+            thread.start()
+            thread.join(timeout=30)  # Wait max 30s
+            if thread.is_alive():
+                logger.warning("Compaction ingest timed out (30s) - continuing without waiting")
+                _compaction_log("COMPACTION_TIMEOUT", session_id=session_id)
+        except Exception as e:
+            logger.warning("Compaction ingest failed: %s", e)
+            _compaction_log("COMPACTION_INGEST_FAIL", session_id=session_id, error=str(e)[:200])
+        _compaction_log("COMPACTION_DONE", session_id=session_id, memories=str(len(memory_tuples)), date=date_str)
         state[session_id] = current_turn_count
         _save_compaction_state(state)
-        # Broadcast to WebUI: No new memories to save
-        try:
-            from vaf.core.web_interface import get_web_interface
-            get_web_interface().push_update({
-                "type": "memory_learning",
-                "status": "completed",
-                "session_id": session_id,
-                "memories_saved": 0,
-                "message": "Memory Learning complete! No new facts to remember."
-            })
-        except Exception:
-            pass
-        refresh_user_profile_summary(user_scope_id)
-        return
-    async def _ingest_all() -> None:
-        async with get_db() as db:
-            pipeline = RagPipeline(db)
-            for content, tags in memory_tuples:
-                if not content or not content.strip():
-                    continue
-                meta: Dict[str, Any] = {
-                    "source": f"memory/{date_str}",
-                    "type": "conversation",  # From 15-message compaction; orange in graph
-                }
-                if tags:
-                    meta["tags"] = tags
-                else:
-                    meta["tags"] = ["compaction"]  # Fallback so memories are filterable
-                await pipeline.ingest(
-                    content=content.strip(),
-                    metadata=meta,
-                    user_scope_id=user_scope_id,
-                    auto_connect=False,
-                )
 
-    # Run in a daemon thread with timeout - never block the main thread
-    def _run_ingest():
+        # Save last_compaction_at_turn in session.runtime_state for UI display
         try:
-            asyncio.run(_ingest_all())
+            from vaf.core.session import SessionManager
+            _sm = SessionManager()
+            _session = _sm.load(session_id)
+            if not hasattr(_session, 'runtime_state') or _session.runtime_state is None:
+                _session.runtime_state = {}
+            _session.runtime_state["last_compaction_at_turn"] = current_turn_count
+            _sm.save(_session)
         except Exception as e:
-            logger.warning("Compaction ingest inner error: %s", e)
+            logger.debug("Failed to save compaction turn to session: %s", e)
 
-    try:
-        thread = threading.Thread(target=_run_ingest, daemon=True)
-        thread.start()
-        thread.join(timeout=30)  # Wait max 30s
-        if thread.is_alive():
-            logger.warning("Compaction ingest timed out (30s) - continuing without waiting")
-            _compaction_log("COMPACTION_TIMEOUT", session_id=session_id)
+        _notify_ui("completed", f"Memory Learning complete! Saved {len(memory_tuples)} memories.", len(memory_tuples))
+        # Run refresh in background so we never block the queue worker
+        def _refresh_bg():
+            try:
+                refresh_user_profile_summary(user_scope_id)
+            except Exception as ex:
+                logger.debug("User profile summary refresh failed: %s", ex)
+        threading.Thread(target=_refresh_bg, daemon=True).start()
+
     except Exception as e:
-        logger.warning("Compaction ingest failed: %s", e)
-        _compaction_log("COMPACTION_INGEST_FAIL", session_id=session_id, error=str(e)[:200])
-    _compaction_log("COMPACTION_DONE", session_id=session_id, memories=str(len(memory_tuples)), date=date_str)
-    state[session_id] = current_turn_count
-    _save_compaction_state(state)
-
-    # Also save last_compaction_at_turn in session.runtime_state for UI display
-    try:
-        from vaf.core.session import SessionManager
-        _sm = SessionManager()
-        _session = _sm.load(session_id)
-        if not hasattr(_session, 'runtime_state') or _session.runtime_state is None:
-            _session.runtime_state = {}
-        _session.runtime_state["last_compaction_at_turn"] = current_turn_count
-        _sm.save(_session)
-    except Exception as e:
-        logger.debug("Failed to save compaction turn to session: %s", e)
-
-    # Broadcast to WebUI: Memory Learning completed
-    try:
-        from vaf.core.web_interface import get_web_interface
-        get_web_interface().push_update({
-            "type": "memory_learning",
-            "status": "completed",
-            "session_id": session_id,
-            "memories_saved": len(memory_tuples),
-            "message": f"Memory Learning complete! Saved {len(memory_tuples)} memories."
-        })
-    except Exception:
-        pass
-
-    refresh_user_profile_summary(user_scope_id)
+        logger.exception("Session compaction failed: %s", e)
+        _compaction_log("COMPACTION_FAIL", session_id=session_id, error=str(e)[:200])
+        _notify_ui("error", "Memory Learning failed. Will retry later.")
+    finally:
+        # Ensure UI never stays on "in progress" if we didn't send completed/error (e.g. crash or push_update dropped)
+        if not ui_terminated[0]:
+            _notify_ui("completed", "Memory Learning finished.")
 
 
 def refresh_user_profile_summary(user_scope_id: Optional[UUID]) -> None:

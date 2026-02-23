@@ -814,6 +814,22 @@ function VAFDashboardContent() {
     const [isContextModalOpen, setIsContextModalOpen] = useState(false);
     // xraySection state removed - Context Window modal now shows only overview diagram
 
+    const contextBreakdown = useMemo(() => {
+        if (!contextStats) return null;
+        const totalCap = contextStats.max_tokens;
+        const used = contextStats.tokens;
+        const systemEst = contextStats.system_tokens ?? Math.round(used * 0.3);
+        const historyEst = contextStats.history_tokens ?? Math.round(used * 0.5);
+        const toolsEst = contextStats.tools_tokens ?? Math.round(used * 0.2);
+        const pctOfUsedSystem = used ? (systemEst / used) * 100 : 0;
+        const pctOfUsedTools = used ? (toolsEst / used) * 100 : 0;
+        const pctOfUsedHistory = used ? (historyEst / used) * 100 : 0;
+        const pctOfCapSystem = totalCap ? (systemEst / totalCap) * 100 : 0;
+        const pctOfCapTools = totalCap ? (toolsEst / totalCap) * 100 : 0;
+        const pctOfCapHistory = totalCap ? (historyEst / totalCap) * 100 : 0;
+        return { totalCap, used, systemEst, historyEst, toolsEst, pctOfUsedSystem, pctOfUsedTools, pctOfUsedHistory, pctOfCapSystem, pctOfCapTools, pctOfCapHistory };
+    }, [contextStats]);
+
     // Sub-Agent Window State
     const [subAgentState, setSubAgentState] = useState<{
         isOpen: boolean;
@@ -1039,6 +1055,7 @@ function VAFDashboardContent() {
     const [isProcessingAudio, setIsProcessingAudio] = useState(false);
     const [sttEnabled, setSttEnabled] = useState(false); // Track STT status
     const [memoryLearning, setMemoryLearning] = useState<{ active: boolean; message: string } | null>(null);
+    const memoryLearningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [volume, setVolume] = useState(0);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
@@ -2160,9 +2177,19 @@ function VAFDashboardContent() {
                 else if (data.type === 'memory_learning') {
                     // Memory Learning status updates
                     if (data.status === 'started') {
+                        if (memoryLearningTimeoutRef.current) clearTimeout(memoryLearningTimeoutRef.current);
                         setMemoryLearning({ active: true, message: data.message || 'Memory Learning in progress...' });
+                        // If backend never sends completed/error (e.g. message dropped, server loop missing), auto-dismiss after 90s so UI is not stuck
+                        memoryLearningTimeoutRef.current = setTimeout(() => {
+                            memoryLearningTimeoutRef.current = null;
+                            setMemoryLearning((prev) => prev?.active ? { active: false, message: 'Memory Learning finished.' } : prev);
+                            setTimeout(() => setMemoryLearning(null), 4000);
+                        }, 90000);
                     } else if (data.status === 'completed' || data.status === 'error') {
-                        // Show completion message briefly, then hide
+                        if (memoryLearningTimeoutRef.current) {
+                            clearTimeout(memoryLearningTimeoutRef.current);
+                            memoryLearningTimeoutRef.current = null;
+                        }
                         setMemoryLearning({ active: false, message: data.message || 'Memory Learning complete!' });
                         setTimeout(() => setMemoryLearning(null), 4000);
                     }
@@ -2181,6 +2208,8 @@ function VAFDashboardContent() {
         setWs(socket);
         return () => {
             if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            if (memoryLearningTimeoutRef.current) clearTimeout(memoryLearningTimeoutRef.current);
+            memoryLearningTimeoutRef.current = null;
             socket.close();
         };
     }, [reconnectAttempt]);
@@ -3844,27 +3873,36 @@ function VAFDashboardContent() {
 
                         {/* Diagram area with legend */}
                         <div className="flex px-8 py-6 flex-1 min-h-0 gap-6">
-                            {/* Legend - Left side */}
-                            <div className="shrink-0 w-48 flex flex-col justify-center gap-3 text-sm">
+                            {/* Legend - Left side with token count and percentage */}
+                            <div className="shrink-0 w-52 flex flex-col justify-center gap-3 text-sm">
                                 <div className="flex items-start gap-2">
                                     <div className="w-3 h-3 rounded-sm bg-gray-800 mt-1 shrink-0"></div>
-                                    <div>
+                                    <div className="min-w-0">
                                         <div className="font-semibold text-gray-700">System Prompt</div>
                                         <div className="text-xs text-gray-500">Instructions, persona, rules</div>
+                                        {contextBreakdown && (
+                                        <div className="text-xs font-mono text-gray-600 mt-0.5">{Math.round(contextBreakdown.systemEst).toLocaleString()} {tMain('tokens')} · {contextBreakdown.pctOfCapSystem.toFixed(1)}%</div>
+                                        )}
                                     </div>
                                 </div>
                                 <div className="flex items-start gap-2">
                                     <div className="w-3 h-3 rounded-sm bg-violet-400 mt-1 shrink-0" title="Lilac"></div>
-                                    <div>
+                                    <div className="min-w-0">
                                         <div className="font-semibold text-gray-700">Tool Schemas</div>
                                         <div className="text-xs text-gray-500">Available functions & params</div>
+                                        {contextBreakdown && (
+                                        <div className="text-xs font-mono text-gray-600 mt-0.5">{Math.round(contextBreakdown.toolsEst).toLocaleString()} {tMain('tokens')} · {contextBreakdown.pctOfCapTools.toFixed(1)}%</div>
+                                        )}
                                     </div>
                                 </div>
                                 <div className="flex items-start gap-2">
                                     <div className="w-3 h-3 rounded-sm bg-violet-600 mt-1 shrink-0" title="Violet"></div>
-                                    <div>
+                                    <div className="min-w-0">
                                         <div className="font-semibold text-gray-700">{tMain('conversation')}</div>
                                         <div className="text-xs text-gray-500">Chat history & tool results</div>
+                                        {contextBreakdown && (
+                                        <div className="text-xs font-mono text-gray-600 mt-0.5">{Math.round(contextBreakdown.historyEst).toLocaleString()} {tMain('tokens')} · {contextBreakdown.pctOfCapHistory.toFixed(1)}%</div>
+                                        )}
                                     </div>
                                 </div>
                                 <div className="border-t border-gray-200 my-2"></div>
@@ -3902,17 +3940,10 @@ function VAFDashboardContent() {
                                 )}
                             </div>
 
-                            {/* Diagram - Right side */}
+                            {/* Diagram - Right side (uses contextBreakdown) */}
                             <div className="flex-1 flex flex-col min-h-0">
-                                {(() => {
-                                    // 1. Calculate Data - USE BACKEND VALUES (not frontend estimates!)
-                                    const totalCap = contextStats.max_tokens;
-                                    const used = contextStats.tokens;
-
-                                    // Use real backend token counts if available, fallback to estimates
-                                    const systemEst = contextStats.system_tokens ?? Math.round(used * 0.3);
-                                    const historyEst = contextStats.history_tokens ?? Math.round(used * 0.5);
-                                    const toolsEst = contextStats.tools_tokens ?? Math.round(used * 0.2);
+                                {contextBreakdown && (() => {
+                                    const { totalCap, used, systemEst, toolsEst, historyEst } = contextBreakdown;
                                     const freeEst = totalCap - used;
 
                                     // 2. Layout Configuration
@@ -3925,16 +3956,12 @@ function VAFDashboardContent() {
                                     const gap = 30;
 
                                     // 3. Scale Factor (map tokens to pixels)
-                                    // Available height for left nodes (minus gaps)
                                     const totalAvailableH = h - (pad * 2);
-                                    // We map 'totalCap' to 'totalAvailableH' to keep scale consistent
                                     const scale = totalAvailableH / totalCap;
 
                                     // 4. Calculate Node Heights & Positions
-                                    // Left Nodes (Source) - We stack them with gaps, but scale them correctly
-                                    // Note: "RAG" node now shows Tools tokens (since RAG is part of System)
                                     const hSystem = Math.max(2, systemEst * scale);
-                                    const hTools = Math.max(2, toolsEst * scale);  // Tools instead of RAG
+                                    const hTools = Math.max(2, toolsEst * scale);
                                     const hHistory = Math.max(2, historyEst * scale);
 
                                     // Center the source group vertically

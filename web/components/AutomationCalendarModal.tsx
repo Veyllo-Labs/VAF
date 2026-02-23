@@ -403,29 +403,37 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                     </div>
                 </div>
                 <div
-                    className="shrink-0 mx-4 mb-4 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-4 flex flex-col h-[200px]"
+                    className="shrink-0 mx-4 mb-4 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-4 flex flex-row gap-4 h-[160px]"
                     style={{ backgroundImage: 'radial-gradient(circle, #d1d5db 1.5px, transparent 1.5px)', backgroundSize: '10px 10px' }}
                 >
-                    <div className="flex flex-wrap items-center gap-2 mb-2 shrink-0">
-                        <span className="text-sm font-medium text-gray-700">Notes</span>
-                        <button type="button" onClick={() => setShowAddNotePopup(true)} className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-800">
+                    <div className="shrink-0 flex flex-col">
+                        <h3 className="text-sm font-medium text-gray-700 mb-1.5 shrink-0">Notes</h3>
+                        <button
+                            type="button"
+                            onClick={() => setShowAddNotePopup(true)}
+                            className="shrink-0 flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-800 mb-0"
+                        >
                             <Plus className="w-3.5 h-3.5" /> Add note
                         </button>
                     </div>
-                    <div className="flex-1 min-h-0 overflow-auto flex flex-wrap gap-2 content-start">
+                    <div className="flex-1 min-w-0 overflow-x-auto overflow-y-hidden flex flex-nowrap gap-2 items-center">
                         {automationNotes.map((note) => (
-                            <div key={note.id} className="flex flex-col p-3 rounded-lg bg-white border border-gray-200 min-w-[180px] max-w-[280px] shrink-0">
-                                {note.title ? <span className="text-sm font-medium text-gray-800">{note.title}</span> : null}
-                                <p className="text-sm text-gray-700 mt-0.5 break-words">{note.content}</p>
-                                <p className="text-xs text-gray-500 mt-1">{formatPlannerDate(note.created_at, userTimeFormat)}</p>
-                                <button
-                                    type="button"
-                                    onClick={() => onSendPlannerMessage?.({ type: 'delete_automation_note', id: note.id })}
-                                    className="self-end p-1 text-gray-400 hover:text-red-600 mt-1"
-                                    title="Delete"
-                                >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                            <div key={note.id} className="flex flex-col p-3 rounded-lg bg-white border border-gray-200 min-w-[180px] max-w-[280px] max-h-[120px] shrink-0 overflow-hidden">
+                                <div className="flex items-start justify-between gap-2 shrink-0">
+                                    {note.title ? <span className="text-sm font-medium text-gray-800 min-w-0 flex-1 truncate">{note.title}</span> : <span className="flex-1" />}
+                                    <button
+                                        type="button"
+                                        onClick={() => onSendPlannerMessage?.({ type: 'delete_automation_note', id: note.id })}
+                                        className="p-1 text-gray-400 hover:text-red-600 shrink-0"
+                                        title="Delete"
+                                    >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                </div>
+                                <div className="flex-1 min-h-0 overflow-y-auto mt-0.5">
+                                    <p className="text-sm text-gray-700 break-words pr-0.5">{note.content}</p>
+                                    <p className="text-xs text-gray-500 mt-1 shrink-0">{formatPlannerDate(note.created_at, userTimeFormat)}</p>
+                                </div>
                             </div>
                         ))}
                     </div>

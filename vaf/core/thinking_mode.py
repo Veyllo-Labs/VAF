@@ -658,8 +658,10 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
             if ts_float > threshold:
                 continue
             
-            # Apply 2-minute grace period for WebUI activity to avoid race conditions
-            if latest_source.get(logical_id) == "web" and (now - ts_float) < 120:
+            # Apply 2-minute grace period for ANY activity to avoid race conditions
+            # This ensures that if the user just messaged via Telegram/WhatsApp, 
+            # we don't start thinking immediately even if the idle threshold was technically met.
+            if (now - ts_float) < 120:
                 continue
                 
             result.append(logical_id)
@@ -950,10 +952,11 @@ def _detect_and_set_waiting_for_reply(
     user_scope_id: Optional[str],
     agent: Any = None,
     recent_only: bool = False,
-) -> bool:
+) -> Optional[Dict[str, Any]]:
     """Scan agent history for send_telegram/send_whatsapp/send_discord tool calls.
 
-    If found, call set_waiting_for_reply() with the extracted question_text and return True.
+    If found, call set_waiting_for_reply() with the extracted question_text and return
+    the assistant message dict.
     When *recent_only* is True, only check the last 3 messages (used per-turn in the loop);
     otherwise scan the full history (used as post-run fallback).
     """
@@ -992,8 +995,8 @@ def _detect_and_set_waiting_for_reply(
             except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
             set_waiting_for_reply(user_scope_id, uname, display_name=display_name, question_text=question_text)
-            return True
-    return False
+            return msg
+    return None
 
 
 def _run_thinking_for_user(
@@ -1152,17 +1155,40 @@ def _run_thinking_for_user(
                 agent.chat_step(prompt, stream_callback=None, memory_context=mem_ctx)
 
                 # Immediately set waiting_for_reply when the agent sends a message in this turn.
-                # This must happen NOW (not after the run ends) so that if the user replies quickly
-                # the main agent already has the question_text for context injection.
+                # Also PERSIST this message to the main chat session so the Main Agent sees it!
                 if not _waiting_already_set:
                     try:
-                        if _detect_and_set_waiting_for_reply(
+                        tm_msg = _detect_and_set_waiting_for_reply(
                             getattr(agent, "history", []),
                             user_scope_id,
                             agent=agent,
                             recent_only=True,
-                        ):
+                        )
+                        if tm_msg:
                             _waiting_already_set = True
+                            # Persist to main session history
+                            if _loaded_session and chat_session_id:
+                                try:
+                                    from vaf.core.session import SessionManager
+                                    sm = SessionManager()
+                                    session = sm.load(chat_session_id)
+                                    
+                                    # Strip reasoning from content before saving to history
+                                    clean_content = str(tm_msg.get("content") or "")
+                                    import re
+                                    clean_content = re.sub(r'<think>.*?</think>', '', clean_content, flags=re.DOTALL).strip()
+                                    if not clean_content: clean_content = "(Thinking Mode Question)"
+                                    
+                                    # Add to session
+                                    session.add_message(
+                                        role="assistant", 
+                                        content=clean_content, 
+                                        tool_calls=tm_msg.get("tool_calls")
+                                    )
+                                    sm.save(session)
+                                    logger.info("Thinking Mode question persisted to session: %s", chat_session_id)
+                                except Exception as _save_err:
+                                    logger.debug("Could not persist TM question to session: %s", _save_err)
                     except Exception:
                         pass
 
@@ -1189,18 +1215,30 @@ def _run_thinking_for_user(
                 # show the idle timestamp that triggered this run.
                 if turn > 0:
                     try:
-                        from vaf.core.last_interaction import get_last_interaction
-                        li = get_last_interaction(user_scope_id)
-                        if li:
-                            secs_since = time.time() - float(li.get("ts", 0) or 0)
-                            if secs_since < 45:  # User was active in the last 45 seconds
-                                logger.info(
-                                    "Thinking: user became active (%ds ago), aborting run early",
-                                    int(secs_since),
-                                )
-                                break
-                    except Exception:
-                        pass
+                        from vaf.core.last_interaction import _store_path as _li_path
+                        lp = _li_path()
+                        if lp.exists():
+                            # Find newest TS across all aliases for this logical user
+                            li_data = json.loads(lp.read_text(encoding="utf-8"))
+                            local_admin = str(get_local_admin_scope_id()).strip()
+                            my_aliases = {scope_key, "default", local_admin}
+                            
+                            # Find newest ts among my aliases
+                            newest_li_ts = 0.0
+                            for k, v in li_data.items():
+                                if k in my_aliases and isinstance(v, dict):
+                                    newest_li_ts = max(newest_li_ts, float(v.get("ts", 0)))
+                            
+                            if newest_li_ts > 0:
+                                secs_since = time.time() - newest_li_ts
+                                if secs_since < 60:  # User active in last 60 seconds
+                                    logger.info(
+                                        "Thinking: logical user became active (%ds ago), aborting run",
+                                        int(secs_since),
+                                    )
+                                    break
+                    except Exception as _abort_err:
+                        logger.debug("Thinking abort check failed: %s", _abort_err)
 
             # Persist run: JSON run log (for internal summary) + vaf_denk.log (for debugging)
             # NOT saved to WebUI sessions — thinking output is debug-only, visible in logs/vaf_denk.log

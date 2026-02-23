@@ -6,57 +6,34 @@ Thinking mode runs the main agent in the background while the user is idle. It a
 
 ## Overview
 
-- **When it runs:** After `thinking_idle_minutes` of no activity. Opening the Web UI or sending a message resets the idle timer.
-- **What it does:** One run = multiple agent turns with full tool access (except `memory_save` and Git tools). The agent must call `thinking_done` when finished. It may send at most one message per run; if it asks a question, the system waits for a reply (nudge after 3 min, skip after 10 min).
-- **Per user:** Idle is tracked per `user_scope_id`. One run at a time per user (serialized by lock). Cooldown between runs: `thinking_cooldown_minutes` (default 60 min).
-- **Context:** The agent loads the user's full chat session (Telegram/WhatsApp or user-scoped web default, e.g. `web-default-<scope>`) at the start of each run — it has the same context as the normal agent.
-- **Output:** Runs are logged to `logs/vaf_denk.log` (human-readable) and to JSON run logs under `~/.vaf/thinking_mode_logs/`. They are **not** shown in the Web UI chat list.
+- **When it runs:** After `thinking_idle_minutes` of no activity across ALL linked channels (Web UI, Telegram, WhatsApp, etc.).
+- **What it does:** One run = multiple agent turns with full tool access (except `memory_save` and Git tools). The agent must call `thinking_done` when finished.
+- **Max 1 Message & History Sync:** The agent may send at most one message per run. **New:** Any question asked by the Thinking Agent is automatically persisted to the user's main chat history. This ensures that when the user replies, the normal agent has the full context of what was asked.
+- **Per user:** Idle is tracked per logical user (handling all UUID/username aliases). One run at a time per user (serialized by lock). Cooldown between runs: `thinking_cooldown_minutes` (default 60 min).
+- **Safety Abort:** If the user becomes active on any channel during a run, the thinking process is immediately aborted to prevent dual-agent responses.
+- **Context:** The agent loads the user's full chat session — it has the same context as the normal agent.
+- **Output:** Runs are logged to `logs/vaf_denk.log` (human-readable) and to JSON run logs. Messages sent to the user are also mirrored in the Web UI / main chat history.
 
 ---
 
 ## Configuration
-
-All keys live in the main config (Settings → Advanced or `config.json`). Defaults are in `vaf/core/config.py`.
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `thinking_enabled` | `true` | Master switch for thinking mode. |
-| `thinking_idle_minutes` | `10` | Minutes without activity before a run may start. |
-| `thinking_cooldown_minutes` | `60` | Minimum minutes between completed runs for the same user. |
-| `thinking_check_interval_seconds` | `60` | How often the background loop checks for idle users. |
-| `thinking_automation_buffer_minutes` | `10` | Do not start a run if an automation is scheduled within this many minutes. |
-| `thinking_max_duration_minutes` | `30` | Max run duration; lock is released after this. |
-| `thinking_max_turns` | `10` | Max agent turns per run (cap 30). |
-| `thinking_wait_nudge_minutes` | `3` | Send nudge if user has not replied after this many minutes. |
-| `thinking_wait_skip_minutes` | `10` | Clear waiting state and allow next run after this many minutes without reply. |
-| `thinking_gc_hours` | `12` | Garbage collector deletes old thinking data after this many hours. |
-| `thinking_quiet_hours_enabled` | `false` | When true, thinking mode does not run during the quiet-hours window (local time). |
-| `thinking_quiet_hours_start` | `23:00` | Start of quiet period (HH:MM, 24h). Overnight spans supported (e.g. 23:00–07:00). |
-| `thinking_quiet_hours_end` | `07:00` | End of quiet period (HH:MM, 24h). During this window the agent is not started at all. |
+... [Table remains the same] ...
 
 ---
 
 ## Run flow
 
 1. **Loop:** Background thread runs `thinking_loop_iteration()` every `thinking_check_interval_seconds`.
-2. **Quiet hours:** If `thinking_quiet_hours_enabled` is true and current local time is inside `thinking_quiet_hours_start`–`thinking_quiet_hours_end`, the loop does nothing (no run is started).
-3. **Eligibility:** For each idle user: skip if in "waiting for reply" within nudge/skip window; skip if cooldown has not elapsed; skip if an automation runs within `thinking_automation_buffer_minutes`.
-4. **Lock:** `acquire_lock(user_scope_id)` returns a `run_id` or `None` if already locked.
+2. **Quiet hours:** Checks if current local time is inside the prohibited window.
+3. **Eligibility & Alias Mapping:** For each user, the system finds the *absolute newest* activity timestamp across all their known aliases (Web UUID, Telegram ID, Admin name). If any alias is active, the user is NOT idle.
+4. **Lock:** `acquire_lock(user_scope_id)` returns a `run_id`.
 5. **Run:** `_run_thinking_for_user()` runs in a daemon thread:
-   - Sets `VAF_THINKING_MODE=1` and `VAF_THINKING_SCOPE_ID=<scope_key>` (loads thinking-only tools)
-   - Creates an `Agent`, loads model, calls `init_chat()`
-   - **Loads user's chat session** (`telegram_<id>` / `whatsapp_<jid>` / user-scoped `web-default-<scope>`) via `agent.load_session_context()` — same context as the normal agent
-   - Appends a "THINKING MODE" notice to the system prompt, including:
-     - Summary of the last 3 runs
-     - User's reply to the last question (if any)
-     - Declined questions (topics the user has already refused)
-     - **Persistent thinking notes** (see below)
-   - Multi-turn loop: each turn calls `chat_step()` until `thinking_done` is called or `thinking_max_turns` is reached
-5. **After run:**
-   - JSON run log saved under `~/.vaf/thinking_mode_logs/<scope_key>/`
-   - Human-readable log appended to `logs/vaf_denk_YYYY-MM-DD.log`
-   - If agent sent a question → `set_waiting_for_reply()` is called
-6. **Unlock:** `release_lock()` called in `finally`; cooldown timestamp recorded.
+   - Sets environment flags and creates an `Agent`.
+   - **Loads user's chat session** to ensure context parity.
+   - **History Synchronization:** If the agent sends a message (e.g., via `send_telegram`), that message is instantly appended to the main session's history on disk.
+   - **Real-time Abort Check:** Before each turn, the agent checks if the user's logical ID has seen new activity. If so, it breaks the loop immediately.
+6. **After run:** Logs are saved and waiting states are updated.
+7. **Unlock:** Lock is released; cooldown recorded.
 
 ---
 

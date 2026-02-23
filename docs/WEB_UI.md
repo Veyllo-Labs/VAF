@@ -61,8 +61,8 @@ Singleton pattern manager that:
 
 ### 1. Real-Time Chat Interface
 
-- **Message Display**: User and assistant messages with distinct styling
-- **Streaming Responses**: Live updates as agent generates responses
+- **Message Display**: User and assistant messages with distinct styling. Messages are always shown in chronological order (oldest first); the list is sorted by timestamp when loading a session so the latest reply appears at the bottom.
+- **Streaming Responses**: Live updates as agent generates responses. When the agent uses a tool, the text *after* the tool is shown in a **separate** assistant bubble (so you see: first answer → tool card → follow-up answer), instead of one bubble that keeps updating.
 - **Thinking Process**: Collapsible accordion showing agent's reasoning (`<think>` blocks)
 - **System Steps**: Timeline visualization of agent workflow steps
 
@@ -370,7 +370,7 @@ The Web UI runs alongside the CLI interface:
 ### Message Bubble
 
 - **User**: Right-aligned, indigo background, rounded corners
-- **Assistant**: Left-aligned, white background with border, includes bot icon
+- **Assistant**: Left-aligned, white background with border, includes bot icon. When the agent uses tools mid-turn, the reply is split: the part before the tool stays in one bubble, the part after the tool appears in a new bubble so tool usage and the follow-up answer are visible separately.
 - **System**: Timeline-style with icons, minimal styling
 - **Tool**: Card-style component showing tool name, arguments, status (running/completed), and result
 

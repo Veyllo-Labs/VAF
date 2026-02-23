@@ -120,6 +120,9 @@ class Config:
         "thinking_wait_skip_minutes": 10,                     # If still no reply after this many minutes total: skip the question and do other things
         "thinking_cooldown_minutes": 60,                     # After a thinking run completes: wait this many minutes before starting another
         "thinking_gc_hours": 12,                              # GC deletes thinking-mode sessions older than this many hours
+        "thinking_quiet_hours_enabled": False,               # Do not run thinking mode during quiet hours (local time)
+        "thinking_quiet_hours_start": "23:00",                # Quiet period start (HH:MM, 24h); e.g. 23:00 = 11 PM
+        "thinking_quiet_hours_end": "07:00",                 # Quiet period end (HH:MM, 24h); e.g. 07:00 = 7 AM (overnight span supported)
 
         # Garbage Collector Settings
         "gc_enabled": True,                    # Enable automatic temp file / log cleanup

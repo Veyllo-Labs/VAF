@@ -47,7 +47,9 @@
     "loadSession": "Load session",
     "clearConversation": "Clear conversation",
     "stopSpeaking": "Stop speaking",
-    "help": "Show help"
+    "help": "Show help",
+    "aboutAutomation": "About Automation",
+    "notifications": "Notifications"
   },
   "common": {
     "save": "Save",

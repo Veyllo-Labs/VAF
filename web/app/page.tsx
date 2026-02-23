@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl';
 import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, Info, Bell
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
@@ -1518,9 +1518,21 @@ function VAFDashboardContent() {
                             const newMsgs = [...prev];
                             newMsgs[newMsgs.length - 1] = { ...last, content: data.content };
                             return newMsgs;
-                        } else {
-                            return [...prev, { role: 'assistant', content: data.content, timestamp: Date.now() }];
                         }
+                        // Last message is not assistant (e.g. tool card). Append a new assistant bubble.
+                        // Backend sends full accumulated content; show only the delta after the previous
+                        // assistant text so the user sees a separate answer bubble (e.g. after tool use).
+                        let content = data.content ?? '';
+                        const lastAssistantIdx = prev.map((m, i) => ({ m, i })).filter(({ m }) => m.role === 'assistant').pop()?.i;
+                        if (lastAssistantIdx !== undefined) {
+                            const prevContent = String(prev[lastAssistantIdx].content ?? '').trim();
+                            const newTrimmed = String(content).trim();
+                            if (prevContent.length > 0 && newTrimmed.length >= prevContent.length && newTrimmed.startsWith(prevContent)) {
+                                const delta = newTrimmed.slice(prevContent.length).replace(/^\s*\n+/, '').trim();
+                                if (delta.length > 0) content = delta;
+                            }
+                        }
+                        return [...prev, { role: 'assistant', content, timestamp: Date.now() }];
                     });
                 }
                 else if (data.type === 'clear_last_assistant') {
@@ -1968,6 +1980,18 @@ function VAFDashboardContent() {
                         const firstIdx = finalMsgs.findIndex(m => m.role === msg.role && norm(String(m.content ?? '')) === n);
                         return firstIdx === i;
                     });
+
+                    // Ensure chronological display (oldest first): sort by timestamp so the latest message is never shown at the top
+                    const ts = (m: Message) => (m.timestamp != null ? new Date(m.timestamp).getTime() : 0);
+                    finalMsgs = [...finalMsgs]
+                        .map((m, i) => ({ m, i }))
+                        .sort((a, b) => {
+                            const ta = ts(a.m);
+                            const tb = ts(b.m);
+                            if (ta !== tb) return ta - tb;
+                            return a.i - b.i; // stable: preserve relative order when timestamps equal
+                        })
+                        .map(({ m }) => m);
 
                     setMessages(finalMsgs);
 
@@ -3133,7 +3157,7 @@ function VAFDashboardContent() {
                         />
                     </div>
 
-                    {/* Status Footer: Automation, Settings (Connection-Indikator ist im Main-Bereich links) */}
+                    {/* Status Footer: Automation, Über Automation, Notifications, Settings (Connection-Indikator im Main-Bereich links) */}
                     <div className="shrink-0 p-3 mt-auto mb-2 flex flex-col gap-1 w-full overflow-hidden">
 
                         <div
@@ -3153,6 +3177,35 @@ function VAFDashboardContent() {
                                 <Calendar size={20} />
                             </div>
                             <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap text-sm">Automation</span>
+                        </div>
+
+                        <div
+                            onClick={() => {
+                                setSettingsInitialTab('automations');
+                                setIsSettingsOpen(true);
+                                ws?.send(JSON.stringify({ type: 'get_automations' }));
+                            }}
+                            className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/about transition-all justify-start"
+                            title={tNav('aboutAutomation')}
+                        >
+                            <div className="w-6 flex justify-center shrink-0">
+                                <Info size={20} />
+                            </div>
+                            <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap text-sm">{tNav('aboutAutomation')}</span>
+                        </div>
+
+                        <div
+                            onClick={() => {
+                                setSettingsInitialTab(null);
+                                setIsSettingsOpen(true);
+                            }}
+                            className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/notifications transition-all justify-start"
+                            title={tNav('notifications')}
+                        >
+                            <div className="w-6 flex justify-center shrink-0">
+                                <Bell size={20} />
+                            </div>
+                            <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap text-sm">{tNav('notifications')}</span>
                         </div>
 
                         <div

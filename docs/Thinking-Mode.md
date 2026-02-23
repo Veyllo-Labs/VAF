@@ -30,15 +30,19 @@ All keys live in the main config (Settings → Advanced or `config.json`). Defau
 | `thinking_wait_nudge_minutes` | `3` | Send nudge if user has not replied after this many minutes. |
 | `thinking_wait_skip_minutes` | `10` | Clear waiting state and allow next run after this many minutes without reply. |
 | `thinking_gc_hours` | `12` | Garbage collector deletes old thinking data after this many hours. |
+| `thinking_quiet_hours_enabled` | `false` | When true, thinking mode does not run during the quiet-hours window (local time). |
+| `thinking_quiet_hours_start` | `23:00` | Start of quiet period (HH:MM, 24h). Overnight spans supported (e.g. 23:00–07:00). |
+| `thinking_quiet_hours_end` | `07:00` | End of quiet period (HH:MM, 24h). During this window the agent is not started at all. |
 
 ---
 
 ## Run flow
 
 1. **Loop:** Background thread runs `thinking_loop_iteration()` every `thinking_check_interval_seconds`.
-2. **Eligibility:** For each idle user: skip if in "waiting for reply" within nudge/skip window; skip if cooldown has not elapsed; skip if an automation runs within `thinking_automation_buffer_minutes`.
-3. **Lock:** `acquire_lock(user_scope_id)` returns a `run_id` or `None` if already locked.
-4. **Run:** `_run_thinking_for_user()` runs in a daemon thread:
+2. **Quiet hours:** If `thinking_quiet_hours_enabled` is true and current local time is inside `thinking_quiet_hours_start`–`thinking_quiet_hours_end`, the loop does nothing (no run is started).
+3. **Eligibility:** For each idle user: skip if in "waiting for reply" within nudge/skip window; skip if cooldown has not elapsed; skip if an automation runs within `thinking_automation_buffer_minutes`.
+4. **Lock:** `acquire_lock(user_scope_id)` returns a `run_id` or `None` if already locked.
+5. **Run:** `_run_thinking_for_user()` runs in a daemon thread:
    - Sets `VAF_THINKING_MODE=1` and `VAF_THINKING_SCOPE_ID=<scope_key>` (loads thinking-only tools)
    - Creates an `Agent`, loads model, calls `init_chat()`
    - **Loads user's chat session** (`telegram_<id>` / `whatsapp_<jid>` / user-scoped `web-default-<scope>`) via `agent.load_session_context()` — same context as the normal agent

@@ -138,7 +138,7 @@ Model: search_tools(query="calendar appointment")
 
 **Post-execution hook in `execute_tool()`:** After `search_tools` returns, the discovered tool names are immediately added to `_active_tools` so the model can call them in the very **next turn** without another router round-trip.
 
-**Always available:** `search_tools` (and `list_tools`) are injected into every restricted tool set, CORE_TOOLS, and the emergency fallback list so the model always has a discovery path.
+**Always available:** `search_tools` (and `list_tools`) are injected into every restricted tool set: the discovery-only fallback (router found no tools), CORE_TOOLS (tight context), and the emergency fallback list — so the model always has a discovery path.
 
 ### `_active_tools` state machine
 
@@ -238,9 +238,9 @@ User: "What is the weather?"
 | Situation | Behaviour |
 |---|---|
 | Router LLM fails | `_active_tools = None` → ALL tools loaded (fail-safe) |
-| Router returns empty | Context < 75%: ALL tools; Context > 75%: CORE_TOOLS subset |
+| Router returns empty | Context OK: discovery-only (`list_tools`, `search_tools`). Context tight (e.g. >75%): CORE_TOOLS subset. |
 | Main model retry | `_active_tools = None` → full tool reload |
-| Emergency (internal step) | Context > 80%: minimal subset (`web_search`, `memory_search`, `list_tools`, `search_tools`, …) |
+| Emergency (internal step) | Context >80%: minimal subset (`web_search`, `memory_search`, `list_tools`, `search_tools`, …) |
 
 **CORE_TOOLS** (used when context is tight and router returns nothing):
 `web_search`, `memory_search`, `memory_save`, `list_tools`, `search_tools`,

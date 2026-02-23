@@ -1320,11 +1320,17 @@ function VAFDashboardContent() {
                         if (displayMsg.replace(/[\W_]/g, '').length === 0) return;
 
                         // Do not set statusMessage here: we add this as a system step below; showing it again as ghost loader causes duplicate (prominent + faded).
+                        // Insert system step before the next assistant (so it appears above the reply), not at the end – avoids "system messages below LLM answer" when logs arrive after the answer.
                         setMessages(prev => {
-                            const last = prev[prev.length - 1];
                             const newContent = `${src}: ${cleanMsg}`;
+                            const last = prev[prev.length - 1];
                             if (last && last.role === 'system' && last.content === newContent) return prev;
-                            return [...prev, { role: 'system', content: newContent, timestamp: Date.now() }];
+                            const lastUserIdx = prev.map((m, i) => ({ role: m.role, i })).filter(({ role }) => role === 'user').pop()?.i ?? -1;
+                            const insertAt = prev.findIndex((m, i) => i > lastUserIdx && m.role === 'assistant');
+                            const idx = insertAt === -1 ? prev.length : insertAt;
+                            const next = [...prev];
+                            next.splice(idx, 0, { role: 'system', content: newContent, timestamp: Date.now() });
+                            return next;
                         });
                     }
                 }
@@ -1862,6 +1868,13 @@ function VAFDashboardContent() {
 
                     const cachedMsgs = sessionCache.current[data.sessionId] || [];
 
+                    // Normalize content for comparison (strip <think> blocks so server "answer only" matches cache "think + answer")
+                    const normContent = (s: string) => (s ?? '')
+                        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .slice(0, 400);
+
                     const hydratedServerMsgs = serverMsgs.map((srvMsg: Message & { _order?: number }) => {
                         if (srvMsg.role === 'tool') {
                             const match = cachedMsgs.find(cm =>
@@ -1870,6 +1883,18 @@ function VAFDashboardContent() {
                             );
                             if (match) {
                                 return { ...srvMsg, ...match, _order: srvMsg._order };
+                            }
+                        }
+                        // Assistant: prefer cache version if it contains <think> so Thinking appears above answer after reload
+                        if (srvMsg.role === 'assistant') {
+                            const srvNorm = normContent(String(srvMsg.content ?? ''));
+                            const withThink = cachedMsgs.find(cm =>
+                                cm.role === 'assistant' &&
+                                (normContent(String(cm.content ?? '')) === srvNorm || Math.abs((cm.timestamp ?? 0) - (srvMsg.timestamp ?? 0)) < 2000) &&
+                                /<think>[\s\S]*?<\/think>/i.test(String(cm.content ?? ''))
+                            );
+                            if (withThink) {
+                                return { ...srvMsg, content: withThink.content, _order: srvMsg._order };
                             }
                         }
                         return srvMsg;
@@ -1896,13 +1921,22 @@ function VAFDashboardContent() {
                     // Strip _order before setting state
                     finalMsgs = finalMsgs.map(({ _order, ...msg }) => msg) as Message[];
 
-                    // Fix order after reload: cached system messages (orphans) were appended at end. Move trailing system block before the last assistant so system steps appear before the reply.
-                    const lastAssistantIdx = finalMsgs.map((m, i) => ({ role: m.role, i })).filter(({ role }) => role === 'assistant').pop()?.i ?? -1;
-                    let trailingSystemStart = finalMsgs.length;
-                    while (trailingSystemStart > 0 && finalMsgs[trailingSystemStart - 1].role === 'system') trailingSystemStart--;
-                    if (lastAssistantIdx >= 0 && trailingSystemStart < finalMsgs.length && trailingSystemStart > lastAssistantIdx) {
-                        const systemBlock = finalMsgs.splice(trailingSystemStart, finalMsgs.length - trailingSystemStart);
-                        finalMsgs.splice(lastAssistantIdx, 0, ...systemBlock);
+                    // Fix order after reload: cached orphans (system + tool) are appended at end. For each assistant that has system/tool after it, move that run before the assistant. Process from end so indices stay valid. Sort each moved block: system before tool.
+                    const assistantIndices = finalMsgs.map((m, i) => ({ role: m.role, i })).filter(({ role }) => role === 'assistant').map(({ i }) => i);
+                    for (let a = assistantIndices.length - 1; a >= 0; a--) {
+                        const assistantIdx = assistantIndices[a];
+                        if (assistantIdx + 1 >= finalMsgs.length) continue;
+                        let artifactEnd = assistantIdx + 1;
+                        while (artifactEnd < finalMsgs.length && (finalMsgs[artifactEnd].role === 'system' || finalMsgs[artifactEnd].role === 'tool')) artifactEnd++;
+                        const runLength = artifactEnd - (assistantIdx + 1);
+                        if (runLength <= 0) continue;
+                        const turnArtifacts = finalMsgs.splice(assistantIdx + 1, runLength);
+                        const systemFirst = [...turnArtifacts.filter((m) => m.role === 'system'), ...turnArtifacts.filter((m) => m.role === 'tool')];
+                        finalMsgs.splice(assistantIdx, 0, ...systemFirst);
+                        // Update indices for assistants we haven't processed yet (they shifted right)
+                        for (let j = 0; j < a; j++) {
+                            if (assistantIndices[j] >= assistantIdx) assistantIndices[j] += systemFirst.length;
+                        }
                     }
 
                     // Deduplicate: when switching back to a session, cache + server can both contribute

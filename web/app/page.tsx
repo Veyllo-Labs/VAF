@@ -13,6 +13,7 @@ import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sess
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
+import NotificationsModal, { type NotificationItem } from '@/components/NotificationsModal';
 import SubAgentWindow from '@/components/SubAgentWindow';
 import DocumentEditor from '@/components/DocumentEditor';
 import DocumentViewer, { CHIP_BG_CLASSES, type InsertedSelectionRange } from '@/components/DocumentViewer';
@@ -793,6 +794,8 @@ function VAFDashboardContent() {
     type AutomationTodo = { id: string; text: string; created_at: string; due_at?: string | null; done: boolean };
     const [automationNotes, setAutomationNotes] = useState<AutomationNote[]>([]);
     const [automationTodos, setAutomationTodos] = useState<AutomationTodo[]>([]);
+    const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+    const [notifications, setNotifications] = useState<NotificationItem[]>([]);
     // const [activeTools, setActiveTools] = useState<ToolState[]>([]); // REPLACED BY INLINE MESSAGES
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -2108,6 +2111,12 @@ function VAFDashboardContent() {
                 else if (data.type === 'delete_automation_result') {
                     if (data.ok === true) ws?.send(JSON.stringify({ type: 'get_automations' }));
                 }
+                else if (data.type === 'notification' && data.notification) {
+                    setNotifications(prev => [data.notification, ...prev]);
+                }
+                else if (data.type === 'notifications_list' && Array.isArray(data.notifications)) {
+                    setNotifications(data.notifications);
+                }
                 else if (data.type === 'automation_notes_list') {
                     setAutomationNotes(Array.isArray(data.notes) ? data.notes : []);
                 }
@@ -3195,10 +3204,7 @@ function VAFDashboardContent() {
                         </div>
 
                         <div
-                            onClick={() => {
-                                setSettingsInitialTab(null);
-                                setIsSettingsOpen(true);
-                            }}
+                            onClick={() => setIsNotificationsOpen(true)}
                             className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/notifications transition-all justify-start"
                             title={tNav('notifications')}
                         >
@@ -4227,6 +4233,12 @@ function VAFDashboardContent() {
                     weekday: auto.weekday ?? undefined,
                     day: auto.day ?? undefined,
                 })}
+            />
+            <NotificationsModal
+                isOpen={isNotificationsOpen}
+                onClose={() => setIsNotificationsOpen(false)}
+                notifications={notifications}
+                onFetchComplete={setNotifications}
             />
             {editingAutomationFromCalendar && (
                 <CreateAutomationPopup

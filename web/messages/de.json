@@ -51,6 +51,16 @@
     "aboutAutomation": "Über Automation",
     "notifications": "Benachrichtigungen"
   },
+  "notifications": {
+    "title": "Benachrichtigungen",
+    "view": "Anzeigen",
+    "close": "Schliessen",
+    "statusSuccess": "Erfolg",
+    "statusSkipped": "Übersprungen",
+    "statusError": "Fehler",
+    "empty": "Keine Benachrichtigungen.",
+    "count": "{count} Benachrichtigungen"
+  },
   "common": {
     "save": "Speichern",
     "cancel": "Abbrechen",

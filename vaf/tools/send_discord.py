@@ -74,4 +74,18 @@ class SendDiscordTool(BaseTool):
         except Exception as e:
             return f"Failed to send Discord message: {e}"
 
+        try:
+            from vaf.core.user_notifications import append_notification
+            preview = (out[:100] + "…") if len(out) > 100 else out
+            append_notification(
+                user_scope_id,
+                kind="channel_reply",
+                title="Message sent via Discord",
+                status="success",
+                summary=preview,
+                channel="Discord",
+            )
+        except Exception:
+            pass
+
         return "Message sent to the user via Discord."

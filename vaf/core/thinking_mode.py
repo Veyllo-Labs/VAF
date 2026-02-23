@@ -1013,6 +1013,8 @@ def _run_thinking_for_user(
     from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 
     scope_key = _key(user_scope_id)
+    run_status = "success"
+    run_summary = "Thinking run completed."
     max_duration_minutes = int(Config.get("thinking_max_duration_minutes", 30) or 30)
     # So Agent._load_tools() sees thinking mode and registers thinking_done / thinking_note_add tools
     os.environ["VAF_THINKING_MODE"] = "1"
@@ -1276,6 +1278,8 @@ def _run_thinking_for_user(
                     pass
         except Exception as e:
             logger.exception("Thinking run error for user %s: %s", scope_key[:8] if scope_key != "default" else "default", e)
+            run_status = "error"
+            run_summary = str(e)[:500] if str(e) else "Thinking run failed."
         finally:
             try:
                 agent.shutdown()
@@ -1288,6 +1292,18 @@ def _run_thinking_for_user(
         os.environ.pop("VAF_THINKING_MODE", None)
         os.environ.pop("VAF_THINKING_SCOPE_ID", None)
         _set_last_run_completed(user_scope_id)
+        try:
+            from vaf.core.user_notifications import append_notification
+            append_notification(
+                user_scope_id,
+                kind="thinking",
+                title="Thinking run completed",
+                status=run_status,
+                summary=run_summary,
+                run_id=run_id,
+            )
+        except Exception as notif_err:
+            logger.debug("Could not append thinking notification: %s", notif_err)
         release_lock(user_scope_id)
 
 

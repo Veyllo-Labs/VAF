@@ -891,6 +891,18 @@ vaf automation delete <id>   # Delete task
                     task.last_run = datetime.now().isoformat()
                     # next_run is calculated dynamically - no need to store it
                     self._save_task(task)
+                    try:
+                        from vaf.core.user_notifications import append_notification
+                        append_notification(
+                            task.user_scope_id,
+                            kind="automation",
+                            title=task.name,
+                            status="success",
+                            summary=(result[:500] + "…") if result and len(result) > 500 else (result or "Completed"),
+                            task_name=task.name,
+                        )
+                    except Exception:
+                        pass
                     return result
             else:
                 # Legacy: Use prompt-based execution (backwards compatibility)
@@ -1123,6 +1135,22 @@ vaf automation delete <id>   # Delete task
             os.environ.pop("VAF_IN_AUTOMATION", None)
             # Keep VAF_NONINTERACTIVE if it was set before
         
+        # Notify Web UI of automation result (persisted + live push if server running)
+        try:
+            from vaf.core.user_notifications import append_notification
+            status = "error" if (result or "").strip().startswith("Error:") else "success"
+            summary = (result[:500] + "…") if result and len(result) > 500 else (result or "Completed")
+            append_notification(
+                task.user_scope_id,
+                kind="automation",
+                title=task.name,
+                status=status,
+                summary=summary,
+                task_name=task.name,
+            )
+        except Exception:
+            pass
+
         # Always exit cleanly after automation completes
         import sys
         sys.exit(0)

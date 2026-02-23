@@ -318,6 +318,16 @@ class WebInterfaceManager:
         if self._server_loop:
             asyncio.run_coroutine_threadsafe(self.broadcast(data), self._server_loop)
 
+    def push_update_to_user(self, user_id: str, data: dict):
+        """Thread-safe push update to a specific user's connections (e.g. notifications)."""
+        if not user_id:
+            return
+        if self._server_loop:
+            asyncio.run_coroutine_threadsafe(
+                self.broadcast_to_user(str(user_id).strip(), data),
+                self._server_loop
+            )
+
     def _push_session_update(self, session_id: Optional[str], data: dict):
         """
         Thread-safe push update with session scoping.

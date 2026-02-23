@@ -1,10 +1,11 @@
 from vaf.startup_logger import log
 log("WebServer", "Module load started")
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi import HTTPException, Query
+from starlette.requests import Request
 import asyncio
 import uvicorn
 import threading
@@ -1379,6 +1380,24 @@ async def download_file(path: str = Query(..., description="Absolute path to loc
         media_type=mime_type or "application/octet-stream",
         filename=target.name,
     )
+
+
+@app.get("/api/notifications")
+async def get_notifications_api(
+    request: Request,
+    limit: int = Query(50, ge=1, le=100),
+):
+    """Return recent notifications for the current user (thinking, automation, channel replies)."""
+    try:
+        from vaf.api.config_routes import get_current_user_or_local_admin
+        from vaf.core.user_notifications import get_notifications
+    except ImportError as e:
+        raise HTTPException(status_code=500, detail=f"Notifications not available: {e}")
+    user = get_current_user_or_local_admin(request)
+    user_scope_id = user.get("user_scope_id")
+    notifications = get_notifications(user_scope_id, limit=limit)
+    return {"notifications": notifications}
+
 
 @app.get("/api/workflows/{wf_id}")
 async def get_workflow_details(wf_id: str):
@@ -3063,6 +3082,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({"type": "automation_todos_list", "todos": todos})
                     except Exception as e:
                         await websocket.send_json({"type": "automation_todos_list", "todos": [], "error": str(e)})
+
+                elif type == "get_notifications":
+                    try:
+                        from vaf.core.user_notifications import get_notifications
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        limit = min(100, max(1, int(cmd.get("limit") or 50)))
+                        notifications = get_notifications(user_scope_id, limit=limit)
+                        await websocket.send_json({"type": "notifications_list", "notifications": notifications})
+                    except Exception as e:
+                        await websocket.send_json({"type": "notifications_list", "notifications": [], "error": str(e)})
 
                 elif type == "create_automation_note":
                     try:

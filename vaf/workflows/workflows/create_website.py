@@ -23,8 +23,7 @@ WORKFLOW = {
         "website for", "build a website for",
         "create homepage", "build homepage",
         "create landing page", "landing page for",
-        # Simpler triggers (höhere Match-Chance)
-        "website", "webseite", "homepage",
+        # Do NOT add single-word triggers like "website"/"webseite" – they match mentions (e.g. "ich habe eine Webseite auf wix") and wrongly start website creation. Only creation-intent phrases above.
     ],
     "trigger_patterns": [
         r"erstell.*websit",

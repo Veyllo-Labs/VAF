@@ -4475,13 +4475,9 @@ class Agent:
 
             # SAFETY NET: If router returns empty list, fallback to sensible tools
             # Otherwise the model gets 0 tools and hallucinates using them.
+            used_core_subset = False
             if not selected_tools:
-                # Check if ALL tools fit in context
-                # Temporary set active_tools to None to get 'ALL' count
-                self._active_tools = None
-                
-                # If ALL tools consume > threshold of context, use a "Core" subset instead
-                # (prevents HTTP 400 errors on small context models)
+                # If context is tight, use CORE_TOOLS subset to avoid HTTP 400 / overflow
                 is_small = max_tokens <= 20000
                 router_safety_threshold = 0.75 if is_small else 0.85
                 
@@ -4491,13 +4487,15 @@ class Agent:
                         "update_intent", "update_working_memory", "read_file", "list_files",
                         "coding_agent", "librarian_agent", "research_agent"
                     ]
-                    # Filter to only those that actually exist in this agent
                     fallback_set = [t for t in CORE_TOOLS if t in self.tools]
                     UI.event("Router", f"Safety Net: Context tight ({current_tokens}/{max_tokens}). Using {len(fallback_set)} Core tools.", style="warning")
                     self._active_tools = fallback_set
+                    used_core_subset = True
                 else:
-                    UI.event("Router", "Safety Net: Using ALL tools (Router found none)", style="dim")
-                    self._active_tools = None
+                    # Router found no specific tools: give only discovery tools so the model can list/search
+                    DISCOVERY_ONLY = ["list_tools", "search_tools"]
+                    self._active_tools = [t for t in DISCOVERY_ONLY if t in self.tools]
+                    UI.event("Router", "Safety Net: Router found none. Using list_tools, search_tools.", style="dim")
             else:
                 self._active_tools = selected_tools
 
@@ -4506,7 +4504,7 @@ class Agent:
             final_list = ", ".join(actual_tools)
             if self._active_tools is None:
                 final_list = f"ALL ({len(actual_tools)})"
-            elif not selected_tools:
+            elif not selected_tools and used_core_subset:
                 final_list = f"CORE ({len(actual_tools)})"
             # Single display path: push to Web UI only (avoids duplicate with UI.event→log in Web)
             if _emit_to_web_ui():

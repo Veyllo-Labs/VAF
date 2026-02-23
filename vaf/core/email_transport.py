@@ -262,16 +262,74 @@ def _get_email_config(
     return {"accounts": []}
 
 
+def _email_config_candidates(
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> List[tuple]:
+    """Return [(ec_dict, effective_scope), ...] to try for account/credential lookup. Aligns with list_accounts fallbacks so tools find accounts when scope mismatches (e.g. JWT scope vs legacy)."""
+    from vaf.core.config import get_local_admin_scope_id
+    local_admin_scope = get_local_admin_scope_id()
+    candidates: List[tuple] = []
+    seen: set = set()
+
+    def add(ec: Dict[str, Any], scope: Optional[str]) -> None:
+        key = (id(ec), str(scope) if scope else "")
+        if key not in seen and isinstance(ec, dict) and (ec.get("accounts") or []):
+            seen.add(key)
+            candidates.append((ec, scope))
+
+    add(_get_email_config(username, user_scope_id=user_scope_id), user_scope_id)
+    add(_get_email_config(None, user_scope_id=None), None)
+    if username:
+        add(_get_email_config(username, user_scope_id=None), None)
+    by_scope = Config.get("email_config_by_scope") or {}
+    if isinstance(by_scope, dict):
+        scopes_with_accounts = [
+            (sid, (ec or {}).get("accounts") or [])
+            for sid, ec in by_scope.items()
+            if isinstance(ec, dict) and (ec.get("accounts") or [])
+        ]
+        if len(scopes_with_accounts) == 1:
+            sid, scope_accounts = scopes_with_accounts[0]
+            add({"accounts": scope_accounts}, str(sid).strip())
+    return candidates
+
+
 def get_account(
     account_id: str,
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Return account metadata for account_id (email or account_id). Optional username/user_scope_id for multi-user scope."""
-    ec = _get_email_config(username, user_scope_id=user_scope_id)
-    for a in ec.get("accounts") or []:
-        if (a.get("account_id") or a.get("email") or "").strip().lower() == (account_id or "").strip().lower():
-            return a
+    """Return account metadata for account_id (email or account_id). Optional username/user_scope_id for multi-user scope. Uses fallback config (legacy + single-scope) so account is found when scope mismatches."""
+    want = (account_id or "").strip().lower()
+    for ec, _ in _email_config_candidates(username, user_scope_id):
+        for a in ec.get("accounts") or []:
+            if (a.get("account_id") or a.get("email") or "").strip().lower() == want:
+                return a
+    return None
+
+
+def _get_credentials_with_fallback(
+    account_id: str,
+    provider: str,
+    username: Optional[str],
+    user_scope_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Try credential lookup with primary scope, then legacy (None), then single scope."""
+    creds = get_email_credentials(account_id, provider, username, user_scope_id=user_scope_id)
+    if creds:
+        return creds
+    creds = get_email_credentials(account_id, provider, username, user_scope_id=None)
+    if creds:
+        return creds
+    from vaf.core.config import get_local_admin_scope_id
+    by_scope = Config.get("email_config_by_scope") or {}
+    if isinstance(by_scope, dict):
+        scopes_with_accounts = [sid for sid, ec in by_scope.items() if isinstance(ec, dict) and (ec.get("accounts") or [])]
+        if len(scopes_with_accounts) == 1:
+            creds = get_email_credentials(account_id, provider, username, user_scope_id=scopes_with_accounts[0])
+            if creds:
+                return creds
     return None
 
 
@@ -284,18 +342,18 @@ def get_credentials(
     """
     Load credentials from credential_store. For OAuth uses provider from account metadata.
     Returns dict with either password (IMAP) or access_token/refresh_token (OAuth).
-    Optional username/user_scope_id for multi-user scope.
+    Optional username/user_scope_id for multi-user scope. Tries fallback scopes when primary lookup fails (avoids UUID/scope mismatch).
     """
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
         return None
     prov = provider or acc.get("provider") or "imap"
     if prov == "imap":
-        creds = get_email_credentials(account_id, "imap", username, user_scope_id=user_scope_id)
+        creds = _get_credentials_with_fallback(account_id, "imap", username, user_scope_id)
         if creds and creds.get("type") == "imap":
             return creds
         return None
-    creds = get_email_credentials(account_id, prov, username, user_scope_id=user_scope_id)
+    creds = _get_credentials_with_fallback(account_id, prov, username, user_scope_id)
     if creds and creds.get("type") == "oauth":
         return creds
     return None

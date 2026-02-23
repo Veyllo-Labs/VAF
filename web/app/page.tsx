@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl';
 import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, Info, Bell
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, Bell
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
@@ -3166,7 +3166,7 @@ function VAFDashboardContent() {
                         />
                     </div>
 
-                    {/* Status Footer: Automation, Über Automation, Notifications, Settings (Connection-Indikator im Main-Bereich links) */}
+                    {/* Status Footer: Automation, Notifications, Settings (Connection-Indikator im Main-Bereich links) */}
                     <div className="shrink-0 p-3 mt-auto mb-2 flex flex-col gap-1 w-full overflow-hidden">
 
                         <div
@@ -3186,21 +3186,6 @@ function VAFDashboardContent() {
                                 <Calendar size={20} />
                             </div>
                             <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap text-sm">Automation</span>
-                        </div>
-
-                        <div
-                            onClick={() => {
-                                setSettingsInitialTab('automations');
-                                setIsSettingsOpen(true);
-                                ws?.send(JSON.stringify({ type: 'get_automations' }));
-                            }}
-                            className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/about transition-all justify-start"
-                            title={tNav('aboutAutomation')}
-                        >
-                            <div className="w-6 flex justify-center shrink-0">
-                                <Info size={20} />
-                            </div>
-                            <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap text-sm">{tNav('aboutAutomation')}</span>
                         </div>
 
                         <div

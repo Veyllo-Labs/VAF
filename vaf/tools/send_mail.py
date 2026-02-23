@@ -128,4 +128,15 @@ class SendMailTool(BaseTool):
         if ok:
             suffix = f" with {len(attachments)} attachment(s)" if attachments else ""
             return f"Email{suffix} sent to {to} from {account_id}."
-        return "Failed to send email (check SMTP settings and credentials)."
+        
+        # Determine provider for better error hint
+        prov_hint = ""
+        acc = get_account(account_id, username=cred_username, user_scope_id=user_scope_id)
+        if acc:
+            prov = (acc.get("provider") or "imap").lower()
+            if prov in ("gmail", "microsoft"):
+                prov_hint = f" ({prov.upper()} API failed - check connection in Settings -> Connections -> Email)"
+            else:
+                prov_hint = " (check SMTP settings and credentials in Settings)"
+        
+        return f"Failed to send email{prov_hint}."

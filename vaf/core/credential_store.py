@@ -155,25 +155,54 @@ def get_email_credentials(
     or IMAP field (password). Returns None if not found or on error.
     When username or user_scope_id is set (multi-user mode), credentials are scoped to that user.
     """
-    key = _credential_key(account_id, provider, _cred_key_username(username), user_scope_id=user_scope_id)
+    u = _cred_key_username(username)
+    s = _cred_key_scope(user_scope_id)
+    
+    # Provider candidates: some parts of the system use 'gmail'/'microsoft', others use 'email'
+    providers_to_try = [provider]
+    if provider in ("gmail", "microsoft", "outlook") and "email" not in providers_to_try:
+        providers_to_try.append("email")
+    elif provider == "email":
+        # If we only have 'email', we might also have it under 'gmail' or 'microsoft'
+        # but account_id usually tells us. For now, just add them as fallback if needed.
+        pass
+
+    keys_to_try = []
+    for p in providers_to_try:
+        keys_to_try.append(_credential_key(account_id, p, u, user_scope_id=s))
+        
+        # Fallback for legacy 'admin' username string in key
+        if u is None: # Current user is local admin
+            safe_id = (account_id or "").strip().lower().replace(" ", "_")
+            legacy_admin_key = f"email:{p}:admin:{safe_id}"
+            if legacy_admin_key not in keys_to_try:
+                keys_to_try.append(legacy_admin_key)
+
+    # Log candidates for debugging
+    append_domain_log_always("backend", f"CRED_LOOKUP account={account_id} candidates={','.join(keys_to_try)}")
+
     if _keyring_available():
-        try:
-            import keyring
-            value = keyring.get_password(SERVICE_NAME, key)
-            if not value:
-                return None
-            return json.loads(value)
-        except Exception as e:
-            logger.debug("Keyring get failed for %s: %s", _mask(key), e)
-            return None
+        import keyring
+        for key in keys_to_try:
+            try:
+                value = keyring.get_password(SERVICE_NAME, key)
+                if value:
+                    append_domain_log_always("backend", f"CRED_FOUND_KEYRING key={_mask(key)}")
+                    return json.loads(value)
+            except Exception as e:
+                logger.debug("Keyring get failed for %s: %s", _mask(key), e)
+        return None
+
     data = _load_fallback_data()
-    raw = data.get(key)
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except Exception:
-        return None
+    for key in keys_to_try:
+        raw = data.get(key)
+        if raw:
+            try:
+                append_domain_log_always("backend", f"CRED_FOUND_FALLBACK key={_mask(key)}")
+                return json.loads(raw)
+            except Exception:
+                continue
+    return None
 
 
 def set_email_oauth_tokens(
@@ -239,14 +268,23 @@ def delete_email_credentials(
     """
     safe_username = _cred_key_username(username)
     safe_scope = _cred_key_scope(user_scope_id)
-    keys_to_delete = []
+    
+    # Collect all possible keys to delete (primary + legacy admin)
+    base_keys = []
     if provider:
-        keys_to_delete.append(_credential_key(account_id, provider, safe_username, user_scope_id=safe_scope))
+        base_keys.append((account_id, provider, safe_username, safe_scope))
+        if safe_username is None: # Add legacy admin fallback for deletion
+            base_keys.append((account_id, provider, "admin", safe_scope))
     else:
-        keys_to_delete.append(_credential_key(account_id, "email", safe_username, user_scope_id=safe_scope))
-        keys_to_delete.append(_credential_key(account_id, "imap", safe_username, user_scope_id=safe_scope))
-        for p in ("gmail", "microsoft", "outlook", "apple", "icloud"):
-            keys_to_delete.append(_credential_key(account_id, p, safe_username, user_scope_id=safe_scope))
+        # Default providers to check
+        for p in ("email", "imap", "gmail", "microsoft", "outlook", "apple", "icloud"):
+            base_keys.append((account_id, p, safe_username, safe_scope))
+            if safe_username is None:
+                base_keys.append((account_id, p, "admin", safe_scope))
+
+    keys_to_delete = []
+    for aid, p, u, s in base_keys:
+        keys_to_delete.append(_credential_key(aid, p, u, user_scope_id=s))
 
     if _keyring_available():
         try:

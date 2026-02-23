@@ -25,6 +25,7 @@ import requests
 from vaf.core.config import Config
 from vaf.core.credential_store import get_email_credentials, set_email_oauth_tokens
 from vaf.core.platform import Platform
+from vaf.core.log_helper import append_domain_log_always
 
 # Env vars for shipped default OAuth client IDs (so users don't need Google Cloud Console)
 _ENV_OAUTH_KEYS: Dict[str, Dict[str, str]] = {
@@ -359,6 +360,7 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
                     effective_scope = try_scope
 
     if not creds or creds.get("type") != "oauth":
+        append_domain_log_always("backend", f"OAUTH_ERROR credentials_missing account={account_id} provider={provider} scope={user_scope_id}")
         return None
 
     access = creds.get("access_token")
@@ -367,8 +369,13 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
     now = time.time()
     if access and (expires_at is None or now + TOKEN_EXPIRY_BUFFER < expires_at):
         return access
+    
+    # Refresh required or token expired
     if not refresh or provider not in PROVIDERS:
+        append_domain_log_always("backend", f"OAUTH_WARNING refresh_impossible account={account_id} has_refresh={bool(refresh)}")
         return access  # Return possibly expired token; caller may get 401
+    
+    append_domain_log_always("backend", f"OAUTH_REFRESH_START account={account_id} provider={provider}")
     conf = PROVIDERS[provider]
     client_id = _get_oauth_client_credential(provider, "client_id")
     client_secret = _get_oauth_client_credential(provider, "client_secret")
@@ -387,16 +394,20 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
         resp = requests.post(token_url, data=payload, headers=headers, timeout=30)
         if resp.status_code != 200:
             logger.warning("Token refresh failed for %s: %s %s", provider, resp.status_code, resp.text[:200])
+            append_domain_log_always("backend", f"OAUTH_REFRESH_ERROR account={account_id} status={resp.status_code} response={resp.text}")
             return access
         data = resp.json()
         new_access = data.get("access_token")
         if not new_access:
+            append_domain_log_always("backend", f"OAUTH_REFRESH_ERROR account={account_id} reason=no_access_token_in_response")
             return access
         expires_in = data.get("expires_in")
         new_expires_at = time.time() + int(expires_in) if expires_in else None
         # Save refreshed token back to the EFFECTIVE scope (where it was found)
         set_email_oauth_tokens(account_id, provider, new_access, refresh, new_expires_at, username, user_scope_id=effective_scope)
+        append_domain_log_always("backend", f"OAUTH_REFRESH_SUCCESS account={account_id}")
         return new_access
     except Exception as e:
         logger.warning("Token refresh error for %s: %s", provider, e)
+        append_domain_log_always("backend", f"OAUTH_REFRESH_EXCEPTION account={account_id} error={e}")
         return access

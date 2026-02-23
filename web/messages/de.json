@@ -47,7 +47,9 @@
     "loadSession": "Sitzung laden",
     "clearConversation": "Unterhaltung löschen",
     "stopSpeaking": "Sprachausgabe stoppen",
-    "help": "Hilfe anzeigen"
+    "help": "Hilfe anzeigen",
+    "aboutAutomation": "Über Automation",
+    "notifications": "Benachrichtigungen"
   },
   "common": {
     "save": "Speichern",

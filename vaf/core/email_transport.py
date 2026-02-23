@@ -27,6 +27,7 @@ import requests
 from vaf.core.config import Config
 from vaf.core.credential_store import get_email_credentials
 from vaf.core.oauth_pkce import get_valid_access_token
+from vaf.core.log_helper import append_domain_log_always
 
 logger = logging.getLogger("vaf.core.email_transport")
 
@@ -657,10 +658,13 @@ def _send_mail_gmail(
     """Send mail via Gmail API (users.messages.send with raw RFC 2822)."""
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
+        logger.warning("_send_mail_gmail: account not found: %s", account_id)
+        append_domain_log_always("backend", f"GMAIL_SEND_ERROR account_not_found account={account_id}")
         return False
     token = get_valid_access_token(account_id, "gmail", username, user_scope_id=user_scope_id)
     if not token:
-        logger.warning("No valid Gmail token for account %s", account_id[:8] + "***")
+        logger.warning("_send_mail_gmail: No valid token for account %s", account_id[:8] + "***")
+        append_domain_log_always("backend", f"GMAIL_SEND_ERROR token_missing account={account_id}")
         return False
     from_addr = acc.get("email") or account_id
     msg = _build_mime_message(from_addr, to, subject, body, subtype, attachments)
@@ -673,11 +677,13 @@ def _send_mail_gmail(
             timeout=30,
         )
         if r.status_code not in (200, 201):
-            logger.warning("Gmail send failed: %s %s", r.status_code, r.text[:200])
+            logger.warning("Gmail API send failed for %s: %s %s", account_id, r.status_code, r.text[:300])
+            append_domain_log_always("backend", f"GMAIL_SEND_ERROR account={account_id} status={r.status_code} response={r.text}")
             return False
         return True
     except Exception as e:
-        logger.warning("Gmail send failed: %s", e)
+        logger.warning("Gmail API request failed for %s: %s", account_id, e)
+        append_domain_log_always("backend", f"GMAIL_SEND_ERROR request_exception account={account_id} error={e}")
         return False
 
 
@@ -1047,6 +1053,8 @@ def send_mail(
     Optional username/user_scope_id for multi-user scope."""
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
+        logger.warning("send_mail: account not found: %s", account_id)
+        append_domain_log_always("backend", f"SEND_MAIL_ERROR account_not_found account={account_id}")
         return False
     provider = (acc.get("provider") or "imap").lower()
     if provider == "gmail":
@@ -1055,6 +1063,8 @@ def send_mail(
         return _send_mail_microsoft(account_id, to, subject, body, subtype, username, user_scope_id=user_scope_id, attachments=attachments)
     conn = _smtp_connect(account_id, username, user_scope_id=user_scope_id)
     if not conn:
+        logger.warning("send_mail: _smtp_connect failed for %s", account_id)
+        append_domain_log_always("backend", f"SEND_MAIL_ERROR smtp_connect_failed account={account_id}")
         return False
     try:
         from_addr = acc.get("email") or account_id
@@ -1062,7 +1072,7 @@ def send_mail(
         conn.sendmail(from_addr, [to], msg.as_string())
         return True
     except Exception as e:
-        logger.warning("Send mail failed: %s", e)
+        logger.warning("Send mail failed for %s: %s", account_id, e)
         return False
     finally:
         try:

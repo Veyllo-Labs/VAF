@@ -585,18 +585,11 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
     Reads last_interaction.json (same store as last_interaction module).
     Normalizes so that "default" and local_admin_scope_id count as one user (None).
 
-    IMPORTANT: The local admin user may appear under MULTIPLE keys in last_interaction.json
-    (e.g. both "default" and "f01a10fe-...") because update_last_interaction() uses a simple
-    str(scope_id) key while thinking_mode maps local_admin_scope_id → "default".
-    We must take the NEWEST timestamp across all aliases for the same logical user before
-    deciding whether they are idle — otherwise a stale "default" entry triggers false nudges
-    even though the user was recently active under their UUID key.
-
-    Additionally, only return scope_ids that are actually registered in VAF's configuration
-    (Telegram/WhatsApp/Discord). Stale or legacy scope_ids (e.g. from old sessions that used
-    a different UUID for the admin) are silently ignored.
+    IMPORTANT: The same logical user may appear under MULTIPLE keys in last_interaction.json
+    (e.g. "default", "00000000-...", and their real JWT UUID). We MUST map all aliases
+    of a user to a single logical ID and take the NEWEST timestamp before deciding idle status.
     """
-    from vaf.core.config import get_local_admin_scope_id
+    from vaf.core.config import get_local_admin_scope_id, Config
     path = Platform.data_dir() / "last_interaction.json"
     if not path.exists():
         return []
@@ -609,65 +602,67 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
         threshold = now - (idle_minutes * 60)
         local_admin_scope = str(get_local_admin_scope_id()).strip()
 
-        # Load the set of actually-configured scope_ids so we can skip orphaned entries
-        try:
-            known_scopes = _get_known_scope_ids()
-        except Exception:
-            known_scopes = None  # If lookup fails, don't filter (safe fallback)
-
-        # Step 1: collect the NEWEST timestamp per logical user (None = local admin).
-        # A logical user may have entries under "default", the UUID, or both.
+        # Step 1: Map all known scope IDs to logical users.
+        # Logical ID -> newest TS seen. (None = local admin)
         latest_ts: Dict[Optional[str], float] = {}
+        # Logical ID -> source of the newest interaction
+        latest_source: Dict[Optional[str], str] = {}
+
+        # Load known scope mappings from configuration to group aliases
+        alias_map: Dict[str, Optional[str]] = {"default": None, local_admin_scope: None}
+        try:
+            # Telegram
+            tg_cfg = Config.get("telegram_config") or {}
+            for entry in (tg_cfg.get("whitelist") or []):
+                sid = str(entry.get("user_scope_id") or "").strip()
+                if sid:
+                    alias_map[sid] = None if (sid == "default" or sid == local_admin_scope) else sid
+            
+            # WhatsApp
+            wa_cfg = Config.get("whatsapp_config") or {}
+            for entry in (wa_cfg.get("whitelist") or []):
+                sid = str(entry.get("user_scope_id") or "").strip()
+                if sid:
+                    alias_map[sid] = None if (sid == "default" or sid == local_admin_scope) else sid
+            
+            # Discord
+            disc_cfg = Config.get("discord_config") or {}
+            for entry in (disc_cfg.get("users") or []):
+                sid = str(entry.get("user_scope_id") or "").strip()
+                if sid:
+                    alias_map[sid] = None if (sid == "default" or sid == local_admin_scope) else sid
+        except Exception: pass
+
         for key in data:
-            if not isinstance(key, str):
-                continue
+            if not isinstance(key, str): continue
             entry = data.get(key)
-            if not isinstance(entry, dict):
-                continue
+            if not isinstance(entry, dict): continue
             ts = entry.get("ts")
-            if ts is None:
-                continue
+            if ts is None: continue
             try:
                 ts_float = float(ts)
-            except (TypeError, ValueError):
-                continue
-            # Resolve which logical user this key belongs to
-            scope_id = None if (key == "default" or key == local_admin_scope) else key
-            # Skip stale/legacy scopes that have no matching configuration
-            if known_scopes is not None and scope_id not in known_scopes:
-                continue
-            # Keep the newest timestamp seen for this logical user
-            if scope_id not in latest_ts or ts_float > latest_ts[scope_id]:
-                latest_ts[scope_id] = ts_float
+            except (TypeError, ValueError): continue
 
-        # Step 2: only include users whose NEWEST interaction is older than threshold.
-        # Also apply a web-activity grace period: if the last interaction was via WebUI
-        # and happened less than 2 minutes ago, treat the user as still active.
-        # This prevents a race condition where headless_runner updates last_interaction
-        # AFTER processing a message, which could make the user appear idle briefly.
+            # Map alias to logical user
+            logical_id = alias_map.get(key, key)
+            if (key == "default" or key == local_admin_scope):
+                logical_id = None
+
+            if logical_id not in latest_ts or ts_float > latest_ts[logical_id]:
+                latest_ts[logical_id] = ts_float
+                latest_source[logical_id] = entry.get("source", "web")
+
+        # Step 2: Only include logical users who are truly idle across all aliases
         result: List[Optional[str]] = []
-        for scope_id, ts_float in latest_ts.items():
+        for logical_id, ts_float in latest_ts.items():
             if ts_float > threshold:
-                continue  # Clearly not idle yet
-            # Web grace period: skip if last source was "web" and < 2 min ago
-            try:
-                key_for_entry = "default" if scope_id is None else str(scope_id)
-                # Check both "default" and UUID keys for the entry source
-                entry_source = None
-                for check_key in (key_for_entry, local_admin_scope if scope_id is None else None):
-                    if check_key and check_key in data:
-                        raw_entry = data[check_key]
-                        if isinstance(raw_entry, dict):
-                            entry_source = raw_entry.get("source", "")
-                            entry_ts = float(raw_entry.get("ts", 0) or 0)
-                            # Use this entry only if it's the newest one
-                            if entry_ts >= ts_float - 1:  # within 1 second of newest
-                                break
-                if entry_source == "web" and (now - ts_float) < 120:  # 2-minute grace
-                    continue  # Skip — user just used the WebUI, not really idle
-            except Exception:
-                pass
-            result.append(scope_id)
+                continue
+            
+            # Apply 2-minute grace period for WebUI activity to avoid race conditions
+            if latest_source.get(logical_id) == "web" and (now - ts_float) < 120:
+                continue
+                
+            result.append(logical_id)
         return result
     except (json.JSONDecodeError, OSError):
         return []
@@ -681,6 +676,28 @@ def should_skip_for_automation(user_scope_id: Optional[str], buffer_minutes: int
         return False
     delta = (next_run - datetime.now()).total_seconds()
     return 0 <= delta < buffer_minutes * 60
+
+
+def is_in_quiet_hours() -> bool:
+    """
+    True if quiet hours are enabled and current local time falls inside the configured window.
+    Used to avoid starting thinking mode during the user's sleep (e.g. 23:00–07:00).
+    Overnight spans (start > end) are supported; times are in local time.
+    """
+    from vaf.core.config import Config
+    if not Config.get("thinking_quiet_hours_enabled", False):
+        return False
+    start_str = (Config.get("thinking_quiet_hours_start") or "23:00").strip()
+    end_str = (Config.get("thinking_quiet_hours_end") or "07:00").strip()
+    try:
+        start_t = datetime.strptime(start_str, "%H:%M").time()
+        end_t = datetime.strptime(end_str, "%H:%M").time()
+    except (ValueError, TypeError):
+        return False
+    now = datetime.now().time()
+    if start_t > end_t:
+        return now >= start_t or now < end_t
+    return start_t <= now < end_t
 
 
 def _get_last_thinking_summary(user_scope_id: Optional[str], max_chars: int = 2000) -> str:
@@ -1274,9 +1291,13 @@ def thinking_loop_iteration() -> None:
     """
     One iteration of the thinking mode loop: for each idle user, maybe start a thinking run.
     Call this periodically (e.g. every thinking_check_interval_seconds).
+    When quiet hours are enabled, no run is started during that time window (e.g. 23:00–07:00).
     """
     from vaf.core.config import Config
     if not Config.get("thinking_enabled", True):
+        return
+    if is_in_quiet_hours():
+        logger.debug("Thinking mode skipped: quiet hours")
         return
     idle_min = float(Config.get("thinking_idle_minutes", 10) or 10)
     idle_users = get_idle_user_scope_ids(idle_min)

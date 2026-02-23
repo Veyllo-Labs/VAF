@@ -461,18 +461,32 @@ def update_message_answered(
     answered_at: Optional[str] = None,
     user_scope_id: Optional[str] = None,
 ) -> bool:
-    """Set answered_at (ISO timestamp) when the agent has processed/answered this mail. Returns True if updated."""
+    """Set answered_at (ISO timestamp) when the agent has processed/answered this mail. Returns True if updated.
+    Robustness: tries to match message_id with and without angle brackets."""
     init_store(username, user_scope_id)
     user = _user_for_query(username, user_scope_id)
     ts = (answered_at or "").strip() or datetime.now(timezone.utc).isoformat()
     conn = _get_conn(username, user_scope_id)
+    
+    # Normalize ID: strip brackets for base comparison
+    mid_raw = message_id.strip()
+    mid_no_brackets = mid_raw.lstrip("<").rstrip(">")
+    mid_with_brackets = f"<{mid_no_brackets}>"
+    
+    ids_to_try = [mid_raw, mid_no_brackets, mid_with_brackets]
+    # Remove duplicates while preserving order
+    ids_to_try = list(dict.fromkeys(ids_to_try))
+
     try:
-        cur = conn.execute(
-            "UPDATE email_messages SET answered_at = ? WHERE username = ? AND account_id = ? AND folder = ? AND message_id = ?",
-            (ts, user, account_id, folder or "INBOX", message_id),
-        )
-        conn.commit()
-        return cur.rowcount > 0
+        for try_id in ids_to_try:
+            cur = conn.execute(
+                "UPDATE email_messages SET answered_at = ? WHERE username = ? AND account_id = ? AND folder = ? AND message_id = ?",
+                (ts, user, account_id, folder or "INBOX", try_id),
+            )
+            if cur.rowcount > 0:
+                conn.commit()
+                return True
+        return False
     finally:
         conn.close()
 

@@ -337,29 +337,11 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
     Returns None if credentials missing, invalid, or refresh fails.
     Optional username/user_scope_id for multi-user credential scope.
     """
-    # Fallback logic for credential lookup (aligned with email_transport Candidates)
-    # This allows tools to find tokens even when the chat scope (JWT/WebSocket) differs from the Dashboard scope.
+    # Use the robust lookup from credential_store which handles all candidates
+    # (primary scope, legacy scope, admin fallback, provider name variants)
     creds = get_email_credentials(account_id, provider, username, user_scope_id=user_scope_id)
-    effective_scope = user_scope_id
 
     if not (creds and creds.get("type") == "oauth"):
-        # Try legacy scope (None)
-        creds = get_email_credentials(account_id, provider, username, user_scope_id=None)
-        if creds and creds.get("type") == "oauth":
-            effective_scope = None
-
-    if not (creds and creds.get("type") == "oauth"):
-        # Try single scope with accounts if only one exists
-        by_scope = Config.get("email_config_by_scope") or {}
-        if isinstance(by_scope, dict):
-            scopes_with_accounts = [sid for sid, ec in by_scope.items() if isinstance(ec, dict) and (ec.get("accounts") or [])]
-            if len(scopes_with_accounts) == 1:
-                try_scope = str(scopes_with_accounts[0]).strip()
-                creds = get_email_credentials(account_id, provider, username, user_scope_id=try_scope)
-                if creds and creds.get("type") == "oauth":
-                    effective_scope = try_scope
-
-    if not creds or creds.get("type") != "oauth":
         append_domain_log_always("backend", f"OAUTH_ERROR credentials_missing account={account_id} provider={provider} scope={user_scope_id}")
         return None
 
@@ -403,11 +385,19 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
             return access
         expires_in = data.get("expires_in")
         new_expires_at = time.time() + int(expires_in) if expires_in else None
-        # Save refreshed token back to the EFFECTIVE scope (where it was found)
-        set_email_oauth_tokens(account_id, provider, new_access, refresh, new_expires_at, username, user_scope_id=effective_scope)
+        
+        # Determine best scope for saving back the refreshed token
+        save_scope = user_scope_id
+        # If we found it in a fallback scope, we should probably keep it there?
+        # For local admin setups, saving to 'None' (legacy) is safest to avoid fragmentation.
+        if not user_scope_id or str(user_scope_id).strip() == str(Config.get("local_admin_scope_id")).strip():
+            save_scope = None
+
+        set_email_oauth_tokens(account_id, provider, new_access, refresh, new_expires_at, username, user_scope_id=save_scope)
         append_domain_log_always("backend", f"OAUTH_REFRESH_SUCCESS account={account_id}")
         return new_access
     except Exception as e:
         logger.warning("Token refresh error for %s: %s", provider, e)
         append_domain_log_always("backend", f"OAUTH_REFRESH_EXCEPTION account={account_id} error={e}")
         return access
+

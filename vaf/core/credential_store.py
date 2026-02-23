@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
+from vaf.core.log_helper import append_domain_log_always
 
 logger = logging.getLogger("vaf.core.credential_store")
 
@@ -171,15 +172,20 @@ def get_email_credentials(
     for p in providers_to_try:
         keys_to_try.append(_credential_key(account_id, p, u, user_scope_id=s))
         
-        # Fallback for legacy 'admin' username string in key
-        if u is None: # Current user is local admin
-            safe_id = (account_id or "").strip().lower().replace(" ", "_")
-            legacy_admin_key = f"email:{p}:admin:{safe_id}"
-            if legacy_admin_key not in keys_to_try:
-                keys_to_try.append(legacy_admin_key)
+        # Legacy 'admin' fallback: always try this in local mode to find orphaned credentials
+        # (Useful when UUIDs shift or for legacy migrations)
+        safe_id = (account_id or "").strip().lower().replace(" ", "_")
+        legacy_admin_key = f"email:{p}:admin:{safe_id}"
+        if legacy_admin_key not in keys_to_try:
+            keys_to_try.append(legacy_admin_key)
+        
+        # Also try truly legacy (unscoped) key
+        unscoped_key = f"email:{p}:{safe_id}"
+        if unscoped_key not in keys_to_try:
+            keys_to_try.append(unscoped_key)
 
     # Log candidates for debugging
-    append_domain_log_always("backend", f"CRED_LOOKUP account={account_id} candidates={','.join(keys_to_try)}")
+    # append_domain_log_always("backend", f"CRED_LOOKUP account={account_id} candidates={','.join(keys_to_try)}")
 
     if _keyring_available():
         import keyring

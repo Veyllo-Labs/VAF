@@ -312,7 +312,7 @@ def list_events(
     max_results: int = 100,
 ) -> List[Dict[str, Any]]:
     """List events in the given time range. Returns list of normalized event dicts (id, summary, start, end, htmlLink/webLink)."""
-    token = get_valid_access_token(account_id, provider, username, user_scope_id=user_scope_id)
+    token = get_valid_access_token(account_id, provider, username=username, user_scope_id=user_scope_id)
     if not token:
         return []
     prov = provider.strip().lower()
@@ -365,7 +365,7 @@ def create_event(
     reminder_minutes: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Create a calendar event. Returns normalized event dict or None on failure."""
-    token = get_valid_access_token(account_id, provider, username, user_scope_id=user_scope_id)
+    token = get_valid_access_token(account_id, provider, username=username, user_scope_id=user_scope_id)
     if not token:
         return None
     prov = provider.strip().lower()
@@ -392,7 +392,7 @@ def update_event(
     username: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Update a calendar event. Returns normalized event dict or None on failure."""
-    token = get_valid_access_token(account_id, provider, username, user_scope_id=user_scope_id)
+    token = get_valid_access_token(account_id, provider, username=username, user_scope_id=user_scope_id)
     if not token:
         return None
     prov = provider.strip().lower()
@@ -415,7 +415,7 @@ def delete_event(
     username: Optional[str] = None,
 ) -> bool:
     """Delete a calendar event. Returns True if deleted or already gone."""
-    token = get_valid_access_token(account_id, provider, username, user_scope_id=user_scope_id)
+    token = get_valid_access_token(account_id, provider, username=username, user_scope_id=user_scope_id)
     if not token:
         return False
     prov = provider.strip().lower()

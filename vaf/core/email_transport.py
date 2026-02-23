@@ -931,6 +931,7 @@ def get_message_body_plain(
     """
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
+        append_domain_log_always("backend", f"GET_BODY_ERROR account_not_found account={account_id}")
         return None
     provider = (acc.get("provider") or "imap").lower()
     result: Optional[str] = None

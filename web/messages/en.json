@@ -51,6 +51,16 @@
     "aboutAutomation": "About Automation",
     "notifications": "Notifications"
   },
+  "notifications": {
+    "title": "Notifications",
+    "view": "View",
+    "close": "Close",
+    "statusSuccess": "Success",
+    "statusSkipped": "Skipped",
+    "statusError": "Error",
+    "empty": "No notifications.",
+    "count": "{count} notifications"
+  },
   "common": {
     "save": "Save",
     "cancel": "Cancel",

@@ -189,6 +189,20 @@ class SendWhatsAppTool(BaseTool):
                 except Exception:
                     pass
 
+        try:
+            from vaf.core.user_notifications import append_notification
+            preview = (out[:100] + "…") if len(out) > 100 else out
+            append_notification(
+                user_scope_id,
+                kind="channel_reply",
+                title="Message sent via WhatsApp",
+                status="success",
+                summary=preview,
+                channel="WhatsApp",
+            )
+        except Exception:
+            pass
+
         return result
 
     def _synthesize_voice(self, text: str, lang: str):

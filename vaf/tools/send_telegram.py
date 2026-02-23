@@ -132,6 +132,20 @@ class SendTelegramTool(BaseTool):
         except Exception:
             pass  # Do not fail the tool if session append fails
 
+        try:
+            from vaf.core.user_notifications import append_notification
+            preview = (text_to_send[:100] + "…") if len(text_to_send) > 100 else text_to_send
+            append_notification(
+                user_scope_id,
+                kind="channel_reply",
+                title="Message sent via Telegram",
+                status="success",
+                summary=preview,
+                channel="Telegram",
+            )
+        except Exception:
+            pass
+
         if voice_lang:
             return "Voice message sent to the user via Telegram."
         if file_path:

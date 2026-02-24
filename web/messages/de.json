@@ -291,7 +291,29 @@
       "edit": "Bearbeiten",
       "editSlotTooltip": "Bearbeiten: {name}",
       "confirmDelete": "Diese Automatisierung wirklich löschen?",
-      "delete": "Löschen"
+      "delete": "Löschen",
+      "createPopup": {
+        "title": "Automatisierung anlegen",
+        "subtitle": "Agent zu einer festen Zeit ausführen.",
+        "frequencyLabel": "Wiederholung",
+        "frequencyOnce": "Einmal",
+        "frequencyDaily": "Täglich",
+        "frequencyWeekly": "Wöchentlich",
+        "frequencyMonthly": "Monatlich",
+        "frequencyHourly": "Stündlich",
+        "weekdayLabel": "Wochentag",
+        "timeLabel": "Uhrzeit",
+        "promptLabel": "Aufforderung",
+        "promptPlaceholder": "Was soll der Agent tun?",
+        "nameLabel": "Name (optional)",
+        "namePlaceholder": "z. B. Morgen-Briefing",
+        "errorRequired": "Bitte eine Aufforderung eingeben.",
+        "errorServer": "Fehler beim Speichern. Bitte erneut versuchen.",
+        "cancel": "Abbrechen",
+        "creating": "Wird erstellt…",
+        "save": "Speichern",
+        "create": "Anlegen"
+      }
     },
     "about": {
       "title": "Über VAF (Veyllo Agentic Framework)",

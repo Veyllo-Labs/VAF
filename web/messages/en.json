@@ -291,7 +291,29 @@
       "edit": "Edit",
       "editSlotTooltip": "Edit {name}",
       "confirmDelete": "Delete this automation?",
-      "delete": "Delete"
+      "delete": "Delete",
+      "createPopup": {
+        "title": "Create automation",
+        "subtitle": "Run the agent at a set time.",
+        "frequencyLabel": "Frequency",
+        "frequencyOnce": "Once",
+        "frequencyDaily": "Daily",
+        "frequencyWeekly": "Weekly",
+        "frequencyMonthly": "Monthly",
+        "frequencyHourly": "Hourly",
+        "weekdayLabel": "Weekday",
+        "timeLabel": "Time",
+        "promptLabel": "Prompt",
+        "promptPlaceholder": "What should the agent do?",
+        "nameLabel": "Name (optional)",
+        "namePlaceholder": "e.g. Morning briefing",
+        "errorRequired": "Please enter a prompt.",
+        "errorServer": "Failed to save. Please try again.",
+        "cancel": "Cancel",
+        "creating": "Creating…",
+        "save": "Save",
+        "create": "Create"
+      }
     },
     "about": {
       "title": "About VAF (Veyllo Agentic Framework)",

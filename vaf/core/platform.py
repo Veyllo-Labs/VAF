@@ -812,6 +812,39 @@ class Platform:
         except OSError:
             return (80, 24)  # Default fallback
 
+    @staticmethod
+    def is_process_running(pid: int) -> bool:
+        """
+        Check if a process with the given PID is still running.
+        Cross-platform implementation.
+        """
+        if pid <= 0:
+            return False
+        
+        if Platform.is_windows():
+            # Windows implementation
+            try:
+                # tasklist is slow, but available on all Windows versions
+                # kernel32.OpenProcess is faster but requires ctypes
+                import subprocess
+                output = subprocess.check_output(
+                    f'tasklist /fi "PID eq {pid}" /nh',
+                    shell=True,
+                    stderr=subprocess.STDOUT
+                ).decode('utf-8', errors='ignore')
+                return str(pid) in output
+            except Exception:
+                return True # Assume running on error
+        else:
+            # Unix implementation (macOS/Linux)
+            try:
+                os.kill(pid, 0)
+                return True
+            except OSError:
+                return False
+            except Exception:
+                return True
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONVENIENCE FUNCTIONS

@@ -83,6 +83,52 @@ VAF tracks active sessions to determine when to stop the server:
 - On exit, checks if other sessions are still active
 - Only stops server when the last session exits
 
+## Singleton Task Locking
+
+To prevent race conditions, redundant API costs, and data corruption, VAF implements a **Singleton Execution Pattern** for background tasks (Automations and Thinking Mode).
+
+### 1. **Lock Mechanism (LockManager)**
+
+VAF uses file-based locks stored in `.vaf/locks/`. Each task is identified by a unique `lock_id`.
+
+- **Automations**: `automation_<ID>.lock`
+- **Thinking Mode**: `thinking_<USER_SCOPE>.lock`
+
+### 2. **PID-Check (Alive Verification)**
+
+Unlike simple time-based locks, VAF verifies if the process that acquired the lock is still actually running.
+
+**Lock File Format (`.json`):**
+```json
+{
+  "pid": 12345,
+  "acquired_at": "2026-02-24 11:40:00",
+  "lock_id": "automation_abc123"
+}
+```
+
+**Validation Logic:**
+1. If lock file exists:
+   - Read PID from file.
+   - Check if process with PID is alive (Platform-specific: `tasklist` on Windows, `os.kill(0)` on Unix).
+   - **If process is dead**: Override lock immediately (Orphaned lock protection).
+   - **If process is alive**: Check if lock is older than timeout (e.g., 2 hours). Override if stale.
+2. If no active/valid lock: Acquire new lock and write current PID.
+
+### 3. **Logging & Diagnostics**
+
+The system logs lock events to `backend.log`:
+
+- **Blocked**: `[LOCK] Automation 'Daily News' (abc123) is already running. Skipping.`
+- **Override (Crash Recovery)**: `[LOCK] Overriding orphaned lock (Process 12345 dead): automation_abc123`
+- **Override (Stale)**: `[LOCK] Overriding stale lock: automation_abc123 (age: 2.5h)`
+
+### 4. **Loop Protection (API Safety)**
+
+In addition to process-level locking, VAF implements logic-level loop protection to prevent runaway API costs from infinite model-tool cycles. 
+
+**For details, see [Loop protection in Thinking-Mode.md](Thinking-Mode.md#loop-protection-api-cost-safety).**
+
 ## Process Lifecycle
 
 ```

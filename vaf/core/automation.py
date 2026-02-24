@@ -713,9 +713,18 @@ vaf automation delete <id>   # Delete task
         """
         from vaf.cli.ui import UI
         from vaf.core.platform import Platform
+        from vaf.core.lock_manager import LockManager
         import sys
         import subprocess
         
+        # 🔒 SINGLETON PROTECTION: Prevent same automation from running twice
+        lock_id = f"automation_{task.id}"
+        if not LockManager.acquire(lock_id):
+            msg = f"[LOCK] Automation '{task.name}' ({task.id}) is already running. Skipping."
+            from vaf.core.log_helper import append_domain_log_always
+            append_domain_log_always("backend", msg)
+            return msg
+
         # Speichere aktuelle Zeit als letzte Ausführung (für Cooldown beim Erstellen neuer Automatisierungen)
         # WICHTIG: Cooldown wird nur beim ERSTELLEN geprüft, nicht bei geplanten Ausführungen!
         self._save_last_run_time()
@@ -729,6 +738,9 @@ vaf automation delete <id>   # Delete task
             
             # Try to open in new terminal
             title = f"VAF Automation: {task.name}"
+            # Release lock before spawning new terminal, because the NEW process will acquire its own lock!
+            LockManager.release(lock_id)
+            
             if Platform.open_new_terminal(vaf_cmd, title=title):
                 # Silent - don't show notification in main terminal
                 return f"Automation '{task.name}' started in new terminal window"
@@ -750,6 +762,8 @@ vaf automation delete <id>   # Delete task
         result = ""
         
         try:
+            # ... (Rest of the method logic) ...
+
             # Set environment variables for non-interactive automation mode
             # This prevents user prompts during automation execution
             import os
@@ -1130,6 +1144,13 @@ vaf automation delete <id>   # Delete task
             result = f"Error: {e}"
             UI.error(f"Automation failed: {e}")
         finally:
+            # 🔓 RELEASE LOCK
+            try:
+                from vaf.core.lock_manager import LockManager
+                LockManager.release(f"automation_{task.id}")
+            except Exception:
+                pass
+
             # Clean up environment variables
             import os
             os.environ.pop("VAF_IN_AUTOMATION", None)
@@ -1151,9 +1172,8 @@ vaf automation delete <id>   # Delete task
         except Exception:
             pass
 
-        # Always exit cleanly after automation completes
-        import sys
-        sys.exit(0)
+        # Always return cleanly
+        return result
     
     def start_scheduler(self):
         """Start the background scheduler."""

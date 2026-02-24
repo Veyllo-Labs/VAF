@@ -3315,12 +3315,15 @@ class Agent:
                 return None
             
             # 🔒 INTENT LOCK (Workflow): Save the fresh user intent to persistence
+            # CRITICAL: Skip intent update if running in thinking mode (background).
             if hasattr(self, 'main_persistence') and self.main_persistence:
-                try:
-                    self.main_persistence.update_user_intent(user_input)
-                    self.main_persistence.reset_validation_retry_count()
-                except Exception:
-                    pass
+                _is_thinking_mode = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                if not _is_thinking_mode:
+                    try:
+                        self.main_persistence.update_user_intent(user_input)
+                        self.main_persistence.reset_validation_retry_count()
+                    except Exception:
+                        pass
 
             # Get the matched template
             from vaf.workflows.templates import get_template
@@ -4407,17 +4410,23 @@ class Agent:
                     UI.event("Onboarding", f"First-time check failed: {e}", style="dim")
             
             # 🔒 INTENT LOCK: Save the fresh user intent to persistence
+            # CRITICAL: Skip intent update if running in thinking mode (background).
+            # This prevents technical thinking prompts from overwriting the actual user intent.
             if hasattr(self, 'main_persistence') and self.main_persistence:
-                try:
-                    # Update the "North Star" for the session
-                    self.main_persistence.update_user_intent(user_input)
-                    self.main_persistence.reset_validation_retry_count()
-                except Exception:
-                    pass
+                _is_thinking_mode = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                if not _is_thinking_mode:
+                    try:
+                        # Update the "North Star" for the session
+                        self.main_persistence.update_user_intent(user_input)
+                        self.main_persistence.reset_validation_retry_count()
+                    except Exception:
+                        pass
             
             # LIVE CONTEXT UPDATE: Ensure intent is fresh for the router immediately
             if hasattr(self, 'context_manager'):
-                self.context_manager.update_intent(user_input)
+                _is_thinking_mode = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                if not _is_thinking_mode:
+                    self.context_manager.update_intent(user_input)
                 self.context_manager.update_state({"role": "user", "content": user_input})
         
         # 0.5 Context Management - AFTER adding user input and results
@@ -4589,6 +4598,11 @@ class Agent:
         clean_content = ""
         streaming_tools = {}
         tool_calls_detected = []
+        
+        # Tool Loop Protection: Max number of tool-result cycles in one interaction
+        # Normal interactions usually need 1-3 tool turns.
+        tool_turn_count = 0
+        MAX_TOOL_TURNS_PER_STEP = 15
         
         while empty_retry_count < MAX_EMPTY_RETRIES:
             # 1. Prepare Request
@@ -5518,6 +5532,10 @@ class Agent:
                                                 f"DO NOT execute it again. Analyze the result and provide your answer."
                                             )
                                         })
+                                        # LOOP PROTECTION: Repeatedly calling same tool counts as an empty attempt
+                                        # to ensure it eventually hits the fallback/stop logic.
+                                        empty_retry_count += 1
+                                        append_domain_log("backend", f"[LOOP_PROTECTION] blocked redundant tool call '{tool_name}' - retry_count now {empty_retry_count}")
                                         continue
                                 except Exception as e:
                                     # If check fails, assume it's safe to proceed
@@ -5608,6 +5626,31 @@ class Agent:
 
                 for tc in tool_calls_detected:
                     function_name = tc['function']['name']
+                    
+                    # ═══════════════════════════════════════════════════════════════
+                    # THINKING DONE PROTECTION: Hardcoded break
+                    # ═══════════════════════════════════════════════════════════════
+                    if function_name == "thinking_done":
+                        raw_args = tc['function']['arguments']
+                        try:
+                            arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                        except: arguments = {}
+                        summary = arguments.get("summary", "Done.").strip() or "Done."
+                        
+                        UI.event("System", "Thinking Mode signal: Done. Breaking loop.", style="success")
+                        append_domain_log("backend", f"[LOOP_PROTECTION] thinking_done detected - breaking loop with summary: {summary[:50]}")
+                        
+                        # Add tool result to history
+                        self.history.append({
+                            "role": "tool",
+                            "tool_call_id": tc['id'],
+                            "name": function_name,
+                            "content": summary
+                        })
+                        # Add final assistant message so outer loop sees it
+                        self.history.append({"role": "assistant", "content": summary})
+                        return summary
+
                     raw_args = tc['function']['arguments']
                     try:
                         arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
@@ -5878,7 +5921,18 @@ class Agent:
                     # Compress if we're approaching the limit
                     self.manage_context()
                 
-                UI.event("Debug", "Summarizing intel...", style="dim")
+                # ═══════════════════════════════════════════════════════════════
+                # LOOP PROTECTION: Turn limit check
+                # ═══════════════════════════════════════════════════════════════
+                tool_turn_count += 1
+                if tool_turn_count >= MAX_TOOL_TURNS_PER_STEP:
+                    msg = f"⚠️ [LOOP_PROTECTION] Exceeded {MAX_TOOL_TURNS_PER_STEP} tool turns. Stopping recursion."
+                    UI.event("Emergency", msg, style="bold red")
+                    append_domain_log("backend", msg)
+                    self.history.append({"role": "assistant", "content": msg})
+                    return msg
+
+                UI.event("Debug", f"Summarizing intel (turn {tool_turn_count}/{MAX_TOOL_TURNS_PER_STEP})...", style="dim")
                 continue
             
             # 2. Handle Empty / Think-Only Responses

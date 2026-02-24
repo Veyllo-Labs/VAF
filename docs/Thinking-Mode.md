@@ -11,6 +11,7 @@ Thinking mode runs the main agent in the background while the user is idle. It a
 - **Max 1 Message & History Sync:** The agent may send at most one message per run. **New:** Any question asked by the Thinking Agent is automatically persisted to the user's main chat history. This ensures that when the user replies, the normal agent has the full context of what was asked.
 - **Per user:** Idle is tracked per logical user (handling all UUID/username aliases). One run at a time per user (serialized by lock). Cooldown between runs: `thinking_cooldown_minutes` (default 60 min).
 - **Safety Abort:** If the user becomes active on any channel during a run, the thinking process is immediately aborted to prevent dual-agent responses.
+- **Locking:** Uses a global file-based lock system with PID verification to prevent parallel runs. See [Singleton Task Locking in PROCESS_MANAGEMENT.md](PROCESS_MANAGEMENT.md#singleton-task-locking).
 - **Context:** The agent loads the user's full chat session — it has the same context as the normal agent.
 - **Output:** Runs are logged to `logs/vaf_denk.log` (human-readable) and to JSON run logs. Messages sent to the user are also mirrored in the Web UI / main chat history.
 
@@ -34,6 +35,19 @@ Thinking mode runs the main agent in the background while the user is idle. It a
    - **Real-time Abort Check:** Before each turn, the agent checks if the user's logical ID has seen new activity. If so, it breaks the loop immediately.
 6. **After run:** Logs are saved and waiting states are updated.
 7. **Unlock:** Lock is released; cooldown recorded.
+
+---
+
+## Loop protection (API cost safety)
+
+To prevent runaway API usage (e.g. the model repeatedly calling `thinking_done` or the same tool with the same arguments), the following safeguards apply:
+
+- **`thinking_done` hard break:** When the model calls `thinking_done`, the agent’s internal tool loop exits immediately. No further API request is made for that turn; the tool result is written to history and the run ends. Implemented in `vaf/core/agent.py` (chat_step tool loop).
+- **Max tool turns per step:** A single user turn (or one thinking-mode turn) is limited to **15** tool-result cycles. If the model keeps calling tools without producing a final answer, the run stops after the 15th cycle and a clear message is returned. Enforced in the same chat_step tool loop in `vaf/core/agent.py`.
+- **Redundant tool call block:** If the model calls the same tool again with the same arguments (already executed in context), that call is blocked and the internal retry counter is incremented so the run can hit the empty/fallback stop logic sooner.
+- **Logging:** When any of these triggers, `[LOOP_PROTECTION]` is written to `logs/backend_YYYY-MM-DD.log` (and visible in run summaries). Examples: `thinking_done detected - breaking loop`, `Exceeded 15 tool turns`, `blocked redundant tool call`.
+
+These apply to both normal chat and thinking mode. Run logs in `logs/vaf_denk_YYYY-MM-DD.log` remain the main place to inspect thinking runs.
 
 ---
 
@@ -157,6 +171,7 @@ Debug log: `logs/vaf_denk.log` (human-readable, all users in one file)
 | `thinking_done` tool | `vaf/tools/thinking_done.py` | `ThinkingDoneTool` |
 | `thinking_note_add` tool | `vaf/tools/thinking_note_add.py` | `ThinkingNoteAddTool` |
 | Tool loading | `vaf/core/agent.py` | `_load_tools()` — thinking-mode-only tools gated by `VAF_THINKING_MODE=1` |
+| Loop protection | `vaf/core/agent.py` | `chat_step()` — `thinking_done` hard break, max 15 tool turns, redundant call block; see [Loop protection (API cost safety)](#loop-protection-api-cost-safety) |
 | Debug log | `vaf/core/log_helper.py` | `log_thinking_run()` → `logs/vaf_denk_YYYY-MM-DD.log` |
 | Session context | `vaf/core/agent.py` | `load_session_context()` |
 | GC | `vaf/core/garbage_collector.py` | `_clean_old_thinking_sessions()`; dated log files deleted by date in filename (older than gc_max_age_hours) |

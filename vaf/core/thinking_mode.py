@@ -1195,11 +1195,12 @@ def _run_thinking_for_user(
                         pass
 
                 if _history_has_thinking_done(getattr(agent, "history", [])):
+                    logger.info("Thinking: breaking loop (thinking_done detected)")
                     break
 
                 # SAFETY 1: Hard limit — force-break after turn 4 (5 turns total)
                 if turn >= 4:
-                    logger.warning("Thinking: force-break after %d turns (thinking_done not called)", turn + 1)
+                    logger.warning("Thinking: [SAFETY_LIMIT] force-break after %d turns (thinking_done not called)", turn + 1)
                     break
 
                 # SAFETY 2: If after turn 2 agent hasn't made any tool calls at all, abort
@@ -1209,7 +1210,7 @@ def _run_thinking_for_user(
                         for m in (getattr(agent, "history", []) or [])
                     )
                     if not has_any_tool_call:
-                        logger.warning("Thinking: no tool calls after %d turns, aborting", turn + 1)
+                        logger.warning("Thinking: [SAFETY_LIMIT] no tool calls after %d turns, aborting", turn + 1)
                         break
 
                 # SAFETY 3: Abort if user became active during this run (e.g. opened WebUI).
@@ -1304,6 +1305,14 @@ def _run_thinking_for_user(
             )
         except Exception as notif_err:
             logger.debug("Could not append thinking notification: %s", notif_err)
+        
+        # 🔓 RELEASE GLOBAL LOCK
+        try:
+            from vaf.core.lock_manager import LockManager
+            LockManager.release(f"thinking_{_key(user_scope_id)}")
+        except Exception:
+            pass
+
         release_lock(user_scope_id)
 
 
@@ -1313,9 +1322,19 @@ def maybe_start_thinking_for_user(user_scope_id: Optional[str]) -> bool:
     Returns True if a run was started.
     """
     from vaf.core.config import Config
+    from vaf.core.lock_manager import LockManager
     idle_min = float(Config.get("thinking_idle_minutes", 10) or 10)
     buffer_min = int(Config.get("thinking_automation_buffer_minutes", 10) or 10)
     max_duration = int(Config.get("thinking_max_duration_minutes", 30) or 30)
+
+    # 🔒 GLOBAL LOCK PROTECTION
+    lock_id = f"thinking_{_key(user_scope_id)}"
+    if LockManager.is_locked(lock_id, timeout_hours=max_duration/60.0):
+        msg = f"[LOCK] Thinking mode for user '{_key(user_scope_id)}' is already running. Skipping."
+        from vaf.core.log_helper import append_domain_log_always
+        append_domain_log_always("backend", msg)
+        logger.debug(msg)
+        return False
 
     # Cooldown: skip if a thinking run completed recently
     cooldown_min = int(Config.get("thinking_cooldown_minutes", 60) or 60)
@@ -1327,10 +1346,18 @@ def maybe_start_thinking_for_user(user_scope_id: Optional[str]) -> bool:
     if should_skip_for_automation(user_scope_id, buffer_min):
         logger.debug("Thinking skipped for user: next automation within %d min", buffer_min)
         return False
+    
+    # Acquire internal lock
     run_id = acquire_lock(user_scope_id, max_duration_minutes=max_duration)
     if run_id is None:
-        logger.debug("Thinking already running for user")
+        logger.debug("Thinking already running for user (internal lock)")
         return False
+    
+    # Acquire global lock
+    if not LockManager.acquire(lock_id, timeout_hours=max_duration/60.0):
+        release_lock(user_scope_id)
+        return False
+
     started_at_ts = time.time()
     thread = threading.Thread(
         target=_run_thinking_for_user,

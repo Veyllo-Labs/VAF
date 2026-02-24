@@ -912,7 +912,7 @@ vaf automation delete <id>   # Delete task
                             kind="automation",
                             title=task.name,
                             status="success",
-                            summary=(result[:500] + "…") if result and len(result) > 500 else (result or "Completed"),
+                            summary=result or "Completed",
                             task_name=task.name,
                         )
                     except Exception:
@@ -1160,13 +1160,12 @@ vaf automation delete <id>   # Delete task
         try:
             from vaf.core.user_notifications import append_notification
             status = "error" if (result or "").strip().startswith("Error:") else "success"
-            summary = (result[:500] + "…") if result and len(result) > 500 else (result or "Completed")
             append_notification(
                 task.user_scope_id,
                 kind="automation",
                 title=task.name,
                 status=status,
-                summary=summary,
+                summary=result or "Completed",
                 task_name=task.name,
             )
         except Exception:

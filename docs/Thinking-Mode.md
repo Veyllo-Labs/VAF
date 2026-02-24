@@ -18,7 +18,43 @@ Thinking mode runs the main agent in the background while the user is idle. It a
 ---
 
 ## Configuration
-... [Table remains the same] ...
+
+Key options (in `config.json` or via Web UI **Settings → Advanced → Thinker**):
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `thinking_enabled` | `true` | Enable thinking mode when idle |
+| `thinking_idle_minutes` | `10` | Start after this many minutes without activity |
+| `thinking_check_interval_seconds` | `60` | How often to check for idle users |
+| `thinking_cooldown_minutes` | `60` | Minutes to wait after a run before starting another |
+| `thinking_max_duration_minutes` | `30` | Max duration per run (then release lock) |
+| `thinking_wait_nudge_minutes` | `3` | If user does not reply: send nudge after this many minutes |
+| `thinking_wait_skip_minutes` | `10` | If still no reply: clear waiting state after this many minutes |
+| `thinking_nudge_activity_minutes` | `5` | Do not nudge if user was active on any channel in the last N minutes |
+| `thinking_provider` | `"inherit"` | AI provider for thinking mode (`inherit` = same as main chat, or `openai`, `anthropic`, `deepseek`, `local`) |
+| `thinking_model` | `null` | Specific model for thinking mode (empty = use provider default) |
+| `thinking_quiet_hours_enabled` | `false` | Do not run during quiet hours (local time) |
+| `thinking_quiet_hours_start` / `_end` | `"23:00"` / `"07:00"` | Quiet period (HH:MM, 24h); overnight span supported |
+
+**Cost efficiency:** Set `thinking_provider` and optionally `thinking_model` to use a cheaper model for background runs (e.g. a small local model or a low-cost API tier) while keeping the main chat on a more capable model. Configurable in the Web UI under **Settings → Advanced → Thinker (background)**.
+
+---
+
+## Interruption persistence
+
+When a run is aborted because the user became active (e.g. sent a message), the process does not simply stop. A short summary of the current run state (last tools used, last assistant message) is saved via `thinking_note_add` (e.g. *"Run unterbrochen (Turn 2). Letzte Tools: list_automations. Letzter Gedanke: …"*). The next run receives this note so the agent can continue from context instead of starting from scratch.
+
+---
+
+## Intel gathering (pre-computation)
+
+The thinking-mode prompt allows the agent to perform **at most one** targeted web search per run when the conversation history shows a clear topic (e.g. an important package or event). The agent may call `web_search` and save the result with `thinking_note_add` so that an answer is ready before the user asks again. This is constrained to one search per run to limit cost and noise.
+
+---
+
+## Proactive profile evolution (`save_thinking_suggestion`)
+
+The agent can call **`save_thinking_suggestion`** (thinking-mode only) to propose updates to the user profile (e.g. *"User cares about package tracking"*). Suggestions are stored per user and presented in Settings for review; the agent does not overwrite identity or preferences without the user approving. See `vaf/tools/thinking_suggestion.py` and `vaf/core/thinking_suggestions.py`.
 
 ---
 
@@ -59,6 +95,7 @@ The agent has **the same tools as the normal agent**, with these exceptions:
 |------|--------|--------|
 | `thinking_done` | **Only in Thinking Mode** | Signals end of the run |
 | `thinking_note_add` | **Only in Thinking Mode** | Saves persistent notes for next run |
+| `save_thinking_suggestion` | **Only in Thinking Mode** | Proposes user-profile updates for review in Settings |
 | `memory_save` | ❌ Excluded | Thinking should read memory, not write to it |
 | `git_add_commit` / `git_status` / `git_log` | ❌ Excluded | VAF is the user's project, not the agent's |
 
@@ -95,11 +132,22 @@ The actual sent question text is captured from the `send_telegram` / `send_whats
 ## Waiting for user reply
 
 - When the agent sends a message during a run → `set_waiting_for_reply()` is called with the question text
-- **Nudge:** After `thinking_wait_nudge_minutes`, a short "Hey, bist du da?" is sent
+- **Nudge:** After `thinking_wait_nudge_minutes`, a short "Hey, bist du da?" is sent.
+  - **Inactivity Protection:** No nudge is sent if the user was active on ANY channel within the last `thinking_nudge_activity_minutes` (default 5 min).
 - **Skip:** After `thinking_wait_skip_minutes`, the waiting state is cleared
-- **User replies:** When the user next sends a message, `clear_waiting_for_reply(user_reply_text=...)` is called. The reply is:
-  - Injected as "User reply to your last question" in the next run's system prompt
-  - If it is a refusal: saved to the declined questions log
+- **User replies:** When the user next sends a message, `clear_waiting_for_reply(user_reply_text=...)` is called.
+
+### Automatic Cleanup ("Nudge Killer")
+
+To ensure the background agent doesn't keep waiting (and nudging) while the user is already interacting with the Main Agent, the "waiting for reply" state is cleared automatically:
+
+1. **Centralized Sync (`vaf/core/agent.py`):** In `chat_step()`, the state is cleared with the full `user_reply_text`. This covers all input channels (Web, CLI, Messenger). 
+   - **Context Injection:** If the user was being waited on, the Main Agent receives a context hint explaining which background question the user is likely responding to. This prevents "I'm not sure what you mean" replies to short answers like "Yes, why?".
+2. **Early Cleanup:** To avoid race conditions where a nudge might be triggered while a message is being processed, both the **Web Server** and **Headless Runner** attempt to clear the state as soon as a message is received.
+
+The reply is:
+- Injected as "User reply to your last question" in the next run's system prompt
+- If it is a refusal: saved to the declined questions log
 
 ---
 
@@ -151,6 +199,7 @@ Thinking mode output is **not shown in the Web UI chat list**. It is logged to:
 | `thinking_last_completed.json` | Per-user timestamp of last completed run (for cooldown) |
 | `thinking_declined_questions.json` | Per-user list of refused questions (auto-expire 30 days) |
 | `thinking_notes.db` | Per-user SQLite DB of persistent agent notes (auto-expire 30 days) |
+| `thinking_suggestions/` | Per-user directory for profile suggestions from `save_thinking_suggestion` (review in Settings) |
 | `last_interaction.json` | Last activity per user; used for idle detection |
 
 Run logs: `Platform.vaf_dir() / "thinking_mode_logs" / <scope_key> / <run_id>_<ts>.json`
@@ -170,6 +219,7 @@ Debug log: `logs/vaf_denk.log` (human-readable, all users in one file)
 | Persistent notes | `vaf/core/thinking_notes.py` | `add_note()`, `get_notes()`, `build_notes_prompt()` |
 | `thinking_done` tool | `vaf/tools/thinking_done.py` | `ThinkingDoneTool` |
 | `thinking_note_add` tool | `vaf/tools/thinking_note_add.py` | `ThinkingNoteAddTool` |
+| `save_thinking_suggestion` tool | `vaf/tools/thinking_suggestion.py` | Proposes profile updates; stored via `vaf/core/thinking_suggestions.py` |
 | Tool loading | `vaf/core/agent.py` | `_load_tools()` — thinking-mode-only tools gated by `VAF_THINKING_MODE=1` |
 | Loop protection | `vaf/core/agent.py` | `chat_step()` — `thinking_done` hard break, max 15 tool turns, redundant call block; see [Loop protection (API cost safety)](#loop-protection-api-cost-safety) |
 | Debug log | `vaf/core/log_helper.py` | `log_thinking_run()` → `logs/vaf_denk_YYYY-MM-DD.log` |

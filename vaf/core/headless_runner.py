@@ -821,23 +821,6 @@ def run_headless_agent():
                     except Exception:
                         agent._excluded_tools = {"replace_editor_selection"}
 
-                    # If the user is replying to a thinking-mode question, inject that question
-                    # as context so the main agent knows what the conversation is about.
-                    try:
-                        from vaf.core.thinking_mode import get_waiting_for_reply as _get_waiting
-                        _thinking_meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
-                        _thinking_scope = _thinking_meta.get("user_scope_id")
-                        _waiting = _get_waiting(_thinking_scope)
-                        if _waiting and (_waiting.get("question_text") or "").strip():
-                            _q_text = _waiting["question_text"].strip()
-                            effective_input = (
-                                f"[Context: You asked the user in a background thinking pass: \"{_q_text}\" — "
-                                f"the following is their reply.]\n\n"
-                                + effective_input
-                            )
-                    except Exception:
-                        pass
-
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
@@ -874,14 +857,6 @@ def run_headless_agent():
                             preview=(task.input_text or "")[:80],
                             voice=bool(meta.get("voice_lang")),
                         )
-                    except Exception:
-                        pass
-                    try:
-                        from vaf.core.thinking_mode import clear_waiting_for_reply, get_waiting_for_reply
-                        meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
-                        scope_id = meta.get("user_scope_id")
-                        reply_text = (task.input_text or "").strip() if get_waiting_for_reply(scope_id) else None
-                        clear_waiting_for_reply(scope_id, user_reply_text=reply_text)
                     except Exception:
                         pass
 

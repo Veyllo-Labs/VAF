@@ -503,8 +503,21 @@ def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
     elapsed_min = (now - question_ts) / 60.0
     nudge_min = float(Config.get("thinking_wait_nudge_minutes", 3) or 3)
     skip_min = float(Config.get("thinking_wait_skip_minutes", 10) or 10)
+    # If elapsed_min is very small (user just active), don't even think about nudging
     if elapsed_min < nudge_min:
         return "skip"
+    
+    # 🛡️ RECENT ACTIVITY PROTECTION: Don't nudge if user was active on ANY channel in last N mins
+    try:
+        from vaf.core.last_interaction import get_last_interaction
+        li = get_last_interaction(user_scope_id)
+        if li and li.get("ts"):
+            nudge_activity_min = float(Config.get("thinking_nudge_activity_minutes", 5) or 5)
+            if (time.time() - li["ts"]) < (nudge_activity_min * 60):
+                return "skip"
+    except Exception:
+        pass
+
     if elapsed_min >= skip_min:
         clear_waiting_for_reply(user_scope_id)
         return "allow_run"
@@ -865,10 +878,14 @@ Call these tools now:
 - `list_automation_notes` — notes to process?
 - `list_automations` — what exists? anything obviously missing?
 
-Also consider: user identity, long-term memory, conversation history, current date/time.
-
 ### Step 2: DECIDE (fast-exit rules)
 Apply these rules IN ORDER:
+
+**IF** you notice a new user preference or pattern:
+  → Call `save_thinking_suggestion` (category: `user_knowledge`) — DONE.
+
+**IF** there's a specific, recurring interest needing status (e.g. DHL):
+  → Call `web_search` (max 1), save as `thinking_note_add` — DONE.
 
 **IF** no open todos AND no actionable notes AND automations look fine:
   → Call `thinking_done` with summary "Nothing actionable." — DONE. Don't waste more turns.
@@ -899,6 +916,19 @@ Only send a message to the user if ALL of these are true:
 - The question is about something SPECIFIC (not generic)
 - You haven't asked this before (check declined questions + recent activity)
 - It genuinely helps the user (not just "filling" the thinking run)
+
+## INTEL GATHERING (Pre-Computation)
+If the conversation history shows a clear, specific, and recurring interest (e.g. a specific DHL package, a stock price, or an upcoming event), you are allowed to:
+1. Perform ONE (max 1) light research call using `web_search` to find current status.
+2. Save the result as a note using `thinking_note_add` (e.g. "DHL Update: Delivery delayed").
+3. DO NOT message the user about this unless it's critical or they asked to be notified. Just have the info ready for when they next ask.
+
+## PROACTIVE PROFILE EVOLUTION (Learning)
+If you notice new patterns in user behavior, preferences, or personal facts (e.g. "User always asks for news at 8am", "User is interested in X"):
+1. DO NOT update the user identity directly.
+2. Instead, call `save_thinking_suggestion` with category `user_knowledge`.
+3. Provide a clear suggestion text (e.g. "Update user profile: add preference for news at 8am").
+4. The user will review and approve these suggestions later.
 
 When you do send a message:
 - Use their language, keep it short (1-2 sentences)
@@ -1020,6 +1050,15 @@ def _run_thinking_for_user(
     os.environ["VAF_THINKING_MODE"] = "1"
     # Pass scope_key to thinking_note_add tool via env (tool reads VAF_THINKING_SCOPE_ID)
     os.environ["VAF_THINKING_SCOPE_ID"] = scope_key
+
+    # 🚀 COST EFFICIENCY: Use specific provider/model for thinking if configured
+    t_provider = (Config.get("thinking_provider") or "inherit").strip().lower()
+    t_model = Config.get("thinking_model")
+    if t_provider != "inherit":
+        os.environ["VAF_PROVIDER"] = t_provider
+    if t_model:
+        os.environ["VAF_MODEL_OVERRIDE"] = str(t_model)
+
     try:
         from vaf.core.agent import Agent
 
@@ -1072,8 +1111,18 @@ def _run_thinking_for_user(
 
         # Append thinking mode notice and last run summary (context so we don't repeat or re-ask)
         if agent.history and agent.history[0].get("role") == "system":
+            # Determine time since last interaction for temporal clarity
+            li = get_last_interaction(user_scope_id)
+            rel_time = ""
+            if li and li.get("ts"):
+                try:
+                    if hasattr(agent, "prompt_manager"):
+                        rel_time = f" (Letzte Nutzer-Nachricht war: {agent.prompt_manager._format_relative_time(li['ts'])})"
+                except Exception:
+                    pass
+
             notice = (
-                "\n\n## THINKING MODE (background pass)\n"
+                f"\n\n## THINKING MODE (background pass){rel_time}\n"
                 "You are running a background check while the user is idle. "
                 "Act > Ask. Max 1 message. Never reveal you're in thinking mode. "
                 "ALWAYS call thinking_done when finished — no exceptions. "
@@ -1232,14 +1281,43 @@ def _run_thinking_for_user(
                                 if k in my_aliases and isinstance(v, dict):
                                     newest_li_ts = max(newest_li_ts, float(v.get("ts", 0)))
                             
-                            if newest_li_ts > 0:
-                                secs_since = time.time() - newest_li_ts
-                                if secs_since < 60:  # User active in last 60 seconds
-                                    logger.info(
-                                        "Thinking: logical user became active (%ds ago), aborting run",
-                                        int(secs_since),
-                                    )
-                                    break
+                                                            if newest_li_ts > 0:
+                                                                secs_since = time.time() - newest_li_ts
+                                                                if secs_since < 60:  # User active in last 60 seconds
+                                                                    logger.info(
+                                                                        "Thinking: logical user became active (%ds ago), aborting run",
+                                                                        int(secs_since),
+                                                                    )
+                                                                    # 🧠 INTERRUPT PERSISTENCE (Strategy B):
+                                                                    # Save current state so we don't forget what we were doing
+                                                                    try:
+                                                                        from vaf.core.thinking_notes import add_note
+                                                                        history = getattr(agent, "history", [])
+                                                                        last_turns = history[-4:] if len(history) >= 4 else history
+                                                                        tools_called = []
+                                                                        last_msg = ""
+                                                                        for m in last_turns:
+                                                                            if m.get("role") == "assistant":
+                                                                                if m.get("tool_calls"):
+                                                                                    for tc in m["tool_calls"]:
+                                                                                        name = (tc.get("function") or {}).get("name") or tc.get("name") or "?"
+                                                                                        if name not in ("thinking_done", "thinking_note_add"):
+                                                                                            tools_called.append(name)
+                                                                                if m.get("content") and m["content"].strip() != "Thinking...":
+                                                                                    last_msg = m["content"].strip()[:100]
+                                                                        
+                                                                        summary = f"Run {run_id} unterbrochen (Turn {turn+1})."
+                                                                        if tools_called:
+                                                                            summary += f" Letzte Tools: {', '.join(list(set(tools_called))[:3])}."
+                                                                        if last_msg:
+                                                                            summary += f" Letzter Gedanke: \"{last_msg}...\""
+                                                                        
+                                                                        add_note(scope_key, summary)
+                                                                        logger.info("Thinking: Context saved to notes before abort.")
+                                                                    except Exception as _note_err:
+                                                                        logger.debug("Thinking: Could not save abort note: %s", _note_err)
+                                                                    break
+                            
                     except Exception as _abort_err:
                         logger.debug("Thinking abort check failed: %s", _abort_err)
 

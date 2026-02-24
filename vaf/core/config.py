@@ -118,6 +118,9 @@ class Config:
         "thinking_max_duration_minutes": 30,                  # Max duration per thinking run (then release lock)
         "thinking_wait_nudge_minutes": 3,                     # If user does not reply to a question: send nudge after this many minutes
         "thinking_wait_skip_minutes": 10,                     # If still no reply after this many minutes total: skip the question and do other things
+        "thinking_nudge_activity_minutes": 5,                # Do not nudge if user was active on any channel in the last N minutes
+        "thinking_provider": "inherit",                      # AI provider for thinking mode ('inherit' or e.g. 'openai', 'local')
+        "thinking_model": None,                              # Specific model for thinking mode (None = use provider default)
         "thinking_cooldown_minutes": 60,                     # After a thinking run completes: wait this many minutes before starting another
         "thinking_gc_hours": 12,                              # GC deletes thinking-mode sessions older than this many hours
         "thinking_quiet_hours_enabled": False,               # Do not run thinking mode during quiet hours (local time)

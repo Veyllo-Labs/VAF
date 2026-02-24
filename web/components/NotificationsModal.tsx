@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslations } from 'next-intl';
-import { X } from 'lucide-react';
+import { X, ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getApiBase } from '@/lib/utils';
 
@@ -137,7 +137,9 @@ export default function NotificationsModal({
                     </span>
                     <span className="flex-1 min-w-0 font-medium text-gray-900 truncate">{item.title}</span>
                     <span className="shrink-0 text-xs text-gray-500">{formatRelativeTime(item.timestamp)}</span>
-                    <span className="shrink-0 text-sm text-blue-600 font-medium">{t('view')}</span>
+                    <span className="shrink-0 text-gray-500" aria-hidden>
+                      {expandedId === item.id ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                    </span>
                   </div>
                   {expandedId === item.id && (item.summary || item.channel) && (
                     <div className="px-3 pb-3 pt-0 border-t border-gray-100">

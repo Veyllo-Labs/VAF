@@ -2622,12 +2622,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             )
                         except Exception:
                             pass
-                        try:
-                            from vaf.core.thinking_mode import clear_waiting_for_reply, get_waiting_for_reply
-                            reply_text = (content or "").strip() if get_waiting_for_reply(user_scope_id) else None
-                            clear_waiting_for_reply(user_scope_id, user_reply_text=reply_text)
-                        except Exception:
-                            pass
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)
                         try:
                             if is_debug_logging_enabled():

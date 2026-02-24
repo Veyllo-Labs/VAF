@@ -2158,6 +2158,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 { value: 'openai', label: 'OpenAI' },
                                                 { value: 'anthropic', label: 'Anthropic' },
                                                 { value: 'deepseek', label: 'DeepSeek' },
+                                                { value: 'google', label: 'Google' },
+                                                { value: 'openrouter', label: 'OpenRouter' },
                                                 { value: 'local', label: 'Local' },
                                             ]}
                                         />
@@ -2179,6 +2181,58 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             />
                                         </div>
                                     )}
+                                </Section>
+
+                                <Section title={tAdvanced('thinker')}>
+                                    <p className="text-sm text-gray-600 mb-3">{tAdvanced('thinkerProviderDesc')}</p>
+                                    <Select
+                                        label={tAdvanced('thinkerProvider')}
+                                        value={localConfig.thinking_provider || 'inherit'}
+                                        onChange={(v: string) => {
+                                            handleChange('thinking_provider', v);
+                                            handleChange('thinking_model', undefined);
+                                        }}
+                                        options={[
+                                            { value: 'inherit', label: tAdvanced('sameAsMain') },
+                                            { value: 'openai', label: 'OpenAI' },
+                                            { value: 'anthropic', label: 'Anthropic' },
+                                            { value: 'deepseek', label: 'DeepSeek' },
+                                            { value: 'google', label: 'Google' },
+                                            { value: 'openrouter', label: 'OpenRouter' },
+                                            { value: 'local', label: 'Local' },
+                                        ]}
+                                    />
+                                    {(localConfig.thinking_provider && localConfig.thinking_provider !== 'inherit') && (() => {
+                                        const tp = localConfig.thinking_provider;
+                                        const isLocal = tp === 'local';
+                                        const defaultModel = isLocal
+                                            ? (availableModels?.[0] ?? '')
+                                            : (() => { const p = PROVIDERS.find(pr => pr.id === tp); return p ? (localConfig[`api_model_${p.id}`] || p.defaultModel) : ''; })();
+                                        const options = isLocal
+                                            ? (availableModels ?? []).map(m => ({ value: m, label: m }))
+                                            : (() => {
+                                                const p = PROVIDERS.find(pr => pr.id === tp);
+                                                if (!p) return [];
+                                                const list = apiModels?.[p.id] ?? [];
+                                                const def = localConfig[`api_model_${p.id}`] || p.defaultModel;
+                                                const rest = list.filter(m => m !== def);
+                                                return [
+                                                    { value: def, label: list.includes(def) ? def : `${def} (Default)` },
+                                                    ...rest.map(m => ({ value: m, label: m }))
+                                                ];
+                                            })();
+                                        return (
+                                            <div className="mt-3" key={tp}>
+                                                <Select
+                                                    label={tAdvanced('thinkerModel')}
+                                                    value={localConfig.thinking_model ?? defaultModel}
+                                                    onChange={(v: string) => handleChange('thinking_model', v || undefined)}
+                                                    options={options}
+                                                />
+                                                <p className="text-xs text-gray-500 mt-1">{tAdvanced('thinkerModelDesc')}</p>
+                                            </div>
+                                        );
+                                    })()}
                                 </Section>
 
                                 <Section title={tAdvanced('system')}>

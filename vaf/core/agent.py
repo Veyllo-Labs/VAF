@@ -110,7 +110,7 @@ class Agent:
         self.models_dir = os.path.join(self.base_dir, "models")
         
         # Determine model filename from config path or just name
-        model_name = self.config.get("model")
+        model_name = os.environ.get("VAF_MODEL_OVERRIDE", "").strip() or self.config.get("model")
         # Handle full HuggingFace paths (e.g. user/repo/filename.gguf)
         if model_name.count("/") >= 2:
             parts = model_name.rsplit("/", 1)
@@ -1057,6 +1057,12 @@ class Agent:
                                 continue
                             self.tools[instance.name] = instance
                             continue
+                        
+                        # save_thinking_suggestion: available in thinking mode for proactive suggestions
+                        if instance.name == "save_thinking_suggestion":
+                            if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+                                self.tools[instance.name] = instance
+                                continue
                         # thinking_note_add: available in both modes — agent can save notes during
                         # normal chat for the next thinking pass (e.g. "user confirmed X, don't ask again")
                         if instance.name == "thinking_note_add":
@@ -4213,6 +4219,29 @@ class Agent:
             pass
 
         self.context_manager.decay_state()
+
+        # 🔒 NUDGE KILLER & CONTEXT SYNC: Clear background waiting status on ANY user interaction
+        if user_input and not skip_input:
+            try:
+                from vaf.core.thinking_mode import clear_waiting_for_reply, get_waiting_for_reply
+                _scope = getattr(self, "_current_user_scope_id", None)
+                
+                # If we were waiting for a reply, inject the original question as context
+                # so the Main Agent understands vague replies (e.g. "Yes, why?")
+                waiting = get_waiting_for_reply(_scope)
+                if waiting and (waiting.get("question_text") or "").strip():
+                    q_text = waiting["question_text"].strip()
+                    user_input = (
+                        f"[Context: You asked the user in a background thinking pass: \"{q_text}\" — "
+                        f"the following is their reply.]\n\n"
+                        + user_input
+                    )
+                
+                # If we're interacting, we're definitely not waiting anymore
+                # Pass the input text so it gets saved for the NEXT thinking run summary
+                clear_waiting_for_reply(_scope, user_reply_text=user_input)
+            except Exception:
+                pass
 
         # Check if any backend is available (local, server, or API)
         if not self.llm and not self.use_server and not self.api_backend:

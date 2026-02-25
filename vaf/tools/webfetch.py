@@ -1,137 +1,214 @@
 """
-VAF Web Fetch Tool - Fetch and convert web pages
-Retrieves URL content and converts HTML to Markdown
+VAF Web Fetch Tool - The Ultimate Web Reader
+Combines: SSL Fallback, UA Rotation, Caching, Table Flattening, 
+Text-Density Extraction, Navigation Filtering, and Keyword Search.
 """
 import re
-from typing import Dict, Any
+import os
+import json
+import time
+import random
+import hashlib
+import urllib3
+from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse
+from pathlib import Path
 
 from vaf.tools.base import BaseTool
+from vaf.core.config import Config
 
+# Constants
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+]
+DOMAIN_LAST_FETCH: Dict[str, float] = {}
+MIN_DELAY = 1.0 
 
 class WebFetchTool(BaseTool):
-    """Fetch content from URLs and convert to readable text."""
-    
     name = "webfetch"
     description = (
-        "Fetch content from a URL and convert it to readable text/markdown. "
-        "Use to read documentation pages, API references, GitHub READMEs, blog posts, "
-        "or any publicly available web page."
+        "Retrieves content from a URL and converts it to readable Markdown. "
+        "IMPORTANT: For long pages, tracking sites (DHL, UPS), or when searching for specific info, "
+        "ALWAYS provide 'search_terms' (e.g., ['Status', 'Delivery', 'August']). "
+        "This extracts relevant sections with context and moves them to the top, "
+        "preventing the important info from being cut off by system truncation."
     )
-    input_examples = [
-        {"url": "https://docs.python.org/3/tutorial/"},
-        {"url": "https://github.com/user/repo", "extract_main": False},
-    ]
-
+    
     parameters = {
         "type": "object",
         "properties": {
-            "url": {
-                "type": "string",
-                "description": "The URL to fetch"
-            },
-            "extract_main": {
-                "type": "boolean",
-                "description": "Try to extract main content only (default: true)"
+            "url": {"type": "string", "description": "The URL to fetch"},
+            "extract_main": {"type": "boolean", "description": "Try to extract main content only (default: true)"},
+            "timeout": {"type": "integer", "description": "Timeout in seconds (default: 30)"},
+            "use_cache": {"type": "boolean", "description": "Use cached version if available (default: true)"},
+            "cache_ttl": {"type": "integer", "description": "Cache lifetime in seconds (default: 3600)"},
+            "user_agent": {"type": "string", "description": "Custom User-Agent string"},
+            "max_length": {"type": "integer", "description": "Max length of returned text (default: 20000)"},
+            "search_terms": {
+                "type": "array", 
+                "items": {"type": "string"},
+                "description": "Terms to search for. Matching sections will be moved to the top."
             }
         },
         "required": ["url"]
     }
-    
+
+    def _get_cache_path(self, url: str) -> Path:
+        cache_dir = Config.APP_DIR / "tmp" / "webfetch_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        return cache_dir / f"{url_hash}.json"
+
+    def _get_cached_data(self, url: str, ttl: int) -> Optional[Dict]:
+        cache_path = self._get_cache_path(url)
+        if cache_path.exists():
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if time.time() - data.get("timestamp", 0) < ttl:
+                        return data
+            except Exception: pass
+        return None
+
+    def _save_to_cache(self, url: str, content: str, content_type: str):
+        try:
+            with open(self._get_cache_path(url), "w", encoding="utf-8") as f:
+                json.dump({"url": url, "timestamp": time.time(), "content": content, "type": content_type}, f, ensure_ascii=False)
+        except Exception: pass
+
     def run(self, **kwargs) -> str:
-        url = kwargs.get("url", "")
+        url = kwargs.get("url", "").strip()
         extract_main = kwargs.get("extract_main", True)
         max_length = kwargs.get("max_length", 20000)
+        timeout = kwargs.get("timeout", 30)
+        use_cache = kwargs.get("use_cache", True)
+        cache_ttl = kwargs.get("cache_ttl", 3600)
+        search_terms = kwargs.get("search_terms", [])
         
-        if not url or not url.strip():
-            return "Error: No URL provided"
+        if not url: return "Error: No URL provided"
         
-        # Parse and validate URL
+        # 1. Validate & Parse
         try:
             parsed = urlparse(url)
             if not parsed.scheme:
                 url = "https://" + url
                 parsed = urlparse(url)
-            
-            if parsed.scheme not in ("http", "https"):
-                return f"Error: Invalid URL scheme: {parsed.scheme}"
-        except Exception as e:
-            return f"Error: Invalid URL: {e}"
+        except Exception as e: return f"Error: Invalid URL: {e}"
+
+        # 2. Rate Limiting
+        domain = parsed.netloc
+        if domain in DOMAIN_LAST_FETCH:
+            elapsed = time.time() - DOMAIN_LAST_FETCH[domain]
+            if elapsed < MIN_DELAY: time.sleep(MIN_DELAY - elapsed)
+        DOMAIN_LAST_FETCH[domain] = time.time()
+
+        # 3. Fetch (with Cache & SSL Fallback)
+        full_text = ""
+        content_type = "text/html"
+        cached_data = self._get_cached_data(url, cache_ttl) if use_cache else None
         
-        # Check dependencies
+        if cached_data:
+            full_text = cached_data["content"]
+            content_type = cached_data.get("type", "text/html")
+        else:
+            try:
+                import requests
+                headers = {"User-Agent": kwargs.get("user_agent") or random.choice(USER_AGENTS), "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+                try:
+                    res = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+                except requests.exceptions.SSLError:
+                    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                    res = requests.get(url, headers=headers, timeout=timeout, verify=False)
+                
+                if res.status_code != 200: return f"Error: Site returned status {res.status_code}"
+                full_text = res.text
+                content_type = res.headers.get("Content-Type", "")
+                self._save_to_cache(url, full_text, content_type)
+            except Exception as e: return f"Error fetching {url}: {e}"
+
+        # 4. Processing
+        if "application/json" in content_type:
+            return f"JSON from {url}:\n\n{full_text[:max_length]}"
+
         try:
-            import requests
             from bs4 import BeautifulSoup
             import html2text
-        except ImportError as e:
-            missing = str(e).split("'")[1] if "'" in str(e) else str(e)
-            return f"Error: Missing dependency: {missing}. Install with: pip install requests beautifulsoup4 html2text"
-        
-        try:
-            # Fetch the URL
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 VAF/1.0",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            }
+            soup = BeautifulSoup(full_text, "html.parser")
             
-            response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
-            response.raise_for_status()
+            # Metadata & Iframes
+            title = soup.title.get_text(strip=True) if soup.title else ""
+            iframes = [ifr.get("src") for ifr in soup.find_all("iframe") if ifr.get("src")]
+            is_js_heavy = len(soup.find_all("script")) > 15
             
-            content_type = response.headers.get("Content-Type", "")
-            
-            # Handle JSON
-            if "application/json" in content_type:
-                return f"JSON content from {url}:\n\n{response.text[:max_length]}"
-            
-            # Handle plain text
-            if "text/plain" in content_type:
-                return f"Text content from {url}:\n\n{response.text[:max_length]}"
-            
-            # Parse HTML
-            soup = BeautifulSoup(response.text, "html.parser")
-            
-            # Remove unwanted elements
-            for tag in soup.find_all(["script", "style", "nav", "footer", "header", "aside", "noscript", "iframe"]):
+            # Clean Technical Noise
+            for tag in soup.find_all(["script", "style", "nav", "footer", "header", "aside"]):
                 tag.decompose()
             
-            # Try to extract main content
-            main_content = None
-            if extract_main:
-                for selector in ["main", "article", "#content", "#main", ".content", ".main", ".post"]:
-                    main_content = soup.select_one(selector)
-                    if main_content:
-                        break
+            # Table Flattening (Layout tables)
+            for table in soup.find_all("table"):
+                if not table.find("th"): table.unwrap()
+            for tag in soup.find_all(["tbody", "tr", "td", "thead", "tfoot"]):
+                tag.unwrap()
             
-            html_content = str(main_content) if main_content else str(soup.body or soup)
+            # Main Content Extraction
+            main_area = None
+            if extract_main:
+                for sel in ["main", "article", "#content", ".content", ".article-body"]:
+                    cand = soup.select_one(sel)
+                    if cand and len(cand.get_text(strip=True)) > 300:
+                        main_area = cand
+                        break
+                if not main_area: # Text density heuristic
+                    max_t = 0
+                    for div in soup.find_all(["div", "section"]):
+                        tl = len(div.get_text(strip=True))
+                        if tl > max_t and tl < len(full_text) * 0.9:
+                            max_t, main_area = tl, div
+            
+            html_chunk = str(main_area) if main_area else str(soup.body or soup)
             
             # Convert to Markdown
             h2t = html2text.HTML2Text()
-            h2t.ignore_links = False
-            h2t.ignore_images = True
-            h2t.body_width = 0
-            h2t.unicode_snob = True
-            
-            markdown = h2t.handle(html_content)
+            h2t.ignore_links, h2t.body_width, h2t.unicode_snob = False, 0, True
+            markdown = h2t.handle(html_chunk)
             markdown = re.sub(r'\n{3,}', '\n\n', markdown).strip()
             
-            # Get page title
-            title = ""
-            title_tag = soup.find("title")
-            if title_tag:
-                title = title_tag.get_text().strip()
+            # 5. Semantic Re-Ordering & Filtering
+            lines = markdown.split("\n")
             
-            # Truncate if needed
-            if len(markdown) > max_length:
-                markdown = markdown[:max_length] + "\n\n... (content truncated)"
+            # Move Nav Links to bottom
+            content_start = 0
+            for i, line in enumerate(lines[:50]):
+                if len(line.strip()) > 50 and "[" not in line[:10]:
+                    content_start = i
+                    break
+            if content_start > 5:
+                markdown = "\n".join(lines[content_start:]) + "\n\n---\n### Navigation (Moved):\n" + "\n".join(lines[:content_start])
             
-            result = []
-            if title:
-                result.append(f"# {title}")
-            result.append(f"Source: {url}")
-            result.append("")
-            result.append(markdown)
+            # Keyword Search Results (Prioritize)
+            search_header = ""
+            if search_terms:
+                matches = []
+                paras = markdown.split("\n\n")
+                for term in search_terms:
+                    for i, p in enumerate(paras):
+                        if term.lower() in p.lower():
+                            ctx = (paras[i-1] + "\n" if i>0 else "") + f"**MATCH: {p}**" + ("\n" + paras[i+1] if i<len(paras)-1 else "")
+                            matches.append(ctx)
+                            break
+                if matches:
+                    search_header = "\n## Key Matches:\n" + "\n---\n".join(matches[:3]) + "\n\n---\n"
+
+            # 6. Final Assembly
+            res_lines = [f"# {title}" if title else "", f"Source: {url}", search_header]
+            if iframes: res_lines.append(f"[INFO] Page has {len(iframes)} iframes.")
+            if is_js_heavy and len(markdown) < 1000: res_lines.append("[NOTE] Site uses heavy JS.")
+            res_lines.append("\n" + markdown[:max_length])
+            if len(markdown) > max_length: res_lines.append("\n... (truncated)")
             
-            return "\n".join(result)
-            
-        except Exception as e:
-            return f"Error fetching {url}: {e}"
+            return "\n".join([l for l in res_lines if l]).replace("\n\n\n", "\n\n")
+
+        except Exception as e: return f"Error parsing content: {e}"

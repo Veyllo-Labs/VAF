@@ -55,7 +55,7 @@ Key rules:
 
 - `chat`: user input (must include `sessionId`). Optional: `sidebarDocuments` (`Array<{ name, data, mimeType? }>`, same format as `set_sidebar_documents`); `editorDocument` (`{ name, content }`, plain text of Document Editor when open); `editorSelections` (`Array<{ start, end, text }>`, marked ranges in the editor for `replace_editor_selection`). If present, the backend stores sidebar docs in `session.runtime_state["sidebar_documents"]`, editor doc is prepended to the user turn as `--- CURRENT DOCUMENT (Editor): ... ---`, and editor selections in `session.runtime_state["editor_selections"]` for the tool.
 - `set_sidebar_documents`: set documents shown in the Document Viewer (attachments panel) for the current session. Payload: `{ sessionId?, documents: Array<{ name, data (base64/data-URL), mimeType? }> }`. Backend stores extracted text in `session.runtime_state["sidebar_documents"]` and injects it into the next user turn for the LLM. Send `documents: []` to clear.
-- `get_sessions`, `new_session`, `load_session`, `delete_session`
+- `get_sessions`, `new_session`, `load_session`, `delete_session`. For `load_session`, the server also enqueues `__CMD__:LOAD_SESSION:{id}` so the headless runner immediately loads that session’s context (history and runtime state); the agent stays in sync when the user only switches sessions without sending a message.
 - `get_config`, `get_models`, `get_tools`, `get_workflows`
 - **Automation planner (per-user):** `get_automation_notes`, `get_automation_todos` (no payload). Create/update/delete: `create_automation_note` (`title?`, `content`), `create_automation_todo` (`text`, `due_at?`), `update_automation_todo` (`id`, `text?`, `done?`, `due_at?`), `delete_automation_note` (`id`), `delete_automation_todo` (`id`). Server uses `user_scope_id` from the connection (same as `get_automations`).
 - `get_notifications`: optional. Payload: `{ limit?: number }` (default 50). Server responds with `notifications_list` for the connection’s user.
@@ -71,7 +71,8 @@ Key rules:
 - `clear_last_assistant`: request to remove the last assistant message (used before empty-response and false-promise retries so only the retry response is shown).
 - `new_log`: system/status timeline entries. When the agent gives up after API empty-response delayed retries, it sends the final message only via `new_log` (return value `[SYSTEM_LOG_ONLY]...`); the headless runner does **not** send `agent_message_update` for that response, so the UI shows a system timeline entry only.
 - `tool_update`: tool start/end/error
-- `stats`: token/usage metrics
+- `stats`: token/usage metrics (used/total, percent; can include input/output from API). Filtered by session when `sessionId` is set.
+- `context_status`: detailed context stats (tokens, max_tokens, percent, system/history/tools breakdown, compaction progress). Sent only to connections subscribed to that session so the context bar stays correct per tab.
 - `subagent_update`: sub-agent window payload
 - `subagent_output`: final sub-agent output block
 - `subagent_output_stream`: live stdout/stderr lines from headless sub-agents

@@ -71,16 +71,16 @@ class ContextManager:
         
         # DYNAMIC LIMITS: React to small context sizes (VRAM efficiency)
         # Very small (e.g. 4k–8k): keep more raw so 1–2 turns visible after tool use
-        # For 12k: recent 6; For 16k: recent 8; For >32k: recent 10 (default)
+        # For 12k: recent 10; For 16k: recent 12; For >32k: recent 20 (default)
         if max_tokens <= 8192:
             self.trigger_threshold = 0.70
-            self.recent_memory_size = 8
+            self.recent_memory_size = 12
         elif max_tokens <= 12000:
             self.trigger_threshold = 0.70
-            self.recent_memory_size = 6
+            self.recent_memory_size = 10
         elif max_tokens <= 20000:
             self.trigger_threshold = 0.75
-            self.recent_memory_size = 8
+            self.recent_memory_size = 12
         elif max_tokens <= 64000:
             self.trigger_threshold = 0.85
             self.recent_memory_size = 50
@@ -216,6 +216,22 @@ class ContextManager:
         content = str(message.get("content", ""))
         role = message.get("role", "")
         
+        # 0. KEY FACT EXTRACTION (Heuristic)
+        # Look for lines that look like status updates or important data points
+        # common in DHL tracking, research reports, etc.
+        fact_patterns = [
+            r'(?:status|zustand|lage|lieferung|delivery|sendung)[:\s]+(.+)',
+            r'(?:ergebnis|result|outcome)[:\s]+(.+)',
+            r'(?:datum|date|deadline)[:\s]+(.+)',
+        ]
+        for pattern in fact_patterns:
+            matches = re.findall(pattern, content, re.I)
+            for m in matches[:2]:
+                fact = m.strip()[:100]
+                if fact and len(fact) > 10:
+                    if fact not in self.state.key_decisions:
+                        self.state.key_decisions.append(f"Fact: {fact}")
+        
         # Dynamic TTL based on context size
         is_small = self.max_tokens <= 16384
         default_ttl = 3 if is_small else 5
@@ -238,9 +254,9 @@ class ContextManager:
         read = re.findall(r'(?:read|loaded|opened|gelesen|geöffnet)[:\s]+[`"\']?([^\s`"\'<>]+\.\w{1,10})', content, re.I)
         modified = re.findall(r'(?:modified|updated|changed|geändert|aktualisiert)[:\s]+[`"\']?([^\s`"\'<>]+\.\w{1,10})', content, re.I)
         
-        self.state.files_created = update_file_list(self.state.files_created, created[:3])
-        self.state.files_read = update_file_list(self.state.files_read, read[:3])
-        self.state.files_modified = update_file_list(self.state.files_modified, modified[:3])
+        self.state.files_created = update_file_list(self.state.files_created, created[:10])
+        self.state.files_read = update_file_list(self.state.files_read, read[:10])
+        self.state.files_modified = update_file_list(self.state.files_modified, modified[:10])
 
         # Errors
         if 'error' in content.lower() or 'failed' in content.lower() or 'fehler' in content.lower():
@@ -301,8 +317,8 @@ class ContextManager:
 
         # Dynamic limits based on context size
         is_small_context = self.max_tokens < 6000
-        max_raw_chars = 800 if is_small_context else 1500
-        max_raw_lines = 20 if is_small_context else 40
+        max_raw_chars = 1500 if is_small_context else 3000
+        max_raw_lines = 30 if is_small_context else 60
         
         # 2. If content is small, leave it raw
         if char_count < max_raw_chars and line_count < max_raw_lines:
@@ -311,18 +327,18 @@ class ContextManager:
         # 3. Aggressive Pruning for large outputs
         pruned_msg = f"[SEAMLESS COMPRESSION: Tool '{tool_name}' output pruned ({char_count} chars, {line_count} lines)]\n"
         
-        if tool_name in ["read_file", "list_files", "web_search", "web_fetch", "github_get_file", "github_list_repos", "mail_inbox", "whatsapp_inbox", "list_email_accounts", "telegram_inbox"]:
-            # Dynamic pruning window
-            head_lines = 5 if is_small_context else 15
-            tail_lines = 5 if is_small_context else 10
+        if tool_name in ["read_file", "list_files", "web_search", "webfetch", "github_get_file", "github_list_repos", "mail_inbox", "whatsapp_inbox", "list_email_accounts", "telegram_inbox"]:
+            # Dynamic pruning window - preserved even more content (40 lines head, 30 lines tail)
+            head_lines = 20 if is_small_context else 40
+            tail_lines = 15 if is_small_context else 30
             
             head = "\n".join(lines[:head_lines])
             tail = "\n".join(lines[-tail_lines:])
             hidden_count = max(0, line_count - (head_lines + tail_lines))
             return f"{pruned_msg}\n{head}\n\n[... {hidden_count} lines hidden ...]\n\n{tail}\n\nNOTE: The facts from this output are stored in the State Context."
         
-        # Default pruning
-        trunc_limit = 400 if is_small_context else 800
+        # Default pruning - preserved more content (1500 chars)
+        trunc_limit = 800 if is_small_context else 1500
         return f"{pruned_msg}\n{content_str[:trunc_limit]}...\n\n[... truncated for context stability ...]"
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -425,33 +441,33 @@ class ContextManager:
         
         # 1. NARRATIVE (High Priority)
         if self.state.narrative_summary:
-            header = "## RECENT SUMMARY" if is_small else "### 📝 RECENT SUMMARY"
+            header = "## RECENT SUMMARY" if is_small else "### 📝 CONVERSATION SUMMARY"
             parts.append(f"{header}\n{self.state.narrative_summary}")
 
         # 2. PROJECT STATE
         state_parts = []
-        file_limit = 5 if is_small else 8
+        file_limit = 8 if is_small else 15
         if self.state.files_created:
-            state_parts.append(f"**Created:** {', '.join([p for p, t in self.state.files_created[-file_limit:]])}")
+            state_parts.append(f"**Files Created:** {', '.join([p for p, t in self.state.files_created[-file_limit:]])}")
         if self.state.files_modified:
-            state_parts.append(f"**Modified:** {', '.join([p for p, t in self.state.files_modified[-file_limit:]])}")
+            state_parts.append(f"**Files Modified:** {', '.join([p for p, t in self.state.files_modified[-file_limit:]])}")
         if self.state.files_read:
-            state_parts.append(f"**Read:** {', '.join([p for p, t in self.state.files_read[-file_limit:]])}")
+            state_parts.append(f"**Files Read:** {', '.join([p for p, t in self.state.files_read[-file_limit:]])}")
         
         if state_parts:
-            header = "## PROJECT STATE" if is_small else "### 📁 PROJECT STATE"
+            header = "## PROJECT STATE" if is_small else "### 📁 PROJECT & FILE STATE"
             parts.append(f"{header}\n" + "\n".join(state_parts))
 
         # 3. ERRORS (Critical)
         if self.state.errors_encountered:
-            err_limit = 3 if is_small else 5
+            err_limit = 5 if is_small else 10
             header = "## ERRORS" if is_small else "### ⚠️ ERRORS ENCOUNTERED"
             parts.append(f"{header}\n• " + "\n• ".join(self.state.errors_encountered[-err_limit:]))
 
         # 4. DECISIONS & PROGRESS
         if self.state.key_decisions:
-            dec_limit = 3 if is_small else 5
-            header = "## DECISIONS" if is_small else "### 🎯 DECISIONS & PROGRESS"
+            dec_limit = 5 if is_small else 10
+            header = "## DECISIONS" if is_small else "### 🎯 KEY DECISIONS & PROGRESS"
             parts.append(f"{header}\n• " + "\n• ".join(self.state.key_decisions[-dec_limit:]))
         
         # 5. INTENT (Goal)

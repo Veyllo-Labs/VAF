@@ -160,11 +160,17 @@ def check_singleton():
         
         # Fallback: Just open the browser directly since we know VAF is running
         try:
-             import webbrowser
-             webbrowser.open("http://localhost:3000")
-             logger.info("[Tray] Opened Web UI directly via fallback.")
-        except:
-             pass
+            import webbrowser
+            from vaf.core.config import Config
+            if Config.get("local_network_enabled", False) and Config.get("local_network_tls_enabled", False):
+                p = _effective_https_port()
+                url = f"https://127.0.0.1:{p}" if p != 443 else "https://127.0.0.1"
+            else:
+                url = "http://127.0.0.1:3000"
+            webbrowser.open(url)
+            logger.info("[Tray] Opened Web UI directly via fallback.")
+        except Exception:
+            pass
 
         print("VAF is already running. Notifying existing instance...")
         return None
@@ -368,6 +374,17 @@ def start_uvicorn():
         uvicorn_loop = loop
         log("Tray", "Event loop created for Uvicorn")
 
+        # --- ENSURE SSL CERTS EXIST BEFORE STARTING ---
+        # If TLS enabled but no certs, generate them NOW so they are in config before uvicorn reads it
+        if Config.get("local_network_enabled", False) and Config.get("local_network_tls_enabled", False):
+            try:
+                from vaf.network.ssl_utils import ensure_ssl_certificates
+                cert_p, key_p = ensure_ssl_certificates()
+                if cert_p and key_p:
+                    log("Tray", "SSL certificates verified/generated successfully")
+            except Exception as ssl_err:
+                log("Tray", f"Pre-startup SSL setup failed: {ssl_err}")
+
         # Check if port 8001 is available
         import socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -378,9 +395,9 @@ def start_uvicorn():
         else:
             log("Tray", "Port 8001 is free.")
 
-        # When local_network_enabled is False, bind only to localhost (not reachable from LAN)
+        # When network is on, bind to 127.0.0.1; access via integrated HTTPS proxy (0.0.0.0:port).
         local_network_enabled = Config.get("local_network_enabled", False)
-        host = "0.0.0.0" if local_network_enabled else "127.0.0.1"
+        host = "127.0.0.1" if local_network_enabled else "127.0.0.1"
         tls_enabled = Config.get("local_network_tls_enabled", False)
         ssl_cert = (Config.get("local_network_ssl_cert") or "").strip()
         ssl_key = (Config.get("local_network_ssl_key") or "").strip()
@@ -402,6 +419,41 @@ def start_uvicorn():
             config = uvicorn.Config(app, host=host, port=8001, log_level="info", use_colors=False)
         server = uvicorn.Server(config)
         uvicorn_server = server
+
+        # --- START INTEGRATED HTTPS PROXY (single entry point for HTTPS, no Nginx required) ---
+        # When TLS is on, proxy listens on 0.0.0.0:local_network_https_port and forwards to 127.0.0.1:3000/8001.
+        # On Windows, port 443 often requires admin → use 8443 so it works without elevation.
+        if tls_enabled and ssl_cert and ssl_key and os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
+            try:
+                from vaf.network.https_proxy import run_https_proxy
+                https_port = Config.get("local_network_https_port", 443)
+                if platform.system() == "Windows" and https_port == 443:
+                    https_port = 8443
+                    log("Tray", "Using HTTPS port 8443 on Windows (443 would require admin).")
+                def _run_https_proxy():
+                    def _log(msg: str, _style: str = "info"):
+                        log("HTTPS-Proxy", msg)
+                    run_https_proxy("0.0.0.0", https_port, ssl_cert, ssl_key, log_callback=_log)
+                threading.Thread(target=_run_https_proxy, daemon=True).start()
+                log("Tray", f"Integrated HTTPS proxy started on 0.0.0.0:{https_port}")
+            except Exception as px:
+                log("Tray", f"HTTPS proxy failed to start: {px}")
+
+        # --- START INTERNAL NON-SSL API CHANNEL (Port 8005) only when TLS is on ---
+        # Next.js proxies to 8005 to avoid SSL trust issues. When TLS is off, Next.js proxies to 8001 directly.
+        if tls_enabled:
+            def _start_internal_api():
+                try:
+                    import asyncio
+                    log("Tray", "Starting internal API channel on port 8005...")
+                    internal_cfg = uvicorn.Config(app, host="127.0.0.1", port=8005, log_level="warning", use_colors=False)
+                    internal_srv = uvicorn.Server(internal_cfg)
+                    internal_srv.install_signal_handlers = lambda: None
+                    internal_loop = asyncio.new_event_loop()
+                    internal_loop.run_until_complete(internal_srv.serve())
+                except Exception as ie:
+                    log("Tray", f"Internal API channel failed: {ie}")
+            threading.Thread(target=_start_internal_api, daemon=True).start()
 
         # Manually disable signal handlers to prevent main thread interference
         server.install_signal_handlers = lambda: None
@@ -662,6 +714,15 @@ def check_activity_loop(update_icon_callback):
                 
         time.sleep(1)
 
+
+def _effective_https_port() -> int:
+    """Port for integrated HTTPS proxy. On Windows, 443 often needs admin → use 8443."""
+    p = Config.get("local_network_https_port", 443)
+    if platform.system() == "Windows" and p == 443:
+        return 8443
+    return p
+
+
 def open_webui(icon_or_item=None, item=None):
     logger.info("[Tray] open_webui called")
     from vaf.core.frontend_manager import FrontendManager
@@ -673,7 +734,14 @@ def open_webui(icon_or_item=None, item=None):
         logger.error("[Tray] open_webui: Failed to start/find Web UI port")
         return
 
-    url = f"http://localhost:{port}"
+    # With network + TLS: access via integrated HTTPS proxy. Otherwise direct frontend.
+    local_network_enabled = Config.get("local_network_enabled", False)
+    tls_enabled = Config.get("local_network_tls_enabled", False)
+    if local_network_enabled and tls_enabled:
+        https_port = _effective_https_port()
+        url = f"https://127.0.0.1:{https_port}" if https_port != 443 else "https://127.0.0.1"
+    else:
+        url = f"http://127.0.0.1:{port}"
     logger.info(f"[Tray] open_webui: Target URL is {url}")
     
     if platform.system() == "Windows":
@@ -688,7 +756,7 @@ def open_webui(icon_or_item=None, item=None):
                 # Check for "VAF" or "localhost:3000" in browser windows
                 browser_keywords = ["Google Chrome", "Firefox", "Edge", "Browser", "Chromium", "Opera", "Brave"]
                 is_browser = any(kw in title for kw in browser_keywords)
-                has_vaf = "VAF" in title or "localhost:3000" in title or "127.0.0.1:3000" in title
+                has_vaf = "VAF" in title or "localhost" in title or "localhost:3000" in title or "127.0.0.1:3000" in title
                 
                 if is_browser and has_vaf and win32gui.IsWindowVisible(hwnd):
                     try:
@@ -837,7 +905,7 @@ def quit_app(icon=None, item=None):
     os._exit(0)
 
 
-def on_config_changed(key, value):
+def on_config_changed(key, value, old_value=None):
     """Handle dynamic config changes."""
     # Model, context size, or GPU layers changed → restart llama-server with new values
     if key in ["model", "n_ctx", "gpu_layers"]:
@@ -857,6 +925,20 @@ def on_config_changed(key, value):
                 msg += f" with model {model}"
             msg += f" (n_ctx={n_ctx}, gpu_layers={gpu_layers})..."
             log("Tray", msg)
+            
+            # Audit log
+            try:
+                from vaf.core.user_notifications import append_notification
+                from vaf.core.config import get_local_admin_scope_id
+                append_notification(
+                    user_scope_id=str(get_local_admin_scope_id()),
+                    kind="system",
+                    title="AI Model reload triggered",
+                    status="success",
+                    summary=f"Configuration change: {key}={value}\nRestarting local inference engine."
+                )
+            except: pass
+
             try:
                 server_mgr.stop_server(force_external=True)
                 tray_context.set_model_loaded(False)
@@ -873,18 +955,31 @@ def on_config_changed(key, value):
         threading.Thread(target=_restart_llama, daemon=True).start()
 
     # Network binding changes → restart uvicorn + frontend
-    elif key in ["local_network_enabled", "local_network_port"]:
+    elif key in ["local_network_enabled", "local_network_port", "local_network_port_frontend", "local_network_tls_enabled", "local_network_https_port"]:
         def _restart_job():
             # Delay slightly to allow the config save to complete and response to be sent
             time.sleep(1)
             
-            # Re-read config to be sure
+            # Re-read config (network on => 127.0.0.1, access via integrated proxy)
             from vaf.core.config import Config
-            is_enabled = Config.get("local_network_enabled", False)
-            target_host = "0.0.0.0" if is_enabled else "127.0.0.1"
+            target_host = "127.0.0.1"
             
             msg = f"Config change detected: {key}={value}. Restarting servers with host={target_host}..."
             log("Tray", msg)
+            
+            # Audit log
+            try:
+                from vaf.core.user_notifications import append_notification
+                from vaf.core.config import get_local_admin_scope_id
+                append_notification(
+                    user_scope_id=str(get_local_admin_scope_id()),
+                    kind="system",
+                    title="Network restart triggered",
+                    status="success",
+                    summary=f"Changed {key} to {value}.\nRestarting Backend & Frontend for network binding: {target_host}"
+                )
+            except: pass
+
             try: logger.info(f"[Tray] {msg}")
             except: pass
             
@@ -929,6 +1024,25 @@ def on_config_changed(key, value):
         
         # Run in separate thread to avoid deadlock (uvicorn thread waiting for itself)
         threading.Thread(target=_restart_job, daemon=True).start()
+
+# Last known network config (read from file by poll thread) so CLI changes in another process are picked up
+_last_network_config = {}
+
+def _config_file_poll_loop():
+    """Poll config file every 25s; if local_network_* changed (e.g. by 'vaf server on' in CLI), trigger restart."""
+    defaults = {"local_network_enabled": False, "local_network_port": 8001, "local_network_port_frontend": 3000, "local_network_tls_enabled": False, "local_network_https_port": 443}
+    while True:
+        time.sleep(25)
+        try:
+            cfg = Config.load()
+            for key in ["local_network_enabled", "local_network_port", "local_network_port_frontend", "local_network_tls_enabled", "local_network_https_port"]:
+                new_val = cfg.get(key, defaults.get(key))
+                old_val = _last_network_config.get(key)
+                if new_val != old_val:
+                    on_config_changed(key, new_val, old_val)
+                    _last_network_config[key] = new_val
+        except Exception as e:
+            logger.debug("Config poll failed: %s", e)
 
 # ==========================================
 # macOS Implementation (Rumps)
@@ -1012,11 +1126,18 @@ if platform.system() == "Darwin":
                 from vaf.core.frontend_manager import FrontendManager
                 auto_open = Config.get("web_ui_enabled", True)
                 port = FrontendManager().start_frontend()
-                if port:
-                    logger.info(f"[Tray] Frontend started on port {port}, opening browser...")
-                    if auto_open:
+                if port and auto_open:
+                    logger.info("[Tray] Frontend started, opening browser...")
+                    if Config.get("local_network_enabled", False) and Config.get("local_network_tls_enabled", False):
+                        p = _effective_https_port()
+                        url = f"https://127.0.0.1:{p}" if p != 443 else "https://127.0.0.1"
+                    else:
+                        url = f"http://127.0.0.1:{port}"
+                    try:
                         import webbrowser
-                        webbrowser.open(f"http://localhost:{port}")
+                        webbrowser.open(url)
+                    except Exception:
+                        pass
             t_fe = threading.Thread(target=start_frontend_bg, daemon=True)
             t_fe.start()
             
@@ -1145,7 +1266,12 @@ def run_headless():
     
     # Register config observer
     Config.add_observer(on_config_changed)
-    
+    _last_network_config["local_network_enabled"] = Config.get("local_network_enabled", False)
+    _last_network_config["local_network_port"] = Config.get("local_network_port", 8001)
+    _last_network_config["local_network_port_frontend"] = Config.get("local_network_port_frontend", 3000)
+    _last_network_config["local_network_tls_enabled"] = Config.get("local_network_tls_enabled", False)
+    threading.Thread(target=_config_file_poll_loop, daemon=True).start()
+
     # Singleton Check
     lock_socket = check_singleton()
     if not lock_socket:
@@ -1200,7 +1326,13 @@ def run_app():
     log("Tray", "run_app called (Pystray)")
     # Register config observer
     Config.add_observer(on_config_changed)
-    
+    # So CLI "vaf server on" (other process) is picked up: poll config file every 25s
+    _last_network_config["local_network_enabled"] = Config.get("local_network_enabled", False)
+    _last_network_config["local_network_port"] = Config.get("local_network_port", 8001)
+    _last_network_config["local_network_port_frontend"] = Config.get("local_network_port_frontend", 3000)
+    _last_network_config["local_network_tls_enabled"] = Config.get("local_network_tls_enabled", False)
+    threading.Thread(target=_config_file_poll_loop, daemon=True).start()
+
     print("[Tray] run_app called (Pystray)")
     # Singleton Check
     lock_socket = check_singleton()

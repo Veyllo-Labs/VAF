@@ -374,14 +374,14 @@ These endpoints support the Local Network Hosting feature.
 ### 1. Get Access URL
 **GET** `/api/network/access-url`
 
-Returns the correct URL for other devices to connect to VAF.
+Returns the URL other devices on the LAN should use. When TLS is enabled, the port is that of the integrated HTTPS proxy (443 or 8443 on Windows); the response uses `https`.
 
-**Response:**
+**Response (TLS on):**
 ```json
 {
   "host": "192.168.1.50",
-  "port": 3000,
-  "url": "http://192.168.1.50:3000"
+  "port": 8443,
+  "url": "https://192.168.1.50:8443"
 }
 ```
 

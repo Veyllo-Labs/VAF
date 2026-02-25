@@ -1029,6 +1029,45 @@ def _detect_and_set_waiting_for_reply(
     return None
 
 
+def _extract_run_summary(agent_history: List[Dict[str, Any]]) -> str:
+    """Extract a concise summary of what the thinking run actually did."""
+    summary_parts = []
+    tools_used = []
+    final_conclusion = ""
+    
+    for msg in agent_history:
+        if not isinstance(msg, dict): continue
+        if msg.get("role") == "assistant":
+            # Track tool calls
+            for tc in msg.get("tool_calls") or []:
+                name = (tc.get("function") or {}).get("name") or tc.get("name") or ""
+                if name and name not in ("thinking_done", "thinking_note_add", "list_automation_todos", "list_automation_notes", "list_automations"):
+                    tools_used.append(name)
+                
+                # Check for thinking_done summary
+                if name == "thinking_done":
+                    args = tc.get("function", {}).get("arguments") or tc.get("arguments") or "{}"
+                    if isinstance(args, str):
+                        try:
+                            args_dict = json.loads(args)
+                            final_conclusion = args_dict.get("summary") or ""
+                        except Exception: pass
+                    elif isinstance(args, dict):
+                        final_conclusion = args.get("summary") or ""
+
+    if tools_used:
+        unique_tools = list(dict.fromkeys(tools_used))
+        summary_parts.append(f"Tools: {', '.join(unique_tools)}")
+    
+    if final_conclusion:
+        summary_parts.append(f"Result: {final_conclusion}")
+    
+    if not summary_parts:
+        return "No actionable items found."
+        
+    return " | ".join(summary_parts)
+
+
 def _run_thinking_for_user(
     user_scope_id: Optional[str],
     run_id: str,
@@ -1073,7 +1112,6 @@ def _run_thinking_for_user(
         agent.init_chat()
 
         # Load the user's main chat session so the thinking agent sees the full conversation history.
-        # This gives the agent the same context as when the user chats normally (Telegram, WhatsApp, Web).
         _loaded_session = False
         try:
             from vaf.core.messaging_connections import (
@@ -1319,6 +1357,9 @@ def _run_thinking_for_user(
                                     break
                     except Exception as _abort_err:
                         logger.debug("Thinking abort check failed: %s", _abort_err)
+
+            # Populate run summary from history
+            run_summary = _extract_run_summary(getattr(agent, "history", []))
 
             # Persist run: JSON run log (for internal summary) + vaf_denk.log (for debugging)
             # NOT saved to WebUI sessions — thinking output is debug-only, visible in logs/vaf_denk.log

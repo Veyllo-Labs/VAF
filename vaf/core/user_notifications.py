@@ -13,8 +13,8 @@ from vaf.core.platform import Platform
 
 logger = logging.getLogger("vaf.core.user_notifications")
 
-MAX_ITEMS = 100
-MAX_AGE_DAYS = 7
+MAX_ITEMS = 200 # Increased for better audit trail
+MAX_AGE_HOURS = 48
 
 
 def _notifications_dir() -> Path:
@@ -36,8 +36,8 @@ def _file_path(user_scope_id: Optional[str]) -> Path:
 
 
 def _trim(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Keep at most MAX_ITEMS and drop older than MAX_AGE_DAYS."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)).isoformat()
+    """Keep at most MAX_ITEMS and drop older than MAX_AGE_HOURS."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=MAX_AGE_HOURS)).isoformat()
     out = [i for i in items if (i.get("timestamp") or "") >= cutoff]
     if len(out) > MAX_ITEMS:
         out = out[-MAX_ITEMS:]

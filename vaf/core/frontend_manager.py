@@ -182,10 +182,10 @@ class FrontendManager:
                   "0.0.0.0" = accessible from network, "127.0.0.1" = localhost only
             force_restart: If True, skip the "already running" check and start fresh
         """
-        # Determine host binding based on config if not explicitly provided
+        # When network is on, bind to 127.0.0.1; access via integrated HTTPS proxy.
         if host is None:
             local_network_enabled = Config.get("local_network_enabled", False)
-            host = "0.0.0.0" if local_network_enabled else "127.0.0.1"
+            host = "127.0.0.1"
 
         web_dir = self.get_web_dir()
         pkg_file = os.path.join(web_dir, "package.json")
@@ -235,7 +235,8 @@ class FrontendManager:
                 os.makedirs(os.path.dirname(self.get_port_file()), exist_ok=True)
                 with open(self.get_port_file(), "w") as f:
                     f.write(str(port))
-            except: pass
+            except Exception:
+                pass
 
             # Log file (only when Debug Logs enabled): web_debug_YYYY-MM-DD.log
             log_path = get_dated_log_path("web_debug", "log")
@@ -243,20 +244,34 @@ class FrontendManager:
             log_file = str(log_path)
             use_debug_log = is_debug_logging_enabled()
 
-            # Pass backend connection info as environment variables for next.config.js
+            # Production server: build once if needed, then next start (no dev server)
             frontend_env = os.environ.copy()
-            if Config.get("local_network_tls_enabled", False):
-                frontend_env["VAF_TLS_ENABLED"] = "true"
+            backend_port = Config.get("local_network_port", 8001)
             if Config.get("local_network_enabled", False):
-                frontend_env["VAF_API_HOST"] = host
-            frontend_env["VAF_API_PORT"] = str(Config.get("local_network_port", 8001))
+                frontend_env["VAF_API_PORT"] = str(backend_port)
+                frontend_env["VAF_API_HOST"] = "0.0.0.0"
+            # When TLS is off, Next.js proxies directly to backend (8001). When TLS is on, proxy uses internal 8005.
+            if not Config.get("local_network_tls_enabled", False):
+                frontend_env["VAF_INTERNAL_API_PORT"] = str(backend_port)
+            next_args = ["-p", str(port), "-H", host]
 
-            # Start Process - avoid shell=True to have direct control over process tree
-            # -H specifies the hostname/interface to bind to
-            cmd = [npm_path, "run", "dev", "--", "-p", str(port), "-H", host]
-            
-            self._log(f"Starting Frontend with command: {' '.join(cmd)}", "info", log_callback)
+            # Run npm run build if .next is missing so next start works
+            next_dir = os.path.join(web_dir, ".next")
+            if not os.path.isdir(next_dir) or not os.path.exists(os.path.join(next_dir, "BUILD_ID")):
+                self._log("Production build missing, running npm run build...", "warning", log_callback)
+                build_kwargs = {"cwd": web_dir, "env": frontend_env}
+                if platform.system() == "Windows":
+                    build_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                result = subprocess.run([npm_path, "run", "build"], **build_kwargs, capture_output=not use_debug_log)
+                if result.returncode != 0:
+                    self._log("Frontend build failed. Run 'cd web && npm run build' and check errors.", "error", log_callback)
+                    return None
+                self._log("Build finished.", "dim", log_callback)
+
+            cmd = [npm_path, "run", "start", "--"] + next_args
+            self._log(f"Starting Frontend (production) with command: {' '.join(cmd)}", "info", log_callback)
             self._log(f"Binding to host: {host} (Local Network: {Config.get('local_network_enabled', False)})", "info", log_callback)
+
             if use_debug_log:
                 self._log(f"Logging stdout/stderr to: {log_file}", "info", log_callback)
 

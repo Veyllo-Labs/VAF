@@ -1625,6 +1625,20 @@ class Agent:
                 from vaf.core.api_backend import APIBackendManager
                 self.api_backend = APIBackendManager(self.provider)
                 UI.event("Success", f"API Backend ready: {self.provider.upper()}", style="success")
+                
+                # Audit log
+                try:
+                    from vaf.core.user_notifications import append_notification
+                    from vaf.core.config import get_local_admin_scope_id
+                    append_notification(
+                        user_scope_id=str(get_local_admin_scope_id()),
+                        kind="system",
+                        title=f"API Backend ready: {self.provider.upper()}",
+                        status="success",
+                        summary=f"Provider: {self.provider}\nModel: {self.model_display_name}"
+                    )
+                except: pass
+                
                 return  # Success - no local model needed
             except ValueError as e:
                 UI.error(f"API Backend initialization failed: {e}")
@@ -1671,6 +1685,20 @@ class Agent:
             self.server = ServerManager()
             if self.server.start_server(self.model_path, n_gpu_layers=n_gpu, n_ctx=n_ctx):
                 self.use_server = True
+                
+                # Audit log
+                try:
+                    from vaf.core.user_notifications import append_notification
+                    from vaf.core.config import get_local_admin_scope_id
+                    append_notification(
+                        user_scope_id=str(get_local_admin_scope_id()),
+                        kind="system",
+                        title="Local model loaded",
+                        status="success",
+                        summary=f"Model: {self.filename}\nBackend: Standalone Server"
+                    )
+                except: pass
+
                 # Show GPU status
                 if primary_gpu:
                     if primary_gpu.compute_available:
@@ -1749,6 +1777,19 @@ class Agent:
                     verbose=self.verbose
                 )
                 
+            # Audit log
+            try:
+                from vaf.core.user_notifications import append_notification
+                from vaf.core.config import get_local_admin_scope_id
+                append_notification(
+                    user_scope_id=str(get_local_admin_scope_id()),
+                    kind="system",
+                    title="Local model loaded",
+                    status="success",
+                    summary=f"Model: {self.filename}\nBackend: Internal Library"
+                )
+            except: pass
+
             UI.event("System", "Model Loaded", style="success")
         except Exception as e:
             UI.error(f"Init failed: {e}")

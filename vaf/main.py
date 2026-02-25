@@ -243,7 +243,7 @@ def bootstrap():
 bootstrap()
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, bridge
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, bridge, server
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -290,6 +290,9 @@ app.add_typer(automation_app, name="automation", help="Time-based task automatio
 
 # Bridges (Discord, Slack, etc.)
 app.add_typer(bridge.app, name="bridge", help="Bridge VAF to external platforms")
+
+# Server/Hosting management
+app.add_typer(server.app, name="server", help="Manage local network server mode")
 
 # Sub-Agent execution (internal use - for separate terminal windows)
 app.add_typer(subagent.app, name="subagent", help="Run sub-agents in separate terminals")

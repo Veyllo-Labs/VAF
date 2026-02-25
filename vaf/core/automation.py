@@ -1138,6 +1138,12 @@ vaf automation delete <id>   # Delete task
             # next_run is calculated dynamically - no need to store it
             self._save_task(task)
             
+            # If frequency is ONCE, delete after run
+            if task.frequency == Frequency.ONCE:
+                # Use permanent=True because it's a planned one-time run, not a manual deletion
+                self.delete(task.id, permanent=True)
+                append_domain_log_always("backend", f"Automation '{task.name}' ({task.id}) frequency is 'once' - deleted after run.")
+            
             agent.shutdown()
             
         except Exception as e:

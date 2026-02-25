@@ -38,7 +38,7 @@ class AutomationTool(BaseTool):
     name = "create_automation"
     description = """Create a scheduled automation task that runs at specified times.
 Use this when user wants to schedule recurring tasks or a one-time task:
-- Once (einmalig): single run, scheduled for the next day
+- Once (einmalig): single run, automatically deleted after execution. Best for one-time reminders or tasks (e.g. 'Remind me tomorrow at 10:00').
 - Daily (täglich), weekly (wöchentlich, use weekday e.g. monday), monthly (monatlich, use day 1-31), hourly (stündlich)
 - Daily news/weather reports, periodic backups, scheduled reminders, regular document generation
 

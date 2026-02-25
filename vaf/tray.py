@@ -641,7 +641,7 @@ def check_activity_loop(update_icon_callback):
                 # Show "active" if ready (cloud: websocket connected, local: model loaded)
                 update_icon_callback("active" if is_ready else "idle")
 
-        if time.time() - last_log_ts >= 5:
+        if time.time() - last_log_ts >= 60:
             last_log_ts = time.time()
             state_line = (
                 f"IdleCheck state: loaded={tray_context.model_loaded} "
@@ -1377,7 +1377,14 @@ def run_app():
 
     icon = pystray.Icon("VAF", create_image("idle"), "VAF Agent", menu)
 
+    last_icon_state = None
+
     def update_icon(icon_obj, state):
+        nonlocal last_icon_state
+        if state == last_icon_state:
+            return
+        last_icon_state = state
+        
         if state == "idle":
             icon_obj.icon = create_image("idle")
             try:

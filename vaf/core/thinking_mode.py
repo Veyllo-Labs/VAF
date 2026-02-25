@@ -658,7 +658,7 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
 
             # Map alias to logical user
             logical_id = alias_map.get(key, key)
-            if (key == "default" or key == local_admin_scope):
+            if (key == "default" or key == local_admin_scope or logical_id == local_admin_scope):
                 logical_id = None
 
             if logical_id not in latest_ts or ts_float > latest_ts[logical_id]:
@@ -1281,43 +1281,42 @@ def _run_thinking_for_user(
                                 if k in my_aliases and isinstance(v, dict):
                                     newest_li_ts = max(newest_li_ts, float(v.get("ts", 0)))
                             
-                                                            if newest_li_ts > 0:
-                                                                secs_since = time.time() - newest_li_ts
-                                                                if secs_since < 60:  # User active in last 60 seconds
-                                                                    logger.info(
-                                                                        "Thinking: logical user became active (%ds ago), aborting run",
-                                                                        int(secs_since),
-                                                                    )
-                                                                    # 🧠 INTERRUPT PERSISTENCE (Strategy B):
-                                                                    # Save current state so we don't forget what we were doing
-                                                                    try:
-                                                                        from vaf.core.thinking_notes import add_note
-                                                                        history = getattr(agent, "history", [])
-                                                                        last_turns = history[-4:] if len(history) >= 4 else history
-                                                                        tools_called = []
-                                                                        last_msg = ""
-                                                                        for m in last_turns:
-                                                                            if m.get("role") == "assistant":
-                                                                                if m.get("tool_calls"):
-                                                                                    for tc in m["tool_calls"]:
-                                                                                        name = (tc.get("function") or {}).get("name") or tc.get("name") or "?"
-                                                                                        if name not in ("thinking_done", "thinking_note_add"):
-                                                                                            tools_called.append(name)
-                                                                                if m.get("content") and m["content"].strip() != "Thinking...":
-                                                                                    last_msg = m["content"].strip()[:100]
-                                                                        
-                                                                        summary = f"Run {run_id} unterbrochen (Turn {turn+1})."
-                                                                        if tools_called:
-                                                                            summary += f" Letzte Tools: {', '.join(list(set(tools_called))[:3])}."
-                                                                        if last_msg:
-                                                                            summary += f" Letzter Gedanke: \"{last_msg}...\""
-                                                                        
-                                                                        add_note(scope_key, summary)
-                                                                        logger.info("Thinking: Context saved to notes before abort.")
-                                                                    except Exception as _note_err:
-                                                                        logger.debug("Thinking: Could not save abort note: %s", _note_err)
-                                                                    break
-                            
+                            if newest_li_ts > 0:
+                                secs_since = time.time() - newest_li_ts
+                                if secs_since < 60:  # User active in last 60 seconds
+                                    logger.info(
+                                        "Thinking: logical user became active (%ds ago), aborting run",
+                                        int(secs_since),
+                                    )
+                                    # 🧠 INTERRUPT PERSISTENCE (Strategy B):
+                                    # Save current state so we don't forget what we were doing
+                                    try:
+                                        from vaf.core.thinking_notes import add_note
+                                        history = getattr(agent, "history", [])
+                                        last_turns = history[-4:] if len(history) >= 4 else history
+                                        tools_called = []
+                                        last_msg = ""
+                                        for m in last_turns:
+                                            if m.get("role") == "assistant":
+                                                if m.get("tool_calls"):
+                                                    for tc in m["tool_calls"]:
+                                                        name = (tc.get("function") or {}).get("name") or tc.get("name") or "?"
+                                                        if name not in ("thinking_done", "thinking_note_add"):
+                                                            tools_called.append(name)
+                                                if m.get("content") and m["content"].strip() != "Thinking...":
+                                                    last_msg = m["content"].strip()[:100]
+                                        
+                                        summary = f"Run {run_id} unterbrochen (Turn {turn+1})."
+                                        if tools_called:
+                                            summary += f" Letzte Tools: {', '.join(list(set(tools_called))[:3])}."
+                                        if last_msg:
+                                            summary += f" Letzter Gedanke: \"{last_msg}...\""
+                                        
+                                        add_note(scope_key, summary)
+                                        logger.info("Thinking: Context saved to notes before abort.")
+                                    except Exception as _note_err:
+                                        logger.debug("Thinking: Could not save abort note: %s", _note_err)
+                                    break
                     except Exception as _abort_err:
                         logger.debug("Thinking abort check failed: %s", _abort_err)
 

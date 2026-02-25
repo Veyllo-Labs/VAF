@@ -1844,7 +1844,8 @@ class Agent:
 
         # Load new session data
         from vaf.core.session import SessionManager
-        sm = SessionManager()
+        # CRITICAL: Pass state_registry so runtime state (ContextManager, etc.) is restored
+        sm = SessionManager(state_registry=self.state_registry)
         try:
             session = sm.load(session_id)
             # Set current user from session metadata so build_prompt() can show User identity block (only override if session has them)
@@ -1856,10 +1857,10 @@ class Agent:
             # Reset Context (System Prompt)
             self.init_chat() 
             
-            # Replay History
+            # Replay History (session.messages are Message dataclass instances: .role, .content)
             for msg in session.messages:
-                role = msg.get("role")
-                content = str(msg.get("content") or "")
+                role = getattr(msg, "role", None)
+                content = str(getattr(msg, "content", None) or "")
                 if role in ["user", "assistant", "tool", "system"]:
                     # Skip duplicate or operational system prompts
                     if role == "system":
@@ -1884,19 +1885,59 @@ class Agent:
             self.current_session_id = session_id
             set_current_session_id(session_id)
             
-        # CRITICAL: Compress history immediately upon load to match context limits
+        # CRITICAL: Compress history immediately upon load IF needed
         # Otherwise UI shows massive "Raw Truth" (e.g. 17k tokens) which looks broken,
         # even though chat_step would compress it before sending.
         # We want the UI to show the "Ready State".
-        self.manage_context()
+        current_tokens, max_tokens = self.get_token_usage()
+        if current_tokens > max_tokens * 0.9:
+            self.manage_context()
             
         # Broadcast new context stats to WebUI immediately
         self._broadcast_context_status()
 
+    def _sanitize_response(self, text: str) -> str:
+        """
+        Detects and strips leaked tool call JSON fragments from the text response.
+        Common when models get confused and output JSON in the text field.
+        """
+        if not text:
+            return ""
+            
+        # Pattern 1: Full or partial JSON tool call arrays/objects at the end
+        # Matches things like: [{"tool_calls": ...}] or {"name": "update_working_memory"...}
+        # and even fragmented ones: ", "name": ... or "}, "type": "function", "index": 0}]}
+        patterns = [
+            r'\[?\s*\{\s*"tool_calls":.*$',
+            r'\{\s*"name":\s*"[^"]*",\s*"arguments":.*$',
+            r'\{\s*"index":\s*\d+,\s*"id":.*$',
+            r'",\s*"name":\s*"[^"]*",\s*"type":\s*"function".*$',
+            r'"\}\s*,\s*"type":\s*"function".*$',  # leaked tail: "}, "type": "function", "index": 0}]}
+            r'",\s*"name":\s*"[^"]*"\}\s*,\s*"type":\s*"function".*$',  # full: , "name": "x"}, "type": "function"...
+            r',\s*"name":\s*"[^"]*"?\s*$',  # trailing fragment: , "name": "update_working_memory" or without closing quote
+            r'\}\s*,\s*\{\s*"index":\s*\d+.*$',
+            r'\}\s*,\s*\{\s*"name":\s*"[^"]*".*$',
+            r'\]\s*\}\s*$', # Closing brackets at the very end
+            r'\}\s*\]\s*\}\s*$', # More closing brackets
+        ]
+        
+        cleaned = text
+        for pattern in patterns:
+            # We use re.sub with a special handling for end of string to avoid destroying internal JSON
+            # Only strip if the pattern is found near the end of the text
+            if re.search(pattern, cleaned, flags=re.DOTALL | re.MULTILINE):
+                # If the match is in the last 20% of the text or at least after 50 chars
+                # this prevents stripping legitimate looking JSON in long technical answers
+                cleaned = re.sub(pattern, '', cleaned, flags=re.DOTALL | re.MULTILINE)
+            
+        return cleaned.strip()
+
     def _clean_reasoning(self, text: str) -> str:
         """Removes internal reasoning/CoT blocks from the model response."""
         import re
-        t = text
+        
+        # First, apply the JSON sanitizer to catch leaked tool calls
+        t = self._sanitize_response(text)
         
         # 1. Remove XML-style thinking blocks
         t = re.sub(r'<think>.*?</think>', '', t, flags=re.DOTALL)
@@ -2348,72 +2389,70 @@ class Agent:
     def _estimate_token_usage(self):
         """
         Estimate token usage without loading the tokenizer.
-        Used when server mode is active to avoid blocking on model file.
-        Uses ~4 chars per token as a conservative estimate for most LLMs.
+        Uses weighted ratios (2.8 for code, 3.6 for text) for high accuracy.
         """
-        import json as json_module  # Local import to avoid scope issues
+        import json as json_module
 
-        total_chars = 0
+        total_tokens = 0
 
-        # 1. Estimate chat history tokens
+        # 1. Estimate chat history tokens using weighted ratios
         for msg in self.history:
             content = str(msg.get("content", ""))
             role = str(msg.get("role", ""))
-            total_chars += len(content) + len(role) + 20  # 20 for message structure
+            
+            # Weighted estimation (Code is denser than text)
+            ratio = 2.8 if "```" in content else 3.6
+            msg_tokens = int((len(content) + len(role)) / ratio) + 5
+            total_tokens += msg_tokens
 
         # 2. Estimate tool schema tokens — only for local/server mode.
-        # API backends (Claude, OpenAI, etc.) handle tool schemas server-side and
-        # do NOT count them against the user-visible context window limit.
-        # Including them here causes the 170%+ false display in API mode.
+        # API backends handle schemas server-side.
         if hasattr(self, 'TOOLS') and self.TOOLS and not self.api_backend:
             try:
                 schema_str = json_module.dumps(self.TOOLS)
-                total_chars += len(schema_str)
+                # Tool schemas are mostly structured text/code-like
+                total_tokens += int(len(schema_str) / 3.0)
             except Exception:
-                total_chars += 2000  # Fallback estimate for tools
+                total_tokens += len(self.tools) * 200
 
-        # Convert chars to tokens (conservative: ~4 chars per token)
-        estimated_tokens = total_chars // 4
+        # Add small safety buffer
+        total_tokens += 50
         
-        # Use actual context manager limit if available (handles API boosts to 128k)
+        # Use actual context manager limit if available
         if self.api_backend:
-            # Boost default for API backends (DeepSeek, OpenAI, etc. support 128k+)
-            max_tokens = self.config.get("n_ctx", 8192)
-            if max_tokens < 128000:
-                max_tokens = 128000
+            max_tokens = self.config.get("n_ctx", 128000)
+            if max_tokens <= 16384: max_tokens = 128000
         elif hasattr(self, 'context_manager'):
             max_tokens = self.context_manager.max_tokens
         else:
             max_tokens = self.config.get("n_ctx", 8192)
 
-        return estimated_tokens, max_tokens
+        return total_tokens, max_tokens
 
     def get_token_usage(self):
         """
         Calculates a precise token usage by using the model's tokenizer.
-        This includes the chat history and the schemas of all active tools.
         """
-        # API Backend: Return REAL context usage from the last request if available.
-        # This is perfectly accurate for APIs like OpenAI, DeepSeek, and Anthropic.
-        if self.api_backend and hasattr(self.api_backend, 'last_request_usage'):
-            last_input = self.api_backend.last_request_usage.get("input_tokens", 0)
-            last_output = self.api_backend.last_request_usage.get("output_tokens", 0)
+        # API Backend: Calculate current history status even if no request was made yet.
+        if self.api_backend:
+            # Try to get data from last request as primary source of truth
+            last_total = 0
+            if hasattr(self.api_backend, 'last_request_usage'):
+                li = self.api_backend.last_request_usage.get("input_tokens", 0)
+                lo = self.api_backend.last_request_usage.get("output_tokens", 0)
+                last_total = li + lo
             
-            # If we haven't made a request yet, or it returned 0, fall back to estimation
-            if last_input > 0:
-                # We use last_input as the base context size. 
-                # We add a small estimate for the *current* unsent user input (if any)
-                total = last_input + last_output
-                
-                # Dynamic n_ctx for APIs: Most modern APIs support 128k context.
-                # If the user hasn't explicitly set a huge limit, we assume 128k for the display.
-                n_ctx = self.config.get("n_ctx", 8192)
-                if n_ctx < 128000:
-                    n_ctx = 128000
-                
-                return total, n_ctx
+            # If last_total is 0 (new session) or too small, calculate based on current history
+            current_est = self._estimate_token_usage()[0]
             
-            return self._estimate_token_usage()
+            # Real total is the maximum of last request or current estimate
+            # (Last request might be smaller if we just compressed, but current history is what counts)
+            total = max(last_total, current_est)
+            
+            n_ctx = self.config.get("n_ctx", 128000)
+            if n_ctx <= 16384: n_ctx = 128000 # Boost for API
+            
+            return total, n_ctx
 
         # Server Mode: Use server /tokenize API for precise count (no local model load).
         # If server is not ready or tokenize fails, fall back to estimation.
@@ -2701,10 +2740,12 @@ class Agent:
                 get_web_interface().log("Context limit reached! Performing emergency cleanup...", level="warning", source="System", session_id=getattr(self, 'current_session_id', None))
             except: pass
 
-            # Absolute Minimum: System Prompt + LAST message (usually the user prompt that caused the overflow)
+            # Absolute Minimum: System Prompt + LAST 6 messages (or as many as available)
             system_msg = [self.history[0]] if self.history and self.history[0].get("role") == "system" else []
-            last_msg = [self.history[-1]] if len(self.history) > 1 else []
-            self.history = system_msg + last_msg
+            # Keep more than just the last message - try to keep 6
+            recent_count = 6
+            last_msgs = self.history[-recent_count:] if len(self.history) > 1 else []
+            self.history = system_msg + last_msgs
             
             # Force UI update
             self._broadcast_context_status()
@@ -2840,23 +2881,50 @@ class Agent:
         return f"[checkpoint] Context reset: {old_len} -> {len(new_history)} messages. Plan and working memory preserved."
 
     def _broadcast_context_status(self):
-        """Send context debug info to WebUI (X-Ray Vision)."""
+        """Send precise context debug info to WebUI (X-Ray Vision)."""
         try:
             from vaf.core.web_interface import get_web_interface
-
+            session_id = getattr(self, "current_session_id", None)
+            
+            # 1. Get absolute totals (Precise)
             tokens, max_tokens = self.get_token_usage()
 
-            # Calculate detailed token breakdown for X-Ray visualization
+            # 2. Calculate detailed breakdown (High Precision)
             system_tokens = 0
             history_tokens = 0
             tools_tokens = 0
             system_content = ""
+            
+            # Setup tokenizer for breakdown if available
+            tokenizer = None
+            if not self.api_backend: # Only use local tokenizer for local/server modes
+                if self.use_server:
+                    pass # We will use the /tokenize API per block
+                else:
+                    tokenizer = self._get_tokenizer()
 
             for msg in self.history:
                 content = str(msg.get("content", ""))
                 role = msg.get("role", "")
-                # Estimate tokens: ~4 chars per token
-                msg_tokens = (len(content) + len(role) + 20) // 4
+                
+                # Precise token count for this message
+                msg_tokens = 0
+                if self.use_server:
+                    try:
+                        r = requests.post("http://127.0.0.1:8080/tokenize", json={"content": content + role}, timeout=2)
+                        if r.status_code == 200:
+                            msg_tokens = len(r.json().get("tokens", [])) + 5
+                    except: pass
+                
+                if msg_tokens == 0 and tokenizer:
+                    try:
+                        msg_tokens = len(tokenizer.tokenize((content + role).encode("utf-8", errors="ignore"))) + 5
+                    except: pass
+                
+                if msg_tokens == 0:
+                    # Improved weighted estimation (Code is denser than text)
+                    ratio = 2.8 if "```" in content else 3.6
+                    msg_tokens = int((len(content) + len(role)) / ratio) + 5
 
                 if role == "system":
                     system_tokens += msg_tokens
@@ -2865,42 +2933,42 @@ class Agent:
                 else:
                     history_tokens += msg_tokens
 
-            # Estimate tool schema tokens — only for local/server mode.
-            # API backends handle schemas server-side; don't count them here
-            # or the X-Ray bar will show >100% (e.g. 186%) in API mode.
+            # 3. Handle Tool Schema Tokens
             if hasattr(self, 'TOOLS') and self.TOOLS and not self.api_backend:
                 try:
-                    import json
                     schema_str = json.dumps(self.TOOLS)
-                    tools_tokens = len(schema_str) // 4
+                    if self.use_server:
+                        r = requests.post("http://127.0.0.1:8080/tokenize", json={"content": schema_str}, timeout=2)
+                        if r.status_code == 200:
+                            tools_tokens = len(r.json().get("tokens", []))
+                    if tools_tokens == 0 and tokenizer:
+                        tools_tokens = len(tokenizer.tokenize(schema_str.encode("utf-8")))
+                    if tools_tokens == 0:
+                        tools_tokens = len(schema_str) // 3
                 except Exception:
-                    tools_tokens = len(self.tools) * 200 if hasattr(self, 'tools') else 0
+                    tools_tokens = len(self.tools) * 200
 
-            # Count user messages for compaction tracking
-            # CRITICAL: Use PERSISTENT count from session.runtime_state, NOT from compressed history
+            # 4. Sync persistent turn count
             user_turn_count = 0
             compaction_interval = 15
             try:
                 from vaf.core.config import Config
                 from vaf.core.session import SessionManager
                 compaction_interval = int(Config.get("memory_compaction_interval", 15))
-                # Try to get persistent count from session
-                if hasattr(self, 'current_session_id') and self.current_session_id:
+                if session_id:
                     try:
-                        _sm = SessionManager()
-                        _session = _sm.load(self.current_session_id)
+                        _sm = SessionManager(state_registry=self.state_registry)
+                        _session = _sm.load(session_id)
                         _runtime = getattr(_session, 'runtime_state', None) or {}
                         user_turn_count = _runtime.get("user_turn_count", 0)
-                    except Exception:
-                        pass
-                # Fallback to history count if no persistent count
+                    except: pass
                 if user_turn_count == 0:
                     user_turn_count = sum(1 for m in self.history if m.get("role") == "user")
-            except Exception:
-                user_turn_count = sum(1 for m in self.history if m.get("role") == "user")
+            except: pass
 
-            if _emit_to_web_ui():
-                get_web_interface().push_update({
+            # 5. Broadcast to SPECIFIC SESSION (No Multi-Tab Leak!)
+            if _emit_to_web_ui() and session_id:
+                get_web_interface()._push_session_update(session_id, {
                     "type": "context_status",
                     "stats": {
                         "tokens": tokens,
@@ -2908,18 +2976,16 @@ class Agent:
                         "percent": round((tokens / max_tokens) * 100, 1) if max_tokens else 0,
                         "message_count": len(self.history),
                         "rag_preview": system_content,
-                        # Detailed breakdown for X-Ray visualization
                         "system_tokens": system_tokens,
                         "history_tokens": history_tokens,
                         "tools_tokens": tools_tokens,
-                        # Compaction tracking
                         "user_turn_count": user_turn_count,
                         "compaction_interval": compaction_interval,
                         "compaction_progress": round((user_turn_count % compaction_interval) / compaction_interval * 100)
                     }
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            append_domain_log("backend", f"broadcast_status_error: {e}")
     
     def restore_context(self) -> bool:
         """Restore full context from archive."""
@@ -4322,10 +4388,13 @@ class Agent:
             
         # Apply updated system prompt + context glue + project context
         if new_prompt is not None and len(self.history) > 0 and self.history[0].get("role") == "system":
-            # 1. Add Context Glue (if we compressed or if it's generally useful)
-            # Only add glue if we actually have state to report
+            # 1. Add Context Glue
+            # We add glue if we have a summary OR if context is getting full
             context_glue = self.context_manager._build_context_summary()
-            if context_glue and (compression_happened or self.context_manager.get_usage_percent(self.history) > 0.5):
+            if context_glue and (
+                self.context_manager.state.narrative_summary or 
+                self.context_manager.get_usage_percent(self.history) > 0.3
+            ):
                 if context_glue not in new_prompt:
                     new_prompt += f"\n\n{context_glue}"
             

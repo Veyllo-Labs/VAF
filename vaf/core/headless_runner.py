@@ -33,55 +33,84 @@ MEMORY_CRITICAL_MB = 4096  # Force aggressive cleanup above 4GB
 STREAM_EMIT_THROTTLE_SEC = 0.08
 
 def _strip_tool_calls_json(text: str) -> str:
-    """Remove raw tool_calls JSON blobs from reply text so bridges/TTS never send them to users."""
-    if not text or ("tool_calls" not in text):
+    """Remove raw tool_calls JSON blobs and fragments from reply text."""
+    if not text:
         return text
-    out = []
-    i = 0
-    while i < len(text):
-        start = text.find('{"tool_calls"', i)
-        if start == -1:
-            start = text.find("{'tool_calls'", i)
-        if start == -1:
-            out.append(text[i:])
-            break
-        out.append(text[i:start])
-        # Match closing brace, skipping content inside double-quoted strings
-        depth = 0
-        j = start
-        in_dq = False
-        escape = False
-        while j < len(text):
-            c = text[j]
-            if escape:
-                escape = False
-                j += 1
-                continue
-            if c == "\\" and in_dq:
-                escape = True
-                j += 1
-                continue
-            if c == '"' and not in_dq:
-                in_dq = True
-                j += 1
-                continue
-            if c == '"' and in_dq:
-                in_dq = False
-                j += 1
-                continue
-            if in_dq:
-                j += 1
-                continue
-            if c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
+        
+    # Check for common tool call JSON patterns
+    if "tool_calls" not in text and '"name":' not in text and '"function":' not in text:
+        return text
+        
+    # Pattern-based removal for leaked JSON fragments (incl. tail like ", "name": "update_working_memory"}, "type": "function", "index": 0}]}")
+    import re
+    patterns = [
+        r'\[?\s*\{\s*"tool_calls":.*$',
+        r'\{\s*"name":\s*"[^"]*",\s*"arguments":.*$',
+        r'\{\s*"index":\s*\d+,\s*"id":.*$',
+        r'",\s*"name":\s*"[^"]*",\s*"type":\s*"function".*$',
+        r'"\}\s*,\s*"type":\s*"function".*$',
+        r'",\s*"name":\s*"[^"]*"\}\s*,\s*"type":\s*"function".*$',
+        r',\s*"name":\s*"[^"]*"?\s*$',
+        r'\}\s*,\s*\{\s*"index":\s*\d+.*$',
+        r'\}\s*,\s*\{\s*"name":\s*"[^"]*".*$',
+        r'\]\s*\}\s*$',
+        r'\}\s*\]\s*\}\s*$',
+    ]
+    
+    out = text
+    for p in patterns:
+        out = re.sub(p, '', out, flags=re.DOTALL | re.MULTILINE)
+        
+    # Legacy brace counting for full blocks (fallback)
+    if '{"tool_calls"' in out or "{'tool_calls'" in out:
+        temp_out = []
+        i = 0
+        while i < len(out):
+            start = out.find('{"tool_calls"', i)
+            if start == -1:
+                start = out.find("{'tool_calls'", i)
+            if start == -1:
+                temp_out.append(out[i:])
+                break
+            temp_out.append(out[i:start])
+            # Match closing brace
+            depth = 0
+            j = start
+            in_dq = False
+            escape = False
+            while j < len(out):
+                c = out[j]
+                if escape:
+                    escape = False
                     j += 1
-                    break
-            j += 1
-        i = j
-    return "".join(out)
+                    continue
+                if c == "\\" and in_dq:
+                    escape = True
+                    j += 1
+                    continue
+                if c == '"' and not in_dq:
+                    in_dq = True
+                    j += 1
+                    continue
+                if c == '"' and in_dq:
+                    in_dq = False
+                    j += 1
+                    continue
+                if in_dq:
+                    j += 1
+                    continue
+                if c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        j += 1
+                        break
+                j += 1
+            i = j
+        out = "".join(temp_out)
+        
+    return out.strip()
 
 
 # Phrases that must never appear in messages sent to contacts via Telegram/WhatsApp/Discord.
@@ -269,7 +298,8 @@ def run_headless_agent():
 
     # Task Queue
     tq = TaskQueue()
-    session_mgr = SessionManager()
+    # CRITICAL: Connect SessionManager to agent's registry for full state persistence
+    session_mgr = SessionManager(state_registry=agent.state_registry)
     
     # Main Loop
     last_subagent_check = 0.0
@@ -879,7 +909,11 @@ def run_headless_agent():
                     else:
                         # Final response broadcast: always send full content once so UI has complete message.
                         # (Streaming is throttled, so the last chunk(s) may never have been emitted.)
-                        final_text = "".join(response_parts) if response_parts else response_text
+                        raw_final = "".join(response_parts) if response_parts else response_text
+                        
+                        # SANITIZE: Remove leaked JSON fragments before showing to user
+                        final_text = _strip_tool_calls_json(raw_final)
+                        
                         if not final_text or not str(final_text).strip():
                             final_text = "[Error] No response was produced. The server may have rejected the request (e.g. context too large). Try closing the Document Editor or starting a new chat."
                         get_web_interface().emit_agent_message(
@@ -1120,7 +1154,8 @@ def run_headless_agent():
                                         break
                                 if last_assistant_msg != _clean_response:
                                     session.add_message(role="assistant", content=_clean_response)
-                                    session_mgr.save(session)
+                                # sync_state=True ensures the ContextManager state is saved to runtime_state
+                                session_mgr.save(session, sync_state=True)
                     except Exception as e:
                         logging.getLogger(__name__).warning(f"Failed to save session: {e}")
                         _post_chat_ok = False  # Skip memory-intensive operations
@@ -1620,6 +1655,12 @@ def _handle_command(cmd_str, agent, session_mgr):
             # but we might need to reset agent state
             agent.init_chat()
             
+        elif cmd_type == "LOAD_SESSION" and len(parts) >= 3:
+            sid = parts[2].strip()
+            # Explicitly load the session context (history + runtime state)
+            agent.load_session_context(sid)
+            print(f"[Headless] LOAD_SESSION: Switched agent context to {sid}")
+
         elif cmd_type == "RELOAD_CONFIG":
             from vaf.core.config import Config
             new_cfg = Config.load()

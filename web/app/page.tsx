@@ -711,6 +711,12 @@ function VAFDashboardContent() {
     useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
     const pendingSendRef = useRef<{ text: string } | null>(null);
     const pendingSessionRequestRef = useRef(false);
+    /** After sending a user message, first agent_message_update must append a new bubble (race-safe). */
+    const expectNewAssistantRef = useRef(false);
+    /** Timestamp (ms) when user last sent a message; within 1.5s we force-append first update (millisecond race). */
+    const lastUserSendTimeRef = useRef(0);
+    /** After a tool ended, next agent_message_update must append (tool card may not be in state yet). */
+    const expectNewAssistantAfterToolRef = useRef(false);
     const sidebarListRef = useRef<HTMLDivElement>(null);
     const sidebarDocsSyncedForSessionRef = useRef<string | null>(null);
     type DocumentViewerDoc = { id: string; name: string; mimeType?: string; data?: string; content?: string; htmlContent?: string };
@@ -1240,6 +1246,9 @@ function VAFDashboardContent() {
 
         // 3. Optimistic Switch (viewer state is derived from sessionViewerState[id] automatically)
         setCurrentSessionId(id);
+        expectNewAssistantRef.current = false;
+        lastUserSendTimeRef.current = 0;
+        expectNewAssistantAfterToolRef.current = false;
         const cached = sessionCache.current[id] || [];
         setMessages(cached);
 
@@ -1436,7 +1445,7 @@ function VAFDashboardContent() {
                         }
                         else if (subType === 'end' || subType === 'error') {
                             if (existingIdx === -1) return prev; // Tool not found (maybe page reload?)
-
+                            expectNewAssistantAfterToolRef.current = true;
                             const newMessages = [...prev];
                             newMessages[existingIdx] = {
                                 ...newMessages[existingIdx],
@@ -1526,12 +1535,21 @@ function VAFDashboardContent() {
                     }
                     setMessages(prev => {
                         const last = prev[prev.length - 1];
-                        if (last && last.role === 'assistant') {
+                        const expectNew = expectNewAssistantRef.current;
+                        if (expectNew) expectNewAssistantRef.current = false;
+                        const expectAfterTool = expectNewAssistantAfterToolRef.current;
+                        if (expectAfterTool) expectNewAssistantAfterToolRef.current = false;
+                        // Within 1.5s of user send: force append once (handles ms-level race before state has user msg)
+                        const t = lastUserSendTimeRef.current;
+                        const withinUserSendWindow = t && (Date.now() - t < 1500);
+                        if (withinUserSendWindow) lastUserSendTimeRef.current = 0;
+                        const forceAppend = expectNew || expectAfterTool || withinUserSendWindow;
+                        if (last && last.role === 'assistant' && !forceAppend) {
                             const newMsgs = [...prev];
                             newMsgs[newMsgs.length - 1] = { ...last, content: data.content };
                             return newMsgs;
                         }
-                        // Last message is not assistant (e.g. tool card). Append a new assistant bubble.
+                        // New turn (user just sent), after tool end, or within user-send window. Append a new assistant bubble.
                         // Backend sends full accumulated content; show only the delta after the previous
                         // assistant text so the user sees a separate answer bubble (e.g. after tool use).
                         let content = data.content ?? '';
@@ -2375,6 +2393,8 @@ function VAFDashboardContent() {
                 ? documentViewerState.documents.map(d => d.name)
                 : undefined,
         }]);
+        expectNewAssistantRef.current = true;
+        lastUserSendTimeRef.current = Date.now();
         setLoading(true);
 
         if (currentSessionId) {

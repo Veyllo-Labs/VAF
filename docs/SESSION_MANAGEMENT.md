@@ -65,20 +65,25 @@ if not session_id:
 
 ### 3. Task Queue → Agent
 
+For each task (chat or command), the runner calls `agent.load_session_context(task.session_id)` so the agent’s history and context match the task’s session. Example (conceptually):
+
 ```python
-# vaf/cli/cmd/run.py (line 1204-1226)
+# vaf/core/headless_runner.py (chat task path)
 task = tq.get()
 agent.load_session_context(task.session_id)
-
-# Sync current_session for state tracking
-current_session = session_mgr.load(task.session_id)
-
-# CRITICAL: Sync agent._session_id for WebSocket routing
-if hasattr(agent, '_session_id') and agent._session_id != current_session.id:
-    agent._unregister_session()
-    agent._session_id = current_session.id
-    agent._register_session()
+# ... then process task.input_text (chat) or _handle_command (system command)
 ```
+
+When the session is loaded, `SessionManager.load(session_id, restore_state=True)` restores `runtime_state` (including ContextManager: intent, state, narrative summary) from the session file, so the agent has the correct high-level context for that session.
+
+### 3b. Session switch (Web UI)
+
+When the user clicks a different session in the Web UI, the frontend sends `load_session` with the session id. The server loads the session from disk, sends `history_update` to the client, and enqueues a system command:
+
+- **Command:** `__CMD__:LOAD_SESSION:{sid}` (with `session_id="system"` so the queue accepts it).
+- **Handler:** In `vaf/core/headless_runner.py`, `_handle_command()` handles `LOAD_SESSION` by parsing the session id from the command and calling `agent.load_session_context(sid)`.
+
+As a result, the agent’s context (history + ContextManager) is switched to the selected session immediately, even if the user does not send a new message. The next message in that session then runs with the correct session context already loaded.
 
 ### 4. Agent → Frontend (Broadcasting Updates)
 

@@ -151,14 +151,17 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 └─────────────────────────────────────────────────────────────┘
 ```
 
+When a session is loaded (e.g. on Web UI session switch or when processing a chat task), the ContextManager state (intent, state, narrative summary) is restored from the session’s `runtime_state` if present. So the agent keeps high-level context across session switches; see **SESSION_MANAGEMENT.md** (Session switch / LOAD_SESSION).
+
 ### Real-Time API Token Tracking (Self-Calibration)
 
-Unlike local models where VAF uses a local tokenizer, API providers (OpenAI, DeepSeek, Anthropic, Google) provide exact usage data after each request. VAF now utilizes this data for "Self-Calibration":
+Unlike local models where VAF uses a local tokenizer, API providers (OpenAI, DeepSeek, Anthropic, Google) provide exact usage data after each request. VAF uses this for display and calibration:
 
 1. **Facts over Estimation**: After every API call, VAF captures the exact `input_tokens` and `output_tokens` reported by the provider.
-2. **Context Persistence**: The context bar in the Web UI now reflects the *actual* state of the API's context window, including the exact cost of tool schemas and system prompts.
-3. **Dynamic Context Windows**: When an API backend is active, VAF automatically adjusts the context limit (`n_ctx`) to **128,000 tokens** (unless manually set higher). This prevents premature compression and allows full use of modern "Long Context" models.
-4. **Transparent Continuation**: If a response is cut off due to the output token limit (`finish_reason: length`), VAF's API backend transparently requests a continuation, stitching the parts together seamlessly for the user.
+2. **Context Bar (Web UI)**: The context bar reflects the effective context fill. In API mode the displayed total is the maximum of the last request usage and a history-based estimate (so loading an old session shows the correct fill before any new request). Estimates use weighted ratios: 2.8 chars/token for code (e.g. messages containing ```), 3.6 for plain text; tool schemas (local/server) use 3.0. When a local server is available, the breakdown (system / history / tools) can use the server’s `/tokenize` endpoint for precision.
+3. **Session-Scoped Display**: Context updates (`context_status`) are sent only to the Web UI tab that has that session open (`_push_session_update(session_id, ...)`), so multiple tabs do not see each other’s token stats.
+4. **Dynamic Context Windows**: When an API backend is active, VAF automatically adjusts the context limit (`n_ctx`) to **128,000 tokens** (unless manually set higher). This prevents premature compression and allows full use of modern "Long Context" models.
+5. **Transparent Continuation**: If a response is cut off due to the output token limit (`finish_reason: length`), VAF's API backend transparently requests a continuation, stitching the parts together seamlessly for the user.
 
 ### VRAM-Aware Efficiency
 

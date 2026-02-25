@@ -107,6 +107,27 @@ class GarbageCollector:
         try:
             stats = self._collect()
             logger.info("[GC] Collection complete: %s", stats)
+            
+            # Audit log notification
+            try:
+                from vaf.core.user_notifications import append_notification
+                from vaf.core.config import get_local_admin_scope_id
+                
+                deleted = stats.get("deleted", 0)
+                freed = stats.get("freed_bytes", 0) / (1024 * 1024)
+                sessions = stats.get("thinking_sessions_deleted", 0)
+                
+                if deleted > 0 or sessions > 0:
+                    append_notification(
+                        user_scope_id=str(get_local_admin_scope_id()),
+                        kind="system",
+                        title="System cleanup finished",
+                        status="success",
+                        summary=f"Deleted {deleted} files and {sessions} old thinking sessions. Freed {freed:.1f} MB."
+                    )
+            except Exception:
+                pass
+                
         except Exception as exc:
             logger.error("[GC] Collection failed: %s", exc)
         self._schedule_next()

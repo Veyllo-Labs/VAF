@@ -8,7 +8,7 @@ import { getApiBase } from '@/lib/utils';
 
 export type NotificationItem = {
   id: string;
-  kind: 'thinking' | 'automation' | 'channel_reply';
+  kind: 'thinking' | 'automation' | 'channel_reply' | 'system';
   title: string;
   status: 'success' | 'skipped' | 'error';
   timestamp: string;
@@ -134,6 +134,9 @@ export default function NotificationsModal({
                       )}
                     >
                       {statusLabel(item.status)}
+                    </span>
+                    <span className="shrink-0 text-[10px] font-bold uppercase text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded tracking-tighter">
+                      {item.kind}
                     </span>
                     <span className="flex-1 min-w-0 font-medium text-gray-900 truncate">{item.title}</span>
                     <span className="shrink-0 text-xs text-gray-500">{formatRelativeTime(item.timestamp)}</span>

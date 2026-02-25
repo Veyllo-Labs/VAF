@@ -18,6 +18,11 @@ from vaf.core.platform import Platform
 
 logger = logging.getLogger(__name__)
 
+# Windows: avoid flashing CMD windows when run from pythonw/tray
+_WIN_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Skip further netsh attempts in this process after first failure (avoids repeated 0xc0000142 dialogs)
+_windows_firewall_skip: bool = False
+
 # Rule/anchor names for identification
 FIREWALL_RULE_NAME = "VAF-LocalNetwork"
 
@@ -97,7 +102,8 @@ def is_firewall_configured() -> bool:
             result = subprocess.run(
                 ['netsh', 'advfirewall', 'firewall', 'show', 'rule', f'name={FIREWALL_RULE_NAME}'],
                 capture_output=True,
-                text=True
+                text=True,
+                creationflags=_WIN_CREATE_NO_WINDOW,
             )
             return result.returncode == 0 and FIREWALL_RULE_NAME in result.stdout
         elif Platform.is_macos():
@@ -147,9 +153,17 @@ def _setup_firewall_windows(port: int, port_frontend: int) -> bool:
             f'remoteip={private_ranges},127.0.0.1'
         ]
         
-        result = subprocess.run(allow_cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(
+                allow_cmd, capture_output=True, text=True, creationflags=_WIN_CREATE_NO_WINDOW
+            )
+        except Exception as e:
+            logger.error(f"Failed to run netsh (firewall): {e}")
+            _windows_firewall_skip = True
+            return False
         if result.returncode != 0:
             logger.error(f"Failed to create allow rule: {result.stderr}")
+            _windows_firewall_skip = True
             return False
         
         # Create block rule for all other IPs (lower priority)
@@ -162,10 +176,14 @@ def _setup_firewall_windows(port: int, port_frontend: int) -> bool:
             'protocol=tcp'
         ]
         
-        result = subprocess.run(block_cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.warning(f"Failed to create block rule (may already exist): {result.stderr}")
-    
+        try:
+            block_result = subprocess.run(
+                block_cmd, capture_output=True, text=True, creationflags=_WIN_CREATE_NO_WINDOW
+            )
+            if block_result.returncode != 0:
+                logger.warning(f"Failed to create block rule (may already exist): {block_result.stderr}")
+        except Exception as e:
+            logger.debug("Block rule netsh call failed: %s", e)
     logger.info(f"Windows Firewall rules created for ports {ports}")
     return True
 
@@ -180,7 +198,8 @@ def _cleanup_firewall_windows() -> bool:
             subprocess.run(
                 ['netsh', 'advfirewall', 'firewall', 'delete', 'rule',
                  f'name={FIREWALL_RULE_NAME}-{rule_type}-{port}'],
-                capture_output=True
+                capture_output=True,
+                creationflags=_WIN_CREATE_NO_WINDOW,
             )
     
     return True

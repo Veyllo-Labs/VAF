@@ -6,21 +6,17 @@ const API_HOST = process.env.VAF_API_HOST || '127.0.0.1'
 const API_PORT = process.env.VAF_API_PORT || '8001'
 const API_BASE = `${API_PROTOCOL}://${API_HOST}:${API_PORT}`
 
+// When TLS is off, Next.js proxies to 8001. When TLS is on, proxy to internal HTTP channel 8005.
+const INTERNAL_API_PORT = process.env.VAF_INTERNAL_API_PORT || '8005'
+
 const nextConfig = {
   reactStrictMode: false,
   images: {
     unoptimized: true,
   },
-  // Disable the Next.js dev indicator (bottom-left corner)
+  // Disable the Next.js dev indicator
   devIndicators: false,
-  async rewrites() {
-    return [
-      {
-        source: '/api/:path*',
-        destination: `${API_BASE}/api/:path*`,
-      },
-    ]
-  },
+  // /api/* is handled by app/api/[...path]/route.ts (proxy with cookie forwarding). No rewrites.
 }
 
 module.exports = nextConfig

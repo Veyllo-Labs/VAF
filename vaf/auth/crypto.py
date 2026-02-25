@@ -64,6 +64,7 @@ def create_access_token(
     role: str,
     user_scope_id: str,
     expires_hours: Optional[float] = None,
+    is_2fa_verified: bool = False,
 ) -> str:
     """Create JWT access token."""
     if expires_hours is None:
@@ -78,6 +79,7 @@ def create_access_token(
         "iat": int(now.timestamp()),
         "exp": int(exp.timestamp()),
         "type": "access",
+        "is_2fa_verified": is_2fa_verified,
     }
     return jwt.encode(
         payload,

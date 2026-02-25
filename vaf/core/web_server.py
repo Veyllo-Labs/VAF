@@ -47,51 +47,13 @@ async def json_exception_handler(request, exc):
     return JSONResponse(status_code=500, content={"ok": False, "error": str(exc), "detail": str(exc)})
 
 
-# CORS: explicit origins required when frontend sends credentials (cookies).
-# Regex + credentials can fail in some browsers; list is reliable.
-def _build_cors_origins() -> list[str]:
-    """Build CORS allow-list including localhost AND local-network IPs when enabled."""
-    origins = [
-        "http://localhost",
-        "http://127.0.0.1",
-    ] + [
-        f"http://localhost:{p}" for p in range(3000, 3012)
-    ] + [
-        f"http://127.0.0.1:{p}" for p in range(3000, 3012)
-    ]
+# CORS: Use regex to allow localhost AND all RFC 1918 private network origins.
+# This is safe because Layer 2 (IPValidationMiddleware) already blocks non-local IPs.
+_CORS_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+|192\.168\.\d+\.\d+)(:\d+)?$"
 
-    # When TLS is enabled, add https:// variants
-    tls_on = Config.get("local_network_tls_enabled", False)
-    if tls_on:
-        origins += [
-            "https://localhost",
-            "https://127.0.0.1",
-        ] + [
-            f"https://localhost:{p}" for p in range(3000, 3012)
-        ] + [
-            f"https://127.0.0.1:{p}" for p in range(3000, 3012)
-        ]
-
-    # When local network is enabled, add private-IP origins
-    if Config.get("local_network_enabled", False):
-        try:
-            from vaf.network.binding import get_all_local_ips
-            for _iface, ip in get_all_local_ips():
-                for port in [3000, 8001]:
-                    origins.append(f"http://{ip}:{port}")
-                    origins.append(f"http://{ip}")
-                    if tls_on:
-                        origins.append(f"https://{ip}:{port}")
-                        origins.append(f"https://{ip}")
-        except Exception:
-            pass  # IP middleware validates anyway
-
-    return list(set(origins))  # deduplicate
-
-_CORS_ORIGINS = _build_cors_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_CORS_ORIGINS,
+    allow_origin_regex=_CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -28,6 +28,7 @@ AUTH_EXEMPT_PATHS: set[str] = {
     "/api/auth/verify-2fa",
     "/api/auth/refresh",
     "/api/auth/setup-2fa",
+    "/api/network/ws-config",  # So frontend can build wss:// URL when TLS is on
     "/docs",
     "/openapi.json",
 }

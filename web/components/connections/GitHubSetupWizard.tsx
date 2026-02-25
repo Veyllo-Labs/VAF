@@ -209,8 +209,8 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
     };
 
     const handleConnectToken = async () => {
-        const t = token.trim();
-        if (!t) {
+        const trimmedToken = token.trim();
+        if (!trimmedToken) {
             setError(t('tokenRequired'));
             return;
         }
@@ -221,7 +221,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ token: t }),
+                body: JSON.stringify({ token: trimmedToken }),
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {

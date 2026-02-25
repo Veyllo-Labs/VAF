@@ -187,6 +187,7 @@ class Config:
         "local_network_tls_enabled": False,                       # Serve backend over HTTPS/WSS (need cert + key)
         "local_network_ssl_cert": "",                             # Path to PEM certificate file (e.g. cert.pem)
         "local_network_ssl_key": "",                              # Path to PEM private key file (e.g. key.pem)
+        "local_network_https_port": 443,                           # Port for integrated HTTPS proxy (no Nginx); 8443 if 443 needs admin
         
         # Docker Settings (Desktop Mode only)
         # Note: CLI mode (vaf run) always runs natively with full host access

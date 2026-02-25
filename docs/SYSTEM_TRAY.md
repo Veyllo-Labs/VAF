@@ -62,8 +62,16 @@ Certain settings trigger an automatic server restart when changed in the Web UI:
 | Setting | Effect |
 | :--- | :--- |
 | `n_ctx`, `gpu_layers` | Stops and restarts `llama-server` with new values (local provider only). |
-| `local_network_enabled`, `local_network_port` | Restarts both uvicorn backend and Next.js frontend with new network binding. |
+| `local_network_enabled`, `local_network_port`, `local_network_port_frontend` | Restarts both uvicorn backend and Next.js frontend with new network binding. |
 | `provider` | Switches between local model and API backend; unloads/loads VRAM as needed. |
+
+You can also toggle local network hosting and SSL from the CLI (no UI needed):
+
+| Command | Effect |
+| :--- | :--- |
+| `vaf server on` | Enable local network (bind to 0.0.0.0) and turn on SSL/TLS (HTTPS). Tray restarts backend and frontend automatically. |
+| `vaf server off` | Disable local network (back to 127.0.0.1) and SSL. Tray restarts with localhost-only binding. |
+| `vaf server status` | Show whether hosting is enabled, SSL state, backend port, and the network URLs (e.g. https://192.168.x.x:3000) for other devices. |
 
 This is implemented via the Config observer pattern: `Config.save()` detects changes to critical keys and notifies `on_config_changed()` in `tray.py`, which performs the restart in a background thread.
 

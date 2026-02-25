@@ -2,6 +2,8 @@
 
 VAF (Veyllo Agent Framework) includes robust networking capabilities designed to allow secure, local collaboration. This document details the architecture, security measures, and usage of these features.
 
+**Integrated HTTPS proxy (no Nginx required):** When **Local Network** and **SSL/TLS** are enabled and certificate/key paths are set, VAF starts an integrated reverse proxy on `0.0.0.0:local_network_https_port` (default 443; on Windows often 8443 if 443 requires admin). The proxy is the single TLS entry point: it forwards `/api` and `/api/*` and `/ws` to the internal HTTP channel (port 8005), and all other paths to the frontend (port 3000). The proxy explicitly allows all HTTP methods (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS) for `/api` so that login (`POST /api/auth/login`) and other API calls work correctly. Access via `https://127.0.0.1` (or `https://127.0.0.1:8443` when using 8443) and `https://<LAN-IP>` works without an external proxy. Optional: [NGINX_REVERSE_PROXY.md](NGINX_REVERSE_PROXY.md) and `docs/nginx-vaf-https.conf.example`.
+
 ## Security Model
 
 Security is the primary design constraint for VAF's network features. The system employs a **Defense in Depth** strategy with five layers:
@@ -251,6 +253,7 @@ When TLS is active, the following changes take effect across the stack:
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
 | `local_network_tls_enabled` | `bool` | `false` | Master toggle for TLS |
+| `local_network_https_port` | `int` | `443` | HTTPS proxy listen port (8443 on Windows if 443 needs admin) |
 | `local_network_ssl_cert` | `string` | `""` | Path to PEM certificate (auto-populated if empty) |
 | `local_network_ssl_key` | `string` | `""` | Path to PEM private key (auto-populated if empty) |
 
@@ -300,6 +303,7 @@ Network settings are managed via the Web UI (Settings -> Local Network).
 | `local_network_rate_limit_attempts` | `int` | `5` | Failed login attempts before blocking |
 | `local_network_rate_limit_window_minutes` | `int` | `15` | Rate limit sliding window |
 | `local_network_tls_enabled` | `bool` | `false` | Enable HTTPS/WSS encryption |
+| `local_network_https_port` | `int` | `443` | HTTPS proxy listen port (e.g. 8443 on Windows if 443 needs admin) |
 | `local_network_ssl_cert` | `string` | `""` | PEM certificate path (auto-populated) |
 | `local_network_ssl_key` | `string` | `""` | PEM private key path (auto-populated) |
 
@@ -325,6 +329,7 @@ vaf/
   network/
     binding.py           # IP detection, RFC 1918 validation
     firewall.py          # OS firewall automation (Windows/macOS/Linux)
+    https_proxy.py       # Integrated HTTPS reverse proxy (/api, /ws -> 8005; rest -> 3000)
     connection_tracker.py # Real-time connection monitoring
     ssl_utils.py         # Auto-SSL certificate generation
   api/
@@ -337,20 +342,20 @@ vaf/
 
 ### Request Flow (Network Mode with TLS)
 
+When TLS is enabled, the **integrated HTTPS proxy** is the single entry point. The backend serves TLS on port 8001 and an internal HTTP-only channel on port 8005; the proxy talks to the frontend (3000) and to the internal channel (8005) so TLS is terminated only at the proxy.
+
 ```
-Browser (https://192.168.1.100:3000)
+Browser (https://127.0.0.1 or https://<LAN-IP>, port 443 or 8443)
     |
     v
-Next.js Frontend (serves static + proxies /api/ to backend)
-    |  (env: VAF_TLS_ENABLED=true, VAF_API_HOST=0.0.0.0)
-    v
-Uvicorn + FastAPI (https://0.0.0.0:8001)
+Integrated HTTPS proxy (0.0.0.0:443 or 8443)
     |
-    +-- SecurityHeadersMiddleware (adds X-Frame-Options, HSTS, etc.)
-    +-- RateLimitMiddleware (blocks brute-force on /api/auth/*)
-    +-- IPValidationMiddleware (rejects non-RFC1918 IPs)
-    +-- AuthMiddleware (validates JWT, populates request.state.user)
+    +-- /api, /api/*, /ws  -->  http://127.0.0.1:8005 (internal channel, same FastAPI app)
+    +-- all other paths    -->  http://127.0.0.1:3000 (Next.js frontend)
     |
+    v (for /api and /ws)
+Uvicorn + FastAPI (127.0.0.1:8005)
+    +-- SecurityHeadersMiddleware, RateLimitMiddleware, IPValidationMiddleware, AuthMiddleware
     v
 Route Handler (reads request.state.user for identity & scoping)
 ```
@@ -362,16 +367,18 @@ Route Handler (reads request.state.user for identity & scoping)
 ### 1. Get Access URL
 **GET** `/api/network/access-url`
 
-Returns the correct URL for other devices to connect to VAF.
+Returns the URL other devices on the LAN should use. When TLS is enabled, the port matches the integrated HTTPS proxy (443 or 8443 on Windows). The Web UI uses this for the "For other devices on LAN" row in Network settings.
 
-**Response:**
+**Response (TLS on, Windows):**
 ```json
 {
   "host": "192.168.1.50",
-  "port": 3000,
-  "url": "http://192.168.1.50:3000"
+  "port": 8443,
+  "url": "https://192.168.1.50:8443"
 }
 ```
+
+**Response (no LAN IP detected):** `{ "host": null, "port": 443, "url": null }`
 
 ### 2. Get Active Connections
 **GET** `/api/network/connections`

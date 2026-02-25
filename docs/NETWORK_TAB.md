@@ -14,6 +14,7 @@ The **Local Network** tab is the central command center for managing local netwo
 *   **Element:** "Enable Local Network Hosting" Switch.
 *   **Current Behavior:** Visually enables/disables the underlying sections (opacity change).
 *   **Future Logic:** Starts/Stops the internal Next.js server binding to `0.0.0.0` and opens the configured port in the local firewall.
+*   **CLI alternative:** The same behavior can be triggered from the terminal: `vaf server on` (enable hosting + SSL), `vaf server off` (disable), `vaf server status` (show status and network URLs). The Tray observes config changes and restarts backend/frontend automatically.
 
 #### **B. Network Topology Visualization**
 *   **Element:** "Open Network Map" Button & Full-Screen Modal.

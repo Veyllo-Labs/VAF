@@ -8,7 +8,7 @@ import {
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, Bell
 } from 'lucide-react';
-import { cn, getApiBase } from '@/lib/utils';
+import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
@@ -722,6 +722,7 @@ function VAFDashboardContent() {
     type DocumentViewerDoc = { id: string; name: string; mimeType?: string; data?: string; content?: string; htmlContent?: string };
 
     const [ws, setWs] = useState<WebSocket | null>(null);
+    const wsSocketRef = useRef<WebSocket | null>(null); // so cleanup can close when effect re-runs before async completes
     const [loading, setLoading] = useState(false);
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
     const [activeToolName, setActiveToolName] = useState(''); // Currently-running tool name for loading bubble
@@ -1279,15 +1280,34 @@ function VAFDashboardContent() {
     const [reconnectAttempt, setReconnectAttempt] = useState(0);
     useEffect(() => {
         if (typeof window === 'undefined') return;
-        const base = getApiBase() || 'http://localhost:8001';
-        let wsUrl = (base.startsWith('https') ? base.replace(/^https/, 'wss') : base.replace(/^http/, 'ws')) + '/ws';
-        const token = sessionStorage.getItem('vaf_token');
-        if (token) {
-            wsUrl += (wsUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
-        }
-        const socket = new WebSocket(wsUrl);
         let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-        socket.onopen = () => {
+        let cancelled = false;
+        (async () => {
+            let base: string;
+            const port = window.location.port || '';
+            // When accessed via reverse proxy (nginx/integrated proxy) on 80/443/8443, use same-origin so /ws is proxied
+            if (port === '80' || port === '443' || port === '8443' || port === '') {
+                base = '';
+            } else {
+                try {
+                    const r = await fetch(`${getApiBase() || ''}/api/network/ws-config`, { credentials: 'include' });
+                    if (!r.ok) throw new Error('');
+                    const { useWss, port: backendPort } = await r.json();
+                    const protocol = useWss ? 'wss' : 'ws';
+                    base = `${protocol}://${window.location.hostname}:${backendPort}`;
+                } catch {
+                    base = getWsBase();
+                }
+            }
+            if (cancelled) return;
+            let wsUrl = (base ? base + '/ws' : '/ws');
+            const token = sessionStorage.getItem('vaf_token');
+            if (token) {
+                wsUrl += (wsUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+            }
+            const socket = new WebSocket(wsUrl);
+            wsSocketRef.current = socket;
+            socket.onopen = () => {
             setStatus('connected');
             socket.send(JSON.stringify({ type: 'get_sessions' }));
             socket.send(JSON.stringify({ type: 'get_config' }));
@@ -2269,12 +2289,16 @@ function VAFDashboardContent() {
             }, 3000);
         };
         socket.onerror = () => setStatus('disconnected');
-        setWs(socket);
+        if (!cancelled) setWs(socket);
+        })();
         return () => {
+            cancelled = true;
             if (reconnectTimeout) clearTimeout(reconnectTimeout);
             if (memoryLearningTimeoutRef.current) clearTimeout(memoryLearningTimeoutRef.current);
             memoryLearningTimeoutRef.current = null;
-            socket.close();
+            wsSocketRef.current?.close();
+            wsSocketRef.current = null;
+            setWs(null);
         };
     }, [reconnectAttempt]);
 

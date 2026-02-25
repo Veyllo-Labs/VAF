@@ -229,6 +229,11 @@ vaf run --no-web
 
 # Configure in settings
 vaf settings  # Set web_ui_enabled
+
+# Local network (access from other devices on LAN)
+vaf server on    # Enable hosting on 0.0.0.0 + HTTPS
+vaf server off   # Back to localhost only
+vaf server status  # Show status and network URLs
 ```
 
 **Documentation:** See [docs/WEB_UI.md](docs/WEB_UI.md) for architecture details and API reference.

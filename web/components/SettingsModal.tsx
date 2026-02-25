@@ -663,10 +663,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             .finally(() => setUsersLoading(false));
     }, [isOpen, activeTab]);
 
-    // Fetch LAN access URL from backend (IP for other devices)
+    // Fetch LAN access URL from backend (IP for other devices); use same-origin so it works behind proxy (8443)
     useEffect(() => {
         if (!isOpen || activeTab !== 'local_network') return;
-        fetch('http://localhost:8001/api/network/access-url')
+        const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
+        fetch(`${apiBase}/api/network/access-url`, { credentials: 'include' })
             .then((res) => (res.ok ? res.json() : {}))
             .then((data: { url?: string | null }) => setNetworkAccessUrl(data.url ?? null))
             .catch(() => setNetworkAccessUrl(null));
@@ -1896,7 +1897,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {activeTab === 'local_network' && (
                             <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
                                 <Section title={tLocalNet('networkSettings')}>
-                                     <Switch
+                                    <Switch
                                         label={tLocalNet('enableHosting')}
                                         description={tLocalNet('enableHostingDesc')}
                                         checked={localConfig.local_network_enabled || false}
@@ -1905,67 +1906,80 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 setShowNetworkWarning(true);
                                             } else {
                                                 handleChange('local_network_enabled', false);
+                                                handleChange('local_network_tls_enabled', false);
                                             }
                                         }}
                                     />
-                                    {/* Access URL – LAN IP link so other devices can reach VAF (localhost only works on this PC) */}
+                                    {/* With network on, access via integrated HTTPS proxy (same port). */}
+                                    {/* Access URL for this device and LAN */}
                                     {(() => {
                                         const protocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
                                         const host = displayHost || '';
                                         const port = displayPort && displayPort !== '80' && displayPort !== '443' ? displayPort : '';
                                         const fallbackUrl = host ? `${protocol}//${host}${port ? `:${port}` : ''}` : '';
-                                        const accessUrl = networkAccessUrl || fallbackUrl;
-                                        const isLanUrl = !!networkAccessUrl;
-                                        if (!accessUrl && !fallbackUrl) return null;
+                                        const thisDeviceUrl = fallbackUrl || networkAccessUrl || '';
+                                        const lanUrl = networkAccessUrl;
+                                        const isLanUrl = !!lanUrl;
+                                        if (!thisDeviceUrl && !lanUrl) return null;
+                                        const copyUrl = (url: string) => {
+                                            if (url && navigator.clipboard) {
+                                                navigator.clipboard.writeText(url);
+                                                setNetworkLinkCopied(true);
+                                                setTimeout(() => setNetworkLinkCopied(false), 2000);
+                                            }
+                                        };
                                         return (
                                             <div className={cn(
-                                                "mt-4 p-4 rounded-xl border flex flex-col gap-2",
+                                                "mt-4 p-4 rounded-xl border flex flex-col gap-3",
                                                 localConfig.local_network_enabled
                                                     ? "bg-green-50/50 border-green-200"
                                                     : "bg-gray-50 border-gray-200"
                                             )}>
-                                                <div className="flex items-center justify-between gap-3">
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
-                                                            {isLanUrl ? tLocalNet('networkAccessLinkLan') : tLocalNet('networkAccessLink')}
+                                                {!localConfig.local_network_enabled && (
+                                                    <div className="text-xs text-gray-500">{tLocalNet('enableHostingHint')}</div>
+                                                )}
+                                                {localConfig.local_network_enabled && (
+                                                    <>
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{tLocalNet('thisDeviceUrl')}</div>
+                                                                <div className="font-mono text-sm text-gray-900 break-all">{thisDeviceUrl}</div>
+                                                            </div>
+                                                            <button type="button" onClick={() => copyUrl(thisDeviceUrl)} disabled={!thisDeviceUrl} className="shrink-0 p-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50" title={tCommon('copy')}>
+                                                                <Copy size={16} />
+                                                            </button>
                                                         </div>
-                                                        <div className="font-mono text-sm text-gray-900 break-all">{accessUrl}</div>
-                                                        {!localConfig.local_network_enabled && (
-                                                            <div className="text-xs text-gray-500 mt-1">{tLocalNet('enableHostingHint')}</div>
-                                                        )}
-                                                        {localConfig.local_network_enabled && isLanUrl && (
-                                                            <div className="text-xs text-green-700 mt-1">{tLocalNet('lanUrlHint')}</div>
-                                                        )}
-                                                        {localConfig.local_network_enabled && !isLanUrl && (
-                                                            <div className="text-xs text-amber-700 mt-1">{tLocalNet('localhostHint')}</div>
-                                                        )}
-                                                    </div>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => {
-                                                            if (accessUrl && navigator.clipboard) {
-                                                                navigator.clipboard.writeText(accessUrl);
-                                                                setNetworkLinkCopied(true);
-                                                                setTimeout(() => setNetworkLinkCopied(false), 2000);
-                                                            }
-                                                        }}
-                                                        disabled={!localConfig.local_network_enabled}
-                                                        className={cn(
-                                                            "shrink-0 p-2.5 rounded-lg border transition-colors flex items-center gap-2",
-                                                            localConfig.local_network_enabled
-                                                                ? "bg-white border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300"
-                                                                : "bg-gray-100 border-gray-100 text-gray-400 cursor-not-allowed"
-                                                        )}
-                                                        title="Copy link"
-                                                    >
-                                                        {networkLinkCopied ? (
-                                                            <Check size={16} className="text-green-600" />
-                                                        ) : (
+                                                        <div className="flex items-center justify-between gap-3 border-t border-green-200/50 pt-3">
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{tLocalNet('otherDevicesLanUrl')}</div>
+                                                                {lanUrl ? (
+                                                                    <>
+                                                                        <div className="font-mono text-sm text-green-800 break-all">{lanUrl}</div>
+                                                                        <div className="text-xs text-green-700 mt-0.5">{tLocalNet('lanUrlHint')}</div>
+                                                                    </>
+                                                                ) : (
+                                                                    <div className="text-sm text-amber-700">{tLocalNet('lanUrlLoading')}</div>
+                                                                )}
+                                                            </div>
+                                                            {lanUrl && (
+                                                                <button type="button" onClick={() => copyUrl(lanUrl)} className="shrink-0 p-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50" title={tCommon('copy')}>
+                                                                    <Copy size={16} />
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </>
+                                                )}
+                                                {!localConfig.local_network_enabled && thisDeviceUrl && (
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{tLocalNet('networkAccessLink')}</div>
+                                                            <div className="font-mono text-sm text-gray-900 break-all">{thisDeviceUrl}</div>
+                                                        </div>
+                                                        <button type="button" onClick={() => copyUrl(thisDeviceUrl)} className="shrink-0 p-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50" title={tCommon('copy')}>
                                                             <Copy size={16} />
-                                                        )}
-                                                        <span className="text-xs font-medium hidden sm:inline">{networkLinkCopied ? tCommon('copied') : tCommon('copy')}</span>
-                                                    </button>
-                                                </div>
+                                                        </button>
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     })()}
@@ -4316,6 +4330,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <button
                                 onClick={() => {
                                     handleChange('local_network_enabled', true);
+                                    handleChange('local_network_tls_enabled', true);
                                     setShowNetworkWarning(false);
                                 }}
                                 className="flex-1 py-2.5 bg-gray-900 text-white font-medium rounded-lg hover:bg-black transition-colors"
@@ -4542,9 +4557,10 @@ interface InputProps {
     onChange: (value: string) => void;
     type?: string;
     placeholder?: string;
+    disabled?: boolean;
 }
 
-const Input = ({ label, value, onChange, type = "text", placeholder }: InputProps) => (
+const Input = ({ label, value, onChange, type = "text", placeholder, disabled }: InputProps) => (
     <div className="flex flex-col gap-1.5 w-full">
         <label className="text-sm font-medium text-gray-700 ml-1">{label}</label>
         <input
@@ -4552,7 +4568,8 @@ const Input = ({ label, value, onChange, type = "text", placeholder }: InputProp
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder={placeholder}
-            className="px-4 h-10 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all placeholder:text-gray-400"
+            disabled={disabled}
+            className="px-4 h-10 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed"
         />
     </div>
 );

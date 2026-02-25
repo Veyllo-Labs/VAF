@@ -746,10 +746,18 @@ function VAFDashboardContent() {
     }, [ws]);
 
     const deleteAutomation = useCallback((taskId: string) => {
+        setDeletingAutomationId(taskId);
         if (ws?.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'delete_automation', task_id: taskId }));
+        } else {
+            setDeletingAutomationId(null);
         }
     }, [ws]);
+
+    const onDeleteAutomationAnimationEnd = useCallback((taskId: string) => {
+        setAutomations((prev) => prev.filter((a) => a.id !== taskId));
+        setDeletingAutomationId(null);
+    }, []);
 
     // Per-Session Animation State Tracking
     // Tracks which sessions are actively loading so we can restore animation state on session switch
@@ -790,6 +798,7 @@ function VAFDashboardContent() {
     const [trustedSources, setTrustedSources] = useState<{ categories: Array<{ id: string; name: string; description: string; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> }>({ categories: [] });
     const [trustedSourcesError, setTrustedSourcesError] = useState<string | null>(null);
     const [automations, setAutomations] = useState<Array<{ id: string; name: string; description: string; prompt?: string; frequency: string; time: string; weekday?: string | null; day?: number | null; enabled: boolean; next_run?: string }>>([]);
+    const [deletingAutomationId, setDeletingAutomationId] = useState<string | null>(null);
     type AutomationNote = { id: string; title?: string | null; content: string; created_at: string };
     type AutomationTodo = { id: string; text: string; created_at: string; due_at?: string | null; done: boolean };
     const [automationNotes, setAutomationNotes] = useState<AutomationNote[]>([]);
@@ -2109,7 +2118,11 @@ function VAFDashboardContent() {
                     if (data.ok === true) ws?.send(JSON.stringify({ type: 'get_automations' }));
                 }
                 else if (data.type === 'delete_automation_result') {
-                    if (data.ok === true) ws?.send(JSON.stringify({ type: 'get_automations' }));
+                    if (data.ok === true) {
+                        ws?.send(JSON.stringify({ type: 'get_automations' }));
+                    } else {
+                        setDeletingAutomationId(null);
+                    }
                 }
                 else if (data.type === 'notification' && data.notification) {
                     setNotifications(prev => [data.notification, ...prev]);
@@ -4192,6 +4205,8 @@ function VAFDashboardContent() {
                 onCreateAutomationSubmit={createAutomationSubmit as SettingsModalProps['onCreateAutomationSubmit']}
                 onAutomationCreated={refreshAutomations}
                 onDeleteAutomation={deleteAutomation}
+                deletingAutomationId={deletingAutomationId}
+                onDeleteAutomationAnimationEnd={onDeleteAutomationAnimationEnd}
                 automationNotes={automationNotes}
                 automationTodos={automationTodos}
                 onSendPlannerMessage={(msg) => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }}

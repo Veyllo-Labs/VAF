@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, lazy, Suspense, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
+import { motion } from 'framer-motion';
 // PERFORMANCE: Lazy load ReactFlow - it's heavy and only needed for specific modals
 const ReactFlow = lazy(() => import('reactflow').then(mod => ({ default: mod.default })));
 import {
@@ -180,6 +181,10 @@ export interface SettingsModalProps {
     onAutomationCreated?: () => void;
     /** Delete automation by id (WebSocket). */
     onDeleteAutomation?: (taskId: string) => void;
+    /** Id of automation currently playing delete animation (so list can animate it out). */
+    deletingAutomationId?: string | null;
+    /** Called when delete exit animation finishes; parent should remove item from state. */
+    onDeleteAutomationAnimationEnd?: (taskId: string) => void;
     /** Automation planner notes (per user). Passed to calendar modal. */
     automationNotes?: Array<{ id: string; title?: string | null; content: string; created_at: string }>;
     /** Automation planner todos (per user). Passed to calendar modal. */
@@ -247,7 +252,7 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 ];
 
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -2333,8 +2338,24 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 ) : (
                                     <Section title={tAutomations('scheduled')}>
                                         <div className="space-y-3">
-                                            {automations.map((auto, idx) => (
-                                                <div key={auto.id} className="p-4 bg-white border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
+                                            {automations.map((auto) => (
+                                                <motion.div
+                                                    key={auto.id}
+                                                    layout
+                                                    initial={{ opacity: 1, height: 'auto' }}
+                                                    animate={
+                                                        deletingAutomationId === auto.id
+                                                            ? { opacity: 0, height: 0, marginTop: 0, marginBottom: 0, overflow: 'hidden' }
+                                                            : { opacity: 1, height: 'auto' }
+                                                    }
+                                                    transition={{ duration: 0.3, ease: 'easeInOut' }}
+                                                    onAnimationComplete={
+                                                        deletingAutomationId === auto.id
+                                                            ? () => onDeleteAutomationAnimationEnd?.(auto.id)
+                                                            : undefined
+                                                    }
+                                                    className="p-4 bg-white border border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
+                                                >
                                                     <div className="flex items-start justify-between gap-3">
                                                         <div className="flex-1 min-w-0">
                                                             <div className="flex items-center gap-2 flex-wrap">
@@ -2361,23 +2382,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         <div className="flex items-center gap-1 shrink-0">
                                                             <button
                                                                 type="button"
+                                                                disabled={deletingAutomationId === auto.id}
                                                                 onClick={() => setEditingAutomation({ id: auto.id, name: auto.name, prompt: auto.prompt ?? auto.description, frequency: auto.frequency, time: auto.time, weekday: auto.weekday ?? undefined, day: auto.day ?? undefined })}
-                                                                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                                                                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors disabled:opacity-50"
                                                                 title={tAutomations('edit')}
                                                             >
                                                                 <Edit className="w-4 h-4" />
                                                             </button>
                                                             <button
                                                                 type="button"
+                                                                disabled={deletingAutomationId === auto.id}
                                                                 onClick={() => { if (window.confirm(tAutomations('confirmDelete'))) onDeleteAutomation?.(auto.id); }}
-                                                                className="p-2 rounded-lg text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors"
+                                                                className="p-2 rounded-lg text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-50"
                                                                 title={tAutomations('delete')}
                                                             >
                                                                 <Trash2 className="w-4 h-4" />
                                                             </button>
                                                         </div>
                                                     </div>
-                                                </div>
+                                                </motion.div>
                                             ))}
                                         </div>
                                         <div className="mt-4">

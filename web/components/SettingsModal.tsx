@@ -2424,7 +2424,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </div>
                                     <h2 className="text-2xl font-bold text-gray-900">VAF</h2>
                                     <p className="text-gray-500">Veyllo Agent Framework</p>
-                                    <p className="text-xs text-gray-400 mt-1">v2.5.0 (Mac/Metal Optimized)</p>
+                                    <p className="text-xs text-gray-400 mt-1">v2.6 Alpha (High Priority Context Update)</p>
                                 </div>
 
                                 <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">

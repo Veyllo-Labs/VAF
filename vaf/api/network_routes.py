@@ -40,8 +40,8 @@ def get_ws_config():
 @router.get("/access-url")
 def get_access_url():
     """
-    Return the URL other devices should use (integrated HTTPS proxy).
-    Port matches ws-config (443 or 8443 on Windows when TLS on).
+    Return host and ports for display; full url (with port) for copy.
+    Network mode is always with encryption. Ports: access (HTTPS 443/8443), backend (8001).
     """
     try:
         from vaf.network.binding import get_local_network_ip
@@ -49,17 +49,27 @@ def get_access_url():
     except Exception as e:
         logger.debug(f"Could not get LAN IP: {e}")
         host = None
-    tls = Config.get("local_network_tls_enabled", False)
-    port = 443
-    if tls:
-        import platform
-        port = Config.get("local_network_https_port", 443)
-        if platform.system() == "Windows" and port == 443:
-            port = 8443
+    import platform
+    access_port = Config.get("local_network_https_port", 443)
+    if platform.system() == "Windows" and access_port == 443:
+        access_port = 8443
+    backend_port = Config.get("local_network_port", 8001)
     if not host:
-        return {"host": None, "port": port, "url": None}
-    url = f"https://{host}" if port == 443 else f"https://{host}:{port}"
-    return {"host": host, "port": port, "url": url}
+        return {
+            "host": None,
+            "port": access_port,
+            "backend_port": backend_port,
+            "ports": {"access": access_port, "backend": backend_port},
+            "url": None,
+        }
+    url = f"https://{host}" if access_port == 443 else f"https://{host}:{access_port}"
+    return {
+        "host": host,
+        "port": access_port,
+        "backend_port": backend_port,
+        "ports": {"access": access_port, "backend": backend_port},
+        "url": url,
+    }
 
 
 @router.get("/connections")

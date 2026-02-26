@@ -12,6 +12,10 @@ Endpoints:
 import logging
 import uuid as uuid_module
 from datetime import datetime, timezone
+
+def _utc_now_naive():
+    """Return naive UTC datetime for DB columns that use DateTime without timezone."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 from typing import Any, Dict, Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -152,8 +156,8 @@ async def create_user(data: UserCreate, _: Dict[str, Any] = Depends(require_admi
                 },
                 is_active=True,
                 requires_2fa_setup=True,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
+                created_at=_utc_now_naive(),
+                updated_at=_utc_now_naive(),
             )
 
             db.add(user)
@@ -248,7 +252,7 @@ async def update_user(user_id: str, data: UserUpdate, _: Dict[str, Any] = Depend
                 permissions["workflows"] = data.workflows
             user.permissions = permissions
 
-            user.updated_at = datetime.now(timezone.utc)
+            user.updated_at = _utc_now_naive()
 
             await db.commit()
 

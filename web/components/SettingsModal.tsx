@@ -108,7 +108,8 @@ import {
     X, Globe, Cpu, Volume2, Monitor, Shield, Save, RotateCcw,
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch, Loader2,
     Brain, Database, Link2, MessageSquare, Network, Users, User, Lock, Server, Laptop, Smartphone,
-    Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar
+    Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar,
+    Eye, EyeOff
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
@@ -198,8 +199,8 @@ export interface SettingsModalProps {
 }
 
 const CATEGORIES = [
-    { id: 'general', labelKey: 'general', icon: Globe },
-    { id: 'persona', labelKey: 'persona', icon: Users, adminOnly: true },
+    { id: 'general', labelKey: 'general', icon: Globe, adminOnly: true },
+    { id: 'persona', labelKey: 'persona', icon: Users },
     { id: 'ai', labelKey: 'ai', icon: Cpu },
     { id: 'voice', labelKey: 'voice', icon: Volume2 },
     { id: 'interface', labelKey: 'interface', icon: Monitor },
@@ -432,11 +433,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [usersLoading, setUsersLoading] = useState(false);
     const [networkLinkCopied, setNetworkLinkCopied] = useState(false);
     /** LAN URL for other devices (from backend); e.g. http://192.168.1.100:3000 */
-    const [networkAccessUrl, setNetworkAccessUrl] = useState<string | null>(null);
+    /** From API /api/network/access-url: host, ports (access/backend), url (full URL for copy). */
+    const [accessUrlData, setAccessUrlData] = useState<{ host: string | null; port: number; backend_port: number; url: string | null } | null>(null);
     const [userSearch, setUserSearch] = useState('');
     const [showAddUserModal, setShowAddUserModal] = useState(false);
     const [editingUser, setEditingUser] = useState<any>(null);
     const [newUser, setNewUser] = useState({ username: '', email: '', role: 'User', password: '', tools: [] as string[], workflows: [] as string[], createDb: true });
+    const [showNewUserPassword, setShowNewUserPassword] = useState(false);
 
     // Security Warning & Restart Animation
     const [showNetworkWarning, setShowNetworkWarning] = useState(false);
@@ -669,8 +672,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
         fetch(`${apiBase}/api/network/access-url`, { credentials: 'include' })
             .then((res) => (res.ok ? res.json() : {}))
-            .then((data: { url?: string | null }) => setNetworkAccessUrl(data.url ?? null))
-            .catch(() => setNetworkAccessUrl(null));
+            .then((data: { host?: string | null; port?: number; backend_port?: number; url?: string | null }) => {
+                if (data.host !== undefined || data.url !== undefined)
+                    setAccessUrlData({
+                        host: data.host ?? null,
+                        port: data.port ?? 8443,
+                        backend_port: data.backend_port ?? 8001,
+                        url: data.url ?? null,
+                    });
+                else
+                    setAccessUrlData(null);
+            })
+            .catch(() => setAccessUrlData(null));
     }, [isOpen, activeTab]);
 
     // Reset fetching state when apiModels update
@@ -1044,6 +1057,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 
                 // Reset form
                 setNewUser({ username: '', email: '', role: 'User', password: '', tools: [], workflows: [], createDb: true });
+                setShowNewUserPassword(false);
             } else {
                 const err = await res.json();
                 alert(`Failed to create user: ${err.detail || 'Unknown error'}`);
@@ -1917,10 +1931,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         const host = displayHost || '';
                                         const port = displayPort && displayPort !== '80' && displayPort !== '443' ? displayPort : '';
                                         const fallbackUrl = host ? `${protocol}//${host}${port ? `:${port}` : ''}` : '';
-                                        const thisDeviceUrl = fallbackUrl || networkAccessUrl || '';
-                                        const lanUrl = networkAccessUrl;
+                                        const lanUrl = accessUrlData?.url ?? null;
+                                        const thisDeviceUrl = fallbackUrl || lanUrl || '';
                                         const isLanUrl = !!lanUrl;
-                                        if (!thisDeviceUrl && !lanUrl) return null;
+                                        const apiHost = accessUrlData?.host ?? host;
+                                        const portsText = accessUrlData ? `${accessUrlData.port} (${tLocalNet('portAccess')}), ${accessUrlData.backend_port} (${tLocalNet('portBackend')})` : '';
+                                        if (!thisDeviceUrl && !lanUrl && !apiHost) return null;
                                         const copyUrl = (url: string) => {
                                             if (url && navigator.clipboard) {
                                                 navigator.clipboard.writeText(url);
@@ -1943,7 +1959,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         <div className="flex items-center justify-between gap-3">
                                                             <div className="flex-1 min-w-0">
                                                                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{tLocalNet('thisDeviceUrl')}</div>
-                                                                <div className="font-mono text-sm text-gray-900 break-all">{thisDeviceUrl}</div>
+                                                                {apiHost ? (
+                                                                    <>
+                                                                        <div className="font-mono text-sm text-gray-900 break-all">{apiHost}</div>
+                                                                        {portsText && <div className="text-xs text-gray-600 mt-0.5">{tLocalNet('portsUsed')}: {portsText}</div>}
+                                                                    </>
+                                                                ) : (
+                                                                    <div className="font-mono text-sm text-gray-900 break-all">{thisDeviceUrl}</div>
+                                                                )}
                                                             </div>
                                                             <button type="button" onClick={() => copyUrl(thisDeviceUrl)} disabled={!thisDeviceUrl} className="shrink-0 p-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50" title={tCommon('copy')}>
                                                                 <Copy size={16} />
@@ -1954,7 +1977,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{tLocalNet('otherDevicesLanUrl')}</div>
                                                                 {lanUrl ? (
                                                                     <>
-                                                                        <div className="font-mono text-sm text-green-800 break-all">{lanUrl}</div>
+                                                                        <div className="font-mono text-sm text-green-800 break-all">{apiHost || new URL(lanUrl).hostname}</div>
+                                                                        {portsText && <div className="text-xs text-green-700 mt-0.5">{tLocalNet('portsUsed')}: {portsText}</div>}
                                                                         <div className="text-xs text-green-700 mt-0.5">{tLocalNet('lanUrlHint')}</div>
                                                                     </>
                                                                 ) : (
@@ -2001,7 +2025,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     />
                                                 </div>
                                                 <button 
-                                                    onClick={() => setShowAddUserModal(true)}
+                                                    onClick={() => { setShowAddUserModal(true); setShowNewUserPassword(false); }}
                                                     className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg text-sm shadow-sm hover:shadow transition-all flex items-center gap-2"
                                                 >
                                                     <Plus size={16} /> {tLocalNet('add')}
@@ -2091,17 +2115,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <div className="flex flex-col gap-1.5 w-full">
                                                 <label className="text-sm font-medium text-gray-700 ml-1">{tLocalNet('hostIp')}</label>
                                                 <div className="px-4 h-10 flex items-center bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 font-mono select-all">
-                                                    {networkAccessUrl ? new URL(networkAccessUrl).hostname : (displayHost || 'localhost')}
+                                                    {accessUrlData?.host ?? (displayHost || 'localhost')}
                                                 </div>
                                             </div>
                                             <div className="flex flex-col gap-1.5 w-full">
-                                                <label className="text-sm font-medium text-gray-700 ml-1">{tLocalNet('port')}</label>
-                                                <input
-                                                    type="number"
-                                                    value={localConfig.local_network_port_frontend || 3000}
-                                                    onChange={(e) => handleChange('local_network_port_frontend', parseInt(e.target.value))}
-                                                    className="px-4 h-10 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all text-gray-700 font-mono"
-                                                />
+                                                <label className="text-sm font-medium text-gray-700 ml-1">{tLocalNet('portsUsed')}</label>
+                                                <div className="px-4 py-2.5 flex items-center bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 font-mono">
+                                                    {accessUrlData
+                                                        ? `${accessUrlData.port} (${tLocalNet('portAccess')}), ${accessUrlData.backend_port} (${tLocalNet('portBackend')})`
+                                                        : '—'}
+                                                </div>
                                             </div>
                                         </div>
                                         
@@ -3860,13 +3883,27 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         { value: 'Guest', label: tModals('addUser.roleGuest') }
                                     ]}
                                 />
-                                <Input
-                                    label={tModals('addUser.initialPassword')}
-                                    value={newUser.password}
-                                    onChange={(v) => setNewUser({...newUser, password: v})}
-                                    type="password"
-                                    placeholder={tModals('addUser.autoGenerated')}
-                                />
+                                <div className="flex flex-col gap-1.5 w-full">
+                                    <label className="text-sm font-medium text-gray-700 ml-1">{tModals('addUser.initialPassword')}</label>
+                                    <div className="relative">
+                                        <input
+                                            type={showNewUserPassword ? 'text' : 'password'}
+                                            value={newUser.password}
+                                            onChange={(e) => setNewUser({...newUser, password: e.target.value})}
+                                            placeholder={tModals('addUser.autoGenerated')}
+                                            className="px-4 pr-11 h-10 w-full bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all placeholder:text-gray-400"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowNewUserPassword(!showNewUserPassword)}
+                                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 hover:text-gray-700 rounded hover:bg-gray-100 transition-colors"
+                                            title={showNewUserPassword ? tModals('addUser.hidePassword') : tModals('addUser.showPassword')}
+                                            aria-label={showNewUserPassword ? tModals('addUser.hidePassword') : tModals('addUser.showPassword')}
+                                        >
+                                            {showNewUserPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
 
                             {/* Tools Section */}

@@ -12,23 +12,16 @@ def _manager_for_scope(user_scope_id: Optional[str]) -> Tuple[AutomationManager,
     """Return (manager, effective_scope) for user-scoped automation access.
 
     Local admin scope → global AutomationManager (no user_scope_id).
-    Other scopes → user-scoped manager, but ONLY if that user's directory actually
-    contains automations. If the scoped directory is empty (e.g. a legacy/stale scope_id
-    that no longer maps to a real user), fall back to global scope so the agent can see
-    all automations rather than returning an empty list.
+    Other scopes → user-scoped manager.
     """
     from vaf.core.config import get_local_admin_scope_id
-    from vaf.core.platform import Platform
     local = get_local_admin_scope_id()
+    
+    # If no scope provided or it's the primary local admin, use the global root manager
     if not user_scope_id or str(user_scope_id).strip() == str(local).strip():
         return AutomationManager(), None
-    # Check whether this user actually has scoped automations on disk.
-    scoped_dir = Platform.vaf_dir() / "automations" / str(user_scope_id).strip()
-    has_scoped = scoped_dir.is_dir() and any(scoped_dir.glob("*.json"))
-    if not has_scoped:
-        # No automations in the scoped dir → fall back to global scope so the agent
-        # can see (and create) automations in the shared directory.
-        return AutomationManager(), None
+        
+    # Regular users always use their own isolated scope
     return AutomationManager(user_scope_id=user_scope_id), user_scope_id
 
 

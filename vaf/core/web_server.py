@@ -1618,6 +1618,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 websocket,
                 user_context.get("user_scope_id") or user_context.get("user_id"),
                 username=user_context.get("username"),
+                role=user_context.get("role"),
             )
         os.environ["VAF_WEBUI_ACTIVE"] = "1"
         print(f"[WebSocket] Connected! Active: {len(manager.active_connections)}")
@@ -2055,12 +2056,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         })
 
                 elif type == "get_config":
-                     # Send current config to frontend
-                     cfg = Config.load()
-                     await websocket.send_json({
-                         "type": "config_update",
-                         "config": cfg
-                     })
+                    # Send config to frontend; non-admins get scoped view (only their own connections)
+                    from vaf.core.config import get_local_admin_scope_id
+                    user_scope_id = manager.get_connection_user(websocket) if manager else None
+                    local_admin_scope = get_local_admin_scope_id()
+                    is_admin = user_scope_id is not None and str(user_scope_id) == str(local_admin_scope)
+                    role = "admin" if is_admin else "user"
+                    full_cfg = Config.load()
+                    cfg = Config.config_for_user(full_cfg, str(user_scope_id) if user_scope_id else None, role)
+                    await websocket.send_json({
+                        "type": "config_update",
+                        "config": cfg
+                    })
 
                 elif type == "get_models":
                     # Scan models directory for .gguf files
@@ -2395,9 +2402,17 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         local_admin_scope = get_local_admin_scope_id()
                         is_admin = user_scope_id is not None and str(user_scope_id) == str(local_admin_scope)
-                        if not is_admin:
-                            new_config = Config.filter_for_non_admin(new_config)
                         existing = Config.load()
+                        if not is_admin:
+                            new_filtered, scope_toggles = Config.extract_connection_toggles_for_scope(new_config, str(user_scope_id) if user_scope_id else None)
+                            new_config = Config.filter_for_non_admin(new_filtered)
+                            if scope_toggles:
+                                by_scope = existing.get("connection_enabled_by_scope") or {}
+                                if not isinstance(by_scope, dict):
+                                    by_scope = {}
+                                for scope_id, toggles in scope_toggles.items():
+                                    by_scope[scope_id] = {**(by_scope.get(scope_id) or {}), **toggles}
+                                existing["connection_enabled_by_scope"] = by_scope
                         merged = {**existing, **new_config}
                         Config.save(merged)
                         provider_changed = existing.get("provider") != merged.get("provider")
@@ -2517,6 +2532,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # Use user-scoped default to prevent crosstalk
                             safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
                             session_id = f"web-default-{safe_scope}"
+
+                        # Ensure this connection is subscribed to the session we're queueing for,
+                        # so streaming (agent_message_update) reaches this client (fixes non-admin/LAN).
+                        manager.subscribe_to_session(websocket, session_id)
 
                         # Editor document: prepend to this turn so agent has current editor content (like Document Viewer)
                         editor_doc = cmd.get("editorDocument")
@@ -2821,10 +2840,24 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Return list of saved automations; each user sees only their own (user_scope_id).
                     try:
                         from vaf.core.automation import AutomationManager
+                        from vaf.core.config import get_local_admin_scope_id
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
                         tasks = list(mgr.list())
-                        # Do not merge root automations for non-admin users: each user sees only their own.
+                        
+                        # Merge root automations for local admin (legacy fallback)
+                        local_admin_scope = get_local_admin_scope_id()
+                        if user_scope_id and str(user_scope_id).strip() == str(local_admin_scope).strip():
+                            root_mgr = AutomationManager()
+                            seen_ids = {t.id for t in tasks}
+                            for t in root_mgr.list():
+                                if t.id not in seen_ids:
+                                    tasks.append(t)
+                                    seen_ids.add(t.id)
+                        
+                        # Sort by next run (optional but nice for UI)
+                        tasks.sort(key=lambda t: t.next_run_datetime)
+
                         automations_list = [
                             {
                                 "id": task.id,
@@ -2931,6 +2964,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "delete_automation":
                     try:
                         from vaf.core.automation import AutomationManager
+                        from vaf.core.config import get_local_admin_scope_id
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
                         task_id = (cmd.get("task_id") or cmd.get("id") or "").strip()
@@ -2939,8 +2973,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             continue
                         ok = mgr.delete(task_id, permanent=True)
                         if not ok and user_scope_id:
-                            root_mgr = AutomationManager()
-                            ok = root_mgr.delete(task_id, permanent=True)
+                            # Restrict root fallback to local admin only
+                            local_admin_scope = get_local_admin_scope_id()
+                            if str(user_scope_id).strip() == str(local_admin_scope).strip():
+                                root_mgr = AutomationManager()
+                                ok = root_mgr.delete(task_id, permanent=True)
                         await websocket.send_json({"type": "delete_automation_result", "ok": ok})
                     except Exception as e:
                         await websocket.send_json({"type": "delete_automation_result", "ok": False, "error": str(e)})
@@ -2948,6 +2985,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "update_automation":
                     try:
                         from vaf.core.automation import AutomationManager
+                        from vaf.core.config import get_local_admin_scope_id
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
                         task_id = (cmd.get("task_id") or cmd.get("id") or "").strip()
@@ -2956,10 +2994,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             continue
                         task = mgr.get(task_id)
                         if not task and user_scope_id:
-                            root_mgr = AutomationManager()
-                            task = root_mgr.get(task_id)
-                            if task:
-                                mgr = root_mgr
+                            # Restrict root fallback to local admin only
+                            local_admin_scope = get_local_admin_scope_id()
+                            if str(user_scope_id).strip() == str(local_admin_scope).strip():
+                                root_mgr = AutomationManager()
+                                task = root_mgr.get(task_id)
+                                if task:
+                                    mgr = root_mgr
                         if not task:
                             await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "Automation not found"})
                             continue

@@ -248,21 +248,45 @@ def _get_bot_username() -> Optional[str]:
     return None
 
 
+def _is_telegram_admin(request: Request) -> bool:
+    """True if current user is admin (can see all Telegram sessions/whitelist)."""
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    from vaf.core.config import get_local_admin_scope_id
+    user = get_current_user_or_local_admin(request)
+    scope = user.get("user_scope_id")
+    return scope is not None and str(scope) == str(get_local_admin_scope_id())
+
+
 @router.get("/dashboard")
-async def get_telegram_dashboard():
+async def get_telegram_dashboard(request: Request):
     """
     Data for the Telegram settings dashboard: bot link, sessions (chats for this bot only),
     admin whitelist, relay whitelist, activity. No sensitive data (no tokens).
-    Sessions = one per Telegram user who can chat with our bot (from whitelist + relay), with last_ts and count.
+    Non-admins see only their own whitelist entry and session(s).
     """
     telegram_config = Config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict):
         telegram_config = {}
     bot_username = _get_bot_username()
     bot_link = f"https://t.me/{bot_username}" if bot_username else None
-    admin_whitelist = list(telegram_config.get("whitelist") or [])
+    admin_whitelist_raw = list(telegram_config.get("whitelist") or [])
     relay_whitelist = list(telegram_config.get("relay_whitelist") or [])
-    activity = list(telegram_config.get("chat_activity") or [])[-100:]
+    current_user = get_current_vaf_user(request)
+    user_scope_id = current_user.get("user_scope_id")
+    is_admin = _is_telegram_admin(request)
+
+    if is_admin:
+        admin_whitelist = admin_whitelist_raw
+    else:
+        admin_whitelist = [e for e in admin_whitelist_raw if isinstance(e, dict) and str(e.get("user_scope_id")) == str(user_scope_id)]
+        relay_whitelist = [e for e in relay_whitelist if isinstance(e, dict) and str(e.get("user_scope_id")) == str(user_scope_id)]
+
+    activity_raw = list(telegram_config.get("chat_activity") or [])[-100:]
+    if is_admin:
+        activity = activity_raw
+    else:
+        my_chat_ids = {str(e.get("telegram_user_id") or "") for e in admin_whitelist + relay_whitelist}
+        activity = [a for a in activity_raw if str(a.get("chat_id") or "") in my_chat_ids]
 
     # Sessions: one per chat (our bot only = whitelist + relay). Enrich with last_ts and message_count from activity.
     sessions_by_chat: Dict[str, Dict[str, Any]] = {}

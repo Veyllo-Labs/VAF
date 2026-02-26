@@ -198,6 +198,8 @@ class Config:
         "telegram_config": None,                                   # { bot_token, enabled, verified?, whitelist: [...] }
         # Connections: WhatsApp (Baileys via Node, per-user auth, whitelist with phone_number)
         "whatsapp_config": None,                                   # { enabled, whitelist: [{ phone_number, user_scope_id, vaf_username }] }
+        # Per-user connection toggles (sliders). Only non-admins use this; admin uses global telegram/whatsapp/discord_config.enabled.
+        "connection_enabled_by_scope": None,                       # { "<user_scope_id>": { "telegram": bool, "whatsapp": bool, "discord": bool } }
 
         # Front Office: when True, replies to contacts (from_contact) require explicit approval in Web UI before sending.
         # Default False: contacts you added with "Can reach your assistant" get replies directly; set True to review each reply first.
@@ -275,10 +277,111 @@ class Config:
             return True
         return any(key.startswith(prefix) for prefix in cls.GLOBAL_CONFIG_KEY_PREFIXES)
 
+    # Connection config keys that only admin may write (enabled/whitelist etc.). Non-admins write to connection_enabled_by_scope instead.
+    CONNECTION_CONFIG_KEYS = frozenset({"telegram_config", "whatsapp_config", "discord_config"})
+
     @classmethod
     def filter_for_non_admin(cls, config: dict) -> dict:
         """Return a copy of config with only keys non-admins are allowed to write (user-scoped settings)."""
         return {k: v for k, v in config.items() if not cls.is_global_config_key(k)}
+
+    @classmethod
+    def extract_connection_toggles_for_scope(
+        cls, body: dict, user_scope_id: Optional[str]
+    ) -> tuple[dict, dict]:
+        """
+        For non-admin save: extract telegram/whatsapp/discord enabled from body into connection_enabled_by_scope entry,
+        and return (body_without_connection_configs, { scope_id: { telegram, whatsapp, discord } }).
+        Caller merges the returned dict into connection_enabled_by_scope and merges body_filtered into config (so global connection configs are not overwritten).
+        """
+        if not user_scope_id:
+            return body, {}
+        scope_str = str(user_scope_id).strip()
+        toggles = {}
+        body_filtered = dict(body)
+        for key in cls.CONNECTION_CONFIG_KEYS:
+            if key not in body_filtered:
+                continue
+            val = body_filtered[key]
+            if isinstance(val, dict) and "enabled" in val:
+                if key == "telegram_config":
+                    toggles["telegram"] = bool(val["enabled"])
+                elif key == "whatsapp_config":
+                    toggles["whatsapp"] = bool(val["enabled"])
+                elif key == "discord_config":
+                    toggles["discord"] = bool(val["enabled"])
+            body_filtered.pop(key, None)
+        if not toggles:
+            return body, {}
+        return body_filtered, {scope_str: toggles}
+
+    @classmethod
+    def config_for_user(cls, config: dict, user_scope_id: Optional[str], role: str) -> dict:
+        """
+        Return a copy of config safe to send to a given user. Admins get the full config.
+        Non-admins get connection data scoped to their user_scope_id only (no other users' mail, telegram, whatsapp, etc.).
+        """
+        if (role or "").lower() == "admin":
+            return dict(config)
+        out = dict(config)
+        scope_str = str(user_scope_id).strip() if user_scope_id else None
+
+        # Email: only this user's accounts (email_config_by_scope[user_scope_id])
+        by_scope = config.get("email_config_by_scope") or {}
+        if isinstance(by_scope, dict) and scope_str:
+            out["email_config_by_scope"] = {scope_str: by_scope.get(scope_str, {"accounts": []})}
+        else:
+            out["email_config_by_scope"] = {}
+
+        # Legacy email_config / email_config_by_user: non-admin should not see other users; expose only empty or own
+        out["email_config"] = None
+        out["email_config_by_user"] = {}
+
+        # Per-user connection toggles (new users = all off)
+        by_scope = config.get("connection_enabled_by_scope") or {}
+        if not isinstance(by_scope, dict):
+            by_scope = {}
+        user_toggles = by_scope.get(scope_str or "", {}) if scope_str else {}
+        if not isinstance(user_toggles, dict):
+            user_toggles = {}
+
+        # Telegram: do not expose full whitelist to non-admin; enabled = per-user toggle (default False for new user)
+        tc = config.get("telegram_config") or {}
+        if isinstance(tc, dict):
+            out["telegram_config"] = {
+                "enabled": user_toggles.get("telegram", False),
+                "verified": tc.get("verified", False),
+                "bot_username": tc.get("bot_username"),
+                "whitelist": [],
+            }
+        else:
+            out["telegram_config"] = None
+
+        # WhatsApp: only whitelist entries for this user; enabled = per-user toggle (default False for new user)
+        wc = config.get("whatsapp_config") or {}
+        if isinstance(wc, dict):
+            whitelist = wc.get("whitelist") or []
+            if scope_str:
+                my_entries = [e for e in whitelist if isinstance(e, dict) and str(e.get("user_scope_id")) == scope_str]
+            else:
+                my_entries = []
+            out["whatsapp_config"] = {**wc, "whitelist": my_entries, "enabled": user_toggles.get("whatsapp", False)}
+        else:
+            out["whatsapp_config"] = None
+
+        # Discord: single-tenant; enabled = per-user toggle (default False for new user)
+        dc = config.get("discord_config") or {}
+        if isinstance(dc, dict):
+            out["discord_config"] = {
+                "enabled": user_toggles.get("discord", False),
+                "verified": dc.get("verified", False),
+                "configured": bool(dc.get("verified") and dc.get("admin_user_id")),
+                "chat_activity": [],
+            }
+        else:
+            out["discord_config"] = None
+
+        return out
 
     @classmethod
     def save(cls, config: dict):

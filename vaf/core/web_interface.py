@@ -57,6 +57,7 @@ class WebInterfaceManager:
         self.connection_sessions: Dict[WebSocket, str] = {}  # ws -> session_id
         self.connection_users: Dict[WebSocket, str] = {}  # ws -> user_id (for RAG scope)
         self.connection_usernames: Dict[WebSocket, str] = {}  # ws -> username (for User identity block)
+        self.connection_roles: Dict[WebSocket, str] = {}  # ws -> role (admin, user, guest)
         self.agent_instance = None
         self.tools_cache: List[Dict[str, str]] = []
         # Queue for incoming chat messages from Web UI -> Main Loop
@@ -117,12 +118,16 @@ class WebInterfaceManager:
             del self.connection_users[websocket]
         if websocket in self.connection_usernames:
             del self.connection_usernames[websocket]
+        if websocket in self.connection_roles:
+            del self.connection_roles[websocket]
 
-    def set_connection_user(self, websocket: WebSocket, user_id: str, username: Optional[str] = None) -> None:
-        """Store user id (and optionally username) for this connection (e.g. for RAG scope and User identity block)."""
+    def set_connection_user(self, websocket: WebSocket, user_id: str, username: Optional[str] = None, role: Optional[str] = None) -> None:
+        """Store user id (and optionally username/role) for this connection (e.g. for RAG scope and User identity block)."""
         self.connection_users[websocket] = user_id
         if username is not None:
             self.connection_usernames[websocket] = username
+        if role is not None:
+            self.connection_roles[websocket] = role
 
     def get_connection_user(self, websocket: WebSocket) -> Optional[str]:
         """Get user id for this connection, or None."""
@@ -131,6 +136,10 @@ class WebInterfaceManager:
     def get_connection_username(self, websocket: WebSocket) -> Optional[str]:
         """Get username for this connection, or None."""
         return self.connection_usernames.get(websocket)
+        
+    def get_connection_user_role(self, websocket: WebSocket) -> Optional[str]:
+        """Get user role for this connection, or None."""
+        return self.connection_roles.get(websocket)
 
     def subscribe_to_session(self, websocket: WebSocket, session_id: str):
         """

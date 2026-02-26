@@ -101,9 +101,17 @@ async def get_whatsapp_dashboard_debug(request: Request):
     }
 
 
+def _is_whatsapp_admin(request: Request) -> bool:
+    """True if current user is admin (can see all WhatsApp whitelist/sessions)."""
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    user = get_current_user_or_local_admin(request)
+    scope = user.get("user_scope_id")
+    return scope is not None and str(scope) == str(get_local_admin_scope_id())
+
+
 @router.get("/dashboard")
 async def get_whatsapp_dashboard(request: Request):
-    """Data for the WhatsApp dashboard: status, sessions, activity, stats, whitelist. No sensitive data."""
+    """Data for the WhatsApp dashboard: status, sessions, activity, stats, whitelist. No sensitive data. Non-admins see only their own whitelist and sessions."""
     import time as _time
     from typing import Any, Dict
 
@@ -112,12 +120,17 @@ async def get_whatsapp_dashboard(request: Request):
 
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
+    user_scope_id = user_info.get("user_scope_id")
     whatsapp_config = Config.get("whatsapp_config") or {}
     if not isinstance(whatsapp_config, dict):
         whatsapp_config = {}
 
-    whitelist = whatsapp_config.get("whitelist") or []
-    whitelist = [e for e in whitelist if isinstance(e, dict) and e.get("phone_number")]
+    whitelist_raw = whatsapp_config.get("whitelist") or []
+    whitelist_raw = [e for e in whitelist_raw if isinstance(e, dict) and e.get("phone_number")]
+    if _is_whatsapp_admin(request):
+        whitelist = whitelist_raw
+    else:
+        whitelist = [e for e in whitelist_raw if str(e.get("user_scope_id")) == str(user_scope_id)]
 
     current_linked = whatsapp_auth_exists(username)
     any_whitelist_linked = any(
@@ -126,7 +139,18 @@ async def get_whatsapp_dashboard(request: Request):
     )
     linked = current_linked or any_whitelist_linked
 
-    activity = list(whatsapp_config.get("chat_activity") or [])[-100:]
+    activity_raw = list(whatsapp_config.get("chat_activity") or [])[-100:]
+    if _is_whatsapp_admin(request):
+        activity = activity_raw
+    else:
+        my_phones = set()
+        for e in whitelist:
+            p = (e.get("phone_number") or "").strip()
+            if p:
+                my_phones.add(p)
+                if not p.startswith("+"):
+                    my_phones.add("+" + p)
+        activity = [a for a in activity_raw if (a.get("chat_id") or "").strip() in my_phones or ("+" + (a.get("chat_id") or "").replace(" ", "")) in my_phones]
 
     def _phone_to_session_id(phone: str, vaf_username: str) -> str:
         digits = "".join(c for c in phone if c.isdigit())
@@ -871,15 +895,23 @@ async def start_qr_flow(request: Request):
 
 @router.post("/whitelist/remove")
 async def remove_whitelist_entry(request: Request, body: WhitelistAddRequest):
-    """Remove a whitelist entry by phone number."""
+    """Remove a whitelist entry by phone number. Non-admins can only remove their own entry."""
     phone = (body.phone_number or "").strip()
     if not phone:
         raise HTTPException(status_code=400, detail="phone_number required")
+    user_info = get_current_vaf_user(request)
+    user_scope_id = user_info.get("user_scope_id")
     config = Config.load()
     wc = config.get("whatsapp_config") or {}
     if not isinstance(wc, dict):
         wc = {}
-    whitelist = [e for e in (wc.get("whitelist") or []) if isinstance(e, dict) and str(e.get("phone_number", "")).strip() != phone]
+    whitelist = list(wc.get("whitelist") or [])
+    if not _is_whatsapp_admin(request):
+        # Non-admin: only allow removing an entry that belongs to this user
+        entry = next((e for e in whitelist if isinstance(e, dict) and str(e.get("phone_number", "")).strip() == phone), None)
+        if entry and str(entry.get("user_scope_id")) != str(user_scope_id):
+            raise HTTPException(status_code=403, detail="You can only remove your own whitelist entry.")
+    whitelist = [e for e in whitelist if not (isinstance(e, dict) and str(e.get("phone_number", "")).strip() == phone)]
     wc["whitelist"] = whitelist
     config["whatsapp_config"] = wc
     Config.save(config)

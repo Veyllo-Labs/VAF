@@ -2391,15 +2391,21 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "save_config":
                     new_config = cmd.get("config")
                     if new_config:
+                        from vaf.core.config import get_local_admin_scope_id
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        local_admin_scope = get_local_admin_scope_id()
+                        is_admin = user_scope_id is not None and str(user_scope_id) == str(local_admin_scope)
+                        if not is_admin:
+                            new_config = Config.filter_for_non_admin(new_config)
                         existing = Config.load()
-                        # Save config (Config.save will notify observers if critical keys changed)
-                        Config.save(new_config)
-                        provider_changed = existing.get("provider") != new_config.get("provider")
+                        merged = {**existing, **new_config}
+                        Config.save(merged)
+                        provider_changed = existing.get("provider") != merged.get("provider")
 
                         try:
-                            if "tray_autostart" in new_config:
+                            if "tray_autostart" in merged:
                                 from vaf.core.platform import Platform
-                                Platform.set_tray_autostart(bool(new_config.get("tray_autostart")))
+                                Platform.set_tray_autostart(bool(merged.get("tray_autostart")))
                         except Exception as e:
                             log("WebServer", f"Tray autostart update failed: {e}")
 

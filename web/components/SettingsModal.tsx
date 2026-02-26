@@ -204,9 +204,9 @@ const CATEGORIES = [
     { id: 'voice', labelKey: 'voice', icon: Volume2 },
     { id: 'interface', labelKey: 'interface', icon: Monitor },
     { id: 'connections', labelKey: 'connections', icon: MessageSquare },
-    { id: 'advanced', labelKey: 'advanced', icon: Zap },
+    { id: 'advanced', labelKey: 'advanced', icon: Zap, adminOnly: true },
     { id: 'automations', labelKey: 'automations', icon: Check },
-    { id: 'local_network', labelKey: 'localNetwork', icon: Network },
+    { id: 'local_network', labelKey: 'localNetwork', icon: Network, adminOnly: true },
     { id: 'about', labelKey: 'about', icon: Globe },
 ];
 

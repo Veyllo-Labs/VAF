@@ -258,6 +258,8 @@ A one-time migration script (`scripts/migrate_users_to_scopes.py`) copies data f
 
 Each `AutomationManager` instance can be created with a `user_scope_id`; tasks are stored in `automations/` (global) or `automations/<user_scope_id>/` (per-user). Tasks carry `user_scope_id` so that when an automation runs (prompt-based or workflow-based), the agent and workflow engine use that scope: RAG/memory, calendar, messaging, contacts, mail, and automation notes/todos all run with the owner's credentials and data. The agent injects `user_scope_id` into automation tools (`create_automation`, `list_automations`, etc.) so new tasks are stored in the correct user directory. The CLI/scheduler uses an aggregated manager that loads from all scope dirs and saves/deletes/restores via the task's scope path.
 
+**Global slot limit:** A given time slot (same HH:MM + frequency, e.g. daily 08:15) may be used by at most **3 users**. If three users already have an automation at that slot, a fourth gets an error: *"Too many other users have already booked this time slot. Please choose another slot at least 15 minutes apart."* This avoids overloading the scheduler at popular times while keeping automations user-specific.
+
 ### Automation planner – notes and todos (`vaf/core/automation_planner.py`)
 
 Notes and to-dos for the automation calendar are stored per user under `Platform.vaf_dir() / "automation_planner" / <user_scope_id> /` (or `_default` when no scope): `notes.json` and `todos.json`. All planner API functions take `user_scope_id`; the Web UI and agent tools use the same scope so that the calendar shows only the current user's data.
@@ -304,6 +306,13 @@ When the primary lookup returns no accounts (e.g. chat session uses local admin 
 
 Synced messages are stored per-scope in `scopes/<user_scope_id>/email_sync.db` (or legacy path for local admin).
 
+### Config: global vs user-scoped
+
+- **Global (admin-only to change):** Backend and network settings apply to all users. Only admins can edit them. This includes: Network tab (local network, ports, TLS, hosting), Advanced tab (server, tray, timeouts, etc.), API keys and provider/model settings, OAuth client IDs, TTS/STT URLs, and similar server-wide options. Stored in the single `config.json`; non-admin PATCH and WebSocket `save_config` are filtered so these keys are not overwritten.
+- **User-specific:** Connections (Mail, WhatsApp, Telegram, Discord, Cloud, Calendar, GitHub), language/interface preferences, and automations are per user. Non-admins can change only the keys that are not in the global set (e.g. language, time format). Connection data is already keyed by `user_scope_id` or username where applicable.
+
+The Settings UI shows the **Network** and **Advanced** tabs only to admins; all users see Connections, Automations, Interface, etc., and receive the same global config for display/behavior without being able to change it.
+
 ## Isolation Summary Table
 
 | Component | Isolation mechanism | Level |
@@ -319,8 +328,9 @@ Synced messages are stored per-scope in `scopes/<user_scope_id>/email_sync.db` (
 | Telegram | Whitelist-based routing | Application |
 | Email | Per-user encrypted credentials + scope-based config lookup chain | Application |
 | Calendar (Google/Microsoft) | Same OAuth and `user_scope_id` as Email; no separate credentials | Application |
-| Automations | Per-user task storage and scoped RAG access | Application |
+| Automations | Per-user task storage and scoped RAG access; max 3 users per time slot (global cap) | Application |
 | Automation planner (notes/todos) | Per-user `automation_planner/<scope>/notes.json`, `todos.json` | Application |
+| Config (global vs user) | Backend/network/API keys: admin-only write; non-admins can change only user-scoped settings | Application |
 
 ## Developer Guidelines: Building New Features
 

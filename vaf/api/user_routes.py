@@ -12,9 +12,9 @@ Endpoints:
 import logging
 import uuid as uuid_module
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,10 +22,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vaf.auth.models import LocalUser, UserRole
 from vaf.auth.database import get_auth_db
 from vaf.auth.crypto import hash_password
+from vaf.core.config import get_local_admin_scope_id
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/users", tags=["users"])
+
+
+def _current_user(request: Request) -> Dict[str, Any]:
+    """Current user from auth middleware or local admin (localhost)."""
+    user = getattr(request.state, "user", None)
+    if user and isinstance(user, dict):
+        return user
+    return {
+        "username": "admin",
+        "role": "admin",
+        "user_scope_id": str(get_local_admin_scope_id()),
+    }
+
+
+def require_admin(request: Request) -> Dict[str, Any]:
+    """Dependency: require admin role. Used for user management endpoints."""
+    user = _current_user(request)
+    role = (user.get("role") or "user").lower()
+    if role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin role required for user management",
+        )
+    return user
 
 
 # --- Request/Response Models ---
@@ -67,8 +92,8 @@ class UserResponse(BaseModel):
 # --- Endpoints ---
 
 @router.get("")
-async def list_users():
-    """List all users. Returns empty list if DB not available."""
+async def list_users(_: Dict[str, Any] = Depends(require_admin)):
+    """List all users (admin only). Returns empty list if DB not available."""
     try:
         async with get_auth_db() as db:
             result = await db.execute(select(LocalUser).order_by(LocalUser.created_at.desc()))
@@ -95,8 +120,8 @@ async def list_users():
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def create_user(data: UserCreate):
-    """Create a new user account."""
+async def create_user(data: UserCreate, _: Dict[str, Any] = Depends(require_admin)):
+    """Create a new user account (admin only)."""
     try:
         async with get_auth_db() as db:
             # Check if username already exists
@@ -153,8 +178,8 @@ async def create_user(data: UserCreate):
 
 
 @router.get("/{user_id}")
-async def get_user(user_id: str):
-    """Get a specific user by ID."""
+async def get_user(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
+    """Get a specific user by ID (admin only)."""
     try:
         async with get_auth_db() as db:
             result = await db.execute(
@@ -192,8 +217,8 @@ async def get_user(user_id: str):
 
 
 @router.put("/{user_id}")
-async def update_user(user_id: str, data: UserUpdate):
-    """Update a user's details."""
+async def update_user(user_id: str, data: UserUpdate, _: Dict[str, Any] = Depends(require_admin)):
+    """Update a user's details (admin only)."""
     try:
         async with get_auth_db() as db:
             result = await db.execute(
@@ -240,8 +265,8 @@ async def update_user(user_id: str, data: UserUpdate):
 
 
 @router.delete("/{user_id}")
-async def delete_user(user_id: str):
-    """Delete a user account."""
+async def delete_user(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
+    """Delete a user account (admin only)."""
     try:
         async with get_auth_db() as db:
             result = await db.execute(

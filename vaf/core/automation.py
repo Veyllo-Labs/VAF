@@ -175,6 +175,58 @@ def _min_gap_minutes(t1: str, t2: str) -> int:
     return min(diff, 1440 - diff)
 
 
+# Max users that may book the same time slot (same HH:MM + frequency). Enforced globally.
+MAX_USERS_PER_SLOT = 3
+SUGGESTED_SLOT_GAP_MINUTES = 15
+
+
+def _slot_occupancy(base_dir: Path) -> Dict[tuple, set]:
+    """
+    Scan all automation tasks under base_dir (root + user UUID subdirs) and return
+    (time, frequency) -> set of user_scope_ids (or "__global__" for root tasks).
+    Only enabled tasks are counted.
+    """
+    if not base_dir.exists():
+        return {}
+    occupancy: Dict[tuple, set] = {}
+    # Root-level tasks (legacy/admin)
+    for filepath in base_dir.glob("*.json"):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not data.get("enabled", True):
+                continue
+            t = data.get("time") or "06:00"
+            freq = data.get("frequency") or "daily"
+            if ":" in t:
+                key = (t, freq)
+                occupancy.setdefault(key, set()).add("__global__")
+        except Exception:
+            continue
+    # Per-user subdirs
+    for subdir in base_dir.iterdir():
+        if not subdir.is_dir():
+            continue
+        try:
+            uuid.UUID(subdir.name)
+        except (ValueError, TypeError):
+            continue
+        for filepath in subdir.glob("*.json"):
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not data.get("enabled", True):
+                    continue
+                t = data.get("time") or "06:00"
+                freq = data.get("frequency") or "daily"
+                if ":" in t:
+                    key = (t, freq)
+                    occupancy.setdefault(key, set()).add(subdir.name)
+            except Exception:
+                continue
+    return occupancy
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # AUTOMATION MANAGER
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -443,6 +495,17 @@ vaf automation delete <id>   # Delete task
                     f"**Solution:** Pick a different time in HH:MM format, or update the existing automation with `update_automation`."
                 )
                 return (False, error_msg)
+        # Global cap: max 3 users per (time, frequency) slot
+        occupancy = _slot_occupancy(self.base_dir)
+        slot = (new_time, (new_frequency or "daily"))
+        users_at_slot = occupancy.get(slot, set())
+        effective_scope = self.user_scope_id or "__global__"
+        if effective_scope not in users_at_slot and len(users_at_slot) >= MAX_USERS_PER_SLOT:
+            return (
+                False,
+                f"Too many other users have already booked this time slot ({new_time}). "
+                f"Please choose another slot at least {SUGGESTED_SLOT_GAP_MINUTES} minutes apart."
+            )
         return (True, None)
 
     def check_can_update_automation(
@@ -469,6 +532,17 @@ vaf automation delete <id>   # Delete task
                     f"Choose a time at least {MIN_AUTOMATION_INTERVAL_MINUTES} minutes apart."
                 )
                 return (False, error_msg)
+        # Global cap: max 3 users per (time, frequency) slot
+        occupancy = _slot_occupancy(self.base_dir)
+        slot = (new_time, (new_frequency or "daily"))
+        users_at_slot = occupancy.get(slot, set())
+        effective_scope = self.user_scope_id or "__global__"
+        if effective_scope not in users_at_slot and len(users_at_slot) >= MAX_USERS_PER_SLOT:
+            return (
+                False,
+                f"Too many other users have already booked this time slot ({new_time}). "
+                f"Please choose another slot at least {SUGGESTED_SLOT_GAP_MINUTES} minutes apart."
+            )
         return (True, None)
     
     def update(self, task_id: str, **kwargs) -> Optional[AutomationTask]:

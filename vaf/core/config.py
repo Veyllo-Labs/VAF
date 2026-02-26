@@ -244,6 +244,42 @@ class Config:
         "cloud_credentials_key",
     ]
 
+    # Keys (and prefixes) that only admins can change. Non-admins can change user-scoped
+    # settings (e.g. language, interface) but not backend/network/API config.
+    GLOBAL_CONFIG_KEY_PREFIXES = (
+        "local_network_",
+        "api_key_",
+        "api_model_",
+        "email_oauth_",
+        "cloud_oauth_",
+        "github_oauth_",
+        "speech_stt_",
+        "speech_tts_",
+        "subagent_",
+        "thinking_",
+        "librarian_",
+        "document_conversion_",
+    )
+    GLOBAL_CONFIG_KEYS = frozenset([
+        "provider", "model", "n_ctx", "gpu_layers", "n_parallel", "llama_cache_ram",
+        "auto_start_local_server", "tray_autostart", "web_ui_enabled", "server_persistence_enabled",
+        "debug_logs_enabled", "server_idle_timeout", "telegram_idle_timeout", "telegram_debounce_seconds",
+        "redis_url", "redis_enabled", "use_docker",
+        "local_admin_scope_id", "local_admin_username",
+    ])
+
+    @classmethod
+    def is_global_config_key(cls, key: str) -> bool:
+        """True if this config key may only be written by an admin (backend/network/API)."""
+        if key in cls.GLOBAL_CONFIG_KEYS:
+            return True
+        return any(key.startswith(prefix) for prefix in cls.GLOBAL_CONFIG_KEY_PREFIXES)
+
+    @classmethod
+    def filter_for_non_admin(cls, config: dict) -> dict:
+        """Return a copy of config with only keys non-admins are allowed to write (user-scoped settings)."""
+        return {k: v for k, v in config.items() if not cls.is_global_config_key(k)}
+
     @classmethod
     def save(cls, config: dict):
         if not cls.APP_DIR.exists():

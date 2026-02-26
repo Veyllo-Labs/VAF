@@ -448,6 +448,8 @@ curl -X POST "http://localhost:5003/asr?encode=true&output=json" \
      -d '{"text": "Test"}' -o /dev/null -w "%{http_code}"
    ```
 
+4. **TTS over LAN (Web UI):** Playback is **proxied** via the backend: the browser sends `speak` over WebSocket and receives audio as base64 (`tts_audio`). The client never calls the TTS URL directly. If TTS only “loads” and no sound plays from a LAN device, the backend may be failing to reach the TTS service. Ensure `speech_tts_docker_url` is reachable from where the backend runs (e.g. if the backend runs inside Docker, use the Docker service name like `http://vaf-tts:5000` instead of `http://localhost:5002`). Check server logs for TTS synthesis errors or timeouts.
+
 ### STT Returns 422 Error
 
 1. **Check audio format:** STT expects proper audio files. Web UI converts to WAV automatically.

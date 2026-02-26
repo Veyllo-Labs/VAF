@@ -46,9 +46,15 @@ def get_current_username(request: Request) -> str:
 
 
 @router.get("/config")
-async def get_config(_username: str = Depends(get_current_username)) -> Dict[str, Any]:
-    """Return current app config. Used by login page during onboarding connections step."""
-    return Config.load()
+async def get_config(request: Request) -> Dict[str, Any]:
+    """Return app config. Non-admins receive a scoped view (only their own connections)."""
+    user = get_current_user_or_local_admin(request)
+    full = Config.load()
+    return Config.config_for_user(
+        full,
+        user.get("user_scope_id"),
+        user.get("role", "user"),
+    )
 
 
 @router.patch("/config")
@@ -57,10 +63,18 @@ async def patch_config(
     request: Request,
     _user: Dict[str, Any] = Depends(get_current_user_or_local_admin),
 ) -> Dict[str, Any]:
-    """Merge provided keys into config and save. Non-admins can only change user-scoped settings (e.g. language); global/backend/network keys are ignored."""
-    if _user.get("role") != "admin":
-        body = Config.filter_for_non_admin(body)
+    """Merge provided keys into config and save. Non-admins: global keys ignored; connection toggles (Telegram/WhatsApp/Discord) stored per-user only."""
     current = Config.load()
+    if _user.get("role") != "admin":
+        body_filtered, scope_toggles = Config.extract_connection_toggles_for_scope(body, _user.get("user_scope_id"))
+        body = Config.filter_for_non_admin(body_filtered)
+        if scope_toggles:
+            by_scope = current.get("connection_enabled_by_scope") or {}
+            if not isinstance(by_scope, dict):
+                by_scope = {}
+            for scope_id, toggles in scope_toggles.items():
+                by_scope[scope_id] = {**(by_scope.get(scope_id) or {}), **toggles}
+            current["connection_enabled_by_scope"] = by_scope
     merged = {**current, **body}
     Config.save(merged)
     return merged

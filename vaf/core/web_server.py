@@ -2842,12 +2842,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         from vaf.core.automation import AutomationManager
                         from vaf.core.config import get_local_admin_scope_id
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        user_role = manager.get_connection_user_role(websocket) if manager else "guest"
                         mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
                         tasks = list(mgr.list())
                         
-                        # Merge root automations for local admin (legacy fallback)
+                        # Merge root automations for admins (legacy fallback)
+                        # Root automations are those in the base directory without a scope subdirectory
                         local_admin_scope = get_local_admin_scope_id()
-                        if user_scope_id and str(user_scope_id).strip() == str(local_admin_scope).strip():
+                        is_admin = user_role == "admin" or (user_scope_id and str(user_scope_id).strip() == str(local_admin_scope).strip())
+                        
+                        if is_admin:
                             root_mgr = AutomationManager()
                             seen_ids = {t.id for t in tasks}
                             for t in root_mgr.list():

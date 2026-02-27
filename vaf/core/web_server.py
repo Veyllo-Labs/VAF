@@ -2986,7 +2986,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             if is_admin:
                                 root_mgr = AutomationManager()
                                 ok = root_mgr.delete(task_id, permanent=True)
-                        await websocket.send_json({"type": "delete_automation_result", "ok": ok})
+                        await websocket.send_json({"type": "delete_automation_result", "ok": ok, "task_id": task_id})
                     except Exception as e:
                         await websocket.send_json({"type": "delete_automation_result", "ok": False, "error": str(e)})
 

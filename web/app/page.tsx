@@ -2158,6 +2158,8 @@ function VAFDashboardContent() {
                 else if (data.type === 'delete_automation_result') {
                     setDeletingAutomationId(null);
                     if (data.ok === true) {
+                        // Optimistically remove deleted automation immediately (no WebSocket round-trip needed)
+                        if (data.task_id) setAutomations((prev) => prev.filter((a) => a.id !== data.task_id));
                         setEditingAutomationFromCalendar(null);
                         refreshAutomations();
                     } else {

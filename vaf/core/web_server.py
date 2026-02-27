@@ -2970,6 +2970,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         from vaf.core.automation import AutomationManager
                         from vaf.core.config import get_local_admin_scope_id
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        user_role = manager.get_connection_user_role(websocket) if manager else "guest"
                         mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
                         task_id = (cmd.get("task_id") or cmd.get("id") or "").strip()
                         if not task_id:
@@ -2977,9 +2978,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             continue
                         ok = mgr.delete(task_id, permanent=True)
                         if not ok and user_scope_id:
-                            # Restrict root fallback to local admin only
+                            # Mirror get_automations: check BOTH user_role AND scope_id
+                            # (previously only scope_id was checked, causing delete to fail for
+                            # role-based admins whose scope_id doesn't match local_admin_scope)
                             local_admin_scope = get_local_admin_scope_id()
-                            if str(user_scope_id).strip() == str(local_admin_scope).strip():
+                            is_admin = user_role == "admin" or str(user_scope_id).strip() == str(local_admin_scope).strip()
+                            if is_admin:
                                 root_mgr = AutomationManager()
                                 ok = root_mgr.delete(task_id, permanent=True)
                         await websocket.send_json({"type": "delete_automation_result", "ok": ok})

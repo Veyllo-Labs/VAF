@@ -175,13 +175,10 @@ class WebInterfaceManager:
         """
         if not session_id:
             return await self.broadcast(message)
-            
+
         message['sessionId'] = session_id  # Ensure sessionId is always present
-        
-        # DEBUG
-        # if message.get('type') == 'agent_message_update':
-        #    print(f"[DEBUG] Broadcasting update to {session_id}: {message.get('content')[:20]}...")
-        
+
+        sent_count = 0
         disconnected = []
         for connection in self.active_connections:
             conn_session = self.connection_sessions.get(connection)
@@ -190,11 +187,21 @@ class WebInterfaceManager:
             if conn_session == session_id:
                 try:
                     await connection.send_text(json.dumps(message))
+                    sent_count += 1
                 except Exception:
                     disconnected.append(connection)
-        
+
         for conn in disconnected:
             self.disconnect(conn)
+
+        # Warn if no subscriber found for streaming events — helps diagnose non-admin streaming bug
+        if sent_count == 0 and message.get('type') in ('agent_message_update', 'tool_update'):
+            msg_type = message.get('type')
+            subscribed = list(self.connection_sessions.values())
+            append_domain_log("webui",
+                f"[WARN] broadcast_to_session({session_id}) found 0 subscribers "
+                f"for '{msg_type}'. Active subscriptions: {subscribed}"
+            )
 
     async def broadcast_to_user(self, user_id: str, message: dict):
         """

@@ -1168,6 +1168,36 @@ def run_headless_agent():
                     except Exception:
                         pass
 
+                    # Send history_update after chat completes so WebUI syncs final state.
+                    # This is the fallback guarantee: even if streaming events were lost
+                    # (e.g. subscribe_to_session race condition for non-admin users in network mode),
+                    # the client receives the full conversation once the response is done.
+                    try:
+                        if task.session_id:
+                            _frontend_msgs = []
+                            for _msg in session.messages:
+                                _role = _msg.role if hasattr(_msg, 'role') else _msg.get("role")
+                                _content = _msg.content if hasattr(_msg, 'content') else _msg.get("content", "")
+                                _ts = getattr(_msg, 'timestamp', None) or (_msg.get("timestamp") if isinstance(_msg, dict) else None)
+                                _meta = getattr(_msg, 'metadata', None) or (_msg.get("metadata") if isinstance(_msg, dict) else None) or {}
+                                _entry = {"role": _role, "content": _content, "timestamp": _ts}
+                                if _meta.get("toolName") is not None:
+                                    _entry["toolName"] = _meta["toolName"]
+                                if _meta.get("toolId") is not None:
+                                    _entry["toolId"] = _meta["toolId"]
+                                if _meta.get("toolStatus") is not None:
+                                    _entry["toolStatus"] = _meta["toolStatus"]
+                                _frontend_msgs.append(_entry)
+                            get_web_interface()._push_session_update(task.session_id, {
+                                "type": "history_update",
+                                "messages": _frontend_msgs,
+                                "sessionId": task.session_id,
+                                "isActive": False,
+                                "currentStatus": "idle"
+                            })
+                    except Exception:
+                        pass
+
                     # 2. Auto-capture: DISABLED - causes 13GB+ memory spikes
                     # The memory leak occurs during pipeline.ingest() ~13 seconds after EMBED_DONE
                     # TODO: Investigate asyncpg/SQLAlchemy memory leak in auto_capture_memory()

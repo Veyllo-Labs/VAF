@@ -287,7 +287,7 @@ export default function CreateAutomationPopup({
                         {isEditMode && onDelete ? (
                             <button
                                 type="button"
-                                onClick={() => { if (window.confirm(tAutomations('confirmDelete'))) { onDelete(editTask!.id); onCreated?.(); onClose(); } }}
+                                onClick={() => { if (window.confirm(tAutomations('confirmDelete'))) { onDelete(editTask!.id); } }}
                                 className="px-4 py-2 rounded-lg text-red-600 hover:bg-red-50 transition-colors font-medium inline-flex items-center gap-2"
                             >
                                 <Trash2 className="w-4 h-4" />

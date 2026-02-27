@@ -2156,10 +2156,17 @@ function VAFDashboardContent() {
                     if (data.ok === true) ws?.send(JSON.stringify({ type: 'get_automations' }));
                 }
                 else if (data.type === 'delete_automation_result') {
+                    setDeletingAutomationId(null);
                     if (data.ok === true) {
-                        ws?.send(JSON.stringify({ type: 'get_automations' }));
+                        setEditingAutomationFromCalendar(null);
+                        refreshAutomations();
                     } else {
-                        setDeletingAutomationId(null);
+                        window.alert(
+                            data.error
+                                ? `Fehler beim Löschen: ${data.error}`
+                                : 'Automatisierung konnte nicht gelöscht werden.'
+                        );
+                        refreshAutomations();
                     }
                 }
                 else if (data.type === 'notification' && data.notification) {
@@ -4294,7 +4301,7 @@ function VAFDashboardContent() {
                     editTask={editingAutomationFromCalendar}
                     onCreated={() => { setEditingAutomationFromCalendar(null); refreshAutomations(); }}
                     onSubmit={createAutomationSubmit}
-                    onDelete={(taskId) => { deleteAutomation(taskId); setEditingAutomationFromCalendar(null); refreshAutomations(); }}
+                    onDelete={(taskId) => { deleteAutomation(taskId); }}
                 />
             )}
         </main>

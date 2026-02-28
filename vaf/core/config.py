@@ -345,41 +345,42 @@ class Config:
         if not isinstance(user_toggles, dict):
             user_toggles = {}
 
-        # Telegram: do not expose full whitelist to non-admin; enabled = per-user toggle (default False for new user)
+        # Telegram: verified = True ONLY if this user has a whitelist entry (not global flag)
         tc = config.get("telegram_config") or {}
         if isinstance(tc, dict):
+            tg_whitelist = tc.get("whitelist") or []
+            my_tg_entries = [e for e in tg_whitelist
+                            if isinstance(e, dict) and str(e.get("user_scope_id")) == scope_str] if scope_str else []
             out["telegram_config"] = {
                 "enabled": user_toggles.get("telegram", False),
-                "verified": tc.get("verified", False),
-                "bot_username": tc.get("bot_username"),
+                "verified": bool(my_tg_entries),
+                "bot_username": tc.get("bot_username") if my_tg_entries else None,
                 "whitelist": [],
             }
         else:
             out["telegram_config"] = None
 
-        # WhatsApp: only whitelist entries for this user; enabled = per-user toggle (default False for new user)
+        # WhatsApp: only this user's whitelist entries; no **wc spread (don't leak internal fields)
         wc = config.get("whatsapp_config") or {}
         if isinstance(wc, dict):
             whitelist = wc.get("whitelist") or []
-            if scope_str:
-                my_entries = [e for e in whitelist if isinstance(e, dict) and str(e.get("user_scope_id")) == scope_str]
-            else:
-                my_entries = []
-            out["whatsapp_config"] = {**wc, "whitelist": my_entries, "enabled": user_toggles.get("whatsapp", False)}
+            my_entries = [e for e in whitelist
+                         if isinstance(e, dict) and str(e.get("user_scope_id")) == scope_str] if scope_str else []
+            out["whatsapp_config"] = {
+                "enabled": user_toggles.get("whatsapp", False),
+                "whitelist": my_entries,
+                "configured": bool(my_entries),
+            }
         else:
             out["whatsapp_config"] = None
 
-        # Discord: single-tenant; enabled = per-user toggle (default False for new user)
-        dc = config.get("discord_config") or {}
-        if isinstance(dc, dict):
-            out["discord_config"] = {
-                "enabled": user_toggles.get("discord", False),
-                "verified": dc.get("verified", False),
-                "configured": bool(dc.get("verified") and dc.get("admin_user_id")),
-                "chat_activity": [],
-            }
-        else:
-            out["discord_config"] = None
+        # Discord: single-tenant (admin-only). Non-admin never has their own Discord connection.
+        out["discord_config"] = {
+            "enabled": False,
+            "verified": False,
+            "configured": False,
+            "chat_activity": [],
+        }
 
         return out
 
@@ -594,3 +595,15 @@ def get_local_admin_scope_id() -> str:
 def get_local_admin_username() -> str:
     """Return the local admin username. Use for display and paths when no JWT."""
     return (Config.get("local_admin_username") or "admin").strip()
+
+
+def is_admin_user(user_scope_id: Optional[str] = None, role: Optional[str] = None) -> bool:
+    """Unified admin check. True if role is 'admin' OR scope_id matches local admin.
+
+    Use this everywhere instead of ad-hoc scope_id or role comparisons.
+    """
+    if (role or "").lower() == "admin":
+        return True
+    if not user_scope_id:
+        return False
+    return str(user_scope_id).strip() == str(get_local_admin_scope_id()).strip()

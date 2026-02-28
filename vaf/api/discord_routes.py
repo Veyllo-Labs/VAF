@@ -7,7 +7,7 @@ import asyncio
 import logging
 import threading
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 logger = logging.getLogger("vaf.api.discord")
@@ -203,15 +203,18 @@ async def get_discord_dashboard():
 
 
 @router.get("/status")
-async def get_discord_status():
-    """
-    Get the current Discord bridge status.
-    """
-    from vaf.core.config import Config
+async def get_discord_status(request: Request):
+    """Get the current Discord bridge status — scoped per user."""
+    from vaf.core.config import Config, is_admin_user
     from vaf.api.discord_bridge import is_bridge_running
+    from vaf.api.config_routes import get_current_user_or_local_admin
+
+    user = get_current_user_or_local_admin(request)
+    if not is_admin_user(user.get("user_scope_id"), user.get("role")):
+        # Discord is single-tenant (admin-only). Non-admin never has Discord.
+        return {"configured": False, "enabled": False, "running": False, "admin_username": None}
 
     discord_config = Config.get("discord_config", {})
-
     return {
         "configured": discord_config.get("verified", False),
         "enabled": discord_config.get("enabled", False),

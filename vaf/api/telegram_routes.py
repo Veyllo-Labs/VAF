@@ -199,12 +199,36 @@ async def whitelist_add(
 
 
 @router.get("/status")
-async def get_telegram_status():
-    """Return configured, enabled, running, and whitelist count (no sensitive data)."""
+async def get_telegram_status(request: Request):
+    """Return configured, enabled, running, and whitelist count — scoped per user."""
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    from vaf.core.config import is_admin_user
+
+    user = get_current_user_or_local_admin(request)
+    scope = user.get("user_scope_id")
+    role = user.get("role", "user")
+
     telegram_config = Config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict):
         telegram_config = {}
+
     whitelist = telegram_config.get("whitelist") or []
+
+    # Non-admin: only show status if they have a whitelist entry
+    if not is_admin_user(scope, role):
+        my_entries = [e for e in whitelist
+                      if isinstance(e, dict) and str(e.get("user_scope_id")) == str(scope)]
+        if not my_entries:
+            return {"configured": False, "enabled": False, "running": False, "whitelist_count": 0}
+        running = False
+        try:
+            from vaf.api.telegram_bridge import is_bridge_running
+            running = is_bridge_running()
+        except Exception:
+            pass
+        return {"configured": True, "enabled": True, "running": running, "whitelist_count": len(my_entries)}
+
+    # Admin: full global status
     running = False
     try:
         from vaf.api.telegram_bridge import is_bridge_running
@@ -251,10 +275,9 @@ def _get_bot_username() -> Optional[str]:
 def _is_telegram_admin(request: Request) -> bool:
     """True if current user is admin (can see all Telegram sessions/whitelist)."""
     from vaf.api.config_routes import get_current_user_or_local_admin
-    from vaf.core.config import get_local_admin_scope_id
+    from vaf.core.config import is_admin_user
     user = get_current_user_or_local_admin(request)
-    scope = user.get("user_scope_id")
-    return scope is not None and str(scope) == str(get_local_admin_scope_id())
+    return is_admin_user(user.get("user_scope_id"), user.get("role"))
 
 
 @router.get("/dashboard")

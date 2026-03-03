@@ -1961,7 +1961,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{tLocalNet('thisDeviceUrl')}</div>
                                                                 {apiHost ? (
                                                                     <>
-                                                                        <div className="font-mono text-sm text-gray-900 break-all">{apiHost}</div>
+                                                                        <div className="font-mono text-sm text-gray-900 break-all">{apiHost}{accessUrlData?.port ? `:${accessUrlData.port}` : ''}</div>
                                                                         {portsText && <div className="text-xs text-gray-600 mt-0.5">{tLocalNet('portsUsed')}: {portsText}</div>}
                                                                     </>
                                                                 ) : (
@@ -1977,7 +1977,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{tLocalNet('otherDevicesLanUrl')}</div>
                                                                 {lanUrl ? (
                                                                     <>
-                                                                        <div className="font-mono text-sm text-green-800 break-all">{apiHost || new URL(lanUrl).hostname}</div>
+                                                                        <div className="font-mono text-sm text-green-800 break-all">{apiHost || new URL(lanUrl).hostname}{accessUrlData?.port ? `:${accessUrlData.port}` : ''}</div>
                                                                         {portsText && <div className="text-xs text-green-700 mt-0.5">{tLocalNet('portsUsed')}: {portsText}</div>}
                                                                         <div className="text-xs text-green-700 mt-0.5">{tLocalNet('lanUrlHint')}</div>
                                                                     </>

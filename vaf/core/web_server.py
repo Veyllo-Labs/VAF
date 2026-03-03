@@ -2057,11 +2057,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "get_config":
                     # Send config to frontend; non-admins get scoped view (only their own connections)
-                    from vaf.core.config import get_local_admin_scope_id
+                    from vaf.core.config import is_admin_user
                     user_scope_id = manager.get_connection_user(websocket) if manager else None
-                    local_admin_scope = get_local_admin_scope_id()
-                    is_admin = user_scope_id is not None and str(user_scope_id) == str(local_admin_scope)
-                    role = "admin" if is_admin else "user"
+                    stored_role = manager.get_connection_user_role(websocket) if manager else None
+                    role = "admin" if is_admin_user(user_scope_id, stored_role) else "user"
                     full_cfg = Config.load()
                     cfg = Config.config_for_user(full_cfg, str(user_scope_id) if user_scope_id else None, role)
                     await websocket.send_json({

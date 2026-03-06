@@ -495,12 +495,22 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setChanged(false);
     }, [config, isOpen]);
 
-    // Open with a specific tab when initialTab is provided
+    // When modal opens, ensure activeTab is valid for the current user's role.
+    // Non-admins must not land on adminOnly tabs (e.g. 'general' with API keys).
     useEffect(() => {
-        if (isOpen && initialTabProp) {
+        if (!isOpen) return;
+        if (initialTabProp) {
             setActiveTab(initialTabProp);
+            return;
         }
-    }, [isOpen, initialTabProp]);
+        // Check if current activeTab is allowed for this user
+        const currentCat = CATEGORIES.find(c => c.id === activeTab);
+        if (currentCat?.adminOnly && currentUser?.role !== 'admin') {
+            // Fall back to first non-admin tab
+            const firstAllowed = CATEGORIES.find(c => !c.adminOnly);
+            if (firstAllowed) setActiveTab(firstAllowed.id);
+        }
+    }, [isOpen, initialTabProp, currentUser?.role]);
 
     // OAuth callback: auto-open Cloud or Email wizard when returning from OAuth with success
     useEffect(() => {
@@ -1218,7 +1228,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     {/* Scrollable Form */}
                     <div className="flex-1 overflow-y-auto p-8 space-y-8">
 
-                        {activeTab === 'general' && (
+                        {activeTab === 'general' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
                                 <Section title={tGeneral('apiKeys')}>
                                     <Input
@@ -1908,7 +1918,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             />
                         )}
 
-                        {activeTab === 'local_network' && (
+                        {activeTab === 'local_network' && currentUser?.role === 'admin' && (
                             <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
                                 <Section title={tLocalNet('networkSettings')}>
                                     <Switch
@@ -2181,7 +2191,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </div>
                         )}
 
-                        {activeTab === 'advanced' && (
+                        {activeTab === 'advanced' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
                                 <Section title={tAdvanced('subAgents')}>
                                     <Switch

@@ -5811,8 +5811,13 @@ class Agent:
                     if _emit_to_web_ui():
                         try:
                             from vaf.core.web_interface import get_web_interface
-                            from vaf.core.subagent_ipc import get_current_session_id
-                            get_web_interface().emit_tool_update('start', function_name, tc['id'], data=json.dumps(arguments), session_id=get_current_session_id())
+                            # Use agent's own session_id (instance attribute) instead of global
+                            # get_current_session_id() which can be overwritten by other threads
+                            _tool_session = getattr(self, 'current_session_id', None)
+                            if not _tool_session:
+                                from vaf.core.subagent_ipc import get_current_session_id
+                                _tool_session = get_current_session_id()
+                            get_web_interface().emit_tool_update('start', function_name, tc['id'], data=json.dumps(arguments), session_id=_tool_session)
                         except Exception:
                             pass
                     
@@ -5873,10 +5878,14 @@ class Agent:
                     if _emit_to_web_ui():
                         try:
                             from vaf.core.web_interface import get_web_interface
-                            from vaf.core.subagent_ipc import get_current_session_id
                             r_str = str(result) if result else ""
                             is_err = "error" in r_str.lower() or "failed" in r_str.lower()
-                            get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=r_str, session_id=get_current_session_id())
+                            # Use agent's own session_id (instance attribute) instead of global
+                            _tool_session = getattr(self, 'current_session_id', None)
+                            if not _tool_session:
+                                from vaf.core.subagent_ipc import get_current_session_id
+                                _tool_session = get_current_session_id()
+                            get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=r_str, session_id=_tool_session)
                             if is_err and "Error executing tool" not in r_str:
                                 time.sleep(2)
                         except Exception:

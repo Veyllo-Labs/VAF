@@ -453,6 +453,21 @@ def _get_trusted_sources_for_ui():
 
 @app.on_event("startup")
 async def startup_event():
+    # Guard: when port 8001 and port 8005 share the same event loop and app,
+    # Uvicorn fires the startup event for each server.  Run init only once per loop.
+    # Using loop identity (not a boolean) so server restarts still re-initialize correctly.
+    loop = asyncio.get_running_loop()
+    if manager._server_loop is loop:
+        log("WebServer", "startup_event: loop already registered, skipping duplicate init")
+        return
+
+    # CRITICAL: Set the event loop IMMEDIATELY (before any await!) to prevent race condition.
+    # When two Uvicorn servers share the same loop via asyncio.gather, the second startup_event
+    # can start while the first is awaiting init_auth_db().  Setting _server_loop before
+    # the first await ensures the guard check works for the concurrent second call.
+    manager.set_server_loop(loop)
+    log("WebServer", "VAF Web Interface: Event loop registered")
+
     # Initialize auth database tables (creates if not exist)
     try:
         from vaf.auth.database import init_auth_db
@@ -460,11 +475,6 @@ async def startup_event():
         log("WebServer", "Auth database tables initialized")
     except Exception as e:
         log("WebServer", f"Auth database init warning: {e}")
-    
-    # Set the event loop for thread-safe broadcasting
-    loop = asyncio.get_running_loop()
-    manager.set_server_loop(loop)
-    log("WebServer", "VAF Web Interface: Event loop registered")
     
     # Register TTS Callbacks for UI sync
     from vaf.core.speech import SpeechManager

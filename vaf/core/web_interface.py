@@ -13,6 +13,19 @@ from vaf.core.log_helper import append_domain_log
 from pathlib import Path
 
 import queue
+from datetime import datetime as _dt
+
+
+def _diag_log(msg: str) -> None:
+    """Write one timestamped line to queue log (always enabled, not gated by debug_logs_enabled).
+    Uses the same queue log as headless_runner so all events are in one chronological stream."""
+    try:
+        from vaf.core.log_helper import get_dated_log_path
+        with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
+            f.write(f"{_dt.now().isoformat()} {msg}\n")
+    except Exception:
+        pass
+
 
 def _resolve_log_dir() -> Path:
     """Resolve log dir so emit_debug.txt and webui_push_debug.txt land in project logs (e.g. d:\\VAF\\logs)."""
@@ -188,19 +201,27 @@ class WebInterfaceManager:
                 try:
                     await connection.send_text(json.dumps(message))
                     sent_count += 1
-                except Exception:
+                except Exception as send_err:
                     disconnected.append(connection)
+                    # Log send failures so we can diagnose proxy relay issues
+                    _diag_log(f"[SEND_FAIL] broadcast_to_session({session_id}) type={message.get('type')} err={send_err}")
 
         for conn in disconnected:
             self.disconnect(conn)
 
-        # Warn if no subscriber found for streaming events — helps diagnose non-admin streaming bug
-        if sent_count == 0 and message.get('type') in ('agent_message_update', 'tool_update'):
-            msg_type = message.get('type')
-            subscribed = list(self.connection_sessions.values())
-            append_domain_log("webui",
-                f"[WARN] broadcast_to_session({session_id}) found 0 subscribers "
-                f"for '{msg_type}'. Active subscriptions: {subscribed}"
+        # Diagnostic: log every broadcast attempt for key event types (always written, not gated by debug flag)
+        msg_type = message.get('type', '')
+        if msg_type in ('agent_message_update', 'tool_update', 'history_update', 'status_update'):
+            try:
+                cur_loop = asyncio.get_running_loop()
+                loop_id = id(cur_loop)
+            except RuntimeError:
+                loop_id = 'NO_LOOP'
+            _diag_log(
+                f"[BROADCAST] session={session_id} type={msg_type} "
+                f"sent={sent_count} active={len(self.active_connections)} "
+                f"subs={list(self.connection_sessions.values())} disconnected={len(disconnected)} "
+                f"loop={loop_id}"
             )
 
     async def broadcast_to_user(self, user_id: str, message: dict):
@@ -322,7 +343,9 @@ class WebInterfaceManager:
     
     def set_server_loop(self, loop):
         """Set the asyncio event loop for thread-safe broadcasting."""
+        old_loop = self._server_loop
         self._server_loop = loop
+        _diag_log(f"[LOOP_SET] new_loop={id(loop)} old_loop={id(old_loop) if old_loop else 'None'} running={loop.is_running()}")
         if self.tools_cache:
             asyncio.run_coroutine_threadsafe(
                 self.broadcast({"type": "tools_list", "tools": self.tools_cache}),
@@ -351,13 +374,26 @@ class WebInterfaceManager:
         if session_id:
             data['sessionId'] = session_id
             if self._server_loop:
-                asyncio.run_coroutine_threadsafe(
+                if self._server_loop.is_closed():
+                    _diag_log(f"[PUSH_DROP] _server_loop is CLOSED! type={data.get('type')} session={session_id}")
+                    return
+                if not self._server_loop.is_running():
+                    _diag_log(f"[PUSH_DROP] _server_loop is NOT RUNNING! loop={id(self._server_loop)} type={data.get('type')} session={session_id}")
+                    return
+                future = asyncio.run_coroutine_threadsafe(
                     self.broadcast_to_session(session_id, data),
                     self._server_loop
                 )
+                # Log scheduling for key event types so we can trace if coroutine executes
+                msg_type = data.get('type', '')
+                if msg_type in ('agent_message_update', 'history_update', 'status_update'):
+                    _diag_log(
+                        f"[PUSH_SCHEDULED] type={msg_type} session={session_id} "
+                        f"loop={id(self._server_loop)} active_ws={len(self.active_connections)}"
+                    )
             else:
                 # WARNING: No server loop means messages are silently dropped!
-                append_domain_log("webui", f"[WARNING] No server loop! Message dropped for session {session_id}")
+                _diag_log(f"[PUSH_DROP] No _server_loop! type={data.get('type')} session={session_id}")
         else:
             # Fallback to global broadcast for non-session events
             self.push_update(data)

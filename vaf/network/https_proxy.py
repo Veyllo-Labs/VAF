@@ -163,6 +163,8 @@ def create_proxy_app() -> Starlette:
         WebSocketRoute("/ws", endpoint=_ws_handler),
         Route("/api", endpoint=_api_route, methods=_API_METHODS),
         Route("/api/{rest:path}", endpoint=_api_route, methods=_API_METHODS),
+        # Backend-served static assets (TTS sounds, etc.) must go to backend, not frontend
+        Route("/sounds/{rest:path}", endpoint=_api_route, methods=_API_METHODS),
         # Static assets (/_next/*, etc.) and pages need GET/HEAD; allow all for compatibility
         Route("/{path:path}", endpoint=_proxy_handler, methods=_API_METHODS),
     ]

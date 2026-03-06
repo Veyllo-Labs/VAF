@@ -785,11 +785,13 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         }
         if (app.id === 'github') {
             const fromApi = githubAccountsFromApi.length > 0;
-            const fromConfig = Array.isArray(config?.github_config?.accounts) && config.github_config.accounts.length > 0;
             const byUser = config?.github_config_by_user as Record<string, { accounts?: unknown[] }> | undefined;
             const username = (currentUser?.username ?? '').trim().toLowerCase();
             const localAdmin = ((config?.local_admin_username ?? 'admin') as string).trim().toLowerCase();
-            const userAccounts = (!username || username === localAdmin) ? null : byUser?.[currentUser?.username ?? '']?.accounts;
+            const isAdmin = !username || username === localAdmin;
+            // Admin sees global github_config; non-admin sees only their own github_config_by_user entry
+            const fromConfig = isAdmin && Array.isArray(config?.github_config?.accounts) && config.github_config.accounts.length > 0;
+            const userAccounts = isAdmin ? null : byUser?.[currentUser?.username ?? '']?.accounts;
             const fromConfigUser = Array.isArray(userAccounts) && userAccounts.length > 0;
             return fromApi || fromConfig || fromConfigUser;
         }

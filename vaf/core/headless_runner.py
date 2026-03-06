@@ -631,6 +631,11 @@ def run_headless_agent():
                                 f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_START session_id={task.session_id}\n")
                     except Exception:
                         pass
+                    # Notify frontend that agent is now thinking (loading animation)
+                    try:
+                        get_web_interface().update_status("thinking", session_id=task.session_id)
+                    except Exception:
+                        pass
                     try:
                         get_web_interface().log(
                             f"Starting chat_step for session {task.session_id}...",
@@ -703,6 +708,7 @@ def run_headless_agent():
                     # Supports .clear() so agent can reset buffer on empty-response retry (only retry content is shown).
                     response_parts = []
                     _last_emit_time = [0.0]  # list so nested function can assign
+                    _emit_count = [0]
 
                     def _emit(text):
                         if not (text and text.strip()):
@@ -716,6 +722,15 @@ def run_headless_agent():
                                     session_id=task.session_id
                                 )
                                 _last_emit_time[0] = now
+                                _emit_count[0] += 1
+                                # Log first emit so we know streaming callback is firing
+                                if _emit_count[0] == 1:
+                                    try:
+                                        from datetime import datetime as _dt3
+                                        with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
+                                            f.write(f"{_dt3.now().isoformat()} STREAM_EMIT_FIRST session_id={task.session_id} text_len={len(text)} loop_ok={bool(get_web_interface()._server_loop)}\n")
+                                    except Exception:
+                                        pass
                             except Exception:
                                 pass
 
@@ -1188,6 +1203,13 @@ def run_headless_agent():
                                 if _meta.get("toolStatus") is not None:
                                     _entry["toolStatus"] = _meta["toolStatus"]
                                 _frontend_msgs.append(_entry)
+                            # Diagnostic: log that we're about to push history_update
+                            try:
+                                from datetime import datetime as _dt2
+                                with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
+                                    f.write(f"{_dt2.now().isoformat()} HISTORY_UPDATE_PUSH session_id={task.session_id} msg_count={len(_frontend_msgs)} loop_closed={get_web_interface()._server_loop.is_closed() if get_web_interface()._server_loop else 'NO_LOOP'}\n")
+                            except Exception:
+                                pass
                             get_web_interface()._push_session_update(task.session_id, {
                                 "type": "history_update",
                                 "messages": _frontend_msgs,
@@ -1195,6 +1217,39 @@ def run_headless_agent():
                                 "isActive": False,
                                 "currentStatus": "idle"
                             })
+                    except Exception as _hist_err:
+                        try:
+                            from datetime import datetime as _dt2
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
+                                f.write(f"{_dt2.now().isoformat()} HISTORY_UPDATE_ERROR session_id={task.session_id} err={_hist_err}\n")
+                        except Exception:
+                            pass
+
+                    # Notify frontend that agent is now idle (stop loading animation)
+                    try:
+                        get_web_interface().update_status("idle", session_id=task.session_id)
+                    except Exception:
+                        pass
+
+                    # Emit Token Stats so frontend can update the token meter
+                    try:
+                        used, total = agent.get_token_usage()
+                        api_backend = getattr(agent, 'api_backend', None)
+                        input_tokens = 0
+                        output_tokens = 0
+                        if api_backend:
+                            usage = api_backend.session_usage
+                            input_tokens = int(usage.get("input_tokens", 0))
+                            output_tokens = int(usage.get("output_tokens", 0))
+                        stats = {
+                            "used": used,
+                            "total": total,
+                            "percent": round((used / total) * 100, 1) if total else 0.0,
+                            "api": bool(api_backend),
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens
+                        }
+                        get_web_interface().emit_stats(stats, session_id=task.session_id)
                     except Exception:
                         pass
 
@@ -1329,6 +1384,8 @@ def run_headless_agent():
                             source="System",
                             session_id=task.session_id
                         )
+                        # Reset status to idle on error so frontend stops loading
+                        get_web_interface().update_status("idle", session_id=task.session_id)
                     except Exception:
                         pass
                     # If task came from Telegram or Discord, send error reply so user sees something

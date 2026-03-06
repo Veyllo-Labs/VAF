@@ -115,15 +115,15 @@ async def _forward_websocket(websocket: WebSocket) -> None:
                             await websocket.send_text(msg)
                         else:
                             await websocket.send_bytes(msg)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("HTTPS proxy from_backend relay ended: %s", exc)
             async def from_client():
                 try:
                     while True:
                         data = await websocket.receive_text()
                         await backend_ws.send(data)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("HTTPS proxy from_client relay ended: %s", exc)
             await asyncio.gather(from_backend(), from_client())
     except Exception as e:
         logger.warning("HTTPS proxy WebSocket backend connect failed: %s", e)

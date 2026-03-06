@@ -1691,8 +1691,7 @@ function VAFDashboardContent() {
                 else if (data.type === 'message_complete') {
                     // Completion sound: play when model has finished (Web UI only)
                     try {
-                        const base = getApiBase() || 'http://localhost:8001';
-                        const soundUrl = `${base}/sounds/tts01.mp3`;
+                        const soundUrl = '/sounds/tts01.mp3';
                         const audio = new Audio(soundUrl);
                         audio.volume = 0.6;
                         audio.play().catch(() => { /* ignore autoplay policy / user mute */ });

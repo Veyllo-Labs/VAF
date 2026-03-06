@@ -201,7 +201,7 @@ export interface SettingsModalProps {
 const CATEGORIES = [
     { id: 'general', labelKey: 'general', icon: Globe, adminOnly: true },
     { id: 'persona', labelKey: 'persona', icon: Users },
-    { id: 'ai', labelKey: 'ai', icon: Cpu },
+    { id: 'ai', labelKey: 'ai', icon: Cpu, adminOnly: true },
     { id: 'voice', labelKey: 'voice', icon: Volume2 },
     { id: 'interface', labelKey: 'interface', icon: Monitor },
     { id: 'connections', labelKey: 'connections', icon: MessageSquare },
@@ -1507,7 +1507,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </div>
                         )}
 
-                        {activeTab === 'ai' && (
+                        {activeTab === 'ai' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
                                 <Section title={tAi('provider')}>
                                     <Select

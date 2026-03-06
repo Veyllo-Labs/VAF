@@ -2030,17 +2030,54 @@ function VAFDashboardContent() {
                         return firstIdx === i;
                     });
 
-                    // Ensure chronological display (oldest first): sort by timestamp so the latest message is never shown at the top
-                    const ts = (m: Message) => (m.timestamp != null ? new Date(m.timestamp).getTime() : 0);
-                    finalMsgs = [...finalMsgs]
-                        .map((m, i) => ({ m, i }))
-                        .sort((a, b) => {
-                            const ta = ts(a.m);
-                            const tb = ts(b.m);
-                            if (ta !== tb) return ta - tb;
-                            return a.i - b.i; // stable: preserve relative order when timestamps equal
-                        })
-                        .map(({ m }) => m);
+                    // NOTE: Do NOT sort by timestamp here. The _order-based sort + reorder
+                    // logic above already produces correct chronological ordering. A timestamp
+                    // sort destroys that order for network clients where client-side timestamps
+                    // (Date.now() on the browser) differ from server-side timestamps — causing
+                    // system/tool messages to appear ABOVE the user prompt instead of below it.
+
+                    // Merge thinking-only assistant orphans into adjacent answer assistant messages.
+                    // During streaming, delta extraction after tool use splits a single model response
+                    // into two assistant messages: one with only <think>...</think> (pre-tool) and one
+                    // with only the answer (post-tool). On history_update the server sends a single
+                    // assistant message, but the thinking-only cached message becomes an orphan that
+                    // appears separately (usually after the answer). Merge them back.
+                    for (let i = finalMsgs.length - 1; i >= 0; i--) {
+                        const msg = finalMsgs[i];
+                        if (msg.role !== 'assistant') continue;
+                        const content = String(msg.content ?? '');
+                        if (!/<think>[\s\S]*?<\/think>/i.test(content)) continue;
+                        const stripped = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+                        if (stripped) continue; // Has visible answer content — not thinking-only
+
+                        // Look backward first (thinking orphan sorted after answer)
+                        let merged = false;
+                        for (let j = i - 1; j >= 0; j--) {
+                            if (finalMsgs[j].role === 'user') break;
+                            if (finalMsgs[j].role === 'assistant') {
+                                const tc = String(finalMsgs[j].content ?? '');
+                                if (!/<think>[\s\S]*?<\/think>/i.test(tc)) {
+                                    finalMsgs[j] = { ...finalMsgs[j], content: content + '\n\n' + tc };
+                                }
+                                finalMsgs.splice(i, 1);
+                                merged = true;
+                                break;
+                            }
+                        }
+                        if (merged) continue;
+                        // Look forward (thinking before answer)
+                        for (let j = i + 1; j < finalMsgs.length; j++) {
+                            if (finalMsgs[j].role === 'user') break;
+                            if (finalMsgs[j].role === 'assistant') {
+                                const tc = String(finalMsgs[j].content ?? '');
+                                if (!/<think>[\s\S]*?<\/think>/i.test(tc)) {
+                                    finalMsgs[j] = { ...finalMsgs[j], content: content + '\n\n' + tc };
+                                }
+                                finalMsgs.splice(i, 1);
+                                break;
+                            }
+                        }
+                    }
 
                     setMessages(finalMsgs);
 

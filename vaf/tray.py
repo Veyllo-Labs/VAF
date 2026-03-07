@@ -95,7 +95,6 @@ server_mgr = ServerManager()
 tray_context = TrayContext()
 server_thread = None
 uvicorn_server = None  # Global reference for restart capability
-uvicorn_internal_server = None  # Internal API server (port 8005) — must also be stopped on restart
 uvicorn_loop = None    # Event loop for the uvicorn server
 
 
@@ -342,7 +341,7 @@ def command_listener(lock_socket):
 
 def start_uvicorn():
     """Start uvicorn server in a separate thread."""
-    global uvicorn_server, uvicorn_internal_server, uvicorn_loop
+    global uvicorn_server, uvicorn_loop
     log("Tray", "start_uvicorn thread started")
     try:
         import asyncio
@@ -424,9 +423,6 @@ def start_uvicorn():
         # --- START INTEGRATED HTTPS PROXY (single entry point for HTTPS, no Nginx required) ---
         # When TLS is on, proxy listens on 0.0.0.0:local_network_https_port and forwards to 127.0.0.1:3000/8001.
         # On Windows, port 443 often requires admin → use 8443 so it works without elevation.
-        # NOTE: On server restart, the old proxy daemon is still alive and keeps working
-        # (each request opens a fresh connection to the restarted backend).  Attempting to
-        # start a second proxy would fail with EADDRINUSE, so we skip if the port is taken.
         if tls_enabled and ssl_cert and ssl_key and os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
             try:
                 from vaf.network.https_proxy import run_https_proxy
@@ -434,36 +430,30 @@ def start_uvicorn():
                 if platform.system() == "Windows" and https_port == 443:
                     https_port = 8443
                     log("Tray", "Using HTTPS port 8443 on Windows (443 would require admin).")
-                # Check if proxy port is already in use (e.g. from previous start before restart)
-                import socket as _sock
-                _probe = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
-                _port_free = _probe.connect_ex(('127.0.0.1', https_port)) != 0
-                _probe.close()
-                if _port_free:
-                    def _run_https_proxy():
-                        def _log(msg: str, _style: str = "info"):
-                            log("HTTPS-Proxy", msg)
-                        run_https_proxy("0.0.0.0", https_port, ssl_cert, ssl_key, log_callback=_log)
-                    threading.Thread(target=_run_https_proxy, daemon=True).start()
-                    log("Tray", f"Integrated HTTPS proxy started on 0.0.0.0:{https_port}")
-                else:
-                    log("Tray", f"HTTPS proxy port {https_port} already in use (existing proxy still running), skipping")
+                def _run_https_proxy():
+                    def _log(msg: str, _style: str = "info"):
+                        log("HTTPS-Proxy", msg)
+                    run_https_proxy("0.0.0.0", https_port, ssl_cert, ssl_key, log_callback=_log)
+                threading.Thread(target=_run_https_proxy, daemon=True).start()
+                log("Tray", f"Integrated HTTPS proxy started on 0.0.0.0:{https_port}")
             except Exception as px:
                 log("Tray", f"HTTPS proxy failed to start: {px}")
 
-        # --- INTERNAL NON-SSL API CHANNEL (Port 8005) only when TLS is on ---
+        # --- START INTERNAL NON-SSL API CHANNEL (Port 8005) only when TLS is on ---
         # Next.js proxies to 8005 to avoid SSL trust issues. When TLS is off, Next.js proxies to 8001 directly.
-        # IMPORTANT: Port 8005 MUST share the same event loop as port 8001! Otherwise WebSocket
-        # connections via the HTTPS proxy (8443 → 8005) live on a different loop than
-        # broadcast_to_session() which runs on port 8001's loop → streaming events silently fail.
-        internal_srv = None
-        uvicorn_internal_server = None  # Reset (TLS may be off on this restart)
         if tls_enabled:
-            log("Tray", "Preparing internal API channel on port 8005 (shared event loop with 8001)...")
-            internal_cfg = uvicorn.Config(app, host="127.0.0.1", port=8005, log_level="warning", use_colors=False)
-            internal_srv = uvicorn.Server(internal_cfg)
-            internal_srv.install_signal_handlers = lambda: None
-            uvicorn_internal_server = internal_srv  # Store globally so restart can stop it
+            def _start_internal_api():
+                try:
+                    import asyncio
+                    log("Tray", "Starting internal API channel on port 8005...")
+                    internal_cfg = uvicorn.Config(app, host="127.0.0.1", port=8005, log_level="warning", use_colors=False)
+                    internal_srv = uvicorn.Server(internal_cfg)
+                    internal_srv.install_signal_handlers = lambda: None
+                    internal_loop = asyncio.new_event_loop()
+                    internal_loop.run_until_complete(internal_srv.serve())
+                except Exception as ie:
+                    log("Tray", f"Internal API channel failed: {ie}")
+            threading.Thread(target=_start_internal_api, daemon=True).start()
 
         # Manually disable signal handlers to prevent main thread interference
         server.install_signal_handlers = lambda: None
@@ -473,22 +463,7 @@ def start_uvicorn():
 
         log("Tray", "Running Uvicorn server (serve)...")
         try:
-            if internal_srv:
-                # Run both servers on the SAME event loop so all WebSocket connections
-                # share one loop and broadcast_to_session works for proxy connections.
-                async def _serve_all():
-                    results = await asyncio.gather(
-                        server.serve(), internal_srv.serve(),
-                        return_exceptions=True
-                    )
-                    # If internal server failed but main survived, log it
-                    for i, r in enumerate(results):
-                        if isinstance(r, Exception):
-                            name = "main server (8001)" if i == 0 else "internal API (8005)"
-                            log("Tray", f"{name} stopped with error: {r}")
-                loop.run_until_complete(_serve_all())
-            else:
-                loop.run_until_complete(server.serve())
+            loop.run_until_complete(server.serve())
         except Exception as serve_error:
             log("Tray", f"Uvicorn serve() failed: {serve_error}")
             raise serve_error
@@ -506,58 +481,21 @@ def start_uvicorn():
 
 def restart_backend_server():
     """Restart the backend uvicorn server with new network binding settings."""
-    global uvicorn_server, uvicorn_internal_server, uvicorn_loop, server_thread
+    global uvicorn_server, uvicorn_loop, server_thread
     log("Tray", "Backend server restart requested")
 
     try:
-        # Stop BOTH servers (main + internal API).
-        # CRITICAL: internal_srv (port 8005) MUST also be stopped!
-        # Without this, asyncio.gather(server.serve(), internal_srv.serve()) never returns,
-        # the old thread keeps running, old WebSocket connections stay alive on the old loop,
-        # and broadcast_to_session silently fails (cross-loop send).
-        if uvicorn_internal_server:
-            log("Tray", "Stopping internal API server (port 8005)...")
-            uvicorn_internal_server.should_exit = True
+        # Stop the current server
         if uvicorn_server:
             log("Tray", "Stopping current uvicorn server...")
             uvicorn_server.should_exit = True
-            # Give both servers a moment to shut down
+            # Give it a moment to shut down
             time.sleep(1)
 
-        # Wait for old thread to finish (now it WILL finish since both servers are stopped)
+        # Wait for old thread to finish
         if server_thread and server_thread.is_alive():
             log("Tray", "Waiting for old server thread to finish...")
             server_thread.join(timeout=5)
-            if server_thread.is_alive():
-                log("Tray", "WARNING: Old server thread did not finish within timeout")
-
-        # Close old event loop so any stale _server_loop references fail immediately
-        # (is_closed() returns True → _push_session_update drops instead of silently failing)
-        # After join(), loop.run_until_complete() has returned → loop is stopped but not closed.
-        # We can safely call close() on a stopped loop directly.
-        old_loop = uvicorn_loop
-        if old_loop and not old_loop.is_closed():
-            try:
-                old_loop.close()
-                log("Tray", "Old event loop closed")
-            except Exception as loop_err:
-                log("Tray", f"Old event loop close warning: {loop_err}")
-
-        # Clear stale WebSocket connections from the old server
-        # These connections are dead (old server stopped) and would cause cross-loop errors
-        try:
-            from vaf.core.web_interface import get_web_interface
-            wi = get_web_interface()
-            stale_count = len(wi.active_connections)
-            if stale_count > 0:
-                log("Tray", f"Clearing {stale_count} stale WebSocket connection(s) from old server")
-                wi.active_connections.clear()
-                wi.connection_sessions.clear()
-                wi.connection_users.clear()
-                wi.connection_usernames.clear()
-                wi.connection_roles.clear()
-        except Exception as clear_err:
-            log("Tray", f"Stale connection cleanup warning: {clear_err}")
 
         # Start new server thread
         log("Tray", "Starting new server thread with updated settings...")
@@ -913,13 +851,8 @@ def quit_app(icon=None, item=None):
     except Exception as e:
         print(f"Error stopping frontend: {e}")
 
-    # Stop uvicorn Web Server (API Backend on port 8001 + internal API on 8005)
-    global uvicorn_server, uvicorn_internal_server
-    if uvicorn_internal_server:
-        try:
-            uvicorn_internal_server.should_exit = True
-        except Exception:
-            pass
+    # Stop uvicorn Web Server (API Backend on port 8001)
+    global uvicorn_server
     if uvicorn_server:
         try:
             uvicorn_server.should_exit = True
@@ -1178,10 +1111,9 @@ if platform.system() == "Darwin":
             GarbageCollector.get_instance().start()
 
             # Start Web Server
-            global server_thread
             logger.info("[Tray] Starting Web Server thread...")
-            server_thread = threading.Thread(target=start_uvicorn, daemon=True)
-            server_thread.start()
+            t = threading.Thread(target=start_uvicorn, daemon=True)
+            t.start()
             
             # Start Headless Agent Loop
             from vaf.core.headless_runner import run_headless_agent
@@ -1354,10 +1286,9 @@ def run_headless():
     GarbageCollector.get_instance().start()
 
     # Start Web Server
-    global server_thread
     print("[VAF] Starting Web Server thread...")
-    server_thread = threading.Thread(target=start_uvicorn, daemon=True)
-    server_thread.start()
+    t = threading.Thread(target=start_uvicorn, daemon=True)
+    t.start()
     
     # Start Headless Agent Loop
     from vaf.core.headless_runner import run_headless_agent
@@ -1431,11 +1362,10 @@ def run_app():
         log("Tray", f"SpeechManager init failed: {e}")
 
     # Start Web Server
-    global server_thread
     print("[Tray] Starting Web Server thread...")
     log("Tray", "Spawning Web Server thread...")
-    server_thread = threading.Thread(target=start_uvicorn, daemon=True)
-    server_thread.start()
+    t = threading.Thread(target=start_uvicorn, daemon=True)
+    t.start()
 
     # Start Headless Agent Loop (for Web UI processing)
     print("[Tray] Starting Agent thread...")

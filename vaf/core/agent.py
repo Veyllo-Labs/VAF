@@ -5811,11 +5811,9 @@ class Agent:
                     # NOTE: Do NOT gate on _emit_to_web_ui() here. That function checks the
                     # process-wide VAF_THINKING_MODE env var, which can be set by a concurrent
                     # background thinking process — blocking tool_update for active WebUI sessions.
-                    # The broadcast mechanism routes updates by session_id, so this is safe.
+                    # broadcast routes updates by session_id, so this is always safe.
                     try:
                         from vaf.core.web_interface import get_web_interface
-                        # Use agent's own session_id (instance attribute) instead of global
-                        # get_current_session_id() which can be overwritten by other threads
                         _tool_session = getattr(self, 'current_session_id', None)
                         if not _tool_session:
                             from vaf.core.subagent_ipc import get_current_session_id
@@ -5879,13 +5877,11 @@ class Agent:
                         
                     # Web UI Event: Tool End
                     # NOTE: Do NOT gate on _emit_to_web_ui() — same race condition as Tool Start.
-                    # Background thinking sets VAF_THINKING_MODE process-wide, blocking WebUI updates.
                     _tool_end_emitted = False
                     try:
                         from vaf.core.web_interface import get_web_interface
                         r_str = str(result) if result else ""
                         is_err = "error" in r_str.lower() or "failed" in r_str.lower()
-                        # Use agent's own session_id (instance attribute) instead of global
                         _tool_session = getattr(self, 'current_session_id', None)
                         if not _tool_session:
                             from vaf.core.subagent_ipc import get_current_session_id

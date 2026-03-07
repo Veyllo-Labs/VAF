@@ -104,9 +104,9 @@ async def get_whatsapp_dashboard_debug(request: Request):
 def _is_whatsapp_admin(request: Request) -> bool:
     """True if current user is admin (can see all WhatsApp whitelist/sessions)."""
     from vaf.api.config_routes import get_current_user_or_local_admin
-    from vaf.core.config import is_admin_user
     user = get_current_user_or_local_admin(request)
-    return is_admin_user(user.get("user_scope_id"), user.get("role"))
+    scope = user.get("user_scope_id")
+    return scope is not None and str(scope) == str(get_local_admin_scope_id())
 
 
 @router.get("/dashboard")
@@ -594,41 +594,23 @@ async def get_whatsapp_dashboard(request: Request):
 
 @router.get("/status")
 async def get_whatsapp_status(request: Request):
-    """Get WhatsApp bridge status — scoped per user."""
+    """Get WhatsApp bridge status and per-user linked state."""
     from vaf.api.whatsapp_bridge import is_bridge_running
     from vaf.core.whatsapp_auth import whatsapp_auth_exists
-    from vaf.api.config_routes import get_current_user_or_local_admin
-    from vaf.core.config import is_admin_user
 
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
-    user = get_current_user_or_local_admin(request)
-
     whatsapp_config = Config.get("whatsapp_config") or {}
     if not isinstance(whatsapp_config, dict):
         whatsapp_config = {}
 
-    if is_admin_user(user.get("user_scope_id"), user.get("role")):
-        # Admin: full global status
-        return {
-            "enabled": whatsapp_config.get("enabled", False),
-            "running": is_bridge_running(),
-            "linked": whatsapp_auth_exists(username),
-            "username": username,
-        }
-
-    # Non-admin: only show status if they have a whitelist entry
-    scope = str(user.get("user_scope_id", ""))
-    whitelist = whatsapp_config.get("whitelist") or []
-    my_entries = [e for e in whitelist
-                  if isinstance(e, dict) and str(e.get("user_scope_id")) == scope]
-    if not my_entries:
-        return {"enabled": False, "running": False, "linked": False, "username": username}
+    linked = whatsapp_auth_exists(username)
+    running = is_bridge_running()
 
     return {
-        "enabled": True,
-        "running": is_bridge_running(),
-        "linked": whatsapp_auth_exists(username),
+        "enabled": whatsapp_config.get("enabled", False),
+        "running": running,
+        "linked": linked,
         "username": username,
     }
 

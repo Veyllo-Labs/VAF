@@ -16,16 +16,7 @@ const nextConfig = {
   },
   // Disable the Next.js dev indicator
   devIndicators: false,
-  // /api/* is handled by app/api/[...path]/route.ts (proxy with cookie forwarding). No rewrites needed for API.
-  // /sounds/* is served by the backend (TTS audio, etc.) and needs proxying to avoid Mixed Content errors.
-  async rewrites() {
-    return [
-      {
-        source: '/sounds/:path*',
-        destination: `http://127.0.0.1:${INTERNAL_API_PORT}/sounds/:path*`,
-      },
-    ]
-  },
+  // /api/* is handled by app/api/[...path]/route.ts (proxy with cookie forwarding). No rewrites.
 }
 
 module.exports = nextConfig

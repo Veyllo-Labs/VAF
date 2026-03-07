@@ -453,21 +453,6 @@ def _get_trusted_sources_for_ui():
 
 @app.on_event("startup")
 async def startup_event():
-    # Guard: when port 8001 and port 8005 share the same event loop and app,
-    # Uvicorn fires the startup event for each server.  Run init only once per loop.
-    # Using loop identity (not a boolean) so server restarts still re-initialize correctly.
-    loop = asyncio.get_running_loop()
-    if manager._server_loop is loop:
-        log("WebServer", "startup_event: loop already registered, skipping duplicate init")
-        return
-
-    # CRITICAL: Set the event loop IMMEDIATELY (before any await!) to prevent race condition.
-    # When two Uvicorn servers share the same loop via asyncio.gather, the second startup_event
-    # can start while the first is awaiting init_auth_db().  Setting _server_loop before
-    # the first await ensures the guard check works for the concurrent second call.
-    manager.set_server_loop(loop)
-    log("WebServer", "VAF Web Interface: Event loop registered")
-
     # Initialize auth database tables (creates if not exist)
     try:
         from vaf.auth.database import init_auth_db
@@ -475,6 +460,11 @@ async def startup_event():
         log("WebServer", "Auth database tables initialized")
     except Exception as e:
         log("WebServer", f"Auth database init warning: {e}")
+    
+    # Set the event loop for thread-safe broadcasting
+    loop = asyncio.get_running_loop()
+    manager.set_server_loop(loop)
+    log("WebServer", "VAF Web Interface: Event loop registered")
     
     # Register TTS Callbacks for UI sync
     from vaf.core.speech import SpeechManager
@@ -1781,13 +1771,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 if role == "assistant":
                     content = clean_history_text(content)
                 entry = {"role": role, "content": content, "timestamp": timestamp}
-                if role == "tool" and meta:
-                    if meta.get("toolName") is not None:
-                        entry["toolName"] = meta["toolName"]
-                    if meta.get("toolId") is not None:
-                        entry["toolId"] = meta["toolId"]
-                    if meta.get("toolStatus") is not None:
-                        entry["toolStatus"] = meta["toolStatus"]
+                if role == "tool":
+                    # Try metadata dict first, then fall back to top-level keys
+                    # (backend stores tool info as top-level: name, tool_call_id)
+                    tool_name = (meta.get("toolName") if meta else None) or msg.get("name")
+                    tool_id = (meta.get("toolId") if meta else None) or msg.get("tool_call_id")
+                    tool_status = (meta.get("toolStatus") if meta else None)
+                    if tool_name is not None:
+                        entry["toolName"] = tool_name
+                    if tool_id is not None:
+                        entry["toolId"] = tool_id
+                    # If tool has content (result), it completed successfully
+                    entry["toolStatus"] = tool_status or ("completed" if content else "running")
                 frontend_messages.append(entry)
 
             # If this is a thinking session and we have a stored user reply, append it once
@@ -1904,13 +1899,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             if role == "assistant":
                                 content = clean_history_text(content)
                             entry = {"role": role, "content": content, "timestamp": timestamp}
-                            if role == "tool" and meta:
-                                if meta.get("toolName") is not None:
-                                    entry["toolName"] = meta["toolName"]
-                                if meta.get("toolId") is not None:
-                                    entry["toolId"] = meta["toolId"]
-                                if meta.get("toolStatus") is not None:
-                                    entry["toolStatus"] = meta["toolStatus"]
+                            if role == "tool":
+                                # Try metadata dict first, then fall back to top-level keys
+                                # (backend stores tool info as top-level: name, tool_call_id)
+                                tool_name = (meta.get("toolName") if meta else None) or msg.get("name")
+                                tool_id = (meta.get("toolId") if meta else None) or msg.get("tool_call_id")
+                                tool_status = (meta.get("toolStatus") if meta else None)
+                                if tool_name is not None:
+                                    entry["toolName"] = tool_name
+                                if tool_id is not None:
+                                    entry["toolId"] = tool_id
+                                # If tool has content (result), it completed successfully
+                                entry["toolStatus"] = tool_status or ("completed" if content else "running")
                             frontend_messages.append(entry)
 
                         # If this is a thinking session and we have a stored user reply, append it once
@@ -2067,10 +2067,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "get_config":
                     # Send config to frontend; non-admins get scoped view (only their own connections)
-                    from vaf.core.config import is_admin_user
+                    from vaf.core.config import get_local_admin_scope_id
                     user_scope_id = manager.get_connection_user(websocket) if manager else None
                     stored_role = manager.get_connection_user_role(websocket) if manager else None
-                    role = "admin" if is_admin_user(user_scope_id, stored_role) else "user"
+                    # Admin if stored role says "admin" OR scope matches local admin scope
+                    local_admin_scope = get_local_admin_scope_id()
+                    is_admin = stored_role == "admin" or (user_scope_id is not None and str(user_scope_id) == str(local_admin_scope))
+                    role = "admin" if is_admin else "user"
                     full_cfg = Config.load()
                     cfg = Config.config_for_user(full_cfg, str(user_scope_id) if user_scope_id else None, role)
                     await websocket.send_json({
@@ -2409,8 +2412,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     if new_config:
                         from vaf.core.config import get_local_admin_scope_id
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        stored_role = manager.get_connection_user_role(websocket) if manager else None
                         local_admin_scope = get_local_admin_scope_id()
-                        is_admin = user_scope_id is not None and str(user_scope_id) == str(local_admin_scope)
+                        is_admin = stored_role == "admin" or (user_scope_id is not None and str(user_scope_id) == str(local_admin_scope))
                         existing = Config.load()
                         if not is_admin:
                             new_filtered, scope_toggles = Config.extract_connection_toggles_for_scope(new_config, str(user_scope_id) if user_scope_id else None)
@@ -2849,28 +2853,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Return list of saved automations; each user sees only their own (user_scope_id).
                     try:
                         from vaf.core.automation import AutomationManager
-                        from vaf.core.config import get_local_admin_scope_id
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
-                        user_role = manager.get_connection_user_role(websocket) if manager else "guest"
                         mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
                         tasks = list(mgr.list())
-                        
-                        # Merge root automations for admins (legacy fallback)
-                        # Root automations are those in the base directory without a scope subdirectory
-                        local_admin_scope = get_local_admin_scope_id()
-                        is_admin = user_role == "admin" or (user_scope_id and str(user_scope_id).strip() == str(local_admin_scope).strip())
-                        
-                        if is_admin:
-                            root_mgr = AutomationManager()
-                            seen_ids = {t.id for t in tasks}
-                            for t in root_mgr.list():
-                                if t.id not in seen_ids:
-                                    tasks.append(t)
-                                    seen_ids.add(t.id)
-                        
-                        # Sort by next run (optional but nice for UI)
-                        tasks.sort(key=lambda t: t.next_run_datetime)
-
+                        # Do not merge root automations for non-admin users: each user sees only their own.
                         automations_list = [
                             {
                                 "id": task.id,
@@ -2977,9 +2963,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "delete_automation":
                     try:
                         from vaf.core.automation import AutomationManager
-                        from vaf.core.config import get_local_admin_scope_id
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
-                        user_role = manager.get_connection_user_role(websocket) if manager else "guest"
                         mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
                         task_id = (cmd.get("task_id") or cmd.get("id") or "").strip()
                         if not task_id:
@@ -2987,22 +2971,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             continue
                         ok = mgr.delete(task_id, permanent=True)
                         if not ok and user_scope_id:
-                            # Mirror get_automations: check BOTH user_role AND scope_id
-                            # (previously only scope_id was checked, causing delete to fail for
-                            # role-based admins whose scope_id doesn't match local_admin_scope)
-                            local_admin_scope = get_local_admin_scope_id()
-                            is_admin = user_role == "admin" or str(user_scope_id).strip() == str(local_admin_scope).strip()
-                            if is_admin:
-                                root_mgr = AutomationManager()
-                                ok = root_mgr.delete(task_id, permanent=True)
-                        await websocket.send_json({"type": "delete_automation_result", "ok": ok, "task_id": task_id})
+                            root_mgr = AutomationManager()
+                            ok = root_mgr.delete(task_id, permanent=True)
+                        await websocket.send_json({"type": "delete_automation_result", "ok": ok})
                     except Exception as e:
                         await websocket.send_json({"type": "delete_automation_result", "ok": False, "error": str(e)})
 
                 elif type == "update_automation":
                     try:
                         from vaf.core.automation import AutomationManager
-                        from vaf.core.config import get_local_admin_scope_id
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
                         task_id = (cmd.get("task_id") or cmd.get("id") or "").strip()
@@ -3011,13 +2988,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             continue
                         task = mgr.get(task_id)
                         if not task and user_scope_id:
-                            # Restrict root fallback to local admin only
-                            local_admin_scope = get_local_admin_scope_id()
-                            if str(user_scope_id).strip() == str(local_admin_scope).strip():
-                                root_mgr = AutomationManager()
-                                task = root_mgr.get(task_id)
-                                if task:
-                                    mgr = root_mgr
+                            root_mgr = AutomationManager()
+                            task = root_mgr.get(task_id)
+                            if task:
+                                mgr = root_mgr
                         if not task:
                             await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "Automation not found"})
                             continue

@@ -495,18 +495,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setChanged(false);
     }, [config, isOpen]);
 
-    // When modal opens, ensure activeTab is valid for the current user's role.
-    // Non-admins must not land on adminOnly tabs (e.g. 'general' with API keys).
+    // Open with a specific tab when initialTab is provided; redirect non-admins away from admin-only tabs
     useEffect(() => {
         if (!isOpen) return;
         if (initialTabProp) {
             setActiveTab(initialTabProp);
             return;
         }
-        // Check if current activeTab is allowed for this user
+        // If non-admin lands on an admin-only tab (e.g. default 'general'), redirect to first allowed tab
         const currentCat = CATEGORIES.find(c => c.id === activeTab);
         if (currentCat?.adminOnly && currentUser?.role !== 'admin') {
-            // Fall back to first non-admin tab
             const firstAllowed = CATEGORIES.find(c => !c.adminOnly);
             if (firstAllowed) setActiveTab(firstAllowed.id);
         }
@@ -1971,7 +1969,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{tLocalNet('thisDeviceUrl')}</div>
                                                                 {apiHost ? (
                                                                     <>
-                                                                        <div className="font-mono text-sm text-gray-900 break-all">{apiHost}{accessUrlData?.port ? `:${accessUrlData.port}` : ''}</div>
+                                                                        <div className="font-mono text-sm text-gray-900 break-all">{apiHost}</div>
                                                                         {portsText && <div className="text-xs text-gray-600 mt-0.5">{tLocalNet('portsUsed')}: {portsText}</div>}
                                                                     </>
                                                                 ) : (
@@ -1987,7 +1985,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{tLocalNet('otherDevicesLanUrl')}</div>
                                                                 {lanUrl ? (
                                                                     <>
-                                                                        <div className="font-mono text-sm text-green-800 break-all">{apiHost || new URL(lanUrl).hostname}{accessUrlData?.port ? `:${accessUrlData.port}` : ''}</div>
+                                                                        <div className="font-mono text-sm text-green-800 break-all">{apiHost || new URL(lanUrl).hostname}</div>
                                                                         {portsText && <div className="text-xs text-green-700 mt-0.5">{tLocalNet('portsUsed')}: {portsText}</div>}
                                                                         <div className="text-xs text-green-700 mt-0.5">{tLocalNet('lanUrlHint')}</div>
                                                                     </>

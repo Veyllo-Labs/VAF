@@ -256,14 +256,7 @@ A one-time migration script (`scripts/migrate_users_to_scopes.py`) copies data f
 
 ### Automations (`vaf/core/automation.py`)
 
-Each `AutomationManager` instance can be created with a `user_scope_id`; tasks are stored in `automations/<user_scope_id>/` (per-user). 
-
-**Role-Based Access:**
-- **Admins:** Users with the `admin` role (including the local admin) see a **merged view** of their own scoped tasks and any legacy "root" tasks stored directly in `automations/`. This ensures backward compatibility for existing installations.
-- **Regular Users:** Restricted to their own `user_scope_id` subdirectory. They cannot see or modify root tasks or other users' tasks.
-
-**Execution & Tools:**
-Tasks carry `user_scope_id` so that when an automation runs (prompt-based or workflow-based), the agent and workflow engine use that scope: RAG/memory, calendar, messaging, contacts, mail, and automation notes/todos all run with the owner's credentials and data. The agent injects `user_scope_id` into automation tools (`create_automation`, `list_automations`, etc.) so new tasks are stored in the correct user directory. The CLI/scheduler uses an aggregated manager that loads from all scope dirs and saves/deletes/restores via the task's scope path.
+Each `AutomationManager` instance can be created with a `user_scope_id`; tasks are stored in `automations/` (global) or `automations/<user_scope_id>/` (per-user). Tasks carry `user_scope_id` so that when an automation runs (prompt-based or workflow-based), the agent and workflow engine use that scope: RAG/memory, calendar, messaging, contacts, mail, and automation notes/todos all run with the owner's credentials and data. The agent injects `user_scope_id` into automation tools (`create_automation`, `list_automations`, etc.) so new tasks are stored in the correct user directory. The CLI/scheduler uses an aggregated manager that loads from all scope dirs and saves/deletes/restores via the task's scope path.
 
 **Global slot limit:** A given time slot (same HH:MM + frequency, e.g. daily 08:15) may be used by at most **3 users**. If three users already have an automation at that slot, a fourth gets an error: *"Too many other users have already booked this time slot. Please choose another slot at least 15 minutes apart."* This avoids overloading the scheduler at popular times while keeping automations user-specific.
 

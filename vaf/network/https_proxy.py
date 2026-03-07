@@ -115,15 +115,15 @@ async def _forward_websocket(websocket: WebSocket) -> None:
                             await websocket.send_text(msg)
                         else:
                             await websocket.send_bytes(msg)
-                except Exception as exc:
-                    logger.debug("HTTPS proxy from_backend relay ended: %s", exc)
+                except Exception:
+                    pass
             async def from_client():
                 try:
                     while True:
                         data = await websocket.receive_text()
                         await backend_ws.send(data)
-                except Exception as exc:
-                    logger.debug("HTTPS proxy from_client relay ended: %s", exc)
+                except Exception:
+                    pass
             await asyncio.gather(from_backend(), from_client())
     except Exception as e:
         logger.warning("HTTPS proxy WebSocket backend connect failed: %s", e)
@@ -163,8 +163,6 @@ def create_proxy_app() -> Starlette:
         WebSocketRoute("/ws", endpoint=_ws_handler),
         Route("/api", endpoint=_api_route, methods=_API_METHODS),
         Route("/api/{rest:path}", endpoint=_api_route, methods=_API_METHODS),
-        # Backend-served static assets (TTS sounds, etc.) must go to backend, not frontend
-        Route("/sounds/{rest:path}", endpoint=_api_route, methods=_API_METHODS),
         # Static assets (/_next/*, etc.) and pages need GET/HEAD; allow all for compatibility
         Route("/{path:path}", endpoint=_proxy_handler, methods=_API_METHODS),
     ]

@@ -724,6 +724,7 @@ function VAFDashboardContent() {
     const [ws, setWs] = useState<WebSocket | null>(null);
     const wsSocketRef = useRef<WebSocket | null>(null); // so cleanup can close when effect re-runs before async completes
     const [loading, setLoading] = useState(false);
+    const [isGenerating, setIsGenerating] = useState(false);
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
     const [activeToolName, setActiveToolName] = useState(''); // Currently-running tool name for loading bubble
 
@@ -768,7 +769,12 @@ function VAFDashboardContent() {
 
     // Per-Session Animation State Tracking
     // Tracks which sessions are actively loading so we can restore animation state on session switch
-    const sessionLoadingStates = useRef<Record<string, { loading: boolean; statusMessage: string; loadingMessageId: number | null }>>({});
+    const sessionLoadingStates = useRef<Record<string, {
+        loading: boolean;
+        isGenerating: boolean;
+        statusMessage: string;
+        loadingMessageId: number | null;
+    }>>({});
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editName, setEditName] = useState('');
     const [config, setConfig] = useState<any>({});
@@ -1236,6 +1242,7 @@ function VAFDashboardContent() {
             sessionCache.current[currentSessionId] = messages;
             sessionLoadingStates.current[currentSessionId] = {
                 loading,
+                isGenerating,
                 statusMessage,
                 loadingMessageId
             };
@@ -1257,11 +1264,13 @@ function VAFDashboardContent() {
         const targetState = sessionLoadingStates.current[id];
         if (targetState) {
             setLoading(targetState.loading);
+            setIsGenerating(targetState.isGenerating);
             setStatusMessage(targetState.statusMessage);
             setLoadingMessageId(targetState.loadingMessageId);
         } else {
             // No saved state = assume idle
             setLoading(false);
+            setIsGenerating(false);
             setStatusMessage('');
             setLoadingMessageId(null);
         }
@@ -1532,8 +1541,10 @@ function VAFDashboardContent() {
                         // Update per-session state even if not the active session
                         // So when user switches back, animations are correct
                         if (data.sessionId) {
+                            const previousState = sessionLoadingStates.current[data.sessionId];
                             sessionLoadingStates.current[data.sessionId] = {
                                 loading: false,
+                                isGenerating: previousState?.isGenerating ?? true,
                                 statusMessage: '',
                                 loadingMessageId: null
                             };
@@ -1542,6 +1553,7 @@ function VAFDashboardContent() {
                     }
 
                     setLoading(false);
+                    setIsGenerating(true);
                     setStatusMessage(''); // Clear status when answer starts
                     setActiveToolName(''); // Clear active tool when answer starts
 
@@ -1549,6 +1561,7 @@ function VAFDashboardContent() {
                     if (activeSessionId) {
                         sessionLoadingStates.current[activeSessionId] = {
                             loading: false,
+                            isGenerating: true,
                             statusMessage: '',
                             loadingMessageId: null
                         };
@@ -1689,9 +1702,22 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'message_complete') {
+                    if (data.sessionId) {
+                        sessionLoadingStates.current[data.sessionId] = {
+                            loading: false,
+                            isGenerating: false,
+                            statusMessage: '',
+                            loadingMessageId: null
+                        };
+                    }
+                    const activeSessionId = currentSessionIdRef.current;
+                    if (!data.sessionId || data.sessionId === activeSessionId) {
+                        setIsGenerating(false);
+                    }
                     // Completion sound: play when model has finished (Web UI only)
                     try {
-                        const soundUrl = '/sounds/tts01.mp3';
+                        const base = getApiBase() || 'http://localhost:8001';
+                        const soundUrl = `${base}/sounds/tts01.mp3`;
                         const audio = new Audio(soundUrl);
                         audio.volume = 0.6;
                         audio.play().catch(() => { /* ignore autoplay policy / user mute */ });
@@ -1919,11 +1945,13 @@ function VAFDashboardContent() {
                     const isActive = !!data.isActive;
                     const status = data.currentStatus && isActive ? `Agent: ${data.currentStatus}` : '';
                     setLoading(isActive);
+                    setIsGenerating(isActive);
                     setStatusMessage(status);
 
                     // Update per-session loading state tracking
                     sessionLoadingStates.current[data.sessionId] = {
                         loading: isActive,
+                        isGenerating: isActive,
                         statusMessage: status,
                         loadingMessageId: isActive ? (data.messages?.length || 0) : null
                     };
@@ -1937,7 +1965,8 @@ function VAFDashboardContent() {
                             timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
                             _order: idx,
                             toolId: m.toolId,
-                            toolName: m.toolName
+                            toolName: m.toolName,
+                            toolStatus: m.toolStatus as Message['toolStatus'] | undefined
                         }));
 
                     // MERGE STRATEGY: UNION with Server Priority
@@ -2079,6 +2108,33 @@ function VAFDashboardContent() {
                         }
                     }
 
+                    // Final safety net: within each turn (between user messages), enforce
+                    // role order: system → tool → assistant. This catches any edge cases
+                    // where the reorder/merge/dedup pipeline left messages out of order
+                    // (e.g. cache+server timestamp mismatches on network clients).
+                    {
+                        const roleWeight = (r: string) => r === 'system' ? 0 : r === 'tool' ? 1 : 2;
+                        let turnStart = 0;
+                        for (let i = 0; i <= finalMsgs.length; i++) {
+                            if (i === finalMsgs.length || finalMsgs[i].role === 'user') {
+                                // Sort the turn segment [turnStart, i) by role, stable
+                                if (i - turnStart > 1) {
+                                    const segment = finalMsgs.slice(turnStart, i)
+                                        .map((m, idx) => ({ m, idx }))
+                                        .sort((a, b) => {
+                                            const wa = roleWeight(a.m.role);
+                                            const wb = roleWeight(b.m.role);
+                                            if (wa !== wb) return wa - wb;
+                                            return a.idx - b.idx; // stable: preserve relative order within same role
+                                        })
+                                        .map(({ m }) => m);
+                                    finalMsgs.splice(turnStart, i - turnStart, ...segment);
+                                }
+                                turnStart = i + 1; // next segment starts after user message
+                            }
+                        }
+                    }
+
                     setMessages(finalMsgs);
 
                     // If a chat was queued before we had a session, send it now.
@@ -2192,19 +2248,10 @@ function VAFDashboardContent() {
                     if (data.ok === true) ws?.send(JSON.stringify({ type: 'get_automations' }));
                 }
                 else if (data.type === 'delete_automation_result') {
-                    setDeletingAutomationId(null);
                     if (data.ok === true) {
-                        // Optimistically remove deleted automation immediately (no WebSocket round-trip needed)
-                        if (data.task_id) setAutomations((prev) => prev.filter((a) => a.id !== data.task_id));
-                        setEditingAutomationFromCalendar(null);
-                        refreshAutomations();
+                        ws?.send(JSON.stringify({ type: 'get_automations' }));
                     } else {
-                        window.alert(
-                            data.error
-                                ? `Fehler beim Löschen: ${data.error}`
-                                : 'Automatisierung konnte nicht gelöscht werden.'
-                        );
-                        refreshAutomations();
+                        setDeletingAutomationId(null);
                     }
                 }
                 else if (data.type === 'notification' && data.notification) {
@@ -2290,6 +2337,7 @@ function VAFDashboardContent() {
                     if (data.sessionId) {
                         sessionLoadingStates.current[data.sessionId] = {
                             loading: false,
+                            isGenerating: false,
                             statusMessage: '',
                             loadingMessageId: null
                         };
@@ -2298,6 +2346,7 @@ function VAFDashboardContent() {
                     const activeSessionId = currentSessionIdRef.current;
                     if (!data.sessionId || data.sessionId === activeSessionId) {
                         setLoading(false);
+                        setIsGenerating(false);
                         setLoadingMessageId(null);
                         // Clear workflow runtime so stop button hides (workflow was stopped)
                         clearWorkflow();
@@ -2439,10 +2488,12 @@ function VAFDashboardContent() {
             sessionId: currentSessionId
         }));
         setLoading(false);
+        setIsGenerating(false);
 
         // Update per-session loading state
         sessionLoadingStates.current[currentSessionId] = {
             loading: false,
+            isGenerating: false,
             statusMessage: '',
             loadingMessageId: null
         };
@@ -2465,10 +2516,12 @@ function VAFDashboardContent() {
         expectNewAssistantRef.current = true;
         lastUserSendTimeRef.current = Date.now();
         setLoading(true);
+        setIsGenerating(true);
 
         if (currentSessionId) {
             sessionLoadingStates.current[currentSessionId] = {
                 loading: true,
+                isGenerating: true,
                 statusMessage: '',
                 loadingMessageId: null
             };
@@ -2641,7 +2694,7 @@ function VAFDashboardContent() {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             const hasContent = input.trim() || insertedSelections.length > 0;
-            if (hasContent && !loading) {
+            if (hasContent && !isGenerating) {
                 sendMessage(undefined);
             }
             return;
@@ -3800,7 +3853,7 @@ function VAFDashboardContent() {
                                 {/* Stop button left of message box — show when chat is loading, a workflow is running, or a sub-agent is active */}
                                 <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
                                     <div className="w-9 shrink-0 flex items-center justify-center">
-                                        {(loading || isWorkflowRunning || isSubAgentRunning) && (
+                                        {(isGenerating || isWorkflowRunning || isSubAgentRunning) && (
                                             <button
                                                 type="button"
                                                 onClick={stopGeneration}
@@ -3867,14 +3920,14 @@ function VAFDashboardContent() {
                                                     onKeyDown={handleKeyDown}
                                                     placeholder={input ? "" : "Ask anything..."}
                                                     className="w-full min-h-[2.5rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
-                                                    disabled={loading}
+                                                    disabled={isGenerating}
                                                 />
                                             </div>
                                         </div>
                                         <button
                                             type="button"
                                             onClick={isRecording ? stopRecording : startRecording}
-                                            disabled={isProcessingAudio || loading}
+                                            disabled={isProcessingAudio || isGenerating}
                                             className={cn(
                                                 "m-2 p-2 rounded-xl transition-all shadow-sm",
                                                 isRecording ? "bg-red-500 text-white" :
@@ -4339,7 +4392,7 @@ function VAFDashboardContent() {
                     editTask={editingAutomationFromCalendar}
                     onCreated={() => { setEditingAutomationFromCalendar(null); refreshAutomations(); }}
                     onSubmit={createAutomationSubmit}
-                    onDelete={(taskId) => { deleteAutomation(taskId); }}
+                    onDelete={(taskId) => { deleteAutomation(taskId); setEditingAutomationFromCalendar(null); refreshAutomations(); }}
                 />
             )}
         </main>

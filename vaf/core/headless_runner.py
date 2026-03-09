@@ -578,6 +578,8 @@ def run_headless_agent():
                         "output_tokens": output_tokens
                     }
                     get_web_interface().emit_stats(stats, session_id=task.session_id)
+                    # Keep Context Window breakdown (system/history/tools) in sync with totals.
+                    agent._broadcast_context_status()
                 except Exception:
                     pass
 
@@ -1066,6 +1068,8 @@ def run_headless_agent():
                             "output_tokens": output_tokens
                         }
                         get_web_interface().emit_stats(stats, session_id=task.session_id)
+                        # Keep Context Window breakdown (system/history/tools) in sync with totals.
+                        agent._broadcast_context_status()
                     except Exception:
                         pass  # Ignore stats errors
 

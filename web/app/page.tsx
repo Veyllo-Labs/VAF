@@ -843,9 +843,37 @@ function VAFDashboardContent() {
         if (!contextStats) return null;
         const totalCap = contextStats.max_tokens;
         const used = contextStats.tokens;
-        const systemEst = contextStats.system_tokens ?? Math.round(used * 0.3);
-        const historyEst = contextStats.history_tokens ?? Math.round(used * 0.5);
-        const toolsEst = contextStats.tools_tokens ?? Math.round(used * 0.2);
+        const fallbackSystem = Math.round(used * 0.3);
+        const fallbackHistory = Math.round(used * 0.5);
+        const fallbackTools = Math.round(used * 0.2);
+
+        const toFiniteNumber = (v: unknown): number | null =>
+            (typeof v === 'number' && Number.isFinite(v) && v >= 0) ? v : null;
+
+        let systemEst = toFiniteNumber(contextStats.system_tokens) ?? fallbackSystem;
+        let historyEst = toFiniteNumber(contextStats.history_tokens) ?? fallbackHistory;
+        let toolsEst = toFiniteNumber(contextStats.tools_tokens) ?? fallbackTools;
+
+        // Guard against stale/mixed events where totals were refreshed via `stats`
+        // but category breakdown is old or incomplete (e.g. tools/history still 0).
+        const breakdownSum = systemEst + historyEst + toolsEst;
+        if (used > 0) {
+            if (breakdownSum <= 0) {
+                systemEst = fallbackSystem;
+                historyEst = fallbackHistory;
+                toolsEst = fallbackTools;
+            } else if (breakdownSum < used * 0.85) {
+                // Preserve known parts and attribute missing portion to conversation,
+                // which is the most dynamic part during active chats.
+                historyEst += (used - breakdownSum);
+            } else if (breakdownSum > used * 1.15) {
+                // Keep bars numerically consistent with the used total.
+                const scale = used / breakdownSum;
+                systemEst *= scale;
+                historyEst *= scale;
+                toolsEst *= scale;
+            }
+        }
         const pctOfUsedSystem = used ? (systemEst / used) * 100 : 0;
         const pctOfUsedTools = used ? (toolsEst / used) * 100 : 0;
         const pctOfUsedHistory = used ? (historyEst / used) * 100 : 0;
@@ -2009,6 +2037,10 @@ function VAFDashboardContent() {
 
                     // Find Orphans: Messages in Cache but NOT in Server
                     const orphans = cachedMsgs.filter(cMsg => {
+                        // Best practice on reload: trust server history for assistant/user turns.
+                        // Cached assistant "orphans" (especially thinking-only stream fragments)
+                        // can appear out of turn after restart and should not be re-injected.
+                        if (cMsg.role === 'assistant' || cMsg.role === 'user') return false;
                         if (cMsg.role === 'system') return true;
 
                         const existsInServer = hydratedServerMsgs.some((sMsg: Message) => {
@@ -2066,18 +2098,18 @@ function VAFDashboardContent() {
                     // system/tool messages to appear ABOVE the user prompt instead of below it.
 
                     // Merge thinking-only assistant orphans into adjacent answer assistant messages.
-                    // During streaming, delta extraction after tool use splits a single model response
-                    // into two assistant messages: one with only <think>...</think> (pre-tool) and one
-                    // with only the answer (post-tool). On history_update the server sends a single
-                    // assistant message, but the thinking-only cached message becomes an orphan that
-                    // appears separately (usually after the answer). Merge them back.
+                    // During streaming, delta extraction after tool use can split one model response
+                    // into two assistant messages (thinking-only + answer-only). On history reload,
+                    // cached orphans can survive and appear below the answer. Use parseContent() so
+                    // we catch complete and incomplete thinking blocks consistently.
                     for (let i = finalMsgs.length - 1; i >= 0; i--) {
                         const msg = finalMsgs[i];
                         if (msg.role !== 'assistant') continue;
                         const content = String(msg.content ?? '');
-                        if (!/<think>[\s\S]*?<\/think>/i.test(content)) continue;
-                        const stripped = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-                        if (stripped) continue; // Has visible answer content — not thinking-only
+                        const parsedCurrent = parseContent(content);
+                        const hasThinking = !!parsedCurrent.thought && parsedCurrent.thought.trim().length > 0;
+                        const hasVisibleAnswer = !!parsedCurrent.answer && parsedCurrent.answer.trim().length > 0;
+                        if (!hasThinking || hasVisibleAnswer) continue; // not thinking-only
 
                         // Look backward first (thinking orphan sorted after answer)
                         let merged = false;
@@ -2085,12 +2117,13 @@ function VAFDashboardContent() {
                             if (finalMsgs[j].role === 'user') break;
                             if (finalMsgs[j].role === 'assistant') {
                                 const tc = String(finalMsgs[j].content ?? '');
-                                if (!/<think>[\s\S]*?<\/think>/i.test(tc)) {
+                                const parsedTarget = parseContent(tc);
+                                if (parsedTarget.answer && parsedTarget.answer.trim().length > 0) {
                                     finalMsgs[j] = { ...finalMsgs[j], content: content + '\n\n' + tc };
+                                    finalMsgs.splice(i, 1);
+                                    merged = true;
+                                    break;
                                 }
-                                finalMsgs.splice(i, 1);
-                                merged = true;
-                                break;
                             }
                         }
                         if (merged) continue;
@@ -2099,11 +2132,12 @@ function VAFDashboardContent() {
                             if (finalMsgs[j].role === 'user') break;
                             if (finalMsgs[j].role === 'assistant') {
                                 const tc = String(finalMsgs[j].content ?? '');
-                                if (!/<think>[\s\S]*?<\/think>/i.test(tc)) {
+                                const parsedTarget = parseContent(tc);
+                                if (parsedTarget.answer && parsedTarget.answer.trim().length > 0) {
                                     finalMsgs[j] = { ...finalMsgs[j], content: content + '\n\n' + tc };
+                                    finalMsgs.splice(i, 1);
+                                    break;
                                 }
-                                finalMsgs.splice(i, 1);
-                                break;
                             }
                         }
                     }

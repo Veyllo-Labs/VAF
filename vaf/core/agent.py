@@ -2975,7 +2975,9 @@ class Agent:
                     history_tokens += msg_tokens
 
             # 3. Handle Tool Schema Tokens
-            if hasattr(self, 'TOOLS') and self.TOOLS and not self.api_backend:
+            # Important: this must work for BOTH local and API providers, otherwise
+            # the Context Window can show 0 for tools in API mode.
+            if hasattr(self, 'TOOLS') and self.TOOLS:
                 try:
                     schema_str = json.dumps(self.TOOLS)
                     if self.use_server:

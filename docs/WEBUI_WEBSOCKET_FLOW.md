@@ -66,11 +66,11 @@ Key rules:
 - `sidebar_documents_set`: sent after processing `set_sidebar_documents`. Payload: `{ contents: Array<{ name, content, data?, mimeType?, htmlContent? }>, sessionId?, error? }`. Each entry has `name` and `content` (extracted text for the LLM); `data` (base64) and `mimeType` for display. When Gotenberg is available, Office docs (.docx, .xlsx, .pptx, .odt, .ods, .odp) are converted to PDF on the backend and returned as `mimeType: application/pdf` with `data` (PDF base64), so the frontend uses the PDF viewer for original layout. Without Gotenberg, the backend provides `htmlContent` or the frontend falls back to client-side mammoth.js for DOCX.
 - `editor_apply_edit`: sent when the agent calls `replace_editor_selection`. Payload: `{ sessionId, selectionIndex, newText, start, end }`. The frontend replaces the character range `[start, end]` in the Document Editor with `newText` and removes that selection chip.
 - `session_list`: available sessions
-- `history_update`: session history (also sets active session). The frontend does not clear document-panel attachment state for that session, so per-session attachment documents persist across repeated switches.
+- `history_update`: session history (also sets active session). The frontend does not clear document-panel attachment state for that session, so per-session attachment documents persist across repeated switches. Tool messages now include `toolName`, `toolId`, and `toolStatus` (either from `metadata.*` or from top-level keys `name`/`tool_call_id`; status defaults to `"completed"` if content is present). The frontend extracts these fields when parsing server messages to ensure tool cards display correctly after reload.
 - `agent_message_update`: streaming assistant text (full content so far). The frontend shows a **separate** assistant bubble when the last message is a tool card: only the text after the previous assistant content is shown in the new bubble, so tool use and the follow-up answer appear distinctly.
 - `clear_last_assistant`: request to remove the last assistant message (used before empty-response and false-promise retries so only the retry response is shown).
 - `new_log`: system/status timeline entries. When the agent gives up after API empty-response delayed retries, it sends the final message only via `new_log` (return value `[SYSTEM_LOG_ONLY]...`); the headless runner does **not** send `agent_message_update` for that response, so the UI shows a system timeline entry only.
-- `tool_update`: tool start/end/error
+- `tool_update`: tool start/end/error. **Note:** Tool events are always emitted — they are NOT gated by `_emit_to_web_ui()`. The previous gating caused a race condition where the process-wide `VAF_THINKING_MODE` env var (set by background thinking) would block tool updates for active WebUI sessions. Tool events use `broadcast_to_session(session_id)` for safe, session-scoped delivery.
 - `stats`: token/usage metrics (used/total, percent; can include input/output from API). Filtered by session when `sessionId` is set.
 - `context_status`: detailed context stats (tokens, max_tokens, percent, system/history/tools breakdown, compaction progress). Sent only to connections subscribed to that session so the context bar stays correct per tab.
 - `subagent_update`: sub-agent window payload
@@ -178,12 +178,32 @@ If the tool card expands but the panel does not open:
 | WebUI shows only system logs | `agent_message_update` filtered by session | Fix session sync and auto-load `history_update` |
 | Sub-agent window never appears | No `subagent_update` emitted | Send periodic sub-agent status updates from headless loop |
 | `False promise detected` loop in API mode | Tool calls missing function name in stream | Drop invalid tool calls; do not retry |
+| Tool cards stuck on "Executing..." | `_emit_to_web_ui()` gated by `VAF_THINKING_MODE` env var, blocking tool events for active sessions during background thinking | Removed `_emit_to_web_ui()` gate from tool start/end in `agent.py`; events now always emit via `broadcast_to_session` |
+| Tool cards show "Executing..." after reload | Backend `history_update` did not include `toolName`/`toolId`/`toolStatus` for tool messages | Fixed `web_server.py` to read top-level `name`/`tool_call_id` keys and default `toolStatus` to `"completed"` |
+| Messages in wrong order after reload | Timestamp sort mixed client/server times; orphan cache messages misplaced | Removed timestamp sort; added turn-based role sort as safety net |
+
+## Message Ordering (history_update)
+
+When the frontend receives `history_update`, it applies a multi-step pipeline to produce correct message order:
+
+1. **Server order (`_order`)**: Messages from the server are indexed by their position in the response array. Orphan messages from the session cache (localStorage) are appended with high `_order` values (100000+).
+2. **Reorder**: System/tool messages that appear after an assistant message are moved before it (within the same turn).
+3. **Deduplication**: Duplicate messages (same role + normalized content) are removed, keeping the first occurrence.
+4. **Thinking merge**: Thinking-only assistant orphans (`<think>` content but no visible answer) are merged into adjacent answer assistant messages.
+5. **Turn-based role sort (safety net)**: Within each turn (between user messages), messages are sorted by role weight: `system (0) → tool (1) → assistant (2)`. This uses a stable sort to preserve relative order within the same role.
+
+**Important**: The pipeline does NOT sort by timestamp. Timestamp-based sorting was removed because network clients have different client-side vs. server-side timestamps, causing messages to appear in the wrong order (e.g., system messages above user prompts).
+
+## WebSocket Connection Role Storage
+
+When a WebSocket connection is established, the user's role from the JWT token is stored via `manager.set_connection_user(websocket, user_id, username=..., role=...)`. The `get_config` and `save_config` handlers use `manager.get_connection_user_role(websocket)` to determine admin status, in addition to the legacy scope-based check. This ensures that the admin role from the JWT is respected even if the scope ID does not match the local admin scope.
 
 ## Key Files
 
 - `vaf/core/web_server.py` (WebSocket server & routing)
 - `vaf/core/web_interface.py` (broadcast manager)
 - `vaf/core/headless_runner.py` (WebUI agent loop)
-- `web/app/page.tsx` (frontend session filtering & render)
+- `vaf/network/https_proxy.py` (integrated HTTPS reverse proxy with connection pooling)
+- `web/app/page.tsx` (frontend session filtering, message ordering & render)
 
-*Last updated: 2026-02-18*
+*Last updated: 2026-03-08*

@@ -25,6 +25,31 @@ FRONTEND_ORIGIN = "http://127.0.0.1:3000"
 # Internal HTTP channel (8005) is always running when this proxy runs (TLS on); 8001 is HTTPS-only
 BACKEND_ORIGIN = "http://127.0.0.1:8005"
 
+# Shared httpx clients for connection pooling — reuse TCP connections across requests
+# instead of opening a new connection for every single resource (JS chunks, CSS, images, etc.)
+_frontend_client: "httpx.AsyncClient | None" = None
+_backend_client: "httpx.AsyncClient | None" = None
+
+
+async def _get_client(target_origin: str) -> "httpx.AsyncClient":
+    """Return a shared httpx.AsyncClient for the target, with connection pooling."""
+    import httpx
+    global _frontend_client, _backend_client
+    if target_origin == FRONTEND_ORIGIN:
+        if _frontend_client is None or _frontend_client.is_closed:
+            _frontend_client = httpx.AsyncClient(
+                timeout=60.0,
+                limits=httpx.Limits(max_connections=50, max_keepalive_connections=20, keepalive_expiry=30),
+            )
+        return _frontend_client
+    else:
+        if _backend_client is None or _backend_client.is_closed:
+            _backend_client = httpx.AsyncClient(
+                timeout=60.0,
+                limits=httpx.Limits(max_connections=50, max_keepalive_connections=20, keepalive_expiry=30),
+            )
+        return _backend_client
+
 
 def _normalize_headers_for_upstream(headers: dict, target_origin: str, original_host: str) -> None:
     """Drop hop-by-hop, set forward headers, set single Host to target (remove any existing host)."""
@@ -59,13 +84,13 @@ async def _forward_http(request: Request, target_origin: str) -> Response:
     except Exception:
         body = b""
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.request(
-                request.method,
-                url,
-                headers=headers,
-                content=body,
-            )
+        client = await _get_client(target_origin)
+        resp = await client.request(
+            request.method,
+            url,
+            headers=headers,
+            content=body,
+        )
     except Exception as e:
         logger.warning("HTTPS proxy forward failed %s %s -> %s: %s", request.method, path, target_origin, e)
         return Response(content=b"Bad Gateway", status_code=502)
@@ -78,8 +103,8 @@ async def _forward_http(request: Request, target_origin: str) -> Response:
             del response_headers[k]
             break
     body_bytes = resp.content
-    if not any(h.lower() == "content-length" for h in response_headers):
-        response_headers["Content-Length"] = str(len(body_bytes))
+    # Always set Content-Length from actual (decompressed) body to avoid mismatches
+    response_headers["Content-Length"] = str(len(body_bytes))
     return Response(
         content=body_bytes,
         status_code=resp.status_code,
@@ -157,16 +182,29 @@ async def _ws_handler(websocket: WebSocket) -> None:
 _API_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
 
+async def _shutdown_clients() -> None:
+    """Close shared httpx clients on app shutdown."""
+    global _frontend_client, _backend_client
+    if _frontend_client and not _frontend_client.is_closed:
+        await _frontend_client.aclose()
+        _frontend_client = None
+    if _backend_client and not _backend_client.is_closed:
+        await _backend_client.aclose()
+        _backend_client = None
+
+
 def create_proxy_app() -> Starlette:
     """Create the ASGI proxy application. WebSocket /ws must use WebSocketRoute so upgrades work."""
     routes = [
         WebSocketRoute("/ws", endpoint=_ws_handler),
         Route("/api", endpoint=_api_route, methods=_API_METHODS),
         Route("/api/{rest:path}", endpoint=_api_route, methods=_API_METHODS),
+        # Sound files are served by the backend (vaf/media/sounds), not Next.js
+        Route("/sounds/{filename:path}", endpoint=_api_route, methods=["GET", "HEAD"]),
         # Static assets (/_next/*, etc.) and pages need GET/HEAD; allow all for compatibility
         Route("/{path:path}", endpoint=_proxy_handler, methods=_API_METHODS),
     ]
-    return Starlette(routes=routes)
+    return Starlette(routes=routes, on_shutdown=[_shutdown_clients])
 
 
 def run_https_proxy(

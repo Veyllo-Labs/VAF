@@ -114,6 +114,19 @@ class WebInterfaceManager:
     async def connect(self, websocket: WebSocket):
         """Accept a new WebSocket connection."""
         await websocket.accept()
+        # Self-heal after restarts/reloads: always bind to the currently running
+        # WebSocket event loop so thread-safe pushes use a live loop.
+        try:
+            current_loop = asyncio.get_running_loop()
+            if (
+                self._server_loop is None
+                or self._server_loop.is_closed()
+                or (not self._server_loop.is_running())
+                or (self._server_loop is not current_loop)
+            ):
+                self.set_server_loop(current_loop)
+        except Exception:
+            pass
         self.active_connections.append(websocket)
         # Send initial state
         await websocket.send_text(json.dumps({
@@ -351,20 +364,37 @@ class WebInterfaceManager:
                 self.broadcast({"type": "tools_list", "tools": self.tools_cache}),
                 self._server_loop
             )
+
+    def _get_dispatch_loop(self):
+        """Return a live loop for run_coroutine_threadsafe, or None if unavailable."""
+        loop = self._server_loop
+        if not loop:
+            return None
+        try:
+            if loop.is_closed() or (not loop.is_running()):
+                _diag_log(f"[LOOP_INVALIDATED] loop={id(loop)} closed={loop.is_closed()} running={loop.is_running()}")
+                self._server_loop = None
+                return None
+        except Exception:
+            self._server_loop = None
+            return None
+        return loop
         
     def push_update(self, data: dict):
         """Thread-safe push update (global broadcast)."""
-        if self._server_loop:
-            asyncio.run_coroutine_threadsafe(self.broadcast(data), self._server_loop)
+        loop = self._get_dispatch_loop()
+        if loop:
+            asyncio.run_coroutine_threadsafe(self.broadcast(data), loop)
 
     def push_update_to_user(self, user_id: str, data: dict):
         """Thread-safe push update to a specific user's connections (e.g. notifications)."""
         if not user_id:
             return
-        if self._server_loop:
+        loop = self._get_dispatch_loop()
+        if loop:
             asyncio.run_coroutine_threadsafe(
                 self.broadcast_to_user(str(user_id).strip(), data),
-                self._server_loop
+                loop
             )
 
     def _push_session_update(self, session_id: Optional[str], data: dict):
@@ -373,23 +403,18 @@ class WebInterfaceManager:
         """
         if session_id:
             data['sessionId'] = session_id
-            if self._server_loop:
-                if self._server_loop.is_closed():
-                    _diag_log(f"[PUSH_DROP] _server_loop is CLOSED! type={data.get('type')} session={session_id}")
-                    return
-                if not self._server_loop.is_running():
-                    _diag_log(f"[PUSH_DROP] _server_loop is NOT RUNNING! loop={id(self._server_loop)} type={data.get('type')} session={session_id}")
-                    return
+            loop = self._get_dispatch_loop()
+            if loop:
                 future = asyncio.run_coroutine_threadsafe(
                     self.broadcast_to_session(session_id, data),
-                    self._server_loop
+                    loop
                 )
                 # Log scheduling for key event types so we can trace if coroutine executes
                 msg_type = data.get('type', '')
                 if msg_type in ('agent_message_update', 'history_update', 'status_update'):
                     _diag_log(
                         f"[PUSH_SCHEDULED] type={msg_type} session={session_id} "
-                        f"loop={id(self._server_loop)} active_ws={len(self.active_connections)}"
+                        f"loop={id(loop)} active_ws={len(self.active_connections)}"
                     )
             else:
                 # WARNING: No server loop means messages are silently dropped!

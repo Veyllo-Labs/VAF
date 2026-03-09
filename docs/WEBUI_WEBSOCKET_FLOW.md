@@ -174,6 +174,7 @@ If the tool card expands but the panel does not open:
 | `Chat_step failed ... charmap` | Windows console encoding | Set `PYTHONIOENCODING=utf-8` and reconfigure stdout/stderr |
 | `LLM Call Failed: HTTPConnectionPool(127.0.0.1:8080)` | Backend not running or duplicate server start | Restart tray; ensure only one `llama-server` is running |
 | Chat stuck after `calling_8080` (no `QUEUE_CHAT_END`) | Local server stopped sending stream data | Agent now times out after 5 min and ends the step. If it keeps happening, check model load and RAM; see **Local Server: Request Timeouts** in `docs/API_INTEGRATION.md`. |
+| Prompt is processed (`QUEUE_CHAT_END`) but Web UI shows only loader/no live answer | Stale `_server_loop` in `web_interface` (pushes are dropped with `PUSH_DROP _server_loop is NOT RUNNING`) | `WebInterfaceManager.connect()` now re-binds to the current running loop and invalid loops are auto-cleared before scheduling. Restart backend once after update. |
 | Messages appear in CLI only | Headless agent not running | Ensure tray starts `run_headless_agent()` |
 | WebUI shows only system logs | `agent_message_update` filtered by session | Fix session sync and auto-load `history_update` |
 | Sub-agent window never appears | No `subagent_update` emitted | Send periodic sub-agent status updates from headless loop |
@@ -186,11 +187,12 @@ If the tool card expands but the panel does not open:
 
 When the frontend receives `history_update`, it applies a multi-step pipeline to produce correct message order:
 
-1. **Server order (`_order`)**: Messages from the server are indexed by their position in the response array. Orphan messages from the session cache (localStorage) are appended with high `_order` values (100000+).
-2. **Reorder**: System/tool messages that appear after an assistant message are moved before it (within the same turn).
-3. **Deduplication**: Duplicate messages (same role + normalized content) are removed, keeping the first occurrence.
-4. **Thinking merge**: Thinking-only assistant orphans (`<think>` content but no visible answer) are merged into adjacent answer assistant messages.
-5. **Turn-based role sort (safety net)**: Within each turn (between user messages), messages are sorted by role weight: `system (0) → tool (1) → assistant (2)`. This uses a stable sort to preserve relative order within the same role.
+1. **Idle reload fast path (source of truth)**: If the session is not active (`isActive=false`), the frontend uses backend `history_update` as-is and skips cache/orphan merge. This avoids stale client fragments and improves reload stability.
+2. **Server order (`_order`)**: For active-session merge paths, server messages are indexed by response order.
+3. **Restricted orphan merge**: Only cache messages that are safe to re-inject are considered. Assistant/user cache orphans are not re-injected to prevent out-of-turn fragments after reload.
+4. **Reorder + dedup**: System/tool messages are normalized into turn order and duplicates are removed.
+5. **Thinking merge (parser-based)**: Thinking-only assistant orphans are detected via `parseContent()` (works for complete and incomplete think blocks) and merged into adjacent answer assistant messages.
+6. **Turn-based role sort (safety net)**: Within each turn (between user messages), messages are sorted by role weight: `system (0) → tool (1) → assistant (2)`, using stable ordering within the same role.
 
 **Important**: The pipeline does NOT sort by timestamp. Timestamp-based sorting was removed because network clients have different client-side vs. server-side timestamps, causing messages to appear in the wrong order (e.g., system messages above user prompts).
 
@@ -206,4 +208,4 @@ When a WebSocket connection is established, the user's role from the JWT token i
 - `vaf/network/https_proxy.py` (integrated HTTPS reverse proxy with connection pooling)
 - `web/app/page.tsx` (frontend session filtering, message ordering & render)
 
-*Last updated: 2026-03-08*
+*Last updated: 2026-03-09*

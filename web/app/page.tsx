@@ -1997,6 +1997,28 @@ function VAFDashboardContent() {
                             toolStatus: m.toolStatus as Message['toolStatus'] | undefined
                         }));
 
+                    // Best practice for reload/network stability:
+                    // When no generation is active, treat backend history as source of truth.
+                    // This avoids expensive cache/orphan merge work on large chats and prevents
+                    // stale cached fragments (e.g. partial thinking chunks) from reordering UI.
+                    if (!isActive) {
+                        const finalServerMsgs = serverMsgs.map(({ _order, ...msg }) => msg) as Message[];
+                        setMessages(finalServerMsgs);
+
+                        // If a chat was queued before we had a session, send it now.
+                        if (pendingSendRef.current && data.sessionId) {
+                            const pending = pendingSendRef.current;
+                            pendingSendRef.current = null;
+                            pendingSessionRequestRef.current = false;
+                            ws?.send(JSON.stringify({
+                                type: 'chat',
+                                content: pending.text,
+                                sessionId: data.sessionId
+                            }));
+                        }
+                        return;
+                    }
+
                     // MERGE STRATEGY: UNION with Server Priority
                     // 1. Hydrate Server Messages with Cache details (e.g. Tool args/status)
                     // 2. Inject Cached Messages that are missing from Server (e.g. System logs, Pending/Streaming Assistant response)

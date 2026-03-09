@@ -61,7 +61,7 @@ Singleton pattern manager that:
 
 ### 1. Real-Time Chat Interface
 
-- **Message Display**: User and assistant messages with distinct styling. Messages are always shown in chronological order (oldest first); the list is sorted by timestamp when loading a session so the latest reply appears at the bottom.
+- **Message Display**: User and assistant messages with distinct styling. Messages are shown in conversation order (oldest first). On session reload (`history_update`), messages are sorted by server order (`_order` index), **not** by timestamp — this prevents ordering issues for network clients where client-side and server-side timestamps differ. A final turn-based role sort ensures correct ordering within each turn: system → tool → assistant.
 - **Streaming Responses**: Live updates as agent generates responses. When the agent uses a tool, the text *after* the tool is shown in a **separate** assistant bubble (so you see: first answer → tool card → follow-up answer), instead of one bubble that keeps updating.
 - **Thinking Process**: Collapsible accordion showing agent's reasoning (`<think>` blocks)
 - **System Steps**: Timeline visualization of agent workflow steps
@@ -81,7 +81,7 @@ Singleton pattern manager that:
 - **Local Model Idle**: Shows `Idle` when the local model is unloaded and waiting for a prompt
 - **Loading States**: Animated dots during agent processing
 - **Workflow Steps**: Real-time display of Router, Workflow, System, and Info events. The **Router** step shows which tools were selected for the turn (e.g. `Router: LLM-based: list_calendar_events` or `Router: Script-based: web_search`), so you can see when and which tools the agent is using.
-- **Inline Tool Status**: Visual cards for running/completed tools directly in the chat stream
+- **Inline Tool Status**: Visual cards for running/completed tools directly in the chat stream. Tool events (`tool_update`) are always emitted regardless of background thinking mode — they are no longer gated by `_emit_to_web_ui()` to avoid race conditions with the `VAF_THINKING_MODE` environment variable. After page reload, tool cards show the correct status (`completed`/`error`) from the `toolStatus` field in `history_update` messages.
 
 ### 4. Sub-Agent Panel & Tool Cards
 
@@ -103,6 +103,8 @@ Singleton pattern manager that:
 - Automatic filtering of redundant messages
 
 ### 6. Settings
+
+**Admin-only tabs:** The following Settings tabs are visible only to admin users: **General**, **AI & Model**, **Advanced**, and **Local Network**. Non-admin users are automatically redirected to the first allowed tab if they land on an admin-only tab. Both the sidebar filter (`adminOnly` flag in the CATEGORIES array) and content rendering guards (`currentUser?.role === 'admin'`) enforce this. The admin role is determined from the stored JWT role on the WebSocket connection.
 
 Under **Settings → Interface** you can set:
 
@@ -323,7 +325,7 @@ If none are set, the tool uses the default path (scrape Google, then DuckDuckGo)
 **Backend Port**: Hardcoded to 8001 in `web_server.py`
 **Frontend Port**: Auto-detected (starts at 3000, increments if occupied)
 
-**API routing**: Next.js rewrites `/api/*` to the backend (`http://127.0.0.1:8001/api/*`). The Mail dashboard calls the backend directly (`hostname:8001`) to avoid proxy-related 500 errors on sync and message-body fetches.
+**API routing**: Next.js proxies `/api/*` to the backend via the catch-all API route (`app/api/[...path]/route.ts`), which forwards to `http://127.0.0.1:8005` (internal HTTP channel). Next.js also rewrites `/sounds/*` to the backend for notification sound files. The Mail dashboard calls the backend directly (`hostname:8001`) to avoid proxy-related 500 errors on sync and message-body fetches.
 
 **Local network (other devices):** Enable local network and SSL/TLS in Settings → Local Network (or run `vaf server on` and enable TLS in settings). Access is via the integrated HTTPS proxy: this device at `https://127.0.0.1:8443` (or `:443`), other devices at `https://<LAN-IP>:8443`. Use `vaf server status` to see LAN URLs. The tray restarts services automatically when network settings change.
 

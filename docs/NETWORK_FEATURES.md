@@ -2,7 +2,16 @@
 
 VAF (Veyllo Agent Framework) includes robust networking capabilities designed to allow secure, local collaboration. This document details the architecture, security measures, and usage of these features.
 
-**Integrated HTTPS proxy (no Nginx required):** When **Local Network** and **SSL/TLS** are enabled and certificate/key paths are set, VAF starts an integrated reverse proxy on `0.0.0.0:local_network_https_port` (default 443; on Windows often 8443 if 443 requires admin). The proxy is the single TLS entry point: it forwards `/api` and `/api/*` and `/ws` to the internal HTTP channel (port 8005), and all other paths to the frontend (port 3000). The proxy explicitly allows all HTTP methods (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS) for `/api` so that login (`POST /api/auth/login`) and other API calls work correctly. Access via `https://127.0.0.1` (or `https://127.0.0.1:8443` when using 8443) and `https://<LAN-IP>` works without an external proxy. Optional: [NGINX_REVERSE_PROXY.md](NGINX_REVERSE_PROXY.md) and `docs/nginx-vaf-https.conf.example`.
+**Integrated HTTPS proxy (no Nginx required):** When **Local Network** and **SSL/TLS** are enabled and certificate/key paths are set, VAF starts an integrated reverse proxy on `0.0.0.0:local_network_https_port` (default 443; on Windows often 8443 if 443 requires admin). The proxy is the single TLS entry point and routes requests as follows:
+
+| Path | Target | Description |
+|------|--------|-------------|
+| `/ws` | `ws://127.0.0.1:8005/ws` | WebSocket relay (bidirectional) |
+| `/api`, `/api/*` | `http://127.0.0.1:8005` | Backend API (all HTTP methods) |
+| `/sounds/*` | `http://127.0.0.1:8005` | Notification sound files (GET/HEAD) |
+| Everything else | `http://127.0.0.1:3000` | Next.js frontend |
+
+The proxy uses **shared httpx clients with connection pooling** (max 50 connections, 20 keep-alive) for both frontend and backend targets, avoiding the overhead of opening a new TCP connection for every resource request. Access via `https://127.0.0.1` (or `https://127.0.0.1:8443` when using 8443) and `https://<LAN-IP>` works without an external proxy. Optional: [NGINX_REVERSE_PROXY.md](NGINX_REVERSE_PROXY.md) and `docs/nginx-vaf-https.conf.example`.
 
 ## Security Model
 
@@ -348,12 +357,13 @@ When TLS is enabled, the **integrated HTTPS proxy** is the single entry point. T
 Browser (https://127.0.0.1 or https://<LAN-IP>, port 443 or 8443)
     |
     v
-Integrated HTTPS proxy (0.0.0.0:443 or 8443)
+Integrated HTTPS proxy (0.0.0.0:443 or 8443)  [connection-pooled httpx clients]
     |
-    +-- /api, /api/*, /ws  -->  http://127.0.0.1:8005 (internal channel, same FastAPI app)
-    +-- all other paths    -->  http://127.0.0.1:3000 (Next.js frontend)
+    +-- /api, /api/*, /ws     -->  http://127.0.0.1:8005 (internal channel, same FastAPI app)
+    +-- /sounds/*             -->  http://127.0.0.1:8005 (notification sounds from backend)
+    +-- all other paths       -->  http://127.0.0.1:3000 (Next.js frontend)
     |
-    v (for /api and /ws)
+    v (for /api, /sounds, and /ws)
 Uvicorn + FastAPI (127.0.0.1:8005)
     +-- SecurityHeadersMiddleware, RateLimitMiddleware, IPValidationMiddleware, AuthMiddleware
     v

@@ -311,7 +311,7 @@ Synced messages are stored per-scope in `scopes/<user_scope_id>/email_sync.db` (
 - **Global (admin-only to change):** Backend and network settings apply to all users. Only admins can edit them. This includes: Network tab (local network, ports, TLS, hosting), Advanced tab (server, tray, timeouts, etc.), API keys and provider/model settings, OAuth client IDs, TTS/STT URLs, and similar server-wide options. Stored in the single `config.json`; non-admin PATCH and WebSocket `save_config` are filtered so these keys are not overwritten.
 - **User-specific:** Connections (Mail, WhatsApp, Telegram, Discord, Cloud, Calendar, GitHub), language/interface preferences, and automations are per user. Non-admins can change only the keys that are not in the global set (e.g. language, time format). Connection data is already keyed by `user_scope_id` or username where applicable.
 
-The Settings UI shows the **Network** and **Advanced** tabs only to admins; all users see Connections, Automations, Interface, etc., and receive the same global config for display/behavior without being able to change it.
+The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local Network** tabs only to admins (controlled by the `adminOnly` flag in the `CATEGORIES` array and per-tab content rendering guards). Non-admin users are automatically redirected away from admin-only tabs. All users see Persona, Voice, Interface, Connections, Automations, and About, and receive the same global config for display/behavior without being able to change it.
 
 ## Isolation Summary Table
 

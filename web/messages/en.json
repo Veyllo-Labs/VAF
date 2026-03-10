@@ -58,7 +58,13 @@
     "statusSkipped": "Skipped",
     "statusError": "Error",
     "empty": "No notifications.",
-    "count": "{count} notifications"
+    "count": "{count} notifications",
+    "labelChannel": "Channel",
+    "labelTask": "Task",
+    "labelHandoff": "Handoff",
+    "labelAutomation": "Automation",
+    "badgeOk": "ok",
+    "badgeFailed": "failed"
   },
   "common": {
     "save": "Save",

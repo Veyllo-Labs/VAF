@@ -264,6 +264,10 @@ Each `AutomationManager` instance can be created with a `user_scope_id`; tasks a
 
 Notes and to-dos for the automation calendar are stored per user under `Platform.vaf_dir() / "automation_planner" / <user_scope_id> /` (or `_default` when no scope): `notes.json` and `todos.json`. All planner API functions take `user_scope_id`; the Web UI and agent tools use the same scope so that the calendar shows only the current user's data.
 
+### Thinking workspace (`vaf/core/thinking_workspace.py`)
+
+Thinking workspace data is stored per user under `Platform.data_dir() / "workspaces" / <scope_key> /`, where `scope_key` uses the same normalization as Thinking Mode (`local_admin_scope_id` -> `default`, otherwise user scope id). Tasks, run artifacts, handoff proposals, and approval archives are isolated by this key. Workspace path resolution is boundary-checked to prevent cross-scope traversal.
+
 ### Sandbox (`vaf/tools/python_sandbox.py`)
 
 Code execution in the Docker sandbox uses per-user working directories:
@@ -330,6 +334,7 @@ The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local
 | Calendar (Google/Microsoft) | Same OAuth and `user_scope_id` as Email; no separate credentials | Application |
 | Automations | Per-user task storage and scoped RAG access; max 3 users per time slot (global cap) | Application |
 | Automation planner (notes/todos) | Per-user `automation_planner/<scope>/notes.json`, `todos.json` | Application |
+| Thinking workspace | Per-user `workspaces/<scope_key>/` with boundary-checked file access and handoff approvals | Application |
 | Config (global vs user) | Backend/network/API keys: admin-only write; non-admins can change only user-scoped settings | Application |
 
 ## Developer Guidelines: Building New Features

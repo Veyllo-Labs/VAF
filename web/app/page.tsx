@@ -1985,7 +1985,7 @@ function VAFDashboardContent() {
                     };
 
                     // Parse server messages and preserve server order (index) so sort is stable
-                    const serverMsgs = data.messages
+                    const serverMsgs: Array<Message & { _order: number }> = data.messages
                         .filter((m: any) => m.role !== 'system') // Hide raw system prompts from server (we have better local logs)
                         .map((m: any, idx: number) => ({
                             role: m.role,

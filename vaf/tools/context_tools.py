@@ -130,6 +130,7 @@ class UpdateWorkingMemoryTool(BaseTool):
     
     def run(self, **kwargs) -> str:
         base_dir = kwargs.get('base_dir', '.')
+        user_scope_id = kwargs.get('user_scope_id')
         notes = kwargs.get('notes')
         plan = kwargs.get('plan')
         add_notes = kwargs.get('add_notes')
@@ -144,6 +145,16 @@ class UpdateWorkingMemoryTool(BaseTool):
                 notes=notes, plan=plan, add_notes=add_notes, add_plan=add_plan,
                 tasks=tasks, add_task=add_task, mark_task_done=mark_task_done,
             )
+            # Thinking Workspace bridge: in thinking mode, mirror latest working_memory snapshot
+            # into the per-user workspace for auditable run continuity.
+            try:
+                if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+                    from vaf.core.thinking_workspace import mirror_working_memory_snapshot
+
+                    snapshot = mpm.get_working_memory()
+                    mirror_working_memory_snapshot(user_scope_id, snapshot)
+            except Exception:
+                pass
             return "✅ Working Memory updated."
         except Exception as e:
             return f"❌ Error updating working memory: {e}"

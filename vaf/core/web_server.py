@@ -3091,6 +3091,161 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     except Exception as e:
                         await websocket.send_json({"type": "automation_todos_list", "todos": [], "error": str(e)})
 
+                elif type == "get_thinking_workspace_handoffs":
+                    try:
+                        from vaf.core.thinking_workspace import list_pending_handoffs
+
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        handoffs = list_pending_handoffs(user_scope_id)
+                        await websocket.send_json({"type": "thinking_workspace_handoffs_list", "handoffs": handoffs})
+                    except Exception as e:
+                        await websocket.send_json({"type": "thinking_workspace_handoffs_list", "handoffs": [], "error": str(e)})
+
+                elif type == "approve_thinking_workspace_handoff":
+                    try:
+                        from vaf.core.thinking_workspace import approve_handoff, get_handoff
+                        from vaf.core.user_notifications import append_notification
+
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        task_id = (cmd.get("task_id") or "").strip()
+                        handoff_id = (cmd.get("handoff_id") or "").strip()
+                        if not task_id or not handoff_id:
+                            await websocket.send_json({
+                                "type": "thinking_workspace_handoff_result",
+                                "ok": False,
+                                "action": "approve",
+                                "error": "task_id and handoff_id required",
+                            })
+                            continue
+                        ok = approve_handoff(user_scope_id, task_id, handoff_id)
+                        handoff = get_handoff(user_scope_id, task_id, handoff_id) if ok else None
+                        action_result = handoff.get("automation_action_result") if isinstance(handoff, dict) else None
+                        action_failed = isinstance(action_result, dict) and (action_result.get("ok") is False)
+                        notif_status = "error" if (not ok or action_failed) else "success"
+                        summary_parts = [
+                            f"Action: approve",
+                            f"Task: {task_id}",
+                            f"Handoff: {handoff_id}",
+                        ]
+                        if isinstance(action_result, dict):
+                            op = str(action_result.get("operation") or "").strip()
+                            ok_txt = "ok" if action_result.get("ok") else "failed"
+                            if op:
+                                summary_parts.append(f"Automation action: {op} ({ok_txt})")
+                            if action_result.get("task_id"):
+                                summary_parts.append(f"Automation id: {action_result.get('task_id')}")
+                            if action_result.get("error"):
+                                summary_parts.append(f"Error: {action_result.get('error')}")
+                        append_notification(
+                            user_scope_id,
+                            kind="system",
+                            title="Workspace handoff approved",
+                            status=notif_status,
+                            summary="\n".join(summary_parts),
+                            task_id=task_id,
+                            handoff_id=handoff_id,
+                            action="approve",
+                            automation_action_result=action_result if isinstance(action_result, dict) else None,
+                        )
+                        await websocket.send_json(
+                            {
+                                "type": "new_log",
+                                "entry": {
+                                    "timestamp": time.time(),
+                                    "message": (
+                                        f"Thinking Workspace handoff approved ({handoff_id})."
+                                        + (
+                                            " Automation action failed."
+                                            if action_failed
+                                            else (
+                                                " Automation action applied."
+                                                if isinstance(action_result, dict) and action_result.get("ok") is True
+                                                else ""
+                                            )
+                                        )
+                                    ),
+                                    "source": "System",
+                                },
+                            }
+                        )
+                        await websocket.send_json({
+                            "type": "thinking_workspace_handoff_result",
+                            "ok": ok,
+                            "action": "approve",
+                            "task_id": task_id,
+                            "handoff_id": handoff_id,
+                            "automation_action_result": action_result,
+                            "error": None if ok else "handoff not found",
+                        })
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "thinking_workspace_handoff_result",
+                            "ok": False,
+                            "action": "approve",
+                            "error": str(e),
+                        })
+
+                elif type == "reject_thinking_workspace_handoff":
+                    try:
+                        from vaf.core.thinking_workspace import reject_handoff
+                        from vaf.core.user_notifications import append_notification
+
+                        user_scope_id = manager.get_connection_user(websocket) if manager else None
+                        task_id = (cmd.get("task_id") or "").strip()
+                        handoff_id = (cmd.get("handoff_id") or "").strip()
+                        reason = (cmd.get("reason") or "").strip()
+                        if not task_id or not handoff_id:
+                            await websocket.send_json({
+                                "type": "thinking_workspace_handoff_result",
+                                "ok": False,
+                                "action": "reject",
+                                "error": "task_id and handoff_id required",
+                            })
+                            continue
+                        ok = reject_handoff(user_scope_id, task_id, handoff_id, reason=reason)
+                        append_notification(
+                            user_scope_id,
+                            kind="system",
+                            title="Workspace handoff rejected",
+                            status="success" if ok else "error",
+                            summary="\n".join(
+                                [
+                                    "Action: reject",
+                                    f"Task: {task_id}",
+                                    f"Handoff: {handoff_id}",
+                                    f"Reason: {(reason or 'n/a')[:500]}",
+                                ]
+                            ),
+                            task_id=task_id,
+                            handoff_id=handoff_id,
+                            action="reject",
+                        )
+                        await websocket.send_json(
+                            {
+                                "type": "new_log",
+                                "entry": {
+                                    "timestamp": time.time(),
+                                    "message": f"Thinking Workspace handoff rejected ({handoff_id}).",
+                                    "source": "System",
+                                },
+                            }
+                        )
+                        await websocket.send_json({
+                            "type": "thinking_workspace_handoff_result",
+                            "ok": ok,
+                            "action": "reject",
+                            "task_id": task_id,
+                            "handoff_id": handoff_id,
+                            "error": None if ok else "handoff not found",
+                        })
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "thinking_workspace_handoff_result",
+                            "ok": False,
+                            "action": "reject",
+                            "error": str(e),
+                        })
+
                 elif type == "get_notifications":
                     try:
                         from vaf.core.user_notifications import get_notifications

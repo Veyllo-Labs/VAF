@@ -8,7 +8,7 @@ from vaf.tools.base import BaseTool
 from vaf.core.automation import AutomationManager, AutomationTask, AutomationClarifier
 
 
-def _manager_for_scope(user_scope_id: Optional[str]) -> Tuple[AutomationManager, Optional[str]]:
+def _manager_for_scope(user_scope_id: Optional[str], user_role: Optional[str] = None) -> Tuple[AutomationManager, Optional[str]]:
     """Return (manager, effective_scope) for user-scoped automation access.
 
     Local admin scope → global AutomationManager (no user_scope_id).
@@ -16,11 +16,15 @@ def _manager_for_scope(user_scope_id: Optional[str]) -> Tuple[AutomationManager,
     """
     from vaf.core.config import get_local_admin_scope_id
     local = get_local_admin_scope_id()
-    
+
     # If no scope provided or it's the primary local admin, use the global root manager
     if not user_scope_id or str(user_scope_id).strip() == str(local).strip():
         return AutomationManager(), None
-        
+
+    # Role-based admin fallback: allow aggregated admin access even if scope differs.
+    if (user_role or "").strip().lower() == "admin":
+        return AutomationManager(), user_scope_id
+
     # Regular users always use their own isolated scope
     return AutomationManager(user_scope_id=user_scope_id), user_scope_id
 
@@ -890,8 +894,23 @@ class ListAutomationsTool(BaseTool):
     
     def run(self, **kwargs) -> str:
         try:
-            manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
+            user_scope_id = kwargs.get("user_scope_id")
+            user_role = kwargs.get("user_role")
+            manager, _ = _manager_for_scope(user_scope_id, user_role=user_role)
             tasks = manager.list()
+
+            # Admins get aggregated manager; restrict visible list to root + admin-visible scopes.
+            if (user_role or "").strip().lower() == "admin" and user_scope_id:
+                from vaf.core.config import get_local_admin_scope_id
+                local_admin_scope = get_local_admin_scope_id()
+                tasks = [
+                    t for t in tasks
+                    if (
+                        t.user_scope_id is None
+                        or str(t.user_scope_id) == str(user_scope_id)
+                        or str(t.user_scope_id) == str(local_admin_scope)
+                    )
+                ]
             
             if not tasks:
                 return "No automations configured yet. Use `create_automation` to create one."

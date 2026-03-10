@@ -2606,11 +2606,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # user_scope_id is required for correct RAG scope (Auto-Recall and memory_save)
                         user_scope_id = manager.get_connection_user(websocket)
                         username = manager.get_connection_username(websocket)
+                        user_role = manager.get_connection_user_role(websocket)
                         metadata = {}
                         if user_scope_id:
                             metadata["user_scope_id"] = user_scope_id
                         if username:
                             metadata["username"] = username
+                        if user_role:
+                            metadata["role"] = user_role
                         log("WebServer", f"Chat message from user_scope_id={user_scope_id}, username={username}")
                         # Mark user activity for thinking mode (idle detection)
                         try:
@@ -2851,12 +2854,32 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "get_automations":
                     # Return list of saved automations; each user sees only their own (user_scope_id).
+                    # Admin (local_admin_scope): also sees root automations (e.g. daily calendar check).
                     try:
                         from vaf.core.automation import AutomationManager
+                        from vaf.core.config import get_local_admin_scope_id
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
-                        mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
-                        tasks = list(mgr.list())
-                        # Do not merge root automations for non-admin users: each user sees only their own.
+                        stored_role = manager.get_connection_user_role(websocket) if manager else None
+                        local_admin_scope = get_local_admin_scope_id()
+                        is_admin = (stored_role == "admin") or (
+                            user_scope_id is not None and str(user_scope_id) == str(local_admin_scope)
+                        )
+                        if is_admin:
+                            # Admin: load root + all user dirs, then filter to root + admin-visible scopes.
+                            # Some admin JWTs can have a different scope than local_admin_scope.
+                            mgr = AutomationManager()
+                            all_tasks = list(mgr.list())
+                            tasks = [
+                                t for t in all_tasks
+                                if (
+                                    t.user_scope_id is None
+                                    or str(t.user_scope_id) == str(user_scope_id)
+                                    or str(t.user_scope_id) == str(local_admin_scope)
+                                )
+                            ]
+                        else:
+                            mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
+                            tasks = list(mgr.list())
                         automations_list = [
                             {
                                 "id": task.id,

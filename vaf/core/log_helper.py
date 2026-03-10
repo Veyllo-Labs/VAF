@@ -195,7 +195,7 @@ def log_thinking_run(
     messages: List[Dict[str, Any]],
 ) -> None:
     """
-    Always append a thinking-mode run to logs/vaf_denk.log for debugging.
+    Always append a thinking-mode run to logs/vaf_think.log for debugging.
     One log file for all users; each run gets a separator block with run metadata
     and a human-readable summary of what the agent did.
     """
@@ -244,7 +244,7 @@ def log_thinking_run(
 
         lines.append("")
 
-        path = get_dated_log_path("vaf_denk", "log")
+        path = get_dated_log_path("vaf_think", "log")
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")

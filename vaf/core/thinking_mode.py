@@ -1238,17 +1238,22 @@ def _run_thinking_for_user(
                 memory_context = ""
 
             _waiting_already_set = False
+            # Log/summary must include only messages created during THIS run,
+            # not preloaded session history.
+            run_history_start = len(getattr(agent, "history", []) or [])
             for turn in range(max_turns):
                 prompt = _get_turn_prompt(turn)
                 mem_ctx = (memory_context or None) if turn == 0 else None
                 agent.chat_step(prompt, stream_callback=None, memory_context=mem_ctx)
+                current_history = (getattr(agent, "history", []) or [])
+                run_history = current_history[run_history_start:]
 
                 # Immediately set waiting_for_reply when the agent sends a message in this turn.
                 # Also PERSIST this message to the main chat session so the Main Agent sees it!
                 if not _waiting_already_set:
                     try:
                         tm_msg = _detect_and_set_waiting_for_reply(
-                            getattr(agent, "history", []),
+                            run_history,
                             user_scope_id,
                             agent=agent,
                             recent_only=True,
@@ -1281,7 +1286,7 @@ def _run_thinking_for_user(
                     except Exception:
                         pass
 
-                if _history_has_thinking_done(getattr(agent, "history", [])):
+                if _history_has_thinking_done(run_history):
                     logger.info("Thinking: breaking loop (thinking_done detected)")
                     break
 
@@ -1294,7 +1299,7 @@ def _run_thinking_for_user(
                 if turn >= 2:
                     has_any_tool_call = any(
                         isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")
-                        for m in (getattr(agent, "history", []) or [])
+                        for m in run_history
                     )
                     if not has_any_tool_call:
                         logger.warning("Thinking: [SAFETY_LIMIT] no tool calls after %d turns, aborting", turn + 1)
@@ -1330,7 +1335,7 @@ def _run_thinking_for_user(
                                     # Save current state so we don't forget what we were doing
                                     try:
                                         from vaf.core.thinking_notes import add_note
-                                        history = getattr(agent, "history", [])
+                                        history = run_history
                                         last_turns = history[-4:] if len(history) >= 4 else history
                                         tools_called = []
                                         last_msg = ""
@@ -1358,16 +1363,18 @@ def _run_thinking_for_user(
                     except Exception as _abort_err:
                         logger.debug("Thinking abort check failed: %s", _abort_err)
 
-            # Populate run summary from history
-            run_summary = _extract_run_summary(getattr(agent, "history", []))
+            # Populate run summary from this run only (exclude preloaded session history)
+            final_history = (getattr(agent, "history", []) or [])
+            run_history = final_history[run_history_start:]
+            run_summary = _extract_run_summary(run_history)
 
-            # Persist run: JSON run log (for internal summary) + vaf_denk.log (for debugging)
-            # NOT saved to WebUI sessions — thinking output is debug-only, visible in logs/vaf_denk.log
+            # Persist run: JSON run log (for internal summary) + vaf_think.log (for debugging)
+            # NOT saved to WebUI sessions — thinking output is debug-only, visible in logs/vaf_think.log
             try:
                 started_iso, ended_iso, log_messages = _save_run_log(
-                    user_scope_id, run_id, started_at_ts, getattr(agent, "history", [])
+                    user_scope_id, run_id, started_at_ts, run_history
                 )
-                # Write human-readable log to logs/vaf_denk.log
+                # Write human-readable log to logs/vaf_think.log
                 try:
                     from vaf.core.log_helper import log_thinking_run
                     duration = time.time() - started_at_ts
@@ -1380,7 +1387,7 @@ def _run_thinking_for_user(
                         messages=log_messages,
                     )
                 except Exception as log_file_err:
-                    logger.warning("Could not write vaf_denk.log: %s", log_file_err)
+                    logger.warning("Could not write vaf_think.log: %s", log_file_err)
             except Exception as log_err:
                 logger.warning("Thinking run log save failed: %s", log_err)
             # If agent sent a message (question), wait for reply: nudge at 3 min, skip question after 10 min.
@@ -1388,7 +1395,7 @@ def _run_thinking_for_user(
             if not _waiting_already_set:
                 try:
                     _detect_and_set_waiting_for_reply(
-                        getattr(agent, "history", []),
+                        run_history,
                         user_scope_id,
                         agent=agent,
                         recent_only=False,

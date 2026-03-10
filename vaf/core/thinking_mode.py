@@ -813,6 +813,15 @@ def _build_run_log_messages(agent_history: List[Dict[str, Any]], max_content_len
     return messages
 
 
+def _history_delta(agent_history: List[Dict[str, Any]], start_index: int) -> List[Dict[str, Any]]:
+    """Return only entries created after start_index (run-local history slice)."""
+    if start_index <= 0:
+        return list(agent_history or [])
+    if not agent_history:
+        return []
+    return list(agent_history[start_index:])
+
+
 def _history_has_thinking_done(history: List[Dict[str, Any]]) -> bool:
     """True if any assistant message in history includes a tool_call to thinking_done."""
     for msg in history or []:
@@ -1185,6 +1194,29 @@ def _run_thinking_for_user(
                     notice += "\n\n" + notes_prompt
             except Exception as _notes_err:
                 logger.debug("Could not load thinking notes: %s", _notes_err)
+            # Thinking Workspace context: blend existing todos/notes and open workspace tasks.
+            try:
+                from vaf.core.thinking_workspace import collect_existing_task_sources, list_tasks
+
+                existing_items = collect_existing_task_sources(user_scope_id, limit=6)
+                open_tasks = list_tasks(user_scope_id, status="open")[:5]
+                if existing_items or open_tasks:
+                    lines = ["", "**Thinking Workspace context (MVP):**"]
+                    if open_tasks:
+                        lines.append("- Open workspace tasks:")
+                        for t in open_tasks:
+                            lines.append(f"  - [{t.get('id')}] {t.get('title')} (source: {t.get('source')})")
+                    if existing_items:
+                        lines.append("- Existing task candidates:")
+                        for item in existing_items:
+                            content = (item.get("content") or "")[:120]
+                            lines.append(f"  - ({item.get('source')}) {item.get('title')}: {content}")
+                    lines.append(
+                        "- If you prepare an externally visible action, create a handoff proposal instead of direct apply."
+                    )
+                    notice += "\n" + "\n".join(lines)
+            except Exception as _ws_err:
+                logger.debug("Could not load workspace context: %s", _ws_err)
             agent.history[0]["content"] = (agent.history[0]["content"] or "") + notice
 
         logger.info("Thinking started for user %s", scope_key[:8] if scope_key != "default" else "default")
@@ -1246,7 +1278,7 @@ def _run_thinking_for_user(
                 mem_ctx = (memory_context or None) if turn == 0 else None
                 agent.chat_step(prompt, stream_callback=None, memory_context=mem_ctx)
                 current_history = (getattr(agent, "history", []) or [])
-                run_history = current_history[run_history_start:]
+                run_history = _history_delta(current_history, run_history_start)
 
                 # Immediately set waiting_for_reply when the agent sends a message in this turn.
                 # Also PERSIST this message to the main chat session so the Main Agent sees it!
@@ -1365,7 +1397,7 @@ def _run_thinking_for_user(
 
             # Populate run summary from this run only (exclude preloaded session history)
             final_history = (getattr(agent, "history", []) or [])
-            run_history = final_history[run_history_start:]
+            run_history = _history_delta(final_history, run_history_start)
             run_summary = _extract_run_summary(run_history)
 
             # Persist run: JSON run log (for internal summary) + vaf_think.log (for debugging)
@@ -1390,6 +1422,44 @@ def _run_thinking_for_user(
                     logger.warning("Could not write vaf_think.log: %s", log_file_err)
             except Exception as log_err:
                 logger.warning("Thinking run log save failed: %s", log_err)
+            # Persist run artifacts into Thinking Workspace and create a review handoff.
+            try:
+                from vaf.core.thinking_workspace import (
+                    create_task as _ws_create_task,
+                    write_workspace_file as _ws_write_file,
+                    create_handoff as _ws_create_handoff,
+                )
+
+                ws_task = _ws_create_task(
+                    user_scope_id=user_scope_id,
+                    title=f"Thinking run {run_id}",
+                    source="thinking_run",
+                    description=(run_summary or "")[:300],
+                )
+                task_id = ws_task.get("id")
+                if task_id:
+                    artifact = [
+                        f"# Thinking Run {run_id}",
+                        "",
+                        f"- scope: {scope_key}",
+                        f"- status: {run_status}",
+                        f"- started: {started_iso}",
+                        f"- ended: {ended_iso}",
+                        "",
+                        "## Summary",
+                        run_summary or "(no summary)",
+                    ]
+                    _ws_write_file(user_scope_id, task_id, "run_summary.md", "\n".join(artifact))
+                    if run_summary:
+                        _ws_create_handoff(
+                            user_scope_id=user_scope_id,
+                            task_id=task_id,
+                            title=f"Review thinking proposal {run_id}",
+                            content=run_summary,
+                            proposed_action="review_and_approve",
+                        )
+            except Exception as _ws_save_err:
+                logger.debug("Could not persist thinking workspace artifacts: %s", _ws_save_err)
             # If agent sent a message (question), wait for reply: nudge at 3 min, skip question after 10 min.
             # Usually already set during the turn loop above; this is a fallback for edge cases.
             if not _waiting_already_set:

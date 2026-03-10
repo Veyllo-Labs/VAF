@@ -17,6 +17,15 @@ export type NotificationItem = {
   channel?: string;
   task_name?: string;
   run_id?: string;
+  action?: 'approve' | 'reject' | string;
+  task_id?: string;
+  handoff_id?: string;
+  automation_action_result?: {
+    ok?: boolean;
+    operation?: string;
+    task_id?: string;
+    error?: string;
+  };
 };
 
 function formatRelativeTime(iso: string): string {
@@ -32,6 +41,15 @@ function formatRelativeTime(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+function compactSummary(item: NotificationItem): string {
+  const summary = String(item.summary || '').trim();
+  const firstLine = summary.split('\n').map((s) => s.trim()).find(Boolean) || '';
+  if (firstLine) return firstLine;
+  if (item.kind === 'system' && item.action) return `Handoff ${item.action}`;
+  if (item.kind === 'automation' && item.task_name) return item.task_name;
+  return '';
 }
 
 export interface NotificationsModalProps {
@@ -138,17 +156,57 @@ export default function NotificationsModal({
                     <span className="shrink-0 text-[10px] font-bold uppercase text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded tracking-tighter">
                       {item.kind}
                     </span>
-                    <span className="flex-1 min-w-0 font-medium text-gray-900 truncate">{item.title}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-900 truncate">{item.title}</p>
+                      {compactSummary(item) && (
+                        <p className="text-xs text-gray-600 truncate mt-0.5">{compactSummary(item)}</p>
+                      )}
+                      {(item.action || item.automation_action_result?.operation) && (
+                        <div className="mt-1 flex items-center gap-1.5">
+                          {item.action && (
+                            <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">
+                              {item.action}
+                            </span>
+                          )}
+                          {item.automation_action_result?.operation && (
+                            <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                              {item.automation_action_result.operation}
+                            </span>
+                          )}
+                          {item.automation_action_result && (
+                            <span
+                              className={cn(
+                                'text-[10px] uppercase px-1.5 py-0.5 rounded border',
+                                item.automation_action_result.ok
+                                  ? 'bg-green-50 text-green-700 border-green-200'
+                                  : 'bg-red-50 text-red-700 border-red-200'
+                              )}
+                            >
+                              {item.automation_action_result.ok ? t('badgeOk') : t('badgeFailed')}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
                     <span className="shrink-0 text-xs text-gray-500">{formatRelativeTime(item.timestamp)}</span>
                     <span className="shrink-0 text-gray-500" aria-hidden>
                       {expandedId === item.id ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                     </span>
                   </div>
-                  {expandedId === item.id && (item.summary || item.channel) && (
+                  {expandedId === item.id && (item.summary || item.channel || item.task_id || item.handoff_id) && (
                     <div className="px-3 pb-3 pt-0 border-t border-gray-100">
                       <div className="mt-2 text-sm text-gray-700 whitespace-pre-wrap bg-white rounded-lg p-3 border border-gray-100">
                         {item.channel && (
-                          <p className="text-xs text-gray-500 mb-1">Channel: {item.channel}</p>
+                          <p className="text-xs text-gray-500 mb-1">{t('labelChannel')}: {item.channel}</p>
+                        )}
+                        {item.task_id && (
+                          <p className="text-xs text-gray-500 mb-1">{t('labelTask')}: {item.task_id}</p>
+                        )}
+                        {item.handoff_id && (
+                          <p className="text-xs text-gray-500 mb-1">{t('labelHandoff')}: {item.handoff_id}</p>
+                        )}
+                        {item.automation_action_result?.task_id && (
+                          <p className="text-xs text-gray-500 mb-1">{t('labelAutomation')}: {item.automation_action_result.task_id}</p>
                         )}
                         {item.summary}
                       </div>

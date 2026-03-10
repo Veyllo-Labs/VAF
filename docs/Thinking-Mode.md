@@ -14,6 +14,8 @@ Thinking mode runs the main agent in the background while the user is idle. It a
 - **Locking:** Uses a global file-based lock system with PID verification to prevent parallel runs. See [Singleton Task Locking in PROCESS_MANAGEMENT.md](PROCESS_MANAGEMENT.md#singleton-task-locking).
 - **Context:** The agent loads the user's full chat session — it has the same context as the normal agent.
 - **Output:** Runs are logged to `logs/vaf_think.log` (human-readable) and to JSON run logs. Messages sent to the user are also mirrored in the Web UI / main chat history.
+- **Workspace (MVP):** Runs can persist artifacts to a per-user Thinking Workspace (`Platform.data_dir()/workspaces/<scope_key>/`). Externally visible actions should be prepared as **handoffs** for approval first.
+- **Working memory bridge:** `update_working_memory` is still the fast scratchpad. In Thinking Mode, updates are mirrored to workspace snapshots (`working_memory/latest.json` + timestamped history) for auditability.
 
 ---
 
@@ -200,6 +202,7 @@ Thinking mode output is **not shown in the Web UI chat list**. It is logged to:
 | `thinking_declined_questions.json` | Per-user list of refused questions (auto-expire 30 days) |
 | `thinking_notes.db` | Per-user SQLite DB of persistent agent notes (auto-expire 30 days) |
 | `thinking_suggestions/` | Per-user directory for profile suggestions from `save_thinking_suggestion` (review in Settings) |
+| `workspaces/<scope_key>/` | Per-user Thinking Workspace (tasks, workspace files, handoffs, archives) |
 | `last_interaction.json` | Last activity per user; used for idle detection |
 
 Run logs: `Platform.vaf_dir() / "thinking_mode_logs" / <scope_key> / <run_id>_<ts>.json`
@@ -220,6 +223,8 @@ Debug log: `logs/vaf_think.log` (human-readable, all users in one file)
 | `thinking_done` tool | `vaf/tools/thinking_done.py` | `ThinkingDoneTool` |
 | `thinking_note_add` tool | `vaf/tools/thinking_note_add.py` | `ThinkingNoteAddTool` |
 | `save_thinking_suggestion` tool | `vaf/tools/thinking_suggestion.py` | Proposes profile updates; stored via `vaf/core/thinking_suggestions.py` |
+| Thinking workspace core | `vaf/core/thinking_workspace.py` | `create_task()`, `write_workspace_file()`, `create_handoff()`, `approve_handoff()`, `reject_handoff()` |
+| Thinking workspace tools | `vaf/tools/thinking_workspace_*.py` | Read/write/handoff operations (Thinking Mode only) |
 | Tool loading | `vaf/core/agent.py` | `_load_tools()` — thinking-mode-only tools gated by `VAF_THINKING_MODE=1` |
 | Loop protection | `vaf/core/agent.py` | `chat_step()` — `thinking_done` hard break, max 15 tool turns, redundant call block; see [Loop protection (API cost safety)](#loop-protection-api-cost-safety) |
 | Debug log | `vaf/core/log_helper.py` | `log_thinking_run()` → `logs/vaf_think_YYYY-MM-DD.log` |
@@ -231,5 +236,6 @@ Debug log: `logs/vaf_think.log` (human-readable, all users in one file)
 ## See also
 
 - **AUTOMATIONS.md** — Scheduled automations and todos that thinking mode can create/modify
+- **THINKING_WORKSPACE.md** — Per-user virtual desktop, handoff flow, and safety model
 - **MEMORY_SYSTEM.md** — RAG memory that thinking mode can search (read-only)
 - **TELEGRAM_INTEGRATION.md**, **WHATSAPP_INTEGRATION.md** — Channels used for agent messages and nudges

@@ -1057,6 +1057,12 @@ class Agent:
                                 continue
                             self.tools[instance.name] = instance
                             continue
+                        # thinking_workspace_* tools: ONLY in thinking mode
+                        if instance.name.startswith("thinking_workspace_"):
+                            if os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes"):
+                                continue
+                            self.tools[instance.name] = instance
+                            continue
                         
                         # save_thinking_suggestion: available in thinking mode for proactive suggestions
                         if instance.name == "save_thinking_suggestion":
@@ -6703,6 +6709,8 @@ class Agent:
                     tool_args["user_scope_id"] = scope_id
                     # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
                     append_domain_log("rag", f"[Agent] {name} called with user_scope_id={scope_id}")
+                if name in ("update_intent", "update_working_memory"):
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name == "learn_document":
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                     tool_args["_agent"] = self
@@ -6732,6 +6740,8 @@ class Agent:
                 if name in ("create_automation", "list_automations", "read_automation", "update_automation", "delete_automation", "restore_automation", "list_trash"):
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                     tool_args["user_role"] = getattr(self, "_current_user_role", None)
+                if name in ("thinking_workspace_read", "thinking_workspace_write", "thinking_workspace_handoff"):
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("list_calendar_events", "create_calendar_event", "update_calendar_event", "delete_calendar_event"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)

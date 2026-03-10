@@ -457,12 +457,44 @@ vaf automation delete <id>   # Delete task
             filepath.parent.mkdir(parents=True, exist_ok=True)
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(task.to_dict(), f, indent=2, ensure_ascii=False)
+
+    def _sync_workspace_automation_state(
+        self,
+        task: AutomationTask,
+        run_status: str = "",
+        summary: str = "",
+        event: str = "automation_sync",
+    ) -> None:
+        """Best-effort bridge: mirror automation lifecycle state into Thinking Workspace."""
+        try:
+            from vaf.core.thinking_workspace import sync_automation_status_to_workspace
+
+            payload = {
+                "id": task.id,
+                "name": task.name,
+                "description": task.description,
+                "frequency": task.frequency,
+                "time": task.time,
+                "enabled": task.enabled,
+                "last_run": task.last_run,
+                "next_run": task.next_run_iso,
+            }
+            sync_automation_status_to_workspace(
+                user_scope_id=task.user_scope_id,
+                automation_data=payload,
+                run_status=run_status,
+                summary=summary,
+                event=event,
+            )
+        except Exception:
+            pass
     
     def create(self, task: AutomationTask) -> AutomationTask:
         """Create a new automation task."""
         # next_run is calculated dynamically - no need to store it
         self.tasks[task.id] = task
         self._save_task(task)
+        self._sync_workspace_automation_state(task, event="automation_created")
         
         # If scheduler is already running, schedule this task immediately
         if self._running:
@@ -557,6 +589,7 @@ vaf automation delete <id>   # Delete task
         
         # next_run is calculated dynamically - no need to store it
         self._save_task(task)
+        self._sync_workspace_automation_state(task, event="automation_updated")
         return task
     
     def delete(self, task_id: str, permanent: bool = False) -> bool:
@@ -578,6 +611,11 @@ vaf automation delete <id>   # Delete task
                 shutil.move(str(filepath), str(trash_path))
         
         del self.tasks[task_id]
+        try:
+            task.enabled = False
+            self._sync_workspace_automation_state(task, event="automation_deleted")
+        except Exception:
+            pass
         return True
     
     def move_to_trash(self, task_id: str) -> bool:
@@ -979,6 +1017,12 @@ vaf automation delete <id>   # Delete task
                     task.last_run = datetime.now().isoformat()
                     # next_run is calculated dynamically - no need to store it
                     self._save_task(task)
+                    self._sync_workspace_automation_state(
+                        task,
+                        run_status="success",
+                        summary=(result or "")[:1000],
+                        event="automation_run",
+                    )
                     try:
                         from vaf.core.user_notifications import append_notification
                         append_notification(
@@ -1247,6 +1291,16 @@ vaf automation delete <id>   # Delete task
                 status=status,
                 summary=result or "Completed",
                 task_name=task.name,
+            )
+        except Exception:
+            pass
+        try:
+            status = "error" if (result or "").strip().startswith("Error:") else "success"
+            self._sync_workspace_automation_state(
+                task,
+                run_status=status,
+                summary=(result or "")[:1000],
+                event="automation_run",
             )
         except Exception:
             pass

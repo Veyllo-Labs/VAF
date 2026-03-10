@@ -28,7 +28,20 @@ def _safe_scope_key(user_scope_id: Optional[str]) -> str:
     """Safe filename segment from user_scope_id."""
     if not user_scope_id or not str(user_scope_id).strip():
         return "default"
-    return "".join(c if c.isalnum() or c in "-_" else "_" for c in str(user_scope_id).strip())[:64]
+    scope = str(user_scope_id).strip()
+    # Keep local admin and "default" in a single shared bucket so notifications
+    # created by idle/thinking mode (often using None/default) are visible in WebUI
+    # sessions authenticated as local admin scope.
+    try:
+        from vaf.core.config import get_local_admin_scope_id
+
+        local_admin_scope = str(get_local_admin_scope_id()).strip()
+        if scope == "default" or scope == local_admin_scope:
+            return "default"
+    except Exception:
+        if scope == "default":
+            return "default"
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in scope)[:64]
 
 
 def _file_path(user_scope_id: Optional[str]) -> Path:
@@ -95,9 +108,19 @@ def append_notification(
     # Live push to Web UI
     try:
         from vaf.core.web_interface import get_web_interface
-        if user_scope_id:
+        push_user_scope_id = user_scope_id
+        if not push_user_scope_id or not str(push_user_scope_id).strip():
+            # Thinking runs often use None/default; active localhost WebUI sockets
+            # are subscribed with local admin scope id, so push to that id.
+            try:
+                from vaf.core.config import get_local_admin_scope_id
+
+                push_user_scope_id = str(get_local_admin_scope_id())
+            except Exception:
+                push_user_scope_id = None
+        if push_user_scope_id:
             get_web_interface().push_update_to_user(
-                user_scope_id,
+                str(push_user_scope_id).strip(),
                 {"type": "notification", "notification": item},
             )
     except Exception as e:

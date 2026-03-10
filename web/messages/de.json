@@ -58,7 +58,13 @@
     "statusSkipped": "Übersprungen",
     "statusError": "Fehler",
     "empty": "Keine Benachrichtigungen.",
-    "count": "{count} Benachrichtigungen"
+    "count": "{count} Benachrichtigungen",
+    "labelChannel": "Kanal",
+    "labelTask": "Task",
+    "labelHandoff": "Handoff",
+    "labelAutomation": "Automatisierung",
+    "badgeOk": "ok",
+    "badgeFailed": "fehlgeschlagen"
   },
   "common": {
     "save": "Speichern",

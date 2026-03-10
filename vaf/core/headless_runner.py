@@ -426,6 +426,7 @@ def run_headless_agent():
                 meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
                 agent._current_user_scope_id = meta.get("user_scope_id")
                 agent._current_username = meta.get("username")
+                agent._current_user_role = meta.get("role")
                 # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
                 append_domain_log("rag", f"[Headless] Task user_scope_id={meta.get('user_scope_id')}, username={meta.get('username')}")
 

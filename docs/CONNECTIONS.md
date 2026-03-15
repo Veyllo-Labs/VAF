@@ -409,8 +409,8 @@ The Discord bridge:
 Telegram uses the same pipeline as the Web UI:
 1. Telegram bridge receives messages, looks up the sender in the whitelist (user_scope_id, username)
 2. Messages are debounced per chat (wait for follow-up messages, then combine into one prompt)
-3. A single task is enqueued on the same TaskQueue as the Web UI, with metadata (user_scope_id, username, telegram_chat_id)
-4. Headless runner processes the task; RAG, tools, and user identity are scoped to that user
+3. A single task is enqueued on the same TaskQueue as the Web UI, with metadata (user_scope_id, username, telegram_chat_id, `origin_channel`, `task_class`)
+4. Headless runner processes the task under session isolation; queue policy may run weighted-fair across classes (`interactive`/`automation`/`background`) when enabled
 5. The agent reply (without internal reasoning blocks) is sent back to the Telegram chat via the bridge
 
 ## Email Integration

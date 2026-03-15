@@ -150,6 +150,8 @@ def _run_bot() -> None:
             "username": "admin",
             "discord_channel_id": channel_id,
             "discord_author_id": str(message.author.id),
+            "origin_channel": "discord",
+            "task_class": "interactive",
         }
 
         try:

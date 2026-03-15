@@ -718,6 +718,9 @@ def _wa_flush(pending_key: str) -> None:
         return
     session_id = rec["session_id"]
     metadata = rec["metadata"]
+    if isinstance(metadata, dict):
+        metadata.setdefault("origin_channel", "whatsapp")
+        metadata.setdefault("task_class", "interactive")
     username = rec["username"]
     from_jid = rec["from_jid"]
     voice_lang = rec.get("voice_lang")

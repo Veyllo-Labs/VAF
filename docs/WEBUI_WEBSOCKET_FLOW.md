@@ -18,12 +18,14 @@ flowchart TB
         WS_Server[FastAPI WebSocket /ws]
         WebIface[WebInterfaceManager]
         TaskQueue[TaskQueue]
-        Agent[Headless Agent]
+        Scheduler[QueuePolicy(legacy or weighted_fair)]
+        Agent[Headless Agent Worker(s)]
     end
 
     FE_WS -->|"chat + sessionId"| WS_Server
-    WS_Server -->|"tq.add(session_id,input)"| TaskQueue
-    TaskQueue -->|"tq.get()"| Agent
+    WS_Server -->|"tq.add(session_id,input,metadata)"| TaskQueue
+    TaskQueue --> Scheduler
+    Scheduler -->|"tq.get(worker_id)"| Agent
     Agent -->|"emit_agent_message"| WebIface
     WebIface -->|"sessionId tag + WS send"| FE_WS
     FE_WS --> FE_Render
@@ -31,10 +33,10 @@ flowchart TB
 
 ## Connection Sequence (Happy Path)
 
-1. WebUI opens WebSocket: `ws://localhost:8001/ws`.
+1. WebUI opens WebSocket: `ws://localhost:8001/ws` (or `wss://<host>:8443/ws` when Local Network TLS proxy is enabled).
 2. Backend sends `session_list` and then `history_update` (auto-load latest session).
 3. Frontend sets `currentSessionId` and starts sending `chat` messages with session ID.
-4. Backend queues the task.
+4. Backend queues the task with metadata (`origin_channel`, `task_class`, `enqueue_session_id`).
 5. Headless agent processes and streams `agent_message_update`.
 6. Frontend renders the assistant response and the `<think>` block if present.
 
@@ -48,6 +50,7 @@ Key rules:
 - WebSocket responses are tagged with `sessionId`.
 - Frontend ignores messages where `data.sessionId !== currentSessionId` (except
   `session_list` and `history_update`).
+- WebUI enqueue path rejects implicit fallback into messenger sessions (`telegram_*`, `discord_*`, `whatsapp_*`) when `sessionId` is missing, to prevent cross-channel routing.
 
 ## Message Types
 
@@ -74,10 +77,12 @@ Key rules:
 - `new_log`: system/status timeline entries. When the agent gives up after API empty-response delayed retries, it sends the final message only via `new_log` (return value `[SYSTEM_LOG_ONLY]...`); the headless runner does **not** send `agent_message_update` for that response, so the UI shows a system timeline entry only.
 - `tool_update`: tool start/end/error. **Note:** Tool events are always emitted — they are NOT gated by `_emit_to_web_ui()`. The previous gating caused a race condition where the process-wide `VAF_THINKING_MODE` env var (set by background thinking) would block tool updates for active WebUI sessions. Tool events use `broadcast_to_session(session_id)` for safe, session-scoped delivery.
 - `stats`: token/usage metrics (used/total, percent; can include input/output from API). Filtered by session when `sessionId` is set.
+- `queue_stats`: queue/worker metrics from headless runner (`interactive`, `automation`, `background`, `inflight_total`, `inflight_sessions`, oldest wait per class, `queue_policy`).
 - `context_status`: detailed context stats (tokens, max_tokens, percent, system/history/tools breakdown, compaction progress). Sent only to connections subscribed to that session so the context bar stays correct per tab.
 - `subagent_update`: sub-agent window payload
 - `subagent_output`: final sub-agent output block
 - `subagent_output_stream`: live stdout/stderr lines from headless sub-agents
+- `subagent_update.status` may include heartbeat age (`Running sub-agent tasks... (heartbeat Ns ago)`) even when no new stdout line is emitted.
 - `model_state`: Status des lokalen Modells (`loaded`, `persistent`, `provider`)
 - `config_saved`: Bestätigung nach Speichern der Einstellungen; bei Provider-Änderung enthält die Antwort `requires_refresh: true`, die Web-UI zeigt dann das Overlay „Changing model“ und lädt nach 5 Sekunden neu (siehe [MODELL_UND_PROVIDER_WECHSEL.md](MODELL_UND_PROVIDER_WECHSEL.md)).
 - **Automations:** `automations_list` — response to `get_automations`. Payload: `{ automations: [] }`. Each item has `id`, `name`, `description`, `prompt`, `frequency`, `time`, `weekday?`, `day?`, `enabled`, `next_run`, `last_run`.
@@ -102,7 +107,7 @@ Useful files when debugging WebUI / LLM / queue (all under the log dir above):
 
 | File | Contents |
 |------|----------|
-| `queue.log` | **QUEUE_ADD**, **QUEUE_GET**, **QUEUE_CHAT_START** / **QUEUE_CHAT_END**, **QUEUE_CHAT_FAIL**, **QUEUE_DONE** (session_id, cmd/compaction/chat) |
+| `queue.log` | **QUEUE_ADD**, **QUEUE_GET**, **QUEUE_CHAT_START** / **QUEUE_CHAT_END**, **QUEUE_CHAT_FAIL**, **QUEUE_DONE**, **[METRICS]** (class depths, inflight, oldest wait, policy) |
 | `backend.log` | Backend per chat_step `[api(...)` / `server(8080)` / `library(...)]`, **503 model_loading retry**, **unavailable_after_retries**, **calling_8080**, **read_timeout no_data_300s** / **read_timeout_during_stream**, **\[CHUNK\]** / **\[CONTENT\]** (API stream) |
 | `webui.log` | **\[WARNING\]** only when a message is dropped (no server loop). Stream/emit logging is disabled to avoid UI lag. |
 | `rag.log` | RAG timing, search debug, embed calls, snippet count, user scope, failures |
@@ -120,6 +125,10 @@ Useful files when debugging WebUI / LLM / queue (all under the log dir above):
 If `Queued input...` is present but no further logs appear:
 - **Headless agent is not consuming the queue.**
 - Check `vaf/core/headless_runner.py` loop and ensure it uses `tq.get()` directly.
+
+If enqueue is accepted but task appears in a messenger session unexpectedly:
+- Check for routing guard logs: `[ROUTING_WARN]` / `[ROUTING_BLOCK]` in `headless.log`/`backend.log`.
+- Ensure frontend sends explicit `sessionId` and connection subscription is correct.
 
 If `Starting chat_step...` appears but no response:
 - **chat_step crashed or hung**.
@@ -178,7 +187,7 @@ If the tool card expands but the panel does not open:
 | `Chat_step failed ... charmap` | Windows console encoding | Set `PYTHONIOENCODING=utf-8` and reconfigure stdout/stderr |
 | `LLM Call Failed: HTTPConnectionPool(127.0.0.1:8080)` | Backend not running or duplicate server start | Restart tray; ensure only one `llama-server` is running |
 | Chat stuck after `calling_8080` (no `QUEUE_CHAT_END`) | Local server stopped sending stream data | Agent now times out after 5 min and ends the step. If it keeps happening, check model load and RAM; see **Local Server: Request Timeouts** in `docs/API_INTEGRATION.md`. |
-| Prompt is processed (`QUEUE_CHAT_END`) but Web UI shows only loader/no live answer | Stale `_server_loop` in `web_interface` (pushes are dropped with `PUSH_DROP _server_loop is NOT RUNNING`) | `WebInterfaceManager.connect()` now re-binds to the current running loop and invalid loops are auto-cleared before scheduling. Restart backend once after update. |
+| Prompt is processed (`QUEUE_CHAT_END`) but Web UI shows only loader/no live answer | Stale `_server_loop` in `web_interface` (pushes are dropped with `PUSH_DROP _server_loop is NOT RUNNING`) | `WebInterfaceManager.connect()` re-binds to the active loop, invalid loop refs are auto-cleared, and a HTTP fallback push path is used when no loop is available. Subprocess bridge events are also posted to the internal non-SSL API channel (`127.0.0.1:8005`) when TLS is enabled. |
 | Messages appear in CLI only | Headless agent not running | Ensure tray starts `run_headless_agent()` |
 | WebUI shows only system logs | `agent_message_update` filtered by session | Fix session sync and auto-load `history_update` |
 | Sub-agent window never appears | No `subagent_update` emitted | Send periodic sub-agent status updates from headless loop |

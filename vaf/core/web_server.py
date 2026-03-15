@@ -1493,7 +1493,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     except Exception as e:
         log("API", f"Could not track connection: {e}")
 
-    # If local network is DISABLED, only allow localhost
+    # If local network is DISABLED, only allow localhost and require auth token.
     if not local_network_enabled:
         if not is_localhost_client:
             log("API", f"WebSocket rejected: Local network disabled, non-localhost IP {client_ip}")
@@ -1503,28 +1503,27 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             
             await websocket.close(code=4003, reason="Local network feature is disabled")
             return
-        # Localhost - allow; if JWT cookie present, decode so we get user_scope_id for RAG
-        # Use fixed local_admin_scope_id + local_admin_username so WebSocket and HTTP API use same user (user_identity, RAG)
-        from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
-        local_admin_scope = get_local_admin_scope_id()
-        local_admin_username = get_local_admin_username()
-        user_context = {"username": local_admin_username, "role": "admin", "user_scope_id": local_admin_scope}
-        if token:
-            try:
-                from vaf.auth.crypto import get_jwt_secret
-                import jwt
-                secret = get_jwt_secret()
-                payload = jwt.decode(token, secret, algorithms=["HS256"])
-                user_context = {
-                    "user_id": payload.get("sub"),
-                    "user_scope_id": payload.get("user_scope_id") or local_admin_scope,
-                    "username": payload.get("username", local_admin_username),
-                    "role": payload.get("role", "admin"),
-                }
-                log("API", f"WebSocket (localhost) authenticated: {user_context.get('username')} (scope: {user_context.get('user_scope_id')})")
-            except Exception as e:
-                log("API", f"WebSocket (localhost) token decode failed: {e}, using Local Admin scope")
-                pass  # Keep Local Admin fallback with scope
+        if not token:
+            log("API", "WebSocket rejected: Localhost connection without token")
+            await websocket.close(code=4001, reason="Authentication required")
+            return
+        try:
+            from vaf.auth.crypto import get_jwt_secret
+            import jwt
+            secret = get_jwt_secret()
+            payload = jwt.decode(token, secret, algorithms=["HS256"])
+            user_context = {
+                "user_id": payload.get("sub"),
+                "user_scope_id": payload.get("user_scope_id"),
+                "username": payload.get("username"),
+                "role": payload.get("role"),
+                "session_id": payload.get("session_id"),
+            }
+            log("API", f"WebSocket (localhost) authenticated: {user_context.get('username')} (scope: {user_context.get('user_scope_id')})")
+        except Exception as e:
+            log("API", f"WebSocket rejected: Invalid localhost token ({e})")
+            await websocket.close(code=4001, reason="Invalid token")
+            return
     else:
         # Local network is ENABLED - authenticate network users
         try:
@@ -1540,8 +1539,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 await websocket.close(code=4003, reason="Local network only")
                 return
             
-            # Non-localhost requires token authentication
-            if not is_localhost_client and not token:
+            # Require token authentication for all network-mode clients (including localhost).
+            if not token:
                 log("API", f"WebSocket rejected: No token from {client_ip}")
                 # Keep tracked as Guest/Unauth for map visibility?
                 # Yes, but maybe mark as 'Auth Required'
@@ -1590,13 +1589,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     log("API", f"WebSocket rejected: Invalid token from {client_ip}")
                     await websocket.close(code=4001, reason="Invalid token")
                     return
-            elif is_localhost_client:
-                # Localhost without token: use fixed scope + username so RAG and user_identity match HTTP API
-                from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
-                local_admin_scope = get_local_admin_scope_id()
-                local_admin_username = get_local_admin_username()
-                user_context = {"username": local_admin_username, "role": "admin", "user_scope_id": local_admin_scope}
-            
         except ImportError:
             # Auth modules not available - still block non-localhost when disabled
             if not local_network_enabled and not is_localhost_client:
@@ -1870,7 +1862,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # Push command to main loop to switch session
                         from vaf.core.task_queue import TaskQueue
                         tq = TaskQueue()
-                        tq.add(session_id="system", input_text=f"__CMD__:LOAD_SESSION:{sid}", source="web")
+                        tq.add(
+                            session_id="system",
+                            input_text=f"__CMD__:LOAD_SESSION:{sid}",
+                            source="web",
+                            metadata={"task_class": "background"},
+                        )
                         
                         # Helper to clean historical messages (same logic as run.py)
                         import re
@@ -2017,7 +2014,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Push command to main loop to create new session
                     from vaf.core.task_queue import TaskQueue
                     tq = TaskQueue()
-                    tq.add(session_id="system", input_text="__CMD__:NEW_SESSION", source="web", metadata={"user_scope_id": user_scope_id})
+                    tq.add(
+                        session_id="system",
+                        input_text="__CMD__:NEW_SESSION",
+                        source="web",
+                        metadata={"user_scope_id": user_scope_id, "task_class": "background"},
+                    )
                     
                     # Create new session object AND SAVE IT IMMEDIATELY (temp, main loop will take over)
                     new_sess = session_mgr.new(user_scope_id=user_scope_id)
@@ -2052,7 +2054,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # Notify Main Loop to update in-memory object
                         from vaf.core.task_queue import TaskQueue
                         tq = TaskQueue()
-                        tq.add(session_id="system", input_text=f"__CMD__:RENAME_SESSION:{sid}:{new_name}", source="web")
+                        tq.add(
+                            session_id="system",
+                            input_text=f"__CMD__:RENAME_SESSION:{sid}:{new_name}",
+                            source="web",
+                            metadata={"task_class": "background"},
+                        )
                         
                         # Broadcast update ONLY to this user's connections
                         sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
@@ -2426,7 +2433,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 for scope_id, toggles in scope_toggles.items():
                                     by_scope[scope_id] = {**(by_scope.get(scope_id) or {}), **toggles}
                                 existing["connection_enabled_by_scope"] = by_scope
-                        merged = {**existing, **new_config}
+                        merged = Config.merge_preserving_nonempty_sensitive(existing, new_config)
                         Config.save(merged)
                         provider_changed = existing.get("provider") != merged.get("provider")
 
@@ -2441,7 +2448,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # Priority 1 so RELOAD_CONFIG is processed before any pending chat (priority 10)
                         from vaf.core.task_queue import TaskQueue
                         tq = TaskQueue()
-                        tq.add(session_id="system", input_text="__CMD__:RELOAD_CONFIG", source="web", priority=1)
+                        tq.add(
+                            session_id="system",
+                            input_text="__CMD__:RELOAD_CONFIG",
+                            source="web",
+                            priority=1,
+                            metadata={"task_class": "background"},
+                        )
                         await websocket.send_json({
                             "type": "config_saved",
                             "status": "success",
@@ -2538,9 +2551,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 # Append file contents to message (like CLI @filename behavior)
                                 content = content + "\n\n" + file_contents if content else file_contents
                         
-                        # Get session ID: prefer from message, then connection, then fallback
-                        session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                        # Get session ID: prefer explicit message field, then safe connection session, then fallback.
+                        requested_session_id = cmd.get("sessionId")
+                        connection_session_id = manager.get_session_for_connection(websocket)
+                        session_id = requested_session_id or connection_session_id
                         user_scope_id = manager.get_connection_user(websocket)
+                        if (
+                            not requested_session_id
+                            and isinstance(connection_session_id, str)
+                            and connection_session_id.startswith(("telegram_", "discord_", "whatsapp_"))
+                        ):
+                            # Defensive guard: never route WebUI chat into channel sessions implicitly.
+                            session_id = None
                         if not session_id:
                             # Use user-scoped default to prevent crosstalk
                             safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
@@ -2614,6 +2636,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             metadata["username"] = username
                         if user_role:
                             metadata["role"] = user_role
+                        metadata["origin_channel"] = "web"
+                        metadata["enqueue_session_id"] = str(session_id)
+                        if user_scope_id:
+                            metadata["enqueue_user_scope_id"] = str(user_scope_id)
+                        metadata["task_class"] = "interactive"
                         log("WebServer", f"Chat message from user_scope_id={user_scope_id}, username={username}")
                         # Mark user activity for thinking mode (idle detection)
                         try:
@@ -3510,11 +3537,30 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "stop_generation":
                     # Stop the current generation by setting a flag
                     from vaf.core.task_queue import TaskQueue
+                    from vaf.core.platform import Platform
                     tq = TaskQueue()
                     session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
                     if session_id:
                         tq.request_stop(session_id)
-                        log("WebServer", f"Stop requested for session {session_id}")
+                        killed = 0
+                        try:
+                            # Hard-stop any running sub-agent processes for this chat session.
+                            killed = Platform.stop_webui_subagent_processes(str(session_id))
+                        except Exception:
+                            killed = 0
+                        # Also convert active sub-agent tasks into failed results immediately.
+                        try:
+                            from vaf.core.subagent_ipc import get_ipc
+                            ipc = get_ipc()
+                            active = ipc.get_active_tasks(session_id=str(session_id))
+                            for t in active:
+                                try:
+                                    ipc.fail_task(t.task_id, "Stopped by user via stop button.")
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        log("WebServer", f"Stop requested for session {session_id}; killed_subagents={killed}")
                         await websocket.send_json({"type": "generation_stopped", "sessionId": session_id})
 
             except json.JSONDecodeError:

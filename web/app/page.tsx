@@ -1371,8 +1371,9 @@ function VAFDashboardContent() {
                 }
 
                 if (data.type === 'new_log') {
-                    const src = data.entry.source || "";
-                    const rawMsg = data.entry.message || "";
+                    const entry = data.entry || {};
+                    const src = String(entry.source || "");
+                    const rawMsg = String(entry.message || "");
                     const msgLower = rawMsg.toLowerCase();
                     const srcLower = src.toLowerCase();
                     const isSubAgentLog =
@@ -1381,14 +1382,16 @@ function VAFDashboardContent() {
                         srcLower.includes('sub-agent') ||
                         srcLower.includes('subagent');
                     if (isSubAgentLog) {
-                        const timeStamp = new Date().toISOString().slice(11, 19);
+                        const timeStamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
                         appendSubAgentLine(`[${timeStamp}] ${rawMsg}`);
                         // Only open if not already open - avoids duplicate open from tool_update + domain_log
                         if (!subAgentStateRef.current.isOpen) {
                             openSubAgentWindow(false);
                         }
                     } else if (subAgentState.isOpen && (src === 'System' || src === 'Info') && rawMsg) {
-                        const timeStamp = new Date().toISOString().slice(11, 19);
+                        // Suppress repetitive generic runner lines; detailed progress comes via subagent_update.
+                        if (/^running:\s*research agent\b/i.test(rawMsg.trim())) return;
+                        const timeStamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
                         appendSubAgentLine(`[${timeStamp}] ${src}: ${rawMsg}`);
                     }
 
@@ -1477,7 +1480,7 @@ function VAFDashboardContent() {
                         }
                     }
                     if (subAgentState.isOpen) {
-                        const timeStamp = new Date().toISOString().slice(11, 19);
+                        const timeStamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
                         const statusLabel = subType === 'start' ? 'Start' : subType === 'end' ? 'End' : 'Error';
                         const payload = eventData ? ` - ${eventData}` : '';
                         appendSubAgentLine(`[${timeStamp}] ${statusLabel}: ${name}${payload}`);
@@ -1889,7 +1892,7 @@ function VAFDashboardContent() {
                     });
 
                     if (statusLines.length > 0) {
-                        const timeStamp = new Date().toISOString().slice(11, 19);
+                        const timeStamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
                         statusLines.forEach(line => appendSubAgentLine(`[${timeStamp}] ${line}`));
                     }
 
@@ -1897,13 +1900,15 @@ function VAFDashboardContent() {
                     const presence = data.presence || subAgentState.presence;
                     const statusLower = String(data.status || '').toLowerCase();
                     const isRunning = presence === 'online' || statusLower.includes('running') || statusLower.includes('pending');
+                    const isGenericHeartbeatStatus = statusLower.startsWith('running sub-agent tasks');
                     // Don't force-reopen if user explicitly closed the panel
                     const shouldOpen = isRunning && !subAgentUserClosedRef.current;
                     setSubAgentState(prev => ({
                         ...prev,
                         isOpen: shouldOpen ? true : prev.isOpen,
                         agentName: data.agentName || prev.agentName,
-                        status: statusLine || prev.status,
+                        // Keep detailed progress text visible; don't overwrite it every second with generic heartbeat status.
+                        status: isGenericHeartbeatStatus && prev.status ? prev.status : (statusLine || prev.status),
                         presence: presence,
                         currentFile: data.file || prev.currentFile,
                         codeContent: data.code || prev.codeContent,
@@ -1953,7 +1958,7 @@ function VAFDashboardContent() {
                     if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
                     const line = typeof data.line === 'string' ? data.line : '';
                     if (line) {
-                        const timeStamp = new Date().toISOString().slice(11, 19);
+                        const timeStamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
                         const formattedLine = `[${timeStamp}] ${line}`;
                         // If workflow is running, send to workflow terminal instead of sub-agent window
                         if (isWorkflowRunningRef.current) {

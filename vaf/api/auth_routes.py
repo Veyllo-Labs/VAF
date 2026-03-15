@@ -352,6 +352,17 @@ async def login(body: LoginRequest, request: Request, response: Response):
         if not verify_password(user.password_hash, body.password or ""):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
 
+        # 2FA data may become undecryptable after key/config changes.
+        # Repair this state here so login can continue with fresh 2FA setup,
+        # instead of failing later in /verify-2fa.
+        if user.totp_secret and user.totp_nonce and not user.requires_2fa_setup:
+            try:
+                _ = decrypt_totp_secret(user.totp_secret, user.totp_nonce)
+            except Exception:
+                user.totp_secret = None
+                user.totp_nonce = None
+                user.requires_2fa_setup = True
+
         user.last_login = datetime.utcnow()
         await db.commit()
 
@@ -459,22 +470,6 @@ async def me(request: Request, response: Response):
                         _clear_auth_cookie(response)
                         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
-        # No valid token found - fallback to local admin ONLY if local network is disabled
-        if not Config.get("local_network_enabled", False):
-            client_ip = request.client.host if request.client else "unknown"
-            try:
-                from vaf.network.binding import is_localhost
-            except ImportError:
-                is_localhost = lambda ip: ip in ("127.0.0.1", "::1", "localhost")
-                
-            if is_localhost(client_ip):
-                return {
-                    "id": "local-admin",
-                    "username": get_local_admin_username(),
-                    "role": "admin",
-                    "user_scope_id": get_local_admin_scope_id(),
-                }
-        
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     except HTTPException:
         raise

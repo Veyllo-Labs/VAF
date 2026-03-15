@@ -1167,8 +1167,11 @@ class Agent:
             current_session = get_current_session_id()
             
             # 0. Liveness Check (Detect Crashed Sub-Agents)
-            # Check for zombies that haven't updated heartbeat in >20s
-            ipc.check_zombies(timeout_seconds=20)
+            # 20s is too aggressive on some systems (e.g. browser launch / heavy tool finalization)
+            # and can produce false positives. Keep configurable with a safe default.
+            hb_timeout = int(self.config.get("subagent_heartbeat_timeout_seconds", 90) or 90)
+            hb_timeout = max(20, min(600, hb_timeout))
+            ipc.check_zombies(timeout_seconds=hb_timeout)
             
             results = ipc.get_pending_results(session_id=current_session)
             return results

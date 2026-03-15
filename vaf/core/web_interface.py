@@ -400,16 +400,17 @@ class WebInterfaceManager:
     def _push_session_update(self, session_id: Optional[str], data: dict):
         """
         Thread-safe push update with session scoping.
+        Falls back to HTTP POST when the asyncio loop is unavailable (e.g. after
+        the event loop reference is invalidated between WebSocket connections).
         """
         if session_id:
             data['sessionId'] = session_id
             loop = self._get_dispatch_loop()
             if loop:
-                future = asyncio.run_coroutine_threadsafe(
+                asyncio.run_coroutine_threadsafe(
                     self.broadcast_to_session(session_id, data),
                     loop
                 )
-                # Log scheduling for key event types so we can trace if coroutine executes
                 msg_type = data.get('type', '')
                 if msg_type in ('agent_message_update', 'history_update', 'status_update'):
                     _diag_log(
@@ -417,11 +418,23 @@ class WebInterfaceManager:
                         f"loop={id(loop)} active_ws={len(self.active_connections)}"
                     )
             else:
-                # WARNING: No server loop means messages are silently dropped!
-                _diag_log(f"[PUSH_DROP] No _server_loop! type={data.get('type')} session={session_id}")
+                self._http_fallback_push(data)
         else:
-            # Fallback to global broadcast for non-session events
             self.push_update(data)
+
+    def _http_fallback_push(self, data: dict):
+        """POST to the internal API when the asyncio loop reference is stale."""
+        msg_type = data.get('type', '')
+        try:
+            import requests as _req
+            from vaf.core.config import Config
+            tls_on = Config.get("local_network_tls_enabled", False)
+            port = 8005 if tls_on else 8001
+            _req.post(f"http://127.0.0.1:{port}/api/subagent/stream", json=data, timeout=0.5)
+            _diag_log(f"[PUSH_HTTP_OK] type={msg_type} session={data.get('sessionId')} port={port}")
+        except Exception as exc:
+            _diag_log(f"[PUSH_DROP] No _server_loop + HTTP fallback failed! type={msg_type} "
+                      f"session={data.get('sessionId')} err={exc}")
 
 
 # Global Accessor
@@ -453,6 +466,9 @@ def notify_document_created(session_id: Optional[str], file_path, title: Optiona
     else:
         try:
             import requests
-            requests.post("http://127.0.0.1:8001/api/workflow/update", json=payload, timeout=1)
+            from vaf.core.config import Config
+            tls_on = Config.get("local_network_tls_enabled", False)
+            port = 8005 if tls_on else 8001
+            requests.post(f"http://127.0.0.1:{port}/api/workflow/update", json=payload, timeout=1)
         except Exception:
             pass

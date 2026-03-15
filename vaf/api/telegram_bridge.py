@@ -523,6 +523,8 @@ def _run_bot():
             "user_scope_id": user_scope_id,
             "username": vaf_username,
             "telegram_chat_id": str(chat_id),
+            "origin_channel": "telegram",
+            "task_class": "interactive",
         }
         if is_relay:
             metadata["relay"] = True
@@ -710,6 +712,8 @@ def _run_bot():
             "user_scope_id": user_scope_id,
             "username": vaf_username,
             "telegram_chat_id": str(chat_id),
+            "origin_channel": "telegram",
+            "task_class": "interactive",
         }
         if is_relay:
             metadata["relay"] = True

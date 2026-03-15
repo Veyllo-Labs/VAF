@@ -35,20 +35,17 @@ def _auto_close_countdown(delay: int = AUTO_CLOSE_DELAY):
     Show a countdown and then exit (closing the terminal).
     Cross-platform: works on Windows, Linux, macOS.
     """
-    from vaf.cli.ui import UI
-    
-    print()  # Empty line for spacing
-    
-    for remaining in range(delay, 0, -1):
-        # Use carriage return to update the same line
-        sys.stdout.write(f"\r[*] Terminal closing in {remaining} seconds...  ")
+    try:
+        print()
+        for remaining in range(delay, 0, -1):
+            sys.stdout.write(f"\r[*] Terminal closing in {remaining} seconds...  ")
+            sys.stdout.flush()
+            time.sleep(1)
+        sys.stdout.write(f"\r[OK] Terminal closing.                           \n")
         sys.stdout.flush()
-        time.sleep(1)
+    except (BrokenPipeError, OSError):
+        pass
     
-    sys.stdout.write(f"\r[OK] Terminal closing.                           \n")
-    sys.stdout.flush()
-    
-    # Exit the process - this will close the terminal if it was opened for this process
     sys.exit(0)
 
 
@@ -126,7 +123,15 @@ def run_subagent(
         except: pass
     
     success = False
-    
+
+    def _safe_print(*args, **kwargs):
+        """Print that handles pipe/encoding errors (WebUI piped stdout)."""
+        try:
+            print(*args, **kwargs)
+            sys.stdout.flush()
+        except (BrokenPipeError, OSError, IOError):
+            pass
+
     try:
         result = None
         
@@ -137,13 +142,13 @@ def run_subagent(
             if project_path:
                 kwargs["project_path"] = project_path
             result = tool.run(**kwargs)
-            print(result)
+            _safe_print(result)
             
         elif agent_type == "librarian_agent":
             from vaf.tools.librarian import LibrarianTool
             tool = LibrarianTool()
             result = tool.run(task=task)
-            print(result)
+            _safe_print(result)
             
         elif agent_type == "research_agent":
             from vaf.tools.research_agent import ResearchAgentTool
@@ -155,16 +160,14 @@ def run_subagent(
                 kwargs["max_results"] = max_results
             result = tool.run(**kwargs)
             
-            # Show result in terminal (summary, not full HTML)
-            print()
-            print("="*70)
-            print(result)
-            print("="*70)
+            _safe_print()
+            _safe_print("="*70)
+            _safe_print(result)
+            _safe_print("="*70)
         
         elif agent_type == "document_agent":
             from vaf.tools.document_agent import DocumentAgentTool
             tool = DocumentAgentTool()
-            # Long tasks are passed via IPC to avoid Windows command-line limit (~8191 chars)
             effective_task = task
             if (not effective_task or len(effective_task) < 50) and task_id and ipc:
                 payload = ipc.get_task_payload(task_id)
@@ -172,41 +175,41 @@ def run_subagent(
                     effective_task = payload
             result = tool.run(task=effective_task)
             
-            # Show result in terminal
-            print()
-            print("="*70)
-            print(result)
-            print("="*70)
+            _safe_print()
+            _safe_print("="*70)
+            _safe_print(result)
+            _safe_print("="*70)
             
         else:
-            UI.error(f"Unknown sub-agent type: {agent_type}")
+            try:
+                UI.error(f"Unknown sub-agent type: {agent_type}")
+            except (BrokenPipeError, OSError):
+                pass
             if ipc and task_id:
                 ipc.fail_task(task_id, f"Unknown sub-agent type: {agent_type}")
                 if lg:
                     lg.event("ipc_fail_task", ok=True, error="Unknown sub-agent type")
             
-            # Auto-close even on error
             if not no_auto_close:
                 _auto_close_countdown()
             sys.exit(1)
         
-        # Report success to IPC
+        # IPC first (file I/O) - MUST happen before any stdout writes
         if ipc and task_id and result:
             ipc.complete_task(task_id, result)
-            UI.success(f"[OK] Result sent to Main Agent [Task: {task_id}]")
             if lg:
                 lg.event("ipc_complete_task", ok=True, **summarize_result(result))
+            try:
+                UI.success(f"[OK] Result sent to Main Agent [Task: {task_id}]")
+            except (BrokenPipeError, OSError):
+                pass
         elif lg:
-            # Some tools may return empty string; still log end-of-run.
             lg.event("subagent_result_empty_or_none", ok=True, **summarize_result(result))
         
         success = True
             
     except Exception as e:
         error_msg = str(e)
-        UI.error(f"Sub-agent execution failed: {error_msg}")
-        import traceback
-        traceback.print_exc()
         if lg:
             lg.event(
                 "subagent_exception",
@@ -215,11 +218,20 @@ def run_subagent(
                 traceback=traceback.format_exc()[:4000],
             )
         
-        # Report failure to IPC
+        # IPC first (file I/O) - MUST happen before any stdout writes
         if ipc and task_id:
-            ipc.fail_task(task_id, error_msg)
-            if lg:
-                lg.event("ipc_fail_task", ok=True, error=error_msg)
+            try:
+                ipc.fail_task(task_id, error_msg)
+                if lg:
+                    lg.event("ipc_fail_task", ok=True, error=error_msg)
+            except Exception:
+                pass
+        
+        try:
+            UI.error(f"Sub-agent execution failed: {error_msg}")
+            traceback.print_exc()
+        except (BrokenPipeError, OSError):
+            pass
     
     # Auto-close terminal after completion (success or failure)
     if not no_auto_close:

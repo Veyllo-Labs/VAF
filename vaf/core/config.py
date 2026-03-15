@@ -106,6 +106,11 @@ class Config:
         "server_persistence_enabled": False,   # Keep server running after exit
         "tray_autostart": False,               # Auto-start tray on OS login
         "debug_logs_enabled": False,           # Write domain logs and queue.log when enabled; off by default to reduce I/O
+        "parallel_main_workers": 1,            # Main headless workers (1=legacy serialized, 2=weighted-fair parallel)
+        "queue_policy": "legacy",              # legacy | weighted_fair
+        "queue_weight_interactive": 5,         # Used when queue_policy=weighted_fair
+        "queue_weight_automation": 3,          # Used when queue_policy=weighted_fair
+        "queue_weight_background": 1,          # Used when queue_policy=weighted_fair
         "server_idle_timeout": 15,             # Unload local model after idle seconds (Web UI / CLI)
         "telegram_idle_timeout": 120,          # Keep model loaded this long after last Telegram prompt when no Web connections (seconds)
         "telegram_debounce_seconds": 5,        # Wait this long for follow-up messages; combine into one prompt per chat
@@ -382,6 +387,35 @@ class Config:
             out["discord_config"] = None
 
         return out
+
+    @classmethod
+    def merge_preserving_nonempty_sensitive(cls, existing: dict, incoming: dict) -> dict:
+        """
+        Merge config updates while preventing accidental destructive overwrites.
+
+        Safety rules:
+        - Keep existing API keys if incoming value is empty/blank.
+        - Keep existing connection configs if incoming value is None.
+        """
+        merged = dict(existing or {})
+        if not isinstance(incoming, dict):
+            return merged
+
+        for key, value in incoming.items():
+            if key.startswith("api_key_"):
+                if isinstance(value, str) and not value.strip():
+                    if (existing or {}).get(key):
+                        continue
+                if value is None and (existing or {}).get(key):
+                    continue
+
+            if key in cls.CONNECTION_CONFIG_KEYS:
+                if value is None and isinstance((existing or {}).get(key), dict):
+                    continue
+
+            merged[key] = value
+
+        return merged
 
     @classmethod
     def save(cls, config: dict):

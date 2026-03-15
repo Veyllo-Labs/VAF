@@ -8,6 +8,7 @@ import platform
 import shutil
 import shlex
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 import webbrowser
@@ -534,6 +535,15 @@ class Platform:
                 # Copy current environment and ensure all VAF_ vars are passed
                 env = os.environ.copy()
 
+                # stdout is piped (not a real terminal), so Rich Live TUI would
+                # flood the pipe buffer (4 KB on Windows) and deadlock the process.
+                env["VAF_NONINTERACTIVE"] = "1"
+
+                # Force Python to use unbuffered stdout in the child process.
+                # Without this, piped stdout uses ~8 KB full buffering and the
+                # parent's _stream_output thread sees nothing until the child exits.
+                env["PYTHONUNBUFFERED"] = "1"
+
                 # Log the command being executed for debugging
                 import logging
                 logger = logging.getLogger("vaf.platform")
@@ -552,6 +562,13 @@ class Platform:
                     start_new_session=True,
                     env=env  # Explicitly pass environment
                 )
+                # Track spawned sub-agent process for hard-stop from Web UI.
+                Platform.register_webui_subagent_process(
+                    proc=proc,
+                    session_id=os.environ.get("VAF_SESSION_ID", "").strip() or None,
+                    task_id=os.environ.get("VAF_TASK_ID", "").strip() or None,
+                    command=command,
+                )
                 try:
                     import requests
                     from vaf.core.config import Config
@@ -559,21 +576,25 @@ class Platform:
                     task_id = os.environ.get("VAF_TASK_ID", "").strip()
                     agent_type = os.environ.get("VAF_AGENT_TYPE", "").strip()
 
-                    # Helper to send updates via HTTP to the WebServer
-                    # This works across processes (unlike direct singleton calls)
+                    # Resolve correct internal API port: when TLS is active the
+                    # main backend on 8001 expects HTTPS; the non-SSL internal
+                    # channel runs on 8005 instead.
+                    tls_on = Config.get("local_network_tls_enabled", False)
+                    _api_port = 8005 if tls_on else 8001
+                    _api_base = f"http://127.0.0.1:{_api_port}"
+
                     def _send_web_update(data: dict):
                         if not session_id:
                             return
                         try:
                             data["sessionId"] = session_id
-                            # Use the internal API endpoint for subagent updates
                             requests.post(
-                                "http://127.0.0.1:8001/api/subagent/stream",
+                                f"{_api_base}/api/subagent/stream",
                                 json=data,
                                 timeout=0.5
                             )
                         except Exception:
-                            pass  # Don't block on WebUI errors
+                            pass
 
                     if session_id and (task_id or agent_type):
                         title = (agent_type or "Sub-Agent").replace("_", " ").title()
@@ -609,20 +630,26 @@ class Platform:
                         if not proc.stdout:
                             return
                         output_lines = []
-                        for line in proc.stdout:
-                            clean = line.rstrip("\r\n")
-                            if not clean:
-                                continue
-                            output_lines.append(clean)
-                            _send_web_update({
-                                "type": "subagent_output_stream",
-                                "taskId": task_id or None,
-                                "agentType": agent_type or None,
-                                "line": clean
-                            })
+                        try:
+                            for line in proc.stdout:
+                                clean = line.rstrip("\r\n")
+                                if not clean:
+                                    continue
+                                output_lines.append(clean)
+                                _send_web_update({
+                                    "type": "subagent_output_stream",
+                                    "taskId": task_id or None,
+                                    "agentType": agent_type or None,
+                                    "line": clean
+                                })
+                        except (ValueError, OSError):
+                            pass
 
-                        # After stdout closes, check if process exited with error
                         proc.wait()
+                        try:
+                            Platform.unregister_webui_subagent_process(proc.pid)
+                        except Exception:
+                            pass
                         if proc.returncode != 0:
                             error_msg = f"Sub-agent process exited with code {proc.returncode}"
                             if output_lines:
@@ -704,6 +731,106 @@ class Platform:
                 
         except Exception:
             return False
+
+    # Registry of sub-agent processes spawned from WebUI path.
+    # Key: pid, Value: metadata dict
+    _webui_subagent_processes: Dict[int, Dict[str, Any]] = {}
+    _webui_subagent_lock = None
+
+    @staticmethod
+    def _get_webui_subagent_lock():
+        if Platform._webui_subagent_lock is None:
+            import threading
+            Platform._webui_subagent_lock = threading.Lock()
+        return Platform._webui_subagent_lock
+
+    @staticmethod
+    def register_webui_subagent_process(proc, session_id: Optional[str], task_id: Optional[str], command: str) -> None:
+        """Register a spawned WebUI sub-agent process for stop/cancel handling."""
+        if not proc or not getattr(proc, "pid", None):
+            return
+        lock = Platform._get_webui_subagent_lock()
+        with lock:
+            Platform._webui_subagent_processes[int(proc.pid)] = {
+                "session_id": (session_id or "").strip(),
+                "task_id": (task_id or "").strip(),
+                "command": str(command or ""),
+                "created_at": time.time(),
+            }
+
+    @staticmethod
+    def unregister_webui_subagent_process(pid: int) -> None:
+        lock = Platform._get_webui_subagent_lock()
+        with lock:
+            Platform._webui_subagent_processes.pop(int(pid), None)
+
+    @staticmethod
+    def stop_webui_subagent_processes(session_id: str = None) -> int:
+        """
+        Hard-stop tracked WebUI sub-agent processes.
+        If session_id is None, stops ALL tracked processes (used on startup).
+        If session_id is given, stops only processes for that session.
+        Returns number of processes targeted.
+        """
+        lock = Platform._get_webui_subagent_lock()
+        with lock:
+            if session_id is None:
+                matches = list(Platform._webui_subagent_processes.items())
+            else:
+                sid = (session_id or "").strip()
+                if not sid:
+                    return 0
+                matches = [
+                    (pid, meta)
+                    for pid, meta in Platform._webui_subagent_processes.items()
+                    if (meta.get("session_id") or "").strip() == sid
+                ]
+        if not matches:
+            return 0
+
+        stopped = 0
+        for pid, _meta in matches:
+            try:
+                try:
+                    import psutil  # type: ignore
+                    p = psutil.Process(pid)
+                    children = p.children(recursive=True)
+                    for c in children:
+                        try:
+                            c.terminate()
+                        except Exception:
+                            pass
+                    try:
+                        p.terminate()
+                    except Exception:
+                        pass
+                    # Give processes a brief grace period
+                    gone, alive = psutil.wait_procs([p] + children, timeout=1.5)
+                    for a in alive:
+                        try:
+                            a.kill()
+                        except Exception:
+                            pass
+                except Exception:
+                    # Fallback without psutil
+                    if Platform.is_windows():
+                        subprocess.run(
+                            ["taskkill", "/PID", str(pid), "/T", "/F"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=False,
+                        )
+                    else:
+                        os.kill(pid, 15)
+                stopped += 1
+            except Exception:
+                pass
+            finally:
+                try:
+                    Platform.unregister_webui_subagent_process(pid)
+                except Exception:
+                    pass
+        return stopped
     
     # ═══════════════════════════════════════════════════════════════════════════
     # PATHS

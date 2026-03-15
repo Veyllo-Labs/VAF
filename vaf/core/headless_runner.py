@@ -216,7 +216,7 @@ def _maybe_open_draft_in_editor(session_id: str, user_input: str, response_text:
         pass
 
 
-def run_headless_agent():
+def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     """
     Run a headless agent loop that processes tasks from the TaskQueue.
     This is designed to run in a background thread within the Tray App.
@@ -224,20 +224,52 @@ def run_headless_agent():
     # IMMEDIATE: Create log dir and write startup marker (consolidated in headless_YYYY-MM-DD.log)
     log_dir = get_app_log_dir()
     try:
-        append_domain_log("headless", "[STARTUP] Headless Runner STARTING")
-        append_domain_log("headless", f"[STARTUP] PID: {os.getpid()}")
+        append_domain_log("headless", f"[STARTUP] Headless Runner STARTING (worker={worker_id}/{total_workers})")
+        append_domain_log("headless", f"[STARTUP] PID: {os.getpid()} worker={worker_id}")
         append_domain_log("headless", f"[STARTUP] Log dir: {log_dir}")
     except Exception as e:
         print(f"[Headless] Failed to write startup log: {e}")
 
+    # Clean up ALL IPC queues from previous runs.
+    # Active/pending tasks from a dead process can never complete,
+    # and completed results from old sessions confuse the new agent.
+    if worker_id == 1:
+        try:
+            from vaf.core.subagent_ipc import get_ipc
+            ipc = get_ipc()
+            stale_active = ipc._read_json(ipc.active_file)
+            stale_pending = ipc._read_json(ipc.pending_file)
+            stale_results = ipc._read_json(ipc.results_file)
+            total = len(stale_active) + len(stale_pending) + len(stale_results)
+            if total:
+                ipc.clear_all()
+                append_domain_log("headless", f"[STARTUP] Cleared {total} stale IPC entries "
+                                  f"(active={len(stale_active)}, pending={len(stale_pending)}, "
+                                  f"results={len(stale_results)})")
+                print(f"[Headless] Cleared {total} stale IPC entries from previous run")
+        except Exception as e:
+            print(f"[Headless] IPC cleanup failed (non-critical): {e}")
+
+    # Kill leftover sub-agent processes from previous runs.
+    if worker_id == 1:
+        try:
+            from vaf.core.platform import Platform
+            killed = Platform.stop_webui_subagent_processes(session_id=None)
+            if killed:
+                append_domain_log("headless", f"[STARTUP] Killed {killed} stale sub-agent processes")
+                print(f"[Headless] Killed {killed} stale sub-agent processes")
+        except Exception as e:
+            print(f"[Headless] Stale process cleanup failed (non-critical): {e}")
+
     # Start Memory Profiler IMMEDIATELY
-    try:
-        from vaf.core.memory_profiler import start_profiler
-        start_profiler()
-        print(f"[Headless] Memory Profiler started - logging to {get_dated_log_path('memory', 'log')}")
-    except Exception as e:
-        print(f"[Headless] Memory Profiler failed to start: {e}")
-        append_domain_log("headless", f"[STARTUP] Memory Profiler FAILED: {e}")
+    if worker_id == 1:
+        try:
+            from vaf.core.memory_profiler import start_profiler
+            start_profiler()
+            print(f"[Headless] Memory Profiler started - logging to {get_dated_log_path('memory', 'log')}")
+        except Exception as e:
+            print(f"[Headless] Memory Profiler failed to start: {e}")
+            append_domain_log("headless", f"[STARTUP] Memory Profiler FAILED: {e}")
 
     # Ensure UTF-8 output to avoid Windows charmap crashes
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
@@ -258,12 +290,14 @@ def run_headless_agent():
             agent = Agent(verbose=False, register_signals=False)
             agent.init_chat()
 
-            # Register with Web Interface
-            get_web_interface().register_agent(agent)
+            # Register with Web Interface (single owner to avoid pointer races)
+            if worker_id == 1:
+                get_web_interface().register_agent(agent)
 
-            print("[Headless] Agent initialized and ready.")
+            print(f"[Headless] Agent initialized and ready (worker={worker_id}).")
             try:
-                get_web_interface().log("Headless agent initialized and ready.", level="info", source="System")
+                if worker_id == 1:
+                    get_web_interface().log("Headless agent initialized and ready.", level="info", source="System")
                 # Send initial token stats so WebUI shows context usage immediately
                 used, total = agent.get_token_usage()
                 api_backend = getattr(agent, 'api_backend', None)
@@ -284,7 +318,8 @@ def run_headless_agent():
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens
                 }
-                get_web_interface().emit_stats(stats)
+                if worker_id == 1:
+                    get_web_interface().emit_stats(stats)
             except Exception:
                 pass
         except Exception as e:
@@ -305,11 +340,29 @@ def run_headless_agent():
     last_subagent_check = 0.0
     last_subagent_ui_update = 0.0
     last_memory_check = 0.0
+    last_queue_metrics = 0.0
     waited_for_server_ready = False  # Wait for 8080 to return 200 before first chat (avoids 503)
     open_subagent_sessions = set()
     subagent_last_activity = {}
     subagent_last_steps = {}
     from vaf.core.config import Config
+
+    # Optional parallel worker pool (safe rollout via config).
+    if worker_id == 1 and total_workers == 1:
+        try:
+            cfg = Config.load()
+            policy = str(cfg.get("queue_policy", "legacy") or "legacy").strip().lower()
+            worker_count = int(cfg.get("parallel_main_workers", 1) or 1)
+            if policy == "weighted_fair" and worker_count > 1:
+                for wid in range(2, worker_count + 1):
+                    threading.Thread(
+                        target=run_headless_agent,
+                        kwargs={"worker_id": wid, "total_workers": worker_count},
+                        daemon=True,
+                    ).start()
+                append_domain_log("headless", f"[STARTUP] Spawned {worker_count - 1} additional worker(s)")
+        except Exception as e:
+            append_domain_log("headless", f"[STARTUP] Worker spawn skipped: {e}")
 
     def _check_and_cleanup_memory():
         """Check memory usage and cleanup if needed."""
@@ -402,6 +455,29 @@ def run_headless_agent():
         return effective_provider, model
     while True:
         try:
+            if worker_id == 1:
+                _now = time.time()
+                if _now - last_queue_metrics >= 2.0:
+                    last_queue_metrics = _now
+                    try:
+                        qstats = tq.get_queue_stats()
+                        append_domain_log(
+                            "queue",
+                            "[METRICS] "
+                            f"interactive={qstats.get('interactive', 0)} "
+                            f"automation={qstats.get('automation', 0)} "
+                            f"background={qstats.get('background', 0)} "
+                            f"inflight_total={qstats.get('inflight_total', 0)} "
+                            f"inflight_sessions={qstats.get('inflight_sessions', 0)}"
+                        )
+                        get_web_interface().push_update(
+                            {
+                                "type": "queue_stats",
+                                "stats": qstats,
+                            }
+                        )
+                    except Exception:
+                        pass
             # check for tasks
             task = tq.get()
             if task:
@@ -424,6 +500,28 @@ def run_headless_agent():
 
                 # Set current user from task metadata before load_session_context so init_chat/build_prompt get User identity
                 meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                # Defensive session/source integrity checks.
+                try:
+                    expected_sid = str(meta.get("enqueue_session_id") or "").strip()
+                    if expected_sid and str(task.session_id) != expected_sid:
+                        append_domain_log(
+                            "headless",
+                            f"[ROUTING_WARN] session mismatch: task.session_id={task.session_id} "
+                            f"metadata.enqueue_session_id={expected_sid} source={getattr(task, 'source', '')}",
+                        )
+                    source = str(getattr(task, "source", "") or "").strip().lower()
+                    if source == "web" and str(task.session_id).startswith(("telegram_", "discord_", "whatsapp_")):
+                        append_domain_log(
+                            "headless",
+                            f"[ROUTING_BLOCK] Dropping cross-channel task from web to {task.session_id}",
+                        )
+                        try:
+                            tq.task_done(task=task)
+                        except Exception:
+                            tq.task_done()
+                        continue
+                except Exception:
+                    pass
                 agent._current_user_scope_id = meta.get("user_scope_id")
                 agent._current_username = meta.get("username")
                 agent._current_user_role = meta.get("role")
@@ -605,9 +703,8 @@ def run_headless_agent():
                         waited_for_server_ready = True  # don't block forever
 
                 # Normal Chat Step
-                # Clear any prior stop request so this task runs (e.g. after a previous stop)
-                tq.clear_stop(task.session_id)
-                # If user already requested stop (e.g. double-click), skip starting chat_step
+                # If user requested stop, skip starting chat_step for this queued task.
+                # NOTE: do NOT clear before checking; that would drop the stop signal.
                 if tq.should_stop(task.session_id):
                     tq.clear_stop(task.session_id)
                     try:
@@ -865,13 +962,30 @@ def run_headless_agent():
                     # Workflows are for the account owner in Web/CLI; contact chat should be normal LLM reply only.
                     task_source = getattr(task, "source", None) or ""
                     disable_workflows = str(task_source).lower() in ("whatsapp", "telegram", "discord")
-                    response = agent.chat_step(
-                        user_input=effective_input,
-                        stream_callback=webui_stream_callback,  # Stream to WebUI!
-                        skip_input=False,
-                        disable_workflows=disable_workflows,
-                        memory_context=memory_context or None,
-                    )
+
+                    # Keep WebUI sub-agents inside the WebUI panel (no host terminal popups)
+                    # even after restarts where global env flags may be unset.
+                    task_meta_for_env = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                    origin_channel = str(task_meta_for_env.get("origin_channel") or "").strip().lower()
+                    source_channel = str(task_source).strip().lower()
+                    prev_webui_active = os.environ.get("VAF_WEBUI_ACTIVE")
+                    force_webui_active = origin_channel == "web" or source_channel == "web"
+                    try:
+                        if force_webui_active:
+                            os.environ["VAF_WEBUI_ACTIVE"] = "1"
+                        response = agent.chat_step(
+                            user_input=effective_input,
+                            stream_callback=webui_stream_callback,  # Stream to WebUI!
+                            skip_input=False,
+                            disable_workflows=disable_workflows,
+                            memory_context=memory_context or None,
+                        )
+                    finally:
+                        if force_webui_active:
+                            if prev_webui_active is None:
+                                os.environ.pop("VAF_WEBUI_ACTIVE", None)
+                            else:
+                                os.environ["VAF_WEBUI_ACTIVE"] = prev_webui_active
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt
@@ -1349,6 +1463,10 @@ def run_headless_agent():
                     pass
                 tq.task_done()
             else:
+                # Background maintenance runs only on primary worker to avoid duplicates.
+                if worker_id != 1:
+                    time.sleep(0.05)
+                    continue
                 # Periodically check for sub-agent results and summarize for WebUI
                 now = time.time()
                 if now - last_subagent_check >= 1.0:
@@ -1575,12 +1693,21 @@ def run_headless_agent():
                                 open_subagent_sessions.add(sid)
                                 provider, model = _get_subagent_model_info()
                                 steps = []
+                                heartbeat_ages = []
                                 for task in tasks:
                                     status = "running"
                                     if task.status == "completed":
                                         status = "completed"
                                     elif task.status == "pending":
                                         status = "pending"
+                                    try:
+                                        hb = getattr(task, "last_heartbeat", None)
+                                        if hb:
+                                            from datetime import datetime as _dt
+                                            age = max(0.0, (now - _dt.fromisoformat(hb).timestamp()))
+                                            heartbeat_ages.append(int(age))
+                                    except Exception:
+                                        pass
                                     steps.append({
                                         "id": task.task_id,
                                         "title": task.agent_type.replace("_", " ").title(),
@@ -1590,10 +1717,13 @@ def run_headless_agent():
                                     })
 
                                 subagent_last_steps[sid] = steps
+                                hb_status = ""
+                                if heartbeat_ages:
+                                    hb_status = f" (heartbeat {min(heartbeat_ages)}s ago)"
                                 get_web_interface()._push_session_update(sid, {
                                     "type": "subagent_update",
                                     "agentName": "Sub-Agent",
-                                    "status": "Running sub-agent tasks...",
+                                    "status": f"Running sub-agent tasks...{hb_status}",
                                     "presence": "online",
                                     "provider": provider,
                                     "model": model,

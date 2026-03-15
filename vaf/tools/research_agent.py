@@ -569,6 +569,51 @@ class ResearchAgentTool(BaseTool):
         # Pass debug_logger to inner function via closure
         _debug_lg = debug_logger
 
+        if _debug_lg:
+            _debug_lg.event("research_agent_config",
+                            use_live=use_live, is_tty=is_tty, noninteractive=noninteractive,
+                            in_workflow=in_workflow, is_fragment_mode=is_fragment_mode,
+                            console_is_terminal=UI.console.is_terminal,
+                            webui_active=os.environ.get("VAF_WEBUI_ACTIVE", ""),
+                            in_subagent_terminal=os.environ.get("VAF_IN_SUBAGENT_TERMINAL", ""))
+
+        def _emit_progress(message: str, style: str = "dim") -> None:
+            """Emit progress in a way that is visible in WebUI sub-agent stream."""
+            if use_live:
+                return
+            session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+            task_id = os.environ.get("VAF_TASK_ID", "").strip()
+
+            # Direct WebUI status update for sub-agent panel (works even when stdout/new_log rendering differs).
+            if session_id:
+                try:
+                    tls_on = Config.get("local_network_tls_enabled", False)
+                    port = 8005 if tls_on else 8001
+                    requests.post(
+                        f"http://127.0.0.1:{port}/api/subagent/stream",
+                        json={
+                            "type": "subagent_update",
+                            "sessionId": session_id,
+                            "taskId": task_id or None,
+                            "agentName": "Research Agent",
+                            "status": message,
+                            "presence": "online",
+                        },
+                        timeout=0.4,
+                    )
+                except Exception:
+                    pass
+            try:
+                # In WebUI sub-agent runs, plain stdout is the most reliable channel.
+                if noninteractive or (os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes")):
+                    print(f"[Research] {message}", flush=True)
+                else:
+                    UI.event("Research", message, style=style)
+            except (BrokenPipeError, OSError):
+                pass
+            except Exception:
+                pass
+
         def _run_research_loop() -> str:
             nonlocal _debug_lg
             tui.set_stage(f"Starting (lang={lang})")
@@ -576,8 +621,7 @@ class ResearchAgentTool(BaseTool):
             if _debug_lg:
                 _debug_lg.event("research_loop_start", topic=topic, lang=lang, num_sections=len(specs),
                                section_titles=[s.title for s in specs])
-            if in_workflow and not use_live:
-                UI.event("Research", f"Starting research: {topic}", style="dim")
+            _emit_progress(f"Starting research: {topic}", style="dim")
 
             # 🛡️ CHECKPOINT SETUP
             checkpoint_dir = Path(".vaf/tmp/research_checkpoints")
@@ -604,8 +648,7 @@ class ResearchAgentTool(BaseTool):
                 
                 if section_checkpoint.exists():
                     tui.log(f"Resume: {spec.title}")
-                    if in_workflow and not use_live:
-                        UI.event("Research", f"[{idx}/{len(specs)}] {spec.title}: (resumed from cache)", style="dim")
+                    _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: (resumed from cache)", style="dim")
                     try:
                         section_html = section_checkpoint.read_text(encoding="utf-8")
                         rendered_sections.append(section_html)
@@ -624,8 +667,7 @@ class ResearchAgentTool(BaseTool):
                 if _debug_lg:
                     _debug_lg.event("section_start", section_idx=idx, section_title=spec.title,
                                    query=section_query[:200])
-                if in_workflow and not use_live:
-                    UI.event("Research", f"[{idx}/{len(specs)}] {spec.title}: searching sources...", style="dim")
+                _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: searching sources...", style="dim")
 
                 # Get raw results for trust filtering (fetch more initially to have buffer)
                 raw_results = None
@@ -695,8 +737,7 @@ class ResearchAgentTool(BaseTool):
                 except: pass
 
                 tui.set_stage("Summarizing")
-                if in_workflow and not use_live:
-                    UI.event("Research", f"[{idx}/{len(specs)}] {spec.title}: summarizing...", style="dim")
+                _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: summarizing...", style="dim")
                 section_html = self._summarize_section_html(
                     topic=topic,
                     title=spec.title,
@@ -718,8 +759,7 @@ class ResearchAgentTool(BaseTool):
                 if is_empty:
                     tui.set_stage("Retry (deep search)")
                     tui.log(f"retry: {spec.title} (empty/too thin)")
-                    if in_workflow and not use_live:
-                        UI.event("Research", f"[{idx}/{len(specs)}] {spec.title}: retrying (deeper search)...", style="dim")
+                    _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: retrying (deeper search)...", style="dim")
                     # Retry with trust filtering (but allow lower quality if needed)
                     retry_raw = web.run(query=section_query, max_results=min(15, max_results + 5), deep=True, open_in_browser=False, return_raw=True)
                     if not isinstance(retry_raw, list):
@@ -759,8 +799,7 @@ class ResearchAgentTool(BaseTool):
                 if is_short:
                     tui.set_stage("Append expand")
                     tui.log(f"append: {spec.title} ({word_count} words)")
-                    if in_workflow and not use_live:
-                        UI.event("Research", f"[{idx}/{len(specs)}] {spec.title}: expanding content...", style="dim")
+                    _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: expanding content...", style="dim")
                     section_html = self._summarize_section_html(
                         topic=topic,
                         title=spec.title,
@@ -835,27 +874,54 @@ class ResearchAgentTool(BaseTool):
                 if _debug_lg:
                     _debug_lg.event("report_saved", output_path=str(output_path))
 
-                UI.success(f"Research saved: {output_path}")
-                
-                # Open in browser automatically
-                # Convert Windows backslashes to forward slashes for file:/// URL
-                abs_path = output_path.absolute()
-                file_url = f"file:///{abs_path.as_posix()}"
-                
-                if Platform.open_url(file_url, incognito=True):
-                    UI.event("Browser", f"Opened: {filename}", style="success")
-                else:
-                    UI.warning("Could not auto-open browser. Open manually:")
-                    UI.info(str(abs_path))
-                
-                # Return SHORT SUMMARY for Main Agent (not full HTML!)
+                try:
+                    UI.success(f"Research saved: {output_path}")
+                except (BrokenPipeError, OSError):
+                    pass
+
+                if _debug_lg:
+                    _debug_lg.event("post_report_saved_ui_done")
+
+                # Only open browser when running locally (not in WebUI/network mode
+                # where the browser would open on the server, not on the client).
+                webui_mode = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
+                open_result = {"done": False, "ok": False}
+
+                if not webui_mode:
+                    abs_path = output_path.absolute()
+                    file_url = f"file:///{abs_path.as_posix()}"
+
+                    def _open_report() -> None:
+                        try:
+                            open_result["ok"] = bool(Platform.open_url(file_url, incognito=True))
+                        except Exception:
+                            open_result["ok"] = False
+                        finally:
+                            open_result["done"] = True
+
+                    opener = threading.Thread(target=_open_report, daemon=True)
+                    opener.start()
+                    opener.join(timeout=2.0)
+
+                if _debug_lg:
+                    _debug_lg.event("post_open_url", done=open_result["done"], ok=open_result["ok"],
+                                   skipped_webui=webui_mode)
+
+                try:
+                    if not webui_mode and open_result["done"] and open_result["ok"]:
+                        UI.event("Browser", f"Opened: {filename}", style="success")
+                    else:
+                        UI.info(f"Report: {output_path}")
+                except (BrokenPipeError, OSError):
+                    pass
+
                 word_count = sum(len(s.split()) for s in rendered_sections)
                 summary = (
-                    f"✅ Research Report: {topic}\n\n"
-                    f"📄 Saved to: {output_path}\n"
-                    f"📊 {len(rendered_sections)} sections, ~{word_count} words\n"
-                    f"🔗 {len(all_sources)} sources analyzed\n\n"
-                    f"The report has been opened in your browser."
+                    f"Research Report: {topic}\n\n"
+                    f"Saved to: {output_path}\n"
+                    f"{len(rendered_sections)} sections, ~{word_count} words\n"
+                    f"{len(all_sources)} sources analyzed\n\n"
+                    f"The report was saved successfully."
                 )
                 if _debug_lg:
                     _debug_lg.event("research_complete", output_path=str(output_path),
@@ -863,19 +929,18 @@ class ResearchAgentTool(BaseTool):
                 return summary
             else:
                 # Direct call (not sub-agent): return full HTML as before
-                if in_workflow and not use_live:
-                    UI.event("Research", "Research completed.", style="success")
+                _emit_progress("Research completed.", style="success")
                 if _debug_lg:
                     _debug_lg.event("research_complete_inline", html_len=len(html),
                                    num_sections=len(rendered_sections))
                 return html
 
         if not use_live:
-            # No Live: In workflow mode we emit progress events above.
-            # Outside workflow mode, print one static render for user feedback.
             if not in_workflow:
                 try:
                     UI.console.print(tui.render())
+                except (BrokenPipeError, OSError):
+                    pass
                 except Exception:
                     pass
             return _run_research_loop()
@@ -1027,8 +1092,6 @@ class ResearchAgentTool(BaseTool):
                 return f"<h2>{title}</h2><p><em>Keine ausreichenden Suchergebnisse für diesen Abschnitt gefunden.</em></p>"
             return f"<h2>{title}</h2><p><em>Insufficient search results found for this section.</em></p>"
 
-        model_name = Config.get("model", "") or ""
-        
         # Robust language instruction supporting all detected languages (ISO codes like DE, FR, ES, etc.)
         lang_upper = lang.upper()
         lang_instruction = (
@@ -1095,65 +1158,23 @@ class ResearchAgentTool(BaseTool):
                 + "\n".join(sources[:6])
             )
 
-        def call(max_tokens: int, temperature: float) -> str:
+        def call(prompt_text: str, max_tokens: int, temperature: float) -> str:
+            """Provider-aware section generation (local or API), no hardcoded endpoint."""
             try:
-                res = requests.post(
-                    "http://127.0.0.1:8080/v1/chat/completions",
-                    json={
-                        "model": model_name,
-                        "messages": [
-                            {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
-                            {"role": "user", "content": prompt},
-                        ],
-                        "max_tokens": max_tokens,
-                        "temperature": temperature,
-                    },
-                    timeout=90,
+                content = self.query_llm(
+                    messages=[
+                        {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
+                        {"role": "user", "content": prompt_text},
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=temperature,
                 )
-                # Handle Context Size Error (400) - truncate prompt and retry
-                if res.status_code == 400:
-                    try:
-                        error_data = res.json()
-                        error_msg = error_data.get("error", {}).get("message", "")
-                        if "exceed_context_size" in error_msg.lower() or "exceed" in error_msg.lower():
-                            # Truncate prompt significantly and retry once
-                            truncated_prompt = prompt[:len(prompt)//2]  # Cut in half
-                            retry_res = requests.post(
-                                "http://127.0.0.1:8080/v1/chat/completions",
-                                json={
-                                    "model": model_name,
-                                    "messages": [
-                                        {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
-                                        {"role": "user", "content": truncated_prompt},
-                                    ],
-                                    "max_tokens": max_tokens,
-                                    "temperature": temperature,
-                                },
-                                timeout=90,
-                            )
-                            if retry_res.status_code == 200:
-                                msg = retry_res.json()["choices"][0]["message"]
-                                return (msg.get("content") or "").strip()
-                            # If retry also fails, return error
-                            err = (retry_res.text or "")[:250]
-                            return f"<h2>{title}</h2><p><strong>Error:</strong> Context too large even after truncation: {err}</p>"
-                    except (json.JSONDecodeError, KeyError, ValueError, requests.exceptions.RequestException):
-                        pass  # Not a context size error or retry failed, fall through to normal error handling
-                
-                if res.status_code != 200:
-                    err = (res.text or "")[:250]
-                    return f"<h2>{title}</h2><p><strong>Error:</strong> Server returned {res.status_code}: {err}</p>"
-                msg = res.json()["choices"][0]["message"]
-                return (msg.get("content") or "").strip()
-            except requests.exceptions.Timeout:
-                return f"<h2>{title}</h2><p><strong>Error:</strong> Request timeout (90s). The model may be overloaded.</p>"
-            except requests.exceptions.RequestException as e:
-                return f"<h2>{title}</h2><p><strong>Error:</strong> Connection error: {str(e)[:200]}</p>"
-            except Exception as e:
-                return f"<h2>{title}</h2><p><strong>Error:</strong> Unexpected error: {str(e)[:200]}</p>"
+                return (content or "").strip()
+            except Exception:
+                return ""
 
         try:
-            content = call(max_tokens=2200, temperature=0.2)
+            content = call(prompt_text=prompt, max_tokens=2200, temperature=0.2)
             content = _strip_answer_artifacts(content)
             content = _strip_untrusted_links(content, sources)
             if content:
@@ -1161,58 +1182,11 @@ class ResearchAgentTool(BaseTool):
 
             # Retry once with slightly different settings and a shorter web_results payload.
             retry_prompt = prompt.replace(web_results, _truncate(web_results, 2500))
-            res = requests.post(
-                "http://127.0.0.1:8080/v1/chat/completions",
-                json={
-                    "model": model_name,
-                    "messages": [
-                        {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
-                        {"role": "user", "content": retry_prompt},
-                    ],
-                    "max_tokens": 1800,
-                    "temperature": 0.25,
-                },
-                timeout=90,
-            )
-            # Handle Context Size Error (400) - truncate prompt and retry
-            if res.status_code == 400:
-                try:
-                    error_data = res.json()
-                    error_msg = error_data.get("error", {}).get("message", "")
-                    if "exceed_context_size" in error_msg.lower() or "exceed" in error_msg.lower():
-                        # Truncate prompt significantly and retry once
-                        truncated_retry_prompt = retry_prompt[:len(retry_prompt)//2]  # Cut in half
-                        retry_res = requests.post(
-                            "http://127.0.0.1:8080/v1/chat/completions",
-                            json={
-                                "model": model_name,
-                                "messages": [
-                                    {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
-                                    {"role": "user", "content": truncated_retry_prompt},
-                                ],
-                                "max_tokens": 1800,
-                                "temperature": 0.25,
-                            },
-                            timeout=90,
-                        )
-                        if retry_res.status_code == 200:
-                            msg = retry_res.json()["choices"][0]["message"]
-                            content = _strip_answer_artifacts((msg.get("content") or "").strip())
-                            content = _strip_untrusted_links(content, sources)
-                            if content:
-                                return content
-                        # If retry also fails, return error
-                        err = (retry_res.text or "")[:250]
-                        return f"<h2>{title}</h2><p><strong>Error:</strong> Context too large even after truncation: {err}</p>"
-                except (json.JSONDecodeError, KeyError, ValueError, requests.exceptions.RequestException):
-                    pass  # Not a context size error or retry failed, fall through to normal error handling
-            
-            if res.status_code == 200:
-                msg = res.json()["choices"][0]["message"]
-                content = _strip_answer_artifacts((msg.get("content") or "").strip())
-                content = _strip_untrusted_links(content, sources)
-                if content:
-                    return content
+            content = call(prompt_text=retry_prompt, max_tokens=1800, temperature=0.25)
+            content = _strip_answer_artifacts(content)
+            content = _strip_untrusted_links(content, sources)
+            if content:
+                return content
 
             # Final deterministic fallback: never return an empty section.
             if lang == "de":

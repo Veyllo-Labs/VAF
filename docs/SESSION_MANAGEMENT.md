@@ -55,17 +55,23 @@ ws.send(JSON.stringify({
 
 ```python
 # vaf/core/web_server.py
-# Priority: message sessionId > connection sessionId > user-scoped fallback
-session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+# Priority: explicit message sessionId > connection sessionId > user-scoped fallback.
+requested_session_id = cmd.get("sessionId")
+connection_session_id = manager.get_session_for_connection(websocket)
+session_id = requested_session_id or connection_session_id
+
+# Safety: prevent implicit WebUI fallback into messenger sessions.
+if (not requested_session_id) and isinstance(connection_session_id, str) and connection_session_id.startswith(("telegram_", "discord_", "whatsapp_")):
+    session_id = None
+
 if not session_id:
-    # Per-user default so multiple users do not share one chat
     safe_scope = str(manager.get_connection_user(websocket) or "default").replace("-", "")[:8]
     session_id = f"web-default-{safe_scope}"
 ```
 
 ### 3. Task Queue → Agent
 
-For each task (chat or command), the runner calls `agent.load_session_context(task.session_id)` so the agent’s history and context match the task’s session. Example (conceptually):
+For each task (chat or command), the runner calls `agent.load_session_context(task.session_id)` so the agent’s history and context match the task’s session. The queue now supports class-aware scheduling (`interactive`, `automation`, `background`) with optional weighted fairness; legacy single-queue behavior remains available by config. Example (conceptually):
 
 ```python
 # vaf/core/headless_runner.py (chat task path)
@@ -220,7 +226,8 @@ console.log(`🔍 [FILTER] Rejecting ${data.type}: backend=${data.sessionId}, fr
 | `vaf/core/session.py` | Session data model, SessionManager class |
 | `vaf/core/web_server.py` | WebSocket server, message routing |
 | `vaf/core/web_interface.py` | Agent → WebUI broadcast manager |
-| `vaf/cli/cmd/run.py` | Main loop, task queue processing |
+| `vaf/cli/cmd/run.py` | CLI loop, task queue processing |
+| `vaf/core/task_queue.py` | Queue policy, fairness, per-session in-flight guard |
 | `web/app/page.tsx` | Frontend state, session filtering |
 
 ---

@@ -4328,8 +4328,20 @@ class Agent:
             
         return True
 
-    def chat_step(self, user_input: str, stream_callback=None, auto_retry=False, skip_input=False, disable_workflows=False, disable_tools=False, memory_context=None):
+    def chat_step(
+        self,
+        user_input: str,
+        stream_callback=None,
+        auto_retry=False,
+        skip_input=False,
+        disable_workflows=False,
+        disable_tools=False,
+        memory_context=None,
+        thinking_mode: bool = False,
+    ):
         from vaf.cli.ui import UI
+        # Turn-local flag: avoids cross-thread leakage from process-wide env vars.
+        self._current_turn_thinking_mode = bool(thinking_mode)
         
         try:
             append_domain_log("backend", "chat_step_start")
@@ -4563,7 +4575,7 @@ class Agent:
             # CRITICAL: Skip intent update if running in thinking mode (background).
             # This prevents technical thinking prompts from overwriting the actual user intent.
             if hasattr(self, 'main_persistence') and self.main_persistence:
-                _is_thinking_mode = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                _is_thinking_mode = bool(thinking_mode)
                 if not _is_thinking_mode:
                     try:
                         # Update the "North Star" for the session
@@ -4574,7 +4586,7 @@ class Agent:
             
             # LIVE CONTEXT UPDATE: Ensure intent is fresh for the router immediately
             if hasattr(self, 'context_manager'):
-                _is_thinking_mode = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                _is_thinking_mode = bool(thinking_mode)
                 if not _is_thinking_mode:
                     self.context_manager.update_intent(user_input)
                 self.context_manager.update_state({"role": "user", "content": user_input})
@@ -6529,7 +6541,13 @@ class Agent:
                  UI.event("System", "Response loop detected. Cleaning context and retrying fresh...", style="warning")
                  target_len = history_snapshot_len 
                  self.history = self.history[:target_len]
-                 return self.chat_step(user_input=user_input, stream_callback=stream_callback, auto_retry=True, skip_input=skip_input)
+                 return self.chat_step(
+                     user_input=user_input,
+                     stream_callback=stream_callback,
+                     auto_retry=True,
+                     skip_input=skip_input,
+                     thinking_mode=thinking_mode,
+                 )
                  
              fallback_msg = "\n\n*(System: The agent processed the request but failed to generate a final answer. Please see the thought trace above.)*"
              if stream_callback: stream_callback(f"[gold]{fallback_msg}[/gold]")
@@ -6575,6 +6593,13 @@ class Agent:
         from vaf.cli.ui import UI
         from pathlib import Path
         from vaf.core.trust import should_gate_tool, get_tool_policy, set_tool_policy, mark_trusted_dir, is_trusted_dir, explain_gate
+
+        # Thinking-only tool guard (runtime): never allow these in normal chat turns.
+        is_thinking_turn = bool(getattr(self, "_current_turn_thinking_mode", False))
+        if name == "thinking_done" and not is_thinking_turn:
+            return "Error: 'thinking_done' is only available in background thinking mode."
+        if str(name).startswith("thinking_workspace_") and not is_thinking_turn:
+            return "Error: thinking_workspace tools are only available in background thinking mode."
 
         # So tools (e.g. document_writer) can notify Web UI; needed when run directly or via workflow in same process
         try:

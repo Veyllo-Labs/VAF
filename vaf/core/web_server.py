@@ -3542,6 +3542,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
                     if session_id:
                         tq.request_stop(session_id)
+                        dropped = 0
+                        try:
+                            # Also drop already queued follow-up tasks for this session.
+                            # Otherwise users may need to press stop multiple times.
+                            dropped = tq.drop_queued_tasks_for_session(str(session_id))
+                        except Exception:
+                            dropped = 0
                         killed = 0
                         try:
                             # Hard-stop any running sub-agent processes for this chat session.
@@ -3560,7 +3567,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     pass
                         except Exception:
                             pass
-                        log("WebServer", f"Stop requested for session {session_id}; killed_subagents={killed}")
+                        log("WebServer", f"Stop requested for session {session_id}; killed_subagents={killed}; dropped_queued={dropped}")
                         await websocket.send_json({"type": "generation_stopped", "sessionId": session_id})
 
             except json.JSONDecodeError:

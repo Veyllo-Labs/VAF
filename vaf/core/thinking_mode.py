@@ -1276,7 +1276,12 @@ def _run_thinking_for_user(
             for turn in range(max_turns):
                 prompt = _get_turn_prompt(turn)
                 mem_ctx = (memory_context or None) if turn == 0 else None
-                agent.chat_step(prompt, stream_callback=None, memory_context=mem_ctx)
+                agent.chat_step(
+                    prompt,
+                    stream_callback=None,
+                    memory_context=mem_ctx,
+                    thinking_mode=True,
+                )
                 current_history = (getattr(agent, "history", []) or [])
                 run_history = _history_delta(current_history, run_history_start)
 

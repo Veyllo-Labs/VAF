@@ -32,6 +32,11 @@ MEMORY_CRITICAL_MB = 4096  # Force aggressive cleanup above 4GB
 # Throttle stream updates to WebUI so the UI does not lag behind (max ~12 updates/sec)
 STREAM_EMIT_THROTTLE_SEC = 0.08
 
+
+class _StopGenerationRequested(Exception):
+    """Internal control-flow exception for cooperative user stop."""
+    pass
+
 def _strip_tool_calls_json(text: str) -> str:
     """Remove raw tool_calls JSON blobs and fragments from reply text."""
     if not text:
@@ -820,6 +825,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 pass
 
                     def webui_stream_callback(text):
+                        # Cooperative stop: abort an already-running chat_step turn
+                        # as soon as the next stream callback arrives.
+                        if tq.should_stop(task.session_id):
+                            raise _StopGenerationRequested("Stop requested by user")
                         response_parts.append(text)
                         _emit("".join(response_parts))
 
@@ -980,6 +989,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             disable_workflows=disable_workflows,
                             memory_context=memory_context or None,
                         )
+                        if tq.should_stop(task.session_id):
+                            raise _StopGenerationRequested("Stop requested by user")
                     finally:
                         if force_webui_active:
                             if prev_webui_active is None:
@@ -1392,6 +1403,35 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     if 'response_parts' in dir():
                         response_parts.clear()
 
+                except _StopGenerationRequested:
+                    try:
+                        tq.clear_stop(task.session_id)
+                    except Exception:
+                        pass
+                    try:
+                        if "response_parts" in dir():
+                            response_parts.clear()
+                    except Exception:
+                        pass
+                    try:
+                        get_web_interface().emit_agent_message(
+                            role="assistant",
+                            content="[Generation stopped by user]",
+                            session_id=task.session_id,
+                        )
+                        get_web_interface().emit_message_complete(
+                            content="[Generation stopped by user]",
+                            session_id=task.session_id,
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
+                                f.write(f"{_dt.now().isoformat()} QUEUE_CHAT_STOPPED session_id={task.session_id}\n")
+                    except Exception:
+                        pass
                 except Exception as e:
                     _duration = time.time() - _chat_start
                     try:

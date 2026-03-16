@@ -329,6 +329,11 @@ If none are set, the tool uses the default path (scrape Google, then DuckDuckGo)
 
 **Local network (other devices):** Enable local network and SSL/TLS in Settings → Local Network (or run `vaf server on` and enable TLS in settings). Access is via the integrated HTTPS proxy: this device at `https://127.0.0.1:8443` (or `:443`), other devices at `https://<LAN-IP>:8443`. Use `vaf server status` to see LAN URLs. The tray restarts services automatically when network settings change.
 
+**Entry-point behavior (`3000` vs `8443`)**:
+- `:3000` is the frontend runtime/dev entry point.
+- `:8443` is the HTTPS proxy entry point (available when Local Network + TLS is enabled).
+- Optional strict mode: set `VAF_ENFORCE_8443_ONLY=1` to redirect requests from `:3000` to `https://<host>:8443` via `web/proxy.ts`. Keep this disabled unless `:8443` is guaranteed to be active; otherwise users may see `ERR_CONNECTION_REFUSED`.
+
 ## Development
 
 ### Running Frontend Locally
@@ -420,7 +425,9 @@ The Web UI runs alongside the CLI interface:
 
 - **CORS**: Currently allows all origins (development mode)
 - **Production**: Should restrict to specific domains
-- **Authentication**: Not implemented (local-only use)
+- **Authentication**: Implemented. The UI verifies session state via `GET /api/auth/me` and requires a valid auth token/cookie. Unauthenticated clients are redirected to `/login`.
+- **Login UX guard**: `web/proxy.ts` redirects authenticated requests away from `/login` to `/`, so logged-in users do not stay on the login page.
+- **Origin scope note**: Auth state can differ between `http://localhost:3000` and `https://localhost:8443` because cookies/storage are origin-scoped.
 
 ## Troubleshooting
 

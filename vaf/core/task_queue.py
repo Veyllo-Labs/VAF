@@ -88,6 +88,50 @@ class TaskQueue:
         with self._cv:
             self._stop_requests.discard(session_id)
 
+    def drop_queued_tasks_for_session(self, session_id: str) -> int:
+        """
+        Remove all queued (not in-flight) tasks for a given session.
+        Returns the number of removed tasks.
+        """
+        sid = str(session_id or "")
+        if not sid:
+            return 0
+        removed = 0
+        with self._cv:
+            if self._legacy_mode:
+                keep = []
+                for item in self._legacy_heap:
+                    task = item[3]
+                    if task.session_id == sid:
+                        removed += 1
+                    else:
+                        keep.append(item)
+                if removed:
+                    self._legacy_heap = keep
+                    heapq.heapify(self._legacy_heap)
+            else:
+                for task_class in (
+                    self.TASK_CLASS_INTERACTIVE,
+                    self.TASK_CLASS_AUTOMATION,
+                    self.TASK_CLASS_BACKGROUND,
+                ):
+                    heap = self._queues[task_class]
+                    if not heap:
+                        continue
+                    keep = []
+                    for item in heap:
+                        task = item[3]
+                        if task.session_id == sid:
+                            removed += 1
+                        else:
+                            keep.append(item)
+                    if len(keep) != len(heap):
+                        self._queues[task_class] = keep
+                        heapq.heapify(self._queues[task_class])
+            if removed:
+                self._cv.notify_all()
+        return removed
+
     def add(
         self,
         session_id: str,

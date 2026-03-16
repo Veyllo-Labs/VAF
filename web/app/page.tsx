@@ -641,13 +641,29 @@ function VAFDashboardContent() {
         setAuthError(null);
         const ac = new AbortController();
         const timeoutId = setTimeout(() => ac.abort(), 8000);
-        fetch(`${getApiBase()}/api/auth/me`, { credentials: 'include', signal: ac.signal })
+        const authHeaders: Record<string, string> = {
+            'Cache-Control': 'no-cache',
+        };
+        if (typeof window !== 'undefined') {
+            const token = sessionStorage.getItem('vaf_token');
+            if (token) authHeaders.Authorization = `Bearer ${token}`;
+        }
+        fetch(`${getApiBase()}/api/auth/me`, {
+            credentials: 'include',
+            signal: ac.signal,
+            cache: 'no-store',
+            headers: authHeaders,
+        })
             .then(async (res) => {
                 if (res.ok) {
                     const userData = await res.json();
                     setCurrentUser(userData);
                     setIsAuthenticated(true);
                 } else {
+                    if (typeof window !== 'undefined') {
+                        // Avoid split-brain auth state (stale token in storage, invalid on backend)
+                        sessionStorage.removeItem('vaf_token');
+                    }
                     router.replace('/login');
                 }
             })
@@ -725,6 +741,7 @@ function VAFDashboardContent() {
     const wsSocketRef = useRef<WebSocket | null>(null); // so cleanup can close when effect re-runs before async completes
     const [loading, setLoading] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
+    const [isStoppingGeneration, setIsStoppingGeneration] = useState(false);
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
     const [activeToolName, setActiveToolName] = useState(''); // Currently-running tool name for loading bubble
 
@@ -1128,6 +1145,7 @@ function VAFDashboardContent() {
     const artifactLastEditRef = useRef(0);
     const artifactSendTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const subAgentStepsRef = useRef<Array<{ id: string; status: string; title?: string; description?: string }>>([]);
+    const lastSubAgentStatusRef = useRef<string>('');
     const subAgentLogSetRef = useRef<Set<string>>(new Set());
     const subAgentAutoCloseRef = useRef<NodeJS.Timeout | null>(null);
     const subAgentManualOpenRef = useRef(false);
@@ -1447,6 +1465,7 @@ function VAFDashboardContent() {
                     }
 
                     if (subType === 'start' && isSubAgentTool) {
+                        lastSubAgentStatusRef.current = '';
                         subAgentUserClosedRef.current = false;  // New task - user wants to see it
                         openSubAgentWindow(false);
                         const title = String(name || 'Sub-Agent').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
@@ -1744,6 +1763,7 @@ function VAFDashboardContent() {
                     const activeSessionId = currentSessionIdRef.current;
                     if (!data.sessionId || data.sessionId === activeSessionId) {
                         setIsGenerating(false);
+                        setIsStoppingGeneration(false);
                     }
                     // Completion sound: play when model has finished (Web UI only)
                     // Use same-origin relative URL so it works through HTTPS proxy (no mixed content)
@@ -1873,23 +1893,28 @@ function VAFDashboardContent() {
                     const statusText = String(data.status || '').trim();
                     const modelLabel = data.model ? `• ${String(data.model)}` : '';
                     const statusLine = `${statusText}${modelLabel ? ` ${modelLabel}` : ''}`.trim();
-                    const newSteps = data.steps || [];
+                    const incomingSteps = Array.isArray(data.steps) ? data.steps : [];
                     const prevSteps = subAgentStepsRef.current;
+                    // Keep previous step list if this update carries only status text.
+                    // Otherwise, status-only updates clear steps and cause repeated generic "Running ..." entries.
+                    const newSteps = incomingSteps.length > 0 ? incomingSteps : prevSteps;
                     const prevMap = new Map(prevSteps.map(step => [step.id, step.status]));
                     const statusLines: string[] = [];
 
-                    newSteps.forEach((step: any) => {
-                        const prevStatus = prevMap.get(step.id);
-                        if (!prevStatus || prevStatus !== step.status) {
-                            const label = step.status === 'completed'
-                                ? 'Completed'
-                                : step.status === 'running'
-                                    ? 'Running'
-                                    : 'Pending';
-                            const detail = step.description ? ` - ${step.description}` : '';
-                            statusLines.push(`${label}: ${step.title}${detail}`);
-                        }
-                    });
+                    if (incomingSteps.length > 0) {
+                        newSteps.forEach((step: any) => {
+                            const prevStatus = prevMap.get(step.id);
+                            if (!prevStatus || prevStatus !== step.status) {
+                                const label = step.status === 'completed'
+                                    ? 'Completed'
+                                    : step.status === 'running'
+                                        ? 'Running'
+                                        : 'Pending';
+                                const detail = step.description ? ` - ${step.description}` : '';
+                                statusLines.push(`${label}: ${step.title}${detail}`);
+                            }
+                        });
+                    }
 
                     if (statusLines.length > 0) {
                         const timeStamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
@@ -1901,6 +1926,12 @@ function VAFDashboardContent() {
                     const statusLower = String(data.status || '').toLowerCase();
                     const isRunning = presence === 'online' || statusLower.includes('running') || statusLower.includes('pending');
                     const isGenericHeartbeatStatus = statusLower.startsWith('running sub-agent tasks');
+                    const isDetailedStatus = !!statusText && !isGenericHeartbeatStatus;
+                    if (isDetailedStatus && statusText !== lastSubAgentStatusRef.current) {
+                        const timeStamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+                        appendSubAgentLine(`[${timeStamp}] ${statusText}`);
+                        lastSubAgentStatusRef.current = statusText;
+                    }
                     // Don't force-reopen if user explicitly closed the panel
                     const shouldOpen = isRunning && !subAgentUserClosedRef.current;
                     setSubAgentState(prev => ({
@@ -1912,7 +1943,7 @@ function VAFDashboardContent() {
                         presence: presence,
                         currentFile: data.file || prev.currentFile,
                         codeContent: data.code || prev.codeContent,
-                        steps: data.steps || prev.steps,
+                        steps: newSteps,
                         artifactFile: artifactDirtyRef.current ? prev.artifactFile : (data.file || prev.artifactFile),
                         artifactCode: artifactDirtyRef.current ? prev.artifactCode : (data.code || prev.artifactCode),
                         artifactStatus: artifactDirtyRef.current ? prev.artifactStatus : (data.code || data.file ? 'Synced' : prev.artifactStatus)
@@ -1976,17 +2007,23 @@ function VAFDashboardContent() {
 
                     // Restore active state
                     const isActive = !!data.isActive;
+                    // Race guard: a local turn can already be in-flight while backend history
+                    // still reports isActive=false (e.g. reconnect/load snapshot during stream).
+                    // In that case, avoid replacing local chat state with an incomplete snapshot.
+                    const prevLocalState = sessionLoadingStates.current[data.sessionId];
+                    const hadLocalGenerating = !!prevLocalState?.isGenerating;
+                    const effectiveActive = isActive || hadLocalGenerating;
                     const status = data.currentStatus && isActive ? `Agent: ${data.currentStatus}` : '';
-                    setLoading(isActive);
-                    setIsGenerating(isActive);
+                    setLoading(effectiveActive);
+                    setIsGenerating(effectiveActive);
                     setStatusMessage(status);
 
                     // Update per-session loading state tracking
                     sessionLoadingStates.current[data.sessionId] = {
-                        loading: isActive,
-                        isGenerating: isActive,
+                        loading: effectiveActive,
+                        isGenerating: effectiveActive,
                         statusMessage: status,
-                        loadingMessageId: isActive ? (data.messages?.length || 0) : null
+                        loadingMessageId: effectiveActive ? (data.messages?.length || 0) : null
                     };
 
                     // Parse server messages and preserve server order (index) so sort is stable
@@ -2006,7 +2043,7 @@ function VAFDashboardContent() {
                     // When no generation is active, treat backend history as source of truth.
                     // This avoids expensive cache/orphan merge work on large chats and prevents
                     // stale cached fragments (e.g. partial thinking chunks) from reordering UI.
-                    if (!isActive) {
+                    if (!isActive && !hadLocalGenerating) {
                         const finalServerMsgs = serverMsgs.map(({ _order, ...msg }) => msg) as Message[];
                         setMessages(finalServerMsgs);
 
@@ -2408,6 +2445,7 @@ function VAFDashboardContent() {
                     if (!data.sessionId || data.sessionId === activeSessionId) {
                         setLoading(false);
                         setIsGenerating(false);
+                        setIsStoppingGeneration(false);
                         setLoadingMessageId(null);
                         // Clear workflow runtime so stop button hides (workflow was stopped)
                         clearWorkflow();
@@ -2543,21 +2581,12 @@ function VAFDashboardContent() {
     }, [isContextModalOpen]);
 
     const stopGeneration = () => {
-        if (!ws || !currentSessionId) return;
+        if (!ws || !currentSessionId || isStoppingGeneration) return;
+        setIsStoppingGeneration(true);
         ws.send(JSON.stringify({
             type: 'stop_generation',
             sessionId: currentSessionId
         }));
-        setLoading(false);
-        setIsGenerating(false);
-
-        // Update per-session loading state
-        sessionLoadingStates.current[currentSessionId] = {
-            loading: false,
-            isGenerating: false,
-            statusMessage: '',
-            loadingMessageId: null
-        };
     };
 
     const sendMessage = async (e?: React.FormEvent, overrideText?: string) => {
@@ -2576,6 +2605,7 @@ function VAFDashboardContent() {
         }]);
         expectNewAssistantRef.current = true;
         lastUserSendTimeRef.current = Date.now();
+        setIsStoppingGeneration(false);
         setLoading(true);
         setIsGenerating(true);
 
@@ -3914,14 +3944,24 @@ function VAFDashboardContent() {
                                 {/* Stop button left of message box — show when chat is loading, a workflow is running, or a sub-agent is active */}
                                 <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
                                     <div className="w-9 shrink-0 flex items-center justify-center">
-                                        {(isGenerating || isWorkflowRunning || isSubAgentRunning) && (
+                                        {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration) && (
                                             <button
                                                 type="button"
                                                 onClick={stopGeneration}
-                                                title="Stop"
-                                                className="p-2 rounded-full bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-all shadow-md flex items-center justify-center animate-in fade-in slide-in-from-bottom-2"
+                                                disabled={isStoppingGeneration}
+                                                title={isStoppingGeneration ? tMain('stoppingGeneration') : tMain('stopGeneration')}
+                                                className={cn(
+                                                    "p-2 rounded-full text-white text-sm font-medium transition-all shadow-md flex items-center justify-center animate-in fade-in slide-in-from-bottom-2",
+                                                    isStoppingGeneration
+                                                        ? "bg-amber-500 cursor-wait"
+                                                        : "bg-red-500 hover:bg-red-600"
+                                                )}
                                             >
-                                                <Square size={12} fill="currentColor" />
+                                                {isStoppingGeneration ? (
+                                                    <Loader2 size={12} className="animate-spin" />
+                                                ) : (
+                                                    <Square size={12} fill="currentColor" />
+                                                )}
                                             </button>
                                         )}
                                     </div>

@@ -885,7 +885,17 @@ class ResearchAgentTool(BaseTool):
                 # Only open browser when running locally (not in WebUI/network mode
                 # where the browser would open on the server, not on the client).
                 webui_mode = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
+                session_id = os.environ.get("VAF_SESSION_ID", "").strip()
                 open_result = {"done": False, "ok": False}
+
+                # In WebUI mode, push the report directly into the Document Editor panel.
+                # This avoids an extra "read file ..." sub-agent roundtrip just to show the report.
+                if webui_mode and session_id:
+                    try:
+                        from vaf.core.web_interface import notify_document_created
+                        notify_document_created(session_id, str(output_path), title=output_path.name)
+                    except Exception:
+                        pass
 
                 if not webui_mode:
                     abs_path = output_path.absolute()
@@ -1160,18 +1170,36 @@ class ResearchAgentTool(BaseTool):
 
         def call(prompt_text: str, max_tokens: int, temperature: float) -> str:
             """Provider-aware section generation (local or API), no hardcoded endpoint."""
-            try:
-                content = self.query_llm(
-                    messages=[
-                        {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
-                        {"role": "user", "content": prompt_text},
-                    ],
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
-                return (content or "").strip()
-            except Exception:
+            # Guard against provider/SDK stream hangs (especially API streaming without read timeout).
+            # If this call blocks too long, return empty so caller can retry/fallback instead of stalling forever.
+            timeout_sec = int(Config.get("research_section_llm_timeout_seconds", 90) or 90)
+            if timeout_sec < 10:
+                timeout_sec = 10
+
+            holder: Dict[str, Any] = {"content": "", "error": None}
+
+            def _worker() -> None:
+                try:
+                    holder["content"] = self.query_llm(
+                        messages=[
+                            {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
+                            {"role": "user", "content": prompt_text},
+                        ],
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
+                except Exception as e:
+                    holder["error"] = e
+
+            t = threading.Thread(target=_worker, daemon=True)
+            t.start()
+            t.join(timeout=timeout_sec)
+
+            if t.is_alive():
                 return ""
+            if holder.get("error") is not None:
+                return ""
+            return str(holder.get("content") or "").strip()
 
         try:
             content = call(prompt_text=prompt, max_tokens=2200, temperature=0.2)

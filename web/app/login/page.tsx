@@ -44,9 +44,25 @@ export default function LoginPage() {
             return;
         }
         setBackendUnreachable(false);
+        if (typeof window !== 'undefined' && sessionStorage.getItem('vaf_token')) {
+            // Fast path for already authenticated browser sessions
+            router.replace('/');
+            return;
+        }
+        const authHeaders: Record<string, string> = {
+            'Cache-Control': 'no-cache',
+        };
+        if (typeof window !== 'undefined') {
+            const token = sessionStorage.getItem('vaf_token');
+            if (token) authHeaders.Authorization = `Bearer ${token}`;
+        }
 
         // Check if already authenticated
-        fetch(`${apiBase}/api/auth/me`, { credentials: 'include' })
+        fetch(`${apiBase}/api/auth/me`, {
+            credentials: 'include',
+            cache: 'no-store',
+            headers: authHeaders,
+        })
             .then((res) => {
                 if (res.ok) {
                     // If we're in the middle of onboarding (e.g. refresh after 2FA), stay and show Soul/Connections
@@ -61,6 +77,9 @@ export default function LoginPage() {
                 }
 
                 // If not authenticated, check setup status
+                if (typeof window !== 'undefined') {
+                    sessionStorage.removeItem('vaf_token');
+                }
                 fetch(`${apiBase}/api/auth/needs-setup`, { credentials: 'include' })
                     .then((res) => {
                         if (res.status === 404) return null;

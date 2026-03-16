@@ -39,7 +39,9 @@
     "contactReplyTo": "Reply to {name} ({channel})",
     "contactReplyApprove": "Approve",
     "contactReplyReject": "Reject",
-    "contactReplyPreview": "Preview"
+    "contactReplyPreview": "Preview",
+    "stopGeneration": "Stop generation",
+    "stoppingGeneration": "Stopping..."
   },
   "nav": {
     "settings": "Settings",

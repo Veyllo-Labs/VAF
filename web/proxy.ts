@@ -7,19 +7,6 @@ import type { NextRequest } from 'next/server';
  * Guarded by env flag to avoid locking users out when 8443 is not active.
  */
 export function proxy(request: NextRequest) {
-  const isLoginPath =
-    request.nextUrl.pathname === '/login' ||
-    request.nextUrl.pathname.startsWith('/login/');
-  const hasAuthCookie = request.cookies.has('vaf_token');
-
-  // UX guard: if a user already has an auth session, never show /login.
-  if (isLoginPath && hasAuthCookie) {
-    const target = request.nextUrl.clone();
-    target.pathname = '/';
-    target.search = '';
-    return NextResponse.redirect(target, 307);
-  }
-
   const enforce8443 = process.env.VAF_ENFORCE_8443_ONLY === '1';
   if (!enforce8443) {
     return NextResponse.next();

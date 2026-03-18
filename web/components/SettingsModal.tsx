@@ -893,12 +893,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }
     };
 
-    const handleTelegramComplete = (telegramConfig: TelegramConfig) => {
+    const handleTelegramComplete = async (telegramConfig: TelegramConfig) => {
         const merged = { ...(localConfig.telegram_config || {}), ...telegramConfig };
         handleChange('telegram_config', merged);
         setShowTelegramWizard(false);
         // Persist immediately so the connection stays after closing/reopening the modal
         onSave({ ...config, telegram_config: merged });
+        // Start bridge after save so status does not stay "Disconnected"
+        try {
+            await new Promise(r => setTimeout(r, 400));
+            const base = apiBase || '';
+            await fetch(`${base}/api/telegram/start`, { method: 'POST', credentials: 'include' });
+        } catch (e) {
+            console.error('Telegram bridge start failed:', e);
+        }
         // Refetch to get latest whitelist from API; keep merged so connection stays visible
         fetch(apiBase ? `${apiBase}/api/config` : '/api/config', { credentials: 'include' })
             .then((r) => r.ok ? r.json() : null)

@@ -626,7 +626,32 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             setConnectionStatus(prev => ({ ...prev, discord: 'disconnected' }));
         }
         if (appId === 'telegram') {
-            onConfigChange('telegram_config', null);
+            try {
+                await fetch(api('api/telegram/stop'), { method: 'POST', credentials: 'include' });
+            } catch (e) {
+                console.error('Failed to stop Telegram bridge:', e);
+            }
+            // Explicitly overwrite telegram_config with a disabled/empty object.
+            // Using null would be preserved by backend safety-merge and old config would survive restarts.
+            const clearedTelegramConfig = {
+                bot_token: '',
+                verified: false,
+                enabled: false,
+                whitelist: [],
+                relay_whitelist: [],
+                bot_username: null,
+            };
+            onConfigChange('telegram_config', clearedTelegramConfig);
+            try {
+                await fetch(api('api/config'), {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ telegram_config: clearedTelegramConfig }),
+                    credentials: 'include',
+                });
+            } catch (e) {
+                console.error('Failed to clear Telegram config:', e);
+            }
             setConnectionStatus(prev => ({ ...prev, telegram: 'disconnected' }));
         }
         if (appId === 'whatsapp') {

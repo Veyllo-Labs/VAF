@@ -857,6 +857,56 @@ def _is_contact_session(session_id: str) -> bool:
     return False
 
 
+def _trim_telegram_history_after_compaction(session_id: str, current_turn_count: int, keep_user_turns: int) -> None:
+    """
+    Keep Telegram session history bounded after each Memory Learning run.
+    Retains only the newest `keep_user_turns` user turns (+ their following replies/events).
+    """
+    sid = str(session_id or "")
+    if not sid.startswith("telegram_"):
+        return
+    keep_turns = max(1, int(keep_user_turns or 1))
+    try:
+        from vaf.core.session import SessionManager
+        sm = SessionManager()
+        sess = sm.load(sid)
+        msgs = list(getattr(sess, "messages", []) or [])
+        if not msgs:
+            return
+
+        user_seen = 0
+        start_idx = 0
+        found_cutoff = False
+        for idx in range(len(msgs) - 1, -1, -1):
+            if getattr(msgs[idx], "role", None) == "user":
+                user_seen += 1
+                if user_seen >= keep_turns:
+                    start_idx = idx
+                    found_cutoff = True
+                    break
+        if not found_cutoff:
+            return
+
+        pruned = msgs[start_idx:]
+        if len(pruned) >= len(msgs):
+            return
+        sess.messages = pruned
+        if not isinstance(getattr(sess, "runtime_state", None), dict):
+            sess.runtime_state = {}
+        sess.runtime_state["history_trimmed_at_turn"] = int(current_turn_count)
+        sess.runtime_state["history_trimmed_keep_user_turns"] = int(keep_turns)
+        sm.save(sess)
+        _compaction_log(
+            "COMPACTION_HISTORY_TRIM",
+            session_id=sid,
+            before=str(len(msgs)),
+            after=str(len(pruned)),
+            keep_user_turns=str(keep_turns),
+        )
+    except Exception as e:
+        _compaction_log("COMPACTION_HISTORY_TRIM_FAIL", session_id=sid, error=str(e)[:200])
+
+
 def run_session_compaction_sync(
     agent: Any,
     user_scope_id: Optional[UUID],
@@ -942,6 +992,11 @@ def run_session_compaction_sync(
             _compaction_log("COMPACTION_NO_REPLY", session_id=session_id)
             state[session_id] = current_turn_count
             _save_compaction_state(state)
+            _trim_telegram_history_after_compaction(
+                session_id=session_id,
+                current_turn_count=current_turn_count,
+                keep_user_turns=interval,
+            )
             _notify_ui("completed", "Memory Learning complete! No new facts to remember.", 0)
             # Run refresh in background so we never block the queue worker or risk affecting the web server
             def _refresh_bg():
@@ -1004,6 +1059,12 @@ def run_session_compaction_sync(
             _sm.save(_session)
         except Exception as e:
             logger.debug("Failed to save compaction turn to session: %s", e)
+
+        _trim_telegram_history_after_compaction(
+            session_id=session_id,
+            current_turn_count=current_turn_count,
+            keep_user_turns=interval,
+        )
 
         _notify_ui("completed", f"Memory Learning complete! Saved {len(memory_tuples)} memories.", len(memory_tuples))
         # Run refresh in background so we never block the queue worker

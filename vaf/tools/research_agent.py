@@ -577,14 +577,22 @@ class ResearchAgentTool(BaseTool):
                             webui_active=os.environ.get("VAF_WEBUI_ACTIVE", ""),
                             in_subagent_terminal=os.environ.get("VAF_IN_SUBAGENT_TERMINAL", ""))
 
-        def _emit_progress(message: str, style: str = "dim") -> None:
+        _WEB_SEARCH_TIMEOUT = int(Config.get("research_web_search_timeout_seconds", 60) or 60)
+        _SECTION_TIMEOUT = int(Config.get("research_section_timeout_seconds", 180) or 180)
+        _OVERALL_TIMEOUT = int(Config.get("research_overall_timeout_seconds", 900) or 900)
+
+        _is_piped_subprocess = (
+            os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes")
+            and not sys.stdout.isatty()
+        )
+
+        def _emit_progress(message: str, style: str = "dim", presence: str = "online") -> None:
             """Emit progress in a way that is visible in WebUI sub-agent stream."""
             if use_live:
                 return
             session_id = os.environ.get("VAF_SESSION_ID", "").strip()
             task_id = os.environ.get("VAF_TASK_ID", "").strip()
 
-            # Direct WebUI status update for sub-agent panel (works even when stdout/new_log rendering differs).
             if session_id:
                 try:
                     tls_on = Config.get("local_network_tls_enabled", False)
@@ -597,15 +605,20 @@ class ResearchAgentTool(BaseTool):
                             "taskId": task_id or None,
                             "agentName": "Research Agent",
                             "status": message,
-                            "presence": "online",
+                            "presence": presence,
                         },
                         timeout=0.4,
                     )
                 except Exception:
                     pass
+            if _is_piped_subprocess:
+                try:
+                    print(f"[Research] {message}", flush=True)
+                except (BrokenPipeError, OSError):
+                    pass
+                return
             try:
-                # In WebUI sub-agent runs, plain stdout is the most reliable channel.
-                if noninteractive or (os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes")):
+                if noninteractive:
                     print(f"[Research] {message}", flush=True)
                 else:
                     UI.event("Research", message, style=style)
@@ -613,6 +626,29 @@ class ResearchAgentTool(BaseTool):
                 pass
             except Exception:
                 pass
+
+        def _web_search_with_timeout(web_tool, timeout_sec: int = 0, **kwargs):
+            """Run web search with a hard timeout to prevent indefinite hangs."""
+            if timeout_sec <= 0:
+                timeout_sec = _WEB_SEARCH_TIMEOUT
+            holder: Dict[str, Any] = {"result": None, "error": None}
+
+            def _worker():
+                try:
+                    holder["result"] = web_tool.run(**kwargs)
+                except Exception as exc:
+                    holder["error"] = exc
+
+            t = threading.Thread(target=_worker, daemon=True)
+            t.start()
+            t.join(timeout=timeout_sec)
+            if t.is_alive():
+                if _debug_lg:
+                    _debug_lg.event("web_search_timeout", timeout_sec=timeout_sec, kwargs_keys=list(kwargs.keys()))
+                return None
+            if holder["error"] is not None:
+                raise holder["error"]
+            return holder["result"]
 
         def _run_research_loop() -> str:
             nonlocal _debug_lg
@@ -639,13 +675,23 @@ class ResearchAgentTool(BaseTool):
                     all_sources = json.loads(sources_checkpoint.read_text(encoding="utf-8"))
                 except: pass
 
-            global_quality_warning = ""  # Collect warnings across all sections
+            global_quality_warning = ""
+            _loop_start = time.time()
 
             for idx, spec in enumerate(specs, 1):
+                # Overall timeout guard
+                elapsed_total = time.time() - _loop_start
+                if elapsed_total > _OVERALL_TIMEOUT:
+                    tui.log(f"Overall timeout ({_OVERALL_TIMEOUT}s) reached at section {idx}/{len(specs)}")
+                    _emit_progress(f"Timeout reached after {int(elapsed_total)}s - finalizing with {len(rendered_sections)} sections", style="warning")
+                    if _debug_lg:
+                        _debug_lg.event("overall_timeout", elapsed=elapsed_total, sections_done=len(rendered_sections))
+                    break
+
                 # 🛡️ RESUME CHECK
                 safe_title = re.sub(r'[^a-zA-Z0-9]', '_', spec.title)[:30]
                 section_checkpoint = checkpoint_dir / f"sec_{topic_hash}_{idx:02d}_{safe_title}.html"
-                
+
                 if section_checkpoint.exists():
                     tui.log(f"Resume: {spec.title}")
                     _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: (resumed from cache)", style="dim")
@@ -654,152 +700,114 @@ class ResearchAgentTool(BaseTool):
                         rendered_sections.append(section_html)
                         tui.set_section(idx, len(specs), spec.title)
                         tui.set_word_progress(_visible_word_count(section_html), min_words_target, min_words_ok)
-                        continue # Skip to next section
-                    except:
+                        continue
+                    except Exception:
                         tui.log(f"Failed to read checkpoint for {spec.title}, re-generating...")
 
-                tui.increment_loop()
-                tui.set_section(idx, len(specs), spec.title)
-                tui.set_word_progress(0, min_words_target, min_words_ok)
-                section_query = topic if not spec.query_suffix else f"{topic} {spec.query_suffix}"
-                tui.set_stage("Searching web")
-                tui.log(f"web_search: {spec.title}")
-                if _debug_lg:
-                    _debug_lg.event("section_start", section_idx=idx, section_title=spec.title,
-                                   query=section_query[:200])
-                _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: searching sources...", style="dim")
-
-                # Get raw results for trust filtering (fetch more initially to have buffer)
-                raw_results = None
+                # ═══════════════════════════════════════════════════════════
+                # PER-SECTION: wrapped in try/except for fault isolation
+                # ═══════════════════════════════════════════════════════════
+                _section_start = time.time()
                 try:
-                    raw_results = web.run(query=section_query, max_results=max_results * 3, deep=deep, open_in_browser=False, return_raw=True)
+                    tui.increment_loop()
+                    tui.set_section(idx, len(specs), spec.title)
+                    tui.set_word_progress(0, min_words_target, min_words_ok)
+                    section_query = topic if not spec.query_suffix else f"{topic} {spec.query_suffix}"
+                    tui.set_stage("Searching web")
+                    tui.log(f"web_search: {spec.title}")
                     if _debug_lg:
-                        _debug_lg.event("web_search_complete", section_idx=idx,
-                                       num_results=len(raw_results) if isinstance(raw_results, list) else 0)
-                except Exception as e:
-                    tui.log(f"Error in web_search (return_raw): {str(e)[:100]}")
-                    if _debug_lg:
-                        _debug_lg.event("web_search_error", section_idx=idx, error=str(e)[:300])
+                        _debug_lg.event("section_start", section_idx=idx, section_title=spec.title,
+                                       query=section_query[:200])
+                    _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: searching sources...", style="dim")
+
                     raw_results = None
-                
-                if not isinstance(raw_results, list):
-                    # Fallback: use regular search and extract URLs
-                    tui.log("Using fallback: regular web_search")
-                    results = web.run(query=section_query, max_results=max_results, deep=deep, open_in_browser=False)
-                    sources = _extract_urls(results)
-                else:
-                    # Multi-layer filtering: Try high threshold first, then lower if needed
-                    # Step 1: Try Score >= 7 (Science/Gov)
-                    filtered_results, lowest_score, quality_warning = filter_results_by_quality(
-                        raw_results, min_score=7, max_results=max_results
-                    )
-                    
-                    # Step 2: If too few results, try Score >= 4 (Wikipedia, academic)
-                    if len(filtered_results) < max_results:
-                        tui.log(f"Few high-quality sources, expanding to medium quality...")
-                        filtered_medium, _, _ = filter_results_by_quality(
-                            raw_results, min_score=4, max_results=max_results
+                    _initial_had_results = False
+                    try:
+                        raw_results = _web_search_with_timeout(
+                            web, timeout_sec=_WEB_SEARCH_TIMEOUT,
+                            query=section_query, max_results=max_results * 3, deep=deep,
+                            open_in_browser=False, return_raw=True,
                         )
-                        if len(filtered_medium) > len(filtered_results):
-                            filtered_results = filtered_medium
-                            quality_warning = "Note: Some sources have medium quality. For critical information, additional sources should be consulted."
-                    
-                    # Step 3: If still too few, allow Score >= 1 (Blogs, forums) with warning
-                    if len(filtered_results) < 3:
-                        tui.log(f"Very few results, allowing lower quality sources with warning...")
-                        filtered_low, _, _ = filter_results_by_quality(
-                            raw_results, min_score=1, max_results=max_results
+                        _n = len(raw_results) if isinstance(raw_results, list) else 0
+                        _initial_had_results = _n > 0
+                        if _debug_lg:
+                            _debug_lg.event("web_search_complete", section_idx=idx, num_results=_n)
+                    except Exception as e:
+                        tui.log(f"Error in web_search (return_raw): {str(e)[:100]}")
+                        if _debug_lg:
+                            _debug_lg.event("web_search_error", section_idx=idx, error=str(e)[:300])
+                        raw_results = None
+
+                    # Fast path: no results at all → placeholder immediately, skip retry/expand
+                    if not _initial_had_results:
+                        tui.log(f"No results for: {spec.title} - using placeholder")
+                        _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: no results found, skipping", style="dim")
+                        if _debug_lg:
+                            _debug_lg.event("section_no_results_skip", section_idx=idx, section_title=spec.title)
+                        placeholder = (
+                            f"<h2>{spec.title}</h2>"
+                            f"<p><em>{'Keine ausreichenden Suchergebnisse für diesen Abschnitt gefunden.' if lang == 'de' else 'No sufficient search results found for this section.'}</em></p>"
                         )
-                        if len(filtered_low) > len(filtered_results):
-                            filtered_results = filtered_low
-                            quality_warning = "Warning: Information is based on unverified sources. Please verify critically."
-                    
-                    # Collect warning if present
-                    if quality_warning:
-                        if quality_warning not in global_quality_warning:
-                            if global_quality_warning:
-                                global_quality_warning += " " + quality_warning
-                            else:
-                                global_quality_warning = quality_warning
-                        tui.log(f"{quality_warning}")
-                    
-                    # Format filtered results (similar to web_search output)
-                    results = self._format_search_results(section_query, filtered_results, deep=deep)
-                    sources = [r.get("href", "") or r.get("link", "") for r in filtered_results if r.get("href") or r.get("link")]
-                
-                for u in sources:
-                    if u and u not in all_sources:
-                        all_sources.append(u)
-                
-                # 🛡️ SAVE SOURCES CHECKPOINT
-                try:
-                    sources_checkpoint.write_text(json.dumps(all_sources), encoding="utf-8")
-                except: pass
+                        rendered_sections.append(placeholder)
+                        tui.set_word_progress(0, min_words_target, min_words_ok)
+                        if _debug_lg:
+                            _debug_lg.event("section_complete", section_idx=idx, section_title=spec.title,
+                                           word_count=0, elapsed=time.time() - _section_start)
+                        continue  # Next section immediately
 
-                tui.set_stage("Summarizing")
-                _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: summarizing...", style="dim")
-                section_html = self._summarize_section_html(
-                    topic=topic,
-                    title=spec.title,
-                    web_results=_truncate(results, 4500),
-                    sources=sources,
-                    lang=lang,
-                    min_words_target=min_words_target,
-                    attempt="initial",
-                    existing_section_html=(existing_section_html if (existing_section_html and len(specs) == 1) else ""),
-                )
-
-                # Quality check + retry/expand (word-based, with internal buffer).
-                word_count = _visible_word_count(section_html)
-                text_len = _visible_text_len(section_html)
-                tui.set_word_progress(word_count, min_words_target, min_words_ok)
-
-                # "Empty" = basically no usable content
-                is_empty = (word_count == 0 and text_len < min_chars_empty) or (word_count > 0 and word_count < max(30, min_words_ok // 8))
-                if is_empty:
-                    tui.set_stage("Retry (deep search)")
-                    tui.log(f"retry: {spec.title} (empty/too thin)")
-                    _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: retrying (deeper search)...", style="dim")
-                    # Retry with trust filtering (but allow lower quality if needed)
-                    retry_raw = web.run(query=section_query, max_results=min(15, max_results + 5), deep=True, open_in_browser=False, return_raw=True)
-                    if not isinstance(retry_raw, list):
-                        retry_results = web.run(query=section_query, max_results=min(10, max_results + 2), deep=True, open_in_browser=False)
-                        retry_sources = _extract_urls(retry_results)
+                    if not isinstance(raw_results, list):
+                        tui.log("Using fallback: regular web_search")
+                        fallback_result = _web_search_with_timeout(
+                            web, timeout_sec=_WEB_SEARCH_TIMEOUT,
+                            query=section_query, max_results=max_results, deep=deep, open_in_browser=False,
+                        )
+                        results = fallback_result if isinstance(fallback_result, str) else "No results found."
+                        sources = _extract_urls(results)
                     else:
-                        # Allow lower threshold for retry (Score >= 1)
-                        retry_filtered, _, retry_warning = filter_results_by_quality(retry_raw, min_score=1, max_results=min(10, max_results + 2))
-                        retry_results = self._format_search_results(section_query, retry_filtered, deep=True)
-                        retry_sources = [r.get("href", "") or r.get("link", "") for r in retry_filtered if r.get("href") or r.get("link")]
-                        if retry_warning and retry_warning not in global_quality_warning:
-                            if global_quality_warning:
-                                global_quality_warning += " " + retry_warning
-                            else:
-                                global_quality_warning = retry_warning
-                    
-                    for u in retry_sources:
+                        filtered_results, lowest_score, quality_warning = filter_results_by_quality(
+                            raw_results, min_score=7, max_results=max_results
+                        )
+
+                        if len(filtered_results) < max_results:
+                            tui.log(f"Few high-quality sources, expanding to medium quality...")
+                            filtered_medium, _, _ = filter_results_by_quality(
+                                raw_results, min_score=4, max_results=max_results
+                            )
+                            if len(filtered_medium) > len(filtered_results):
+                                filtered_results = filtered_medium
+                                quality_warning = "Note: Some sources have medium quality. For critical information, additional sources should be consulted."
+
+                        if len(filtered_results) < 3:
+                            tui.log(f"Very few results, allowing lower quality sources with warning...")
+                            filtered_low, _, _ = filter_results_by_quality(
+                                raw_results, min_score=1, max_results=max_results
+                            )
+                            if len(filtered_low) > len(filtered_results):
+                                filtered_results = filtered_low
+                                quality_warning = "Warning: Information is based on unverified sources. Please verify critically."
+
+                        if quality_warning:
+                            if quality_warning not in global_quality_warning:
+                                if global_quality_warning:
+                                    global_quality_warning += " " + quality_warning
+                                else:
+                                    global_quality_warning = quality_warning
+                            tui.log(f"{quality_warning}")
+
+                        results = self._format_search_results(section_query, filtered_results, deep=deep)
+                        sources = [r.get("href", "") or r.get("link", "") for r in filtered_results if r.get("href") or r.get("link")]
+
+                    for u in sources:
                         if u and u not in all_sources:
                             all_sources.append(u)
-                    tui.set_stage("Summarizing (retry)")
-                    section_html = self._summarize_section_html(
-                        topic=topic,
-                        title=spec.title,
-                        web_results=_truncate(retry_results, 4500),
-                        sources=retry_sources,
-                        lang=lang,
-                        min_words_target=min_words_target,
-                        attempt="retry",
-                        existing_section_html="",
-                    )
-                    word_count = _visible_word_count(section_html)
-                    text_len = _visible_text_len(section_html)
-                    tui.set_word_progress(word_count, min_words_target, min_words_ok)
 
-                # Short = below buffer threshold (e.g., < 400 words if target is 500)
-                is_short = (word_count > 0 and word_count < min_words_ok) or (word_count == 0 and min_chars_empty <= text_len < min_chars_ok)
-                if is_short:
-                    tui.set_stage("Append expand")
-                    tui.log(f"append: {spec.title} ({word_count} words)")
-                    _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: expanding content...", style="dim")
+                    try:
+                        sources_checkpoint.write_text(json.dumps(all_sources), encoding="utf-8")
+                    except Exception:
+                        pass
+
+                    tui.set_stage("Summarizing")
+                    _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: summarizing...", style="dim")
                     section_html = self._summarize_section_html(
                         topic=topic,
                         title=spec.title,
@@ -807,32 +815,125 @@ class ResearchAgentTool(BaseTool):
                         sources=sources,
                         lang=lang,
                         min_words_target=min_words_target,
-                        attempt="append",
-                        existing_section_html=section_html,
+                        attempt="initial",
+                        existing_section_html=(existing_section_html if (existing_section_html and len(specs) == 1) else ""),
                     )
+
                     word_count = _visible_word_count(section_html)
+                    text_len = _visible_text_len(section_html)
                     tui.set_word_progress(word_count, min_words_target, min_words_ok)
-                rendered_sections.append(section_html)
-                
-                # 🛡️ SAVE SECTION CHECKPOINT
-                try:
-                    section_checkpoint.write_text(section_html, encoding="utf-8")
-                except: pass
+
+                    # Retry only if: section is empty AND initial search had results AND enough budget left
+                    _remaining = _SECTION_TIMEOUT - (time.time() - _section_start)
+                    is_empty = (word_count == 0 and text_len < min_chars_empty) or (word_count > 0 and word_count < max(30, min_words_ok // 8))
+                    if is_empty and _initial_had_results and _remaining > (_WEB_SEARCH_TIMEOUT + 30):
+                        tui.set_stage("Retry (deep search)")
+                        tui.log(f"retry: {spec.title} (empty/too thin)")
+                        _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: retrying (deeper search)...", style="dim")
+                        retry_raw = _web_search_with_timeout(
+                            web, timeout_sec=_WEB_SEARCH_TIMEOUT,
+                            query=section_query, max_results=min(15, max_results + 5), deep=True,
+                            open_in_browser=False, return_raw=True,
+                        )
+                        if isinstance(retry_raw, list) and len(retry_raw) > 0:
+                            retry_filtered, _, retry_warning = filter_results_by_quality(retry_raw, min_score=1, max_results=min(10, max_results + 2))
+                            retry_results = self._format_search_results(section_query, retry_filtered, deep=True)
+                            retry_sources = [r.get("href", "") or r.get("link", "") for r in retry_filtered if r.get("href") or r.get("link")]
+                            if retry_warning and retry_warning not in global_quality_warning:
+                                if global_quality_warning:
+                                    global_quality_warning += " " + retry_warning
+                                else:
+                                    global_quality_warning = retry_warning
+
+                            for u in retry_sources:
+                                if u and u not in all_sources:
+                                    all_sources.append(u)
+                            tui.set_stage("Summarizing (retry)")
+                            _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: summarizing (retry)...", style="dim")
+                            section_html = self._summarize_section_html(
+                                topic=topic,
+                                title=spec.title,
+                                web_results=_truncate(retry_results, 4500),
+                                sources=retry_sources,
+                                lang=lang,
+                                min_words_target=min_words_target,
+                                attempt="retry",
+                                existing_section_html="",
+                            )
+                            word_count = _visible_word_count(section_html)
+                            text_len = _visible_text_len(section_html)
+                            tui.set_word_progress(word_count, min_words_target, min_words_ok)
+                        else:
+                            tui.log(f"Retry also returned no results, keeping placeholder")
+                            _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: retry had no results", style="dim")
+
+                    # Expand only if initial search had results AND section is short AND enough budget left
+                    _remaining = _SECTION_TIMEOUT - (time.time() - _section_start)
+                    is_short = (word_count > 0 and word_count < min_words_ok) or (word_count == 0 and min_chars_empty <= text_len < min_chars_ok)
+                    if is_short and _initial_had_results and _remaining > (_WEB_SEARCH_TIMEOUT + 30):
+                        tui.set_stage("Append expand")
+                        tui.log(f"append: {spec.title} ({word_count} words)")
+                        _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: expanding content...", style="dim")
+                        section_html = self._summarize_section_html(
+                            topic=topic,
+                            title=spec.title,
+                            web_results=_truncate(results, 4500),
+                            sources=sources,
+                            lang=lang,
+                            min_words_target=min_words_target,
+                            attempt="append",
+                            existing_section_html=section_html,
+                        )
+                        word_count = _visible_word_count(section_html)
+                        tui.set_word_progress(word_count, min_words_target, min_words_ok)
+                    rendered_sections.append(section_html)
+
+                    try:
+                        section_checkpoint.write_text(section_html, encoding="utf-8")
+                    except Exception:
+                        pass
+
+                    if _debug_lg:
+                        _debug_lg.event("section_complete", section_idx=idx, section_title=spec.title,
+                                       word_count=word_count, elapsed=time.time() - _section_start)
+
+                except Exception as sec_err:
+                    elapsed_sec = time.time() - _section_start
+                    tui.log(f"ERROR in {spec.title}: {str(sec_err)[:100]}")
+                    _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: ERROR - {str(sec_err)[:80]}", style="error")
+                    if _debug_lg:
+                        _debug_lg.event("section_error", section_idx=idx, section_title=spec.title,
+                                       error=str(sec_err)[:500], elapsed=elapsed_sec)
+                    placeholder = (
+                        f"<h2>{spec.title}</h2>"
+                        f"<p><em>{'Fehler beim Generieren dieses Abschnitts.' if lang == 'de' else 'Error generating this section.'}</em></p>"
+                    )
+                    rendered_sections.append(placeholder)
+
+            total_elapsed = time.time() - _loop_start
+            total_words = sum(_visible_word_count(s) for s in rendered_sections)
+            _emit_progress(
+                f"Research completed: {len(rendered_sections)} sections, ~{total_words} words, "
+                f"{len(all_sources)} sources ({int(total_elapsed)}s)",
+                style="success",
+                presence="idle",
+            )
+            if _debug_lg:
+                _debug_lg.event("research_loop_complete", sections=len(rendered_sections),
+                               words=total_words, sources=len(all_sources), elapsed=total_elapsed)
 
             # Assemble and Save
             tui.set_stage("Finalizing")
             html = self._assemble_html(topic, rendered_sections, all_sources, lang, global_quality_warning)
-            
-            # --- 🛡️ CLEANUP CHECKPOINTS ---
+
             try:
                 for idx, spec in enumerate(specs, 1):
                     safe_title = re.sub(r'[^a-zA-Z0-9]', '_', spec.title)[:30]
                     section_checkpoint = checkpoint_dir / f"sec_{topic_hash}_{idx:02d}_{safe_title}.html"
                     if section_checkpoint.exists(): section_checkpoint.unlink()
                 if sources_checkpoint.exists(): sources_checkpoint.unlink()
-            except: pass
-
-
+            except Exception:
+                pass
 
             if out_format == "html_fragment":
                 # Return only fragments (useful for patching missing sections)
@@ -840,6 +941,43 @@ class ResearchAgentTool(BaseTool):
 
             if out_format == "markdown":
                 md = self._assemble_markdown(topic, rendered_sections, all_sources)
+
+                is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL") == "1"
+                if is_subagent and not in_workflow:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    safe_topic = re.sub(r'[^\w\s-]', '', topic).strip().replace(' ', '_')[:50]
+                    filename = f"research_{safe_topic}_{timestamp}.md"
+                    output_dir = Platform.get_research_dir()
+                    output_path = output_dir / filename
+
+                    if _debug_lg:
+                        _debug_lg.event("saving_report_md", output_path=str(output_path), md_len=len(md))
+
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write(md)
+
+                    webui_mode = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
+                    session_id_env = os.environ.get("VAF_SESSION_ID", "").strip()
+                    if webui_mode and session_id_env:
+                        try:
+                            from vaf.core.web_interface import notify_document_created
+                            notify_document_created(session_id_env, str(output_path), title=output_path.name)
+                        except Exception:
+                            pass
+
+                    word_count = sum(len(s.split()) for s in rendered_sections)
+                    outline = "; ".join(getattr(sp, "title", str(sp)) for sp in specs[:15])
+                    return (
+                        f"TASK COMPLETE — Research Report: {topic}\n\n"
+                        f"Saved to: {output_path}\n"
+                        f"{len(rendered_sections)} sections, ~{word_count} words\n"
+                        f"{len(all_sources)} sources analyzed\n"
+                        f"Outline (for your verbal summary to the user): {outline}\n\n"
+                        f"The report has been saved and is now open in the Document Editor.\n"
+                        f"DO NOT run another research or open the file again. "
+                        f"Summarize briefly for the user using the outline and counts above."
+                    )
+
                 return md
 
             # ═══════════════════════════════════════════════════════════════
@@ -926,12 +1064,16 @@ class ResearchAgentTool(BaseTool):
                     pass
 
                 word_count = sum(len(s.split()) for s in rendered_sections)
+                outline = "; ".join(getattr(sp, "title", str(sp)) for sp in specs[:15])
                 summary = (
-                    f"Research Report: {topic}\n\n"
+                    f"TASK COMPLETE — Research Report: {topic}\n\n"
                     f"Saved to: {output_path}\n"
                     f"{len(rendered_sections)} sections, ~{word_count} words\n"
-                    f"{len(all_sources)} sources analyzed\n\n"
-                    f"The report was saved successfully."
+                    f"{len(all_sources)} sources analyzed\n"
+                    f"Outline (for your verbal summary to the user): {outline}\n\n"
+                    f"The report has been saved and is now open in the Document Editor.\n"
+                    f"DO NOT run another research or open the file again. "
+                    f"Summarize briefly for the user using the outline and counts above."
                 )
                 if _debug_lg:
                     _debug_lg.event("research_complete", output_path=str(output_path),
@@ -946,14 +1088,27 @@ class ResearchAgentTool(BaseTool):
                 return html
 
         if not use_live:
-            if not in_workflow:
+            import logging as _logging
+            for _noisy in ("httpx", "httpcore"):
+                _logging.getLogger(_noisy).setLevel(_logging.WARNING)
+            if _is_piped_subprocess:
+                _logging.getLogger().setLevel(_logging.WARNING)
+            if not in_workflow and not _is_piped_subprocess:
                 try:
                     UI.console.print(tui.render())
                 except (BrokenPipeError, OSError):
                     pass
                 except Exception:
                     pass
-            return _run_research_loop()
+            prev_suppress = os.environ.get("VAF_SUPPRESS_WEB_SEARCH_EVENTS")
+            os.environ["VAF_SUPPRESS_WEB_SEARCH_EVENTS"] = "1"
+            try:
+                return _run_research_loop()
+            finally:
+                if prev_suppress is None:
+                    os.environ.pop("VAF_SUPPRESS_WEB_SEARCH_EVENTS", None)
+                else:
+                    os.environ["VAF_SUPPRESS_WEB_SEARCH_EVENTS"] = prev_suppress
 
         # Live animation while we work (smooth refresh like coding_agent).
         # CRITICAL: Render once before starting Live to prevent multiple empty renders

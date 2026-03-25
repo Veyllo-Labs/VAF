@@ -11,15 +11,61 @@ Best practice: single entry point for HTTPS, TLS termination here.
 
 import asyncio
 import logging
+import ssl
+from datetime import datetime
+from pathlib import Path
 from typing import Callable
 
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route, WebSocketRoute
+from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
 
 logger = logging.getLogger(__name__)
+
+
+def _access_log_path() -> Path:
+    """Return path for the proxy access log (logs/https_proxy_access_<date>.log)."""
+    from vaf.core.platform import Platform
+    log_dir = Platform.data_dir() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / f"https_proxy_access_{datetime.now().strftime('%Y-%m-%d')}.log"
+
+
+def _write_access(line: str) -> None:
+    """Append a timestamped line to the proxy access log."""
+    try:
+        ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+        with open(_access_log_path(), "a", encoding="utf-8") as f:
+            f.write(f"{ts}  {line}\n")
+    except Exception:
+        pass
+
+
+class AccessLogMiddleware:
+    """ASGI middleware that logs every incoming request/connection to a file."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            client = scope.get("client") or ("?", 0)
+            method = scope.get("method", "?")
+            path = scope.get("path", "/")
+            _write_access(f"HTTP  {client[0]}:{client[1]}  {method} {path}")
+        elif scope["type"] == "websocket":
+            client = scope.get("client") or ("?", 0)
+            path = scope.get("path", "/ws")
+            _write_access(f"WS    {client[0]}:{client[1]}  {path}")
+        elif scope["type"] == "lifespan":
+            _write_access("LIFESPAN event")
+        else:
+            client = scope.get("client") or ("?", 0)
+            _write_access(f"OTHER type={scope['type']}  {client[0]}:{client[1]}")
+        await self.app(scope, receive, send)
 
 FRONTEND_ORIGIN = "http://127.0.0.1:3000"
 # Internal HTTP channel (8005) is always running when this proxy runs (TLS on); 8001 is HTTPS-only
@@ -199,12 +245,11 @@ def create_proxy_app() -> Starlette:
         WebSocketRoute("/ws", endpoint=_ws_handler),
         Route("/api", endpoint=_api_route, methods=_API_METHODS),
         Route("/api/{rest:path}", endpoint=_api_route, methods=_API_METHODS),
-        # Sound files are served by the backend (vaf/media/sounds), not Next.js
         Route("/sounds/{filename:path}", endpoint=_api_route, methods=["GET", "HEAD"]),
-        # Static assets (/_next/*, etc.) and pages need GET/HEAD; allow all for compatibility
         Route("/{path:path}", endpoint=_proxy_handler, methods=_API_METHODS),
     ]
-    return Starlette(routes=routes, on_shutdown=[_shutdown_clients])
+    app = Starlette(routes=routes, on_shutdown=[_shutdown_clients])
+    return AccessLogMiddleware(app)
 
 
 def run_https_proxy(
@@ -222,18 +267,23 @@ def run_https_proxy(
     try:
         import uvicorn
         app = create_proxy_app()
+        # Compatibility: ensure TLS 1.2 clients can connect.
+        # Some devices fail with ERR_EMPTY_RESPONSE if only TLS 1.3 is effectively negotiated.
         config = uvicorn.Config(
             app,
             host=host,
             port=port,
             ssl_certfile=ssl_certfile,
             ssl_keyfile=ssl_keyfile,
-            log_level="warning",
+            ssl_version=ssl.PROTOCOL_TLS_SERVER,
+            ssl_ciphers="DEFAULT",
+            log_level="info",
             use_colors=False,
         )
         server = uvicorn.Server(config)
         server.install_signal_handlers = lambda: None
         _log(f"HTTPS proxy listening on https://0.0.0.0:{port} (-> 3000, 8005)")
+        _write_access(f"PROXY STARTED  host={host} port={port} cert={ssl_certfile}")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(server.serve())

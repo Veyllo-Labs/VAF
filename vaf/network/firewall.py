@@ -162,29 +162,11 @@ def _setup_firewall_windows(port: int, port_frontend: int) -> bool:
             _windows_firewall_skip = True
             return False
         if result.returncode != 0:
-            logger.error(f"Failed to create allow rule: {result.stderr}")
+            err_detail = (result.stderr or result.stdout or "").strip()
+            logger.error(f"Failed to create allow rule on port {p}: {err_detail}")
             _windows_firewall_skip = True
             return False
-        
-        # Create block rule for all other IPs (lower priority)
-        block_cmd = [
-            'netsh', 'advfirewall', 'firewall', 'add', 'rule',
-            f'name={FIREWALL_RULE_NAME}-Block-{p}',
-            'dir=in',
-            'action=block',
-            f'localport={p}',
-            'protocol=tcp'
-        ]
-        
-        try:
-            block_result = subprocess.run(
-                block_cmd, capture_output=True, text=True, creationflags=_WIN_CREATE_NO_WINDOW
-            )
-            if block_result.returncode != 0:
-                logger.warning(f"Failed to create block rule (may already exist): {block_result.stderr}")
-        except Exception as e:
-            logger.debug("Block rule netsh call failed: %s", e)
-    logger.info(f"Windows Firewall rules created for ports {ports}")
+    logger.info(f"Windows Firewall allow rules created for ports {ports}")
     return True
 
 
@@ -192,9 +174,9 @@ def _cleanup_firewall_windows() -> bool:
     """Remove Windows Firewall rules."""
     logger.info("Cleaning up Windows Firewall rules")
     
-    # Delete all rules with our prefix
+    # Delete known rule names with our prefix (legacy + current ports)
     for rule_type in ['Allow', 'Block']:
-        for port in [8001, 3000]:  # Common ports
+        for port in [443, 8443, 8001, 8005, 3000]:
             subprocess.run(
                 ['netsh', 'advfirewall', 'firewall', 'delete', 'rule',
                  f'name={FIREWALL_RULE_NAME}-{rule_type}-{port}'],

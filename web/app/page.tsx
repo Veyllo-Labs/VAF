@@ -637,6 +637,25 @@ function VAFDashboardContent() {
     const [authError, setAuthError] = useState<string | null>(null);
     const [authRetryKey, setAuthRetryKey] = useState(0);
 
+    // If network TLS/proxy mode is active, avoid staying on :3000.
+    // Redirect to the HTTPS access port so auth/ws/session are on the correct origin.
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (window.location.port !== '3000') return;
+        const ac = new AbortController();
+        fetch(`${getApiBase()}/api/network/ws-config`, { signal: ac.signal, cache: 'no-store' })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((cfg) => {
+                const useWss = !!cfg?.useWss;
+                const targetPort = String(cfg?.port || '');
+                if (!useWss || !targetPort || targetPort === '3000') return;
+                const targetUrl = `https://${window.location.hostname}:${targetPort}${window.location.pathname}${window.location.search}${window.location.hash}`;
+                window.location.replace(targetUrl);
+            })
+            .catch(() => {});
+        return () => ac.abort();
+    }, []);
+
     useEffect(() => {
         setAuthError(null);
         const ac = new AbortController();
@@ -1897,7 +1916,18 @@ function VAFDashboardContent() {
                     const prevSteps = subAgentStepsRef.current;
                     // Keep previous step list if this update carries only status text.
                     // Otherwise, status-only updates clear steps and cause repeated generic "Running ..." entries.
-                    const newSteps = incomingSteps.length > 0 ? incomingSteps : prevSteps;
+                    let newSteps = incomingSteps.length > 0 ? incomingSteps : prevSteps;
+                    // When agent signals idle/completed, mark any leftover "running" steps as completed
+                    // so the stop button hides and the UI reflects the finished state.
+                    const incomingPresence = data.presence || '';
+                    if (incomingPresence === 'idle' || incomingPresence === 'error') {
+                        const hasRunning = newSteps.some((s: any) => s.status === 'running');
+                        if (hasRunning) {
+                            newSteps = newSteps.map((s: any) =>
+                                s.status === 'running' ? { ...s, status: incomingPresence === 'error' ? 'failed' : 'completed' } : s
+                            );
+                        }
+                    }
                     const prevMap = new Map(prevSteps.map(step => [step.id, step.status]));
                     const statusLines: string[] = [];
 

@@ -629,23 +629,45 @@ class Platform:
                     def _stream_output():
                         if not proc.stdout:
                             return
-                        output_lines = []
-                        try:
-                            for line in proc.stdout:
-                                clean = line.rstrip("\r\n")
-                                if not clean:
-                                    continue
-                                output_lines.append(clean)
-                                _send_web_update({
-                                    "type": "subagent_output_stream",
-                                    "taskId": task_id or None,
-                                    "agentType": agent_type or None,
-                                    "line": clean
-                                })
-                        except (ValueError, OSError):
-                            pass
+                        import queue as _queue
 
-                        proc.wait()
+                        output_lines = []
+                        _line_q: _queue.Queue = _queue.Queue()
+
+                        def _pipe_drain():
+                            """Fast reader: drains OS pipe into unbounded in-memory queue
+                            so the subprocess never blocks on a full pipe buffer."""
+                            try:
+                                for raw in proc.stdout:
+                                    _line_q.put(raw)
+                            except Exception:
+                                pass
+                            finally:
+                                _line_q.put(None)
+
+                        threading.Thread(target=_pipe_drain, daemon=True).start()
+
+                        while True:
+                            raw = _line_q.get()
+                            if raw is None:
+                                break
+                            clean = raw.rstrip("\r\n")
+                            if not clean:
+                                continue
+                            output_lines.append(clean)
+                            _send_web_update({
+                                "type": "subagent_output_stream",
+                                "taskId": task_id or None,
+                                "agentType": agent_type or None,
+                                "line": clean
+                            })
+
+                        try:
+                            proc.wait(timeout=900)
+                        except subprocess.TimeoutExpired:
+                            logger.warning(f"Sub-agent process {proc.pid} did not exit within 900s, killing")
+                            proc.kill()
+                            proc.wait(timeout=10)
                         try:
                             Platform.unregister_webui_subagent_process(proc.pid)
                         except Exception:
@@ -653,10 +675,8 @@ class Platform:
                         if proc.returncode != 0:
                             error_msg = f"Sub-agent process exited with code {proc.returncode}"
                             if output_lines:
-                                # Include last few lines of output in error
                                 error_msg += f". Last output: {' | '.join(output_lines[-5:])}"
                             logger.error(error_msg)
-                            # Try to fail the task via IPC
                             try:
                                 from vaf.core.subagent_ipc import get_ipc
                                 ipc = get_ipc()
@@ -664,6 +684,21 @@ class Platform:
                                     ipc.fail_task(task_id, error_msg)
                             except Exception:
                                 pass
+                            _agent_title = (agent_type or "Sub-Agent").replace("_", " ").title()
+                            _send_web_update({
+                                "type": "subagent_update",
+                                "agentName": _agent_title,
+                                "status": f"Process exited with error (code {proc.returncode})",
+                                "presence": "error",
+                            })
+                        else:
+                            _agent_title = (agent_type or "Sub-Agent").replace("_", " ").title()
+                            _send_web_update({
+                                "type": "subagent_update",
+                                "agentName": _agent_title,
+                                "status": "Completed",
+                                "presence": "idle",
+                            })
 
                     import threading
                     threading.Thread(target=_stream_output, daemon=True).start()

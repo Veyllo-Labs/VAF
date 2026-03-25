@@ -26,6 +26,14 @@ _verification_state = {
 }
 
 
+def _is_discord_admin(user: dict) -> bool:
+    """Return True if current request user is local admin or role=admin."""
+    from vaf.core.config import get_local_admin_scope_id
+    role = (user or {}).get("role")
+    scope = (user or {}).get("user_scope_id")
+    return (str(role or "").lower() == "admin") or (scope is not None and str(scope) == str(get_local_admin_scope_id()))
+
+
 class StartVerificationRequest(BaseModel):
     bot_token: str
     verification_code: str
@@ -170,12 +178,25 @@ async def get_verification_status():
 
 
 @router.get("/dashboard")
-async def get_discord_dashboard():
+async def get_discord_dashboard(request: Request):
     """
     Data for the Discord settings dashboard: status, admin info, activity. No sensitive data (no tokens).
     """
     from vaf.core.config import Config
     from vaf.api.discord_bridge import is_bridge_running
+
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    user = get_current_user_or_local_admin(request)
+    if not _is_discord_admin(user):
+        # Discord is single-tenant admin integration. Non-admin users must not see admin metadata/activity.
+        return {
+            "configured": False,
+            "running": False,
+            "admin_username": None,
+            "admin_user_id": None,
+            "enabled": False,
+            "activity": [],
+        }
 
     discord_config = Config.get("discord_config") or {}
     if not isinstance(discord_config, dict):
@@ -205,12 +226,12 @@ async def get_discord_dashboard():
 @router.get("/status")
 async def get_discord_status(request: Request):
     """Get the current Discord bridge status — scoped per user."""
-    from vaf.core.config import Config, is_admin_user
+    from vaf.core.config import Config
     from vaf.api.discord_bridge import is_bridge_running
     from vaf.api.config_routes import get_current_user_or_local_admin
 
     user = get_current_user_or_local_admin(request)
-    if not is_admin_user(user.get("user_scope_id"), user.get("role")):
+    if not _is_discord_admin(user):
         # Discord is single-tenant (admin-only). Non-admin never has Discord.
         return {"configured": False, "enabled": False, "running": False, "admin_username": None}
 
@@ -251,11 +272,15 @@ async def start_discord_bridge():
 
 
 @router.get("/session/{session_id}/history")
-async def get_discord_session_history(session_id: str):
+async def get_discord_session_history(session_id: str, request: Request):
     """Return message history for a Discord session (session_id must start with 'discord_')."""
     if not session_id.startswith("discord_"):
         raise HTTPException(status_code=400, detail="Invalid session id")
     try:
+        from vaf.api.config_routes import get_current_user_or_local_admin
+        user = get_current_user_or_local_admin(request)
+        if not _is_discord_admin(user):
+            raise HTTPException(status_code=403, detail="Access denied")
         from vaf.core.config import Config
         from vaf.core.session import SessionManager
         session_mgr = SessionManager()

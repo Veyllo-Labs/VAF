@@ -35,6 +35,31 @@ _outgoing_queue: Optional[queue.Queue] = None
 # Per-chat debounce: wait for follow-up messages, then enqueue combined text
 _pending_by_chat: Dict[str, Dict[str, Any]] = {}
 _pending_lock = threading.Lock()
+_unauth_log_last: Dict[str, float] = {}
+_unauth_log_lock = threading.Lock()
+_UNAUTH_LOG_THROTTLE_SEC = 60.0
+
+
+def _drop_unauthorized_telegram(telegram_user_id: str, chat_id: str, message_kind: str = "text") -> None:
+    """
+    Silently drop unauthorized inbound Telegram traffic.
+    Logging is throttled per user to avoid log amplification under abuse.
+    """
+    uid = str(telegram_user_id or "")
+    now = time.time()
+    should_log = False
+    with _unauth_log_lock:
+        last = float(_unauth_log_last.get(uid, 0.0))
+        if now - last >= _UNAUTH_LOG_THROTTLE_SEC:
+            _unauth_log_last[uid] = now
+            should_log = True
+    if should_log:
+        logger.warning(
+            "Dropped unauthorized Telegram %s message from user_id=%s chat_id=%s",
+            message_kind,
+            uid,
+            str(chat_id or ""),
+        )
 
 
 def _whitelist_lookup(telegram_user_id: str) -> Optional[Dict[str, Any]]:
@@ -351,6 +376,30 @@ _voice_reply_pending: Dict[str, str] = {}  # chat_id -> detected_language
 _voice_reply_lock = threading.Lock()
 
 
+def _ensure_sender_thread(bot_token: str) -> bool:
+    """
+    Ensure Telegram sender thread is alive.
+    Returns True if a new sender thread was started, otherwise False.
+    """
+    global _sender_thread, _outgoing_queue
+    token = str(bot_token or "").strip()
+    if not token:
+        return False
+    if _outgoing_queue is None:
+        _outgoing_queue = queue.Queue()
+    if _sender_thread is not None and _sender_thread.is_alive():
+        return False
+    _sender_thread = threading.Thread(target=_sender_loop, args=(token,), daemon=True, name="vaf-telegram-sender")
+    _sender_thread.start()
+    logger.info("Telegram sender thread started")
+    try:
+        from vaf.core.log_helper import log_telegram_reply
+        log_telegram_reply("SENDER thread started")
+    except Exception:
+        pass
+    return True
+
+
 def _sender_loop(bot_token: str):
     """Run in a thread: read (chat_id, text, voice_lang?, file_path?) from _outgoing_queue and POST to Telegram."""
     global _outgoing_queue
@@ -450,6 +499,16 @@ def _sender_loop(bot_token: str):
 
 def _enqueue_reply(chat_id: str, text: str, voice_lang: Optional[str] = None, *, file_path: Optional[str] = None) -> None:
     """Enqueue a reply. If voice_lang is set, reply as voice. If file_path is set, send as document with caption."""
+    # Self-heal: sender thread may die while bot thread remains alive.
+    # If that happens, replies get enqueued but never delivered.
+    if _sender_thread is None or not _sender_thread.is_alive() or _outgoing_queue is None:
+        try:
+            cfg = Config.get("telegram_config") or {}
+            token = (cfg.get("bot_token") or "").strip() if isinstance(cfg, dict) else ""
+            _ensure_sender_thread(token)
+        except Exception:
+            pass
+
     try:
         from vaf.core.log_helper import log_telegram_reply
         log_telegram_reply(f"BRIDGE enqueue chat_id={chat_id} len={len(text)} voice={voice_lang} file={bool(file_path)} queue={_outgoing_queue is not None}")
@@ -557,9 +616,7 @@ def _run_bot():
         chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
         entry, is_relay = _resolve_telegram_user(telegram_user_id)
         if not entry:
-            await update.message.reply_text(
-                "You are not authorized to use this bot. Please add your Telegram in VAF Settings → Connections."
-            )
+            _drop_unauthorized_telegram(telegram_user_id, chat_id, "text")
             return
         user_scope_id = entry.get("user_scope_id")
         vaf_username = entry.get("vaf_username") or "admin"
@@ -601,9 +658,7 @@ def _run_bot():
         # Check authorization
         entry, is_relay = _resolve_telegram_user(telegram_user_id)
         if not entry:
-            await update.message.reply_text(
-                "You are not authorized to use this bot. Please add your Telegram in VAF Settings → Connections."
-            )
+            _drop_unauthorized_telegram(telegram_user_id, chat_id, "voice")
             return
         user_scope_id = entry.get("user_scope_id")
         vaf_username = entry.get("vaf_username") or "admin"
@@ -660,9 +715,7 @@ def _run_bot():
 
         entry, is_relay = _resolve_telegram_user(telegram_user_id)
         if not entry:
-            await update.message.reply_text(
-                "You are not authorized to use this bot. Please add your Telegram in VAF Settings → Connections."
-            )
+            _drop_unauthorized_telegram(telegram_user_id, chat_id, "document")
             return
         user_scope_id = entry.get("user_scope_id")
         vaf_username = entry.get("vaf_username") or "admin"
@@ -771,6 +824,18 @@ def _run_bot():
     )
 
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            user = update.effective_user
+            if user:
+                telegram_user_id = str(user.id)
+                chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
+                entry, _ = _resolve_telegram_user(telegram_user_id)
+                if not entry:
+                    _drop_unauthorized_telegram(telegram_user_id, chat_id, "command_start")
+                    return
+        except Exception:
+            # Fail-safe: do not leak command responses to unauthorized users.
+            return
         await update.message.reply_text(
             "Hi! Send a message and I’ll relay it to your VAF agent. "
             "If you get “not authorized”, add your Telegram in VAF Settings → Connections."
@@ -807,13 +872,13 @@ def start_bridge() -> bool:
     telegram_config = Config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict) or not telegram_config.get("bot_token"):
         return False
-    if _bridge_thread is not None and _bridge_thread.is_alive():
-        return True
-    _bridge_stop_requested = False
-    _outgoing_queue = queue.Queue()
     bot_token = (telegram_config.get("bot_token") or "").strip()
-    _sender_thread = threading.Thread(target=_sender_loop, args=(bot_token,), daemon=True)
-    _sender_thread.start()
+    _bridge_stop_requested = False
+    sender_started = _ensure_sender_thread(bot_token)
+    if _bridge_thread is not None and _bridge_thread.is_alive():
+        if sender_started:
+            logger.warning("Telegram bot thread alive but sender was down; sender restarted")
+        return True
     _bridge_thread = threading.Thread(target=_run_bot, daemon=True)
     _bridge_thread.start()
     logger.info("Telegram bridge started")

@@ -30,25 +30,13 @@ def _get_github_account_for_user(
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Return first GitHub account for this user from config (account_id, login, allow_write).
-
-    Lookup order:
-    1. If username is local admin (or None) → ``github_config``
-    2. Otherwise → ``github_config_by_user[username]``
-    3. Fallback → ``github_config`` (covers single-user setups where the
-       GitHub account was connected as admin but the WebUI session has a
-       different username/scope, e.g. 'Mert' with a JWT scope).
-    """
+    """Return first GitHub account for this user from config (strict per-user isolation)."""
     local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
     if not username or username.strip().lower() == local_admin:
         gc = Config.get("github_config") or {}
     else:
         by_user = Config.get("github_config_by_user") or {}
         gc = by_user.get(username.strip(), {}) if isinstance(by_user, dict) else {}
-        # Fallback: per-user bucket empty → check legacy github_config
-        # (same pattern as email: single-user setup where account lives in admin config)
-        if not (gc.get("accounts") if isinstance(gc, dict) else None):
-            gc = Config.get("github_config") or {}
     accounts = gc.get("accounts") or []
     for acc in accounts:
         if acc.get("enabled", True) and acc.get("account_id"):

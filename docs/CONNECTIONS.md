@@ -190,13 +190,16 @@ The Discord configuration is stored locally in your VAF config:
 - Each whitelist entry links one Telegram user to one VAF user (user_scope_id and username from the Web UI session when that user was added).
 - **Verified account owner**: The user who linked their Telegram with the bot (via the whitelist step or by having sent at least one message) does not need to be manually re-added for proactive sends. The bot resolves their chat ID from the whitelist (with loose matching on scope and username) or from the single linked account when there is only one.
 - **Contact whitelist**: If a Telegram user ID is stored in a contact (Settings → Connections → Contacts) with **Can reach your assistant** enabled, that contact can send messages to your assistant (handled in your context, like a front office).
-- Only whitelisted users receive replies; others see an authorization message.
+- Only whitelisted users receive replies. Non-whitelisted inbound messages are dropped at ingress (no reply, no queue task), reducing abuse/amplification risk.
 - RAG, memories, and user identity are scoped per user, same as in the Web UI.
 
 ### Session storage and memory compaction (15-message rule)
 
 - **Verlauf:** Telegram chat history is stored in the same place as Web UI sessions: `~/.vaf/sessions/`. Each Telegram user has one session file: `telegram_<user_id>.json`. The dashboard “Session-Verlauf” popup reads from this.
+- **Order in dashboard:** In the Telegram session history popup, messages are shown **newest first** (latest message at the top).
 - **Nach-15-Nachrichten-Regel:** The same **session compaction** as in the Web UI applies: every N **main-user** turns (default 15, configurable via `memory_compaction_interval`), the model is prompted to write durable memories into RAG. The prompt includes only **user and assistant messages** (no system or tool content). The count is **cumulative** (e.g. 4 today + 5 tomorrow = 9; at 15 total, compaction runs). Only role **user** (main user of that session) is counted; other participants (relay contacts, other bot users) have separate sessions. Memories are stored under the whitelist user’s `user_scope_id`, so they appear in the same Memory graph and are used in later Web and Telegram chats. Reply length: `memory_compaction_max_tokens` (default 4000). See [MEMORY_SYSTEM.md](MEMORY_SYSTEM.md#session-compaction-background).
+- **Bounded history after compaction:** After each Telegram Memory Learning run, session history is trimmed to keep only the most recent user-turn window (aligned with `memory_compaction_interval`, default 15). This keeps dashboard history bounded and avoids unbounded growth of Telegram session files.
+- **Progress display:** The dashboard counter reflects the **current cycle progress** (resets to `0 / interval` after each Memory Learning) while still showing the last compaction checkpoint turn.
 
 ### Configuration
 
@@ -234,8 +237,10 @@ Global options (top-level in config):
 
 ### Troubleshooting
 
-- **"Not authorized"**: Add your Telegram in the wizard whitelist step (your own account only).
-- **No reply**: Ensure the bridge is running (Settings → Connections, Telegram toggle on). After a VAF restart, the bridge auto-starts if Telegram is enabled.
+- **No reply for a non-whitelisted Telegram account**: Expected behavior. Unauthorized traffic is silently dropped by design.
+- **No reply for a whitelisted account**: Ensure the bridge is running (Settings → Connections, Telegram toggle on). After a VAF restart, the bridge auto-starts if Telegram is enabled.
+- **High unauthorized traffic**: Unauthorized drops are logged with per-user throttling to avoid log amplification under spam/flood attempts.
+- **Telegram reconnects after restart even after Disconnect**: Disconnect now clears token + verification + whitelist and persists `enabled=false`. After disconnect, Telegram should stay off across restarts. If it still reconnects, refresh Settings and verify `telegram_config` is empty/disabled in the saved config.
 
 ## WhatsApp Integration
 

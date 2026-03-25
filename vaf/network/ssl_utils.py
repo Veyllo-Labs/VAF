@@ -213,6 +213,21 @@ def _is_cert_valid(cert_path: Path, min_days_remaining: int = 30) -> bool:
         return False
 
 
+def _cert_has_required_ip_sans(cert_path: Path, required_ips: set[str]) -> bool:
+    """Check if certificate SAN includes all required IP addresses."""
+    try:
+        cert_pem = cert_path.read_bytes()
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        san_ips = {str(v) for v in san_ext.get_values_for_type(x509.IPAddress)}
+        for ip in (required_ips or set()):
+            if ip and ip not in san_ips:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def ensure_ssl_certificates() -> tuple[Optional[str], Optional[str]]:
     """
     Ensure SSL certificates exist and are valid.
@@ -230,21 +245,47 @@ def ensure_ssl_certificates() -> tuple[Optional[str], Optional[str]]:
     if not tls_enabled:
         return None, None
 
+    # Current required IP SANs (for LAN IP changes across restarts)
+    required_ips: set[str] = {"127.0.0.1"}
+    try:
+        from vaf.network.binding import get_local_network_ip
+        lan_ip = str(get_local_network_ip() or "").strip()
+        if lan_ip:
+            required_ips.add(lan_ip)
+    except Exception:
+        pass
+
     # Check if user has manually configured cert paths
     ssl_cert = (Config.get("local_network_ssl_cert") or "").strip()
     ssl_key = (Config.get("local_network_ssl_key") or "").strip()
 
+    ssl_dir = _get_ssl_dir()
+    auto_server_cert = (ssl_dir / "server.pem").resolve()
+    auto_server_key = (ssl_dir / "server-key.pem").resolve()
+
     if ssl_cert and ssl_key and os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
         # User-provided certs exist - check validity
         if _is_cert_valid(Path(ssl_cert)):
-            logger.info("Using user-provided SSL certificate: %s", ssl_cert)
-            return ssl_cert, ssl_key
+            try:
+                cert_resolved = Path(ssl_cert).resolve()
+                key_resolved = Path(ssl_key).resolve()
+            except Exception:
+                cert_resolved = Path(ssl_cert)
+                key_resolved = Path(ssl_key)
+            is_auto_managed_cert = cert_resolved == auto_server_cert and key_resolved == auto_server_key
+            if is_auto_managed_cert and not _cert_has_required_ip_sans(Path(ssl_cert), required_ips):
+                logger.warning(
+                    "Existing auto-generated SSL cert SANs missing current LAN IP(s) %s; regenerating.",
+                    sorted(required_ips),
+                )
+            else:
+                logger.info("Using user-provided SSL certificate: %s", ssl_cert)
+                return ssl_cert, ssl_key
         else:
             logger.warning("User-provided SSL certificate is expired or invalid: %s", ssl_cert)
             # Fall through to auto-generation
 
     # Auto-generate certificates
-    ssl_dir = _get_ssl_dir()
     ca_key_path = ssl_dir / "ca-key.pem"
     ca_cert_path = ssl_dir / "ca.pem"
     server_cert_path = ssl_dir / "server.pem"
@@ -252,12 +293,17 @@ def ensure_ssl_certificates() -> tuple[Optional[str], Optional[str]]:
 
     # Check if existing auto-generated certs are still valid
     if server_cert_path.exists() and server_key_path.exists():
-        if _is_cert_valid(server_cert_path):
+        if _is_cert_valid(server_cert_path) and _cert_has_required_ip_sans(server_cert_path, required_ips):
             logger.info("Using existing auto-generated SSL certificate")
             # Update config with auto-generated paths
             Config.set("local_network_ssl_cert", str(server_cert_path))
             Config.set("local_network_ssl_key", str(server_key_path))
             return str(server_cert_path), str(server_key_path)
+        if _is_cert_valid(server_cert_path):
+            logger.warning(
+                "Auto-generated SSL cert is valid but SANs do not match current LAN IP(s) %s; regenerating.",
+                sorted(required_ips),
+            )
 
     # Generate new CA if needed
     if ca_key_path.exists() and ca_cert_path.exists():

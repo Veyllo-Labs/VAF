@@ -219,7 +219,22 @@ def get_state_redirect_base(state: str) -> Optional[str]:
     return entry.get("redirect_base")
 
 
-def get_authorization_url(provider: str, redirect_uri: str, redirect_base: Optional[str] = None) -> Tuple[str, str]:
+def get_state_username(state: str) -> Optional[str]:
+    """Return initiating username from state, or None."""
+    states = _load_states()
+    entry = states.get(state)
+    if not entry:
+        return None
+    username = (entry.get("username") or "").strip()
+    return username or None
+
+
+def get_authorization_url(
+    provider: str,
+    redirect_uri: str,
+    redirect_base: Optional[str] = None,
+    username: Optional[str] = None,
+) -> Tuple[str, str]:
     """Build OAuth URL with PKCE. Returns (auth_url, state). redirect_base = frontend origin (e.g. http://localhost:3000) for post-OAuth redirect."""
     if provider not in CLOUD_PROVIDERS:
         raise ValueError(f"Unknown cloud provider: {provider}")
@@ -254,6 +269,7 @@ def get_authorization_url(provider: str, redirect_uri: str, redirect_base: Optio
         "code_verifier": verifier,
         "redirect_uri": redirect_uri,
         "redirect_base": (redirect_base or "").strip() or None,
+        "username": (username or "").strip() or None,
         "created_at": time.time(),
     }
     _save_states(states)
@@ -276,6 +292,8 @@ def exchange_code_for_tokens(
     code_verifier = entry.get("code_verifier")
     if not code_verifier:
         raise ValueError("Missing code_verifier.")
+    username_from_state = (entry.get("username") or "").strip() or None
+    effective_username = username if username is not None else username_from_state
     exchange_redirect_uri = entry.get("redirect_uri") or redirect_uri
     if provider not in CLOUD_PROVIDERS:
         raise ValueError(f"Unknown cloud provider: {provider}")
@@ -314,8 +332,8 @@ def exchange_code_for_tokens(
     expires_in = data.get("expires_in")
     expires_at = time.time() + int(expires_in) if expires_in else None
     account_id = _resolve_account_id(provider, access)
-    set_cloud_oauth_tokens(account_id, provider, access, refresh, expires_at, username)
-    return {**data, "account_id": account_id, "provider": provider}
+    set_cloud_oauth_tokens(account_id, provider, access, refresh, expires_at, effective_username)
+    return {**data, "account_id": account_id, "provider": provider, "username": effective_username}
 
 
 def _cred_username_for_store(username: Optional[str]) -> Optional[str]:

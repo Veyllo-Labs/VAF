@@ -1185,6 +1185,12 @@ class Agent:
         if not user_intent or not result:
             return True, None
 
+        # Research/document agents with clear completion signals → always accept
+        if agent_type in ("research_agent", "document_agent"):
+            rl = result.lower()
+            if any(x in rl for x in ["task complete", "report has been saved", "saved successfully", "open in the document editor"]):
+                return True, None
+
         intent_lower = user_intent.lower()
         result_lower = result.lower()
 
@@ -1251,6 +1257,12 @@ class Agent:
 
         # Fast path: clear success indicators – avoid LLM false negatives
         result_lower = result.lower()
+
+        # Research/document agents: report saved + opened in editor → always accept
+        if agent_type in ("research_agent", "document_agent"):
+            if any(x in result_lower for x in ["task complete", "report has been saved", "saved successfully", "open in the document editor"]):
+                return True, None
+
         if any(x in user_intent.lower() for x in ["umbenennen", "umbenenn", "rename"]):
             if any(x in result_lower for x in ["moved", "renamed", "umbenannt", "→"]):
                 return True, None
@@ -1385,6 +1397,18 @@ class Agent:
             else:
                 task_result_msg = f"**FINAL RESULT (Task is DONE):**\n{task.result}"
 
+                # Research/document agent: inject explicit stop instruction
+                if task.agent_type in ("research_agent", "document_agent"):
+                    task_result_msg += (
+                        "\n\n**IMPORTANT INSTRUCTION:** The report is COMPLETE and already OPEN "
+                        "in the Document Editor. Do NOT use any tools (no search_tools, no "
+                        "librarian_agent, no read_file). Reply in the user's language with a "
+                        "**short summary** (2–5 sentences or a few bullets) of what the report "
+                        "covers, using the topic, section titles, and counts above — you are "
+                        "**not** reading the HTML file. Then confirm the full text is in the "
+                        "Document Editor and offer small adjustments if needed."
+                    )
+
                 # Validate: does the result fulfill the user's intent? (LLM-based, heuristic fallback)
                 # Prefer intent from delegation file (written before sub-agent call)
                 user_intent = ""
@@ -1460,39 +1484,55 @@ class Agent:
                             f"Use the information above, choose appropriate tools (e.g. librarian_agent with a different/more explicit task, move_file, find_files), and actually fulfill the user's intent."
                         )
 
-            # Extract file paths from result (research reports, generated documents, etc.)
-            file_paths = re.findall(
-                r'(?:Saved to|Output|File|Path|Ausgabe|Datei):\s*([^\n]+\.(?:html?|pdf|docx?|txt|md|json|csv|xlsx?))',
-                task.result,
-                re.IGNORECASE
-            )
-            
-            file_hint = ""
-            if file_paths:
-                # Clean up paths (remove ANSI codes, extra spaces)
-                cleaned_paths = [re.sub(r'\x1b\[[0-9;]*m', '', fp).strip() for fp in file_paths]
-                file_hint = f"\n\n🔗 **EXTRACTED FILE PATHS (from Sub-Agent output):**\n"
-                for fp in cleaned_paths[:3]:  # Limit to first 3 files
-                    file_hint += f"- `{fp}`\n"
-                file_hint += (
-                    f"\n💡 **TIP:** To read/analyze this file, use:\n"
-                    f"- `read_file('{cleaned_paths[0]}')` for quick reading\n"
-                    f"- `librarian_agent(file='{cleaned_paths[0]}', task='Summarize this document')` for detailed analysis\n"
+            # For research/document agents the report is already open in the
+            # Document Editor — the main agent must NOT try to read or re-open it.
+            if task.agent_type in ("research_agent", "document_agent"):
+                self.history.append({
+                    "role": "system",
+                    "content": (
+                        f"🧠 **Sub-Agent Task Finished**\n"
+                        f"Agent: {task.agent_type} (Task ID: {task.task_id[:8]})\n\n"
+                        f"{task_result_msg}\n\n"
+                        f"--- END OF SUB-AGENT OUTPUT ---\n\n"
+                        f"⚠️ **INSTRUCTION:** The report is COMPLETE and already OPEN in the Document Editor. "
+                        f"Do NOT call any tools (no read_file, no librarian_agent, no search_tools). "
+                        f"Give a **brief content summary** in the user's language from the metadata "
+                        f"(topic, sections, word count, sources) in the message above, then confirm "
+                        f"the editor shows the full report and offer edits if they want."
+                    )
+                })
+            else:
+                # Extract file paths from result (for non-research agents)
+                file_paths = re.findall(
+                    r'(?:Saved to|Output|File|Path|Ausgabe|Datei):\s*([^\n]+\.(?:html?|pdf|docx?|txt|md|json|csv|xlsx?))',
+                    task.result,
+                    re.IGNORECASE
                 )
-            
-            # Add result to history as Background Intel (not a new primary prompt)
-            self.history.append({
-                "role": "system",
-                "content": (
-                    f"🧠 **BACKGROUND INTELLIGENCE: Sub-Agent Task Finished**\n"
-                    f"Agent: {task.agent_type} (Task ID: {task.task_id[:8]})\n\n"
-                    f"{task_result_msg}\n"
-                    f"{file_hint}\n"
-                    f"--- END OF SUB-AGENT OUTPUT ---\n\n"
-                    f"⚠️ **INSTRUCTION:** Use the information above to fulfill the **ORIGINAL USER INTENT**.\n"
-                    f"Do NOT just summarize that a task is done. The user wants an answer to their question, not a status report."
-                )
-            })
+
+                file_hint = ""
+                if file_paths:
+                    cleaned_paths = [re.sub(r'\x1b\[[0-9;]*m', '', fp).strip() for fp in file_paths]
+                    file_hint = f"\n\n🔗 **EXTRACTED FILE PATHS (from Sub-Agent output):**\n"
+                    for fp in cleaned_paths[:3]:
+                        file_hint += f"- `{fp}`\n"
+                    file_hint += (
+                        f"\n💡 **TIP:** To read/analyze this file, use:\n"
+                        f"- `read_file('{cleaned_paths[0]}')` for quick reading\n"
+                        f"- `librarian_agent(file='{cleaned_paths[0]}', task='Summarize this document')` for detailed analysis\n"
+                    )
+
+                self.history.append({
+                    "role": "system",
+                    "content": (
+                        f"🧠 **BACKGROUND INTELLIGENCE: Sub-Agent Task Finished**\n"
+                        f"Agent: {task.agent_type} (Task ID: {task.task_id[:8]})\n\n"
+                        f"{task_result_msg}\n"
+                        f"{file_hint}\n"
+                        f"--- END OF SUB-AGENT OUTPUT ---\n\n"
+                        f"⚠️ **INSTRUCTION:** Use the information above to fulfill the **ORIGINAL USER INTENT**.\n"
+                        f"Do NOT just summarize that a task is done. The user wants an answer to their question, not a status report."
+                    )
+                })
         elif task.status == "failed":
             UI.error(f"✗ Sub-Agent [{task.task_id}] failed: {task.error}")
             

@@ -181,6 +181,7 @@ class Config:
 
         # Local Network Settings
         "local_network_enabled": False,                            # Enable local network access (LAN only)
+        "local_network_force_enabled": False,                      # If True, always keep local_network_enabled=True (cannot be turned off by UI/API)
         "local_network_port": 8001,                                # Backend port for local network
         "local_network_port_frontend": 3000,                       # Frontend port for local network
         "local_network_firewall_enabled": True,                    # Enable OS firewall rules
@@ -239,6 +240,10 @@ class Config:
             for key in ("speech_tts_docker_url", "speech_tts_docker_url_de", "speech_tts_docker_url_en", "speech_tts_docker_url_fr", "speech_stt_docker_url"):
                 if key in cls.DEFAULTS and not (result.get(key) or "").strip():
                     result[key] = cls.DEFAULTS[key]
+            # Hard lock for hosting mode (server appliance deployments):
+            # when enabled, Local Network Hosting cannot be disabled via UI/API saves.
+            if bool(result.get("local_network_force_enabled", False)):
+                result["local_network_enabled"] = True
             return result
         except Exception:
             return cls.DEFAULTS.copy()
@@ -605,6 +610,13 @@ class Config:
         for key in cls.PROTECTED_KEYS:
             if key in existing_config and key not in config:
                 config[key] = existing_config[key]
+
+        # Hosting lock: keep Local Network Hosting enabled if lock is active.
+        force_network = bool(
+            config.get("local_network_force_enabled", existing_config.get("local_network_force_enabled", False))
+        )
+        if force_network:
+            config["local_network_enabled"] = True
 
         with open(cls.CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=4)

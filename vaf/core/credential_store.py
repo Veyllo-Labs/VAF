@@ -168,21 +168,21 @@ def get_email_credentials(
         # but account_id usually tells us. For now, just add them as fallback if needed.
         pass
 
+    # Strict isolation: non-admin scopes must never fall back to admin/legacy keys.
+    # Only local-admin context may probe legacy key formats for backward compatibility.
+    is_local_admin_context = (s is None and u is None)
+
     keys_to_try = []
     for p in providers_to_try:
         keys_to_try.append(_credential_key(account_id, p, u, user_scope_id=s))
-        
-        # Legacy 'admin' fallback: always try this in local mode to find orphaned credentials
-        # (Useful when UUIDs shift or for legacy migrations)
-        safe_id = (account_id or "").strip().lower().replace(" ", "_")
-        legacy_admin_key = f"email:{p}:admin:{safe_id}"
-        if legacy_admin_key not in keys_to_try:
-            keys_to_try.append(legacy_admin_key)
-        
-        # Also try truly legacy (unscoped) key
-        unscoped_key = f"email:{p}:{safe_id}"
-        if unscoped_key not in keys_to_try:
-            keys_to_try.append(unscoped_key)
+        if is_local_admin_context:
+            safe_id = (account_id or "").strip().lower().replace(" ", "_")
+            legacy_admin_key = f"email:{p}:admin:{safe_id}"
+            if legacy_admin_key not in keys_to_try:
+                keys_to_try.append(legacy_admin_key)
+            unscoped_key = f"email:{p}:{safe_id}"
+            if unscoped_key not in keys_to_try:
+                keys_to_try.append(unscoped_key)
 
     # Log candidates for debugging
     # append_domain_log_always("backend", f"CRED_LOOKUP account={account_id} candidates={','.join(keys_to_try)}")

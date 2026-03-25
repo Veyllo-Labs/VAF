@@ -199,23 +199,42 @@ async def whitelist_add(
 
 
 @router.get("/status")
-async def get_telegram_status():
-    """Return configured, enabled, running, and whitelist count (no sensitive data)."""
+async def get_telegram_status(request: Request):
+    """Return per-user Telegram status with strict scope isolation."""
     telegram_config = Config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict):
         telegram_config = {}
     whitelist = telegram_config.get("whitelist") or []
+    relay_whitelist = telegram_config.get("relay_whitelist") or []
     running = False
     try:
         from vaf.api.telegram_bridge import is_bridge_running
         running = is_bridge_running()
     except Exception:
         pass
+    current_user = get_current_vaf_user(request)
+    scope_str = str(current_user.get("user_scope_id") or "").strip()
+    is_admin = _is_telegram_admin(request)
+
+    if is_admin:
+        enabled = bool(telegram_config.get("enabled"))
+        visible_whitelist = list(whitelist)
+    else:
+        by_scope = Config.get("connection_enabled_by_scope") or {}
+        toggles = by_scope.get(scope_str, {}) if isinstance(by_scope, dict) else {}
+        enabled = bool((toggles or {}).get("telegram", False))
+        visible_whitelist = [
+            e
+            for e in list(whitelist) + list(relay_whitelist)
+            if isinstance(e, dict) and str(e.get("user_scope_id") or "").strip() == scope_str
+        ]
+
+    configured = bool(telegram_config.get("bot_token") and telegram_config.get("verified") and len(visible_whitelist) > 0)
     return {
-        "configured": bool(telegram_config.get("bot_token") and telegram_config.get("verified")),
-        "enabled": bool(telegram_config.get("enabled")),
-        "running": running,
-        "whitelist_count": len(whitelist),
+        "configured": configured,
+        "enabled": enabled,
+        "running": bool(running and enabled and configured),
+        "whitelist_count": len(visible_whitelist),
     }
 
 
@@ -424,10 +443,27 @@ def _get_compaction_info(session_id: str) -> tuple:
 
 
 @router.get("/session/{session_id}/history")
-async def get_telegram_session_history(session_id: str):
+async def get_telegram_session_history(session_id: str, request: Request):
     """Return message history and compaction stats for a Telegram session (session_id must start with 'telegram_')."""
     if not session_id.startswith("telegram_"):
         raise HTTPException(status_code=400, detail="Invalid session id")
+    current_user = get_current_vaf_user(request)
+    user_scope_id = str(current_user.get("user_scope_id") or "").strip()
+    is_admin = _is_telegram_admin(request)
+    chat_id = session_id[len("telegram_") :]
+    if not is_admin:
+        telegram_config = Config.get("telegram_config") or {}
+        if not isinstance(telegram_config, dict):
+            telegram_config = {}
+        whitelist = list(telegram_config.get("whitelist") or [])
+        relay_whitelist = list(telegram_config.get("relay_whitelist") or [])
+        allowed_chat_ids = {
+            str(e.get("telegram_user_id") or "").strip()
+            for e in whitelist + relay_whitelist
+            if isinstance(e, dict) and str(e.get("user_scope_id") or "").strip() == user_scope_id
+        }
+        if chat_id not in allowed_chat_ids:
+            raise HTTPException(status_code=403, detail="Access denied")
     try:
         from vaf.core.session import SessionManager
         session_mgr = SessionManager()
@@ -464,6 +500,9 @@ async def get_telegram_session_history(session_id: str):
 @router.post("/relay-whitelist-remove")
 async def relay_whitelist_remove(request: Request, body: WhitelistAddRequest):
     """Remove a contact from the relay whitelist."""
+    current_user = get_current_vaf_user(request)
+    user_scope_id = str(current_user.get("user_scope_id") or "").strip()
+    is_admin = _is_telegram_admin(request)
     telegram_user_id = (body.telegram_user_id or "").strip()
     if not telegram_user_id:
         raise HTTPException(status_code=400, detail="telegram_user_id required")
@@ -471,7 +510,18 @@ async def relay_whitelist_remove(request: Request, body: WhitelistAddRequest):
     telegram_config = config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict):
         telegram_config = {}
-    relay_whitelist = [e for e in (telegram_config.get("relay_whitelist") or []) if str(e.get("telegram_user_id")) != telegram_user_id]
+    relay_whitelist = []
+    for e in (telegram_config.get("relay_whitelist") or []):
+        if str(e.get("telegram_user_id") or "").strip() != telegram_user_id:
+            relay_whitelist.append(e)
+            continue
+        if is_admin:
+            # Admin may remove any entry.
+            continue
+        if str(e.get("user_scope_id") or "").strip() == user_scope_id:
+            # Non-admin may remove only own relay entry.
+            continue
+        relay_whitelist.append(e)
     telegram_config["relay_whitelist"] = relay_whitelist
     config["telegram_config"] = telegram_config
     Config.save(config)

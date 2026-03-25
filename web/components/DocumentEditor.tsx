@@ -146,46 +146,145 @@ function getTextNodesInOrder(root: Node): { node: Text; start: number; end: numb
     return result;
 }
 
-/** Blöcke pro DIN-A4-Seite. */
-const BLOCKS_PER_PAGE = 4;
+/** Injected early so embedded report CSS cannot grow `.a4-page` to full document height. */
+const A4_EDITOR_STYLE = `
+                html, body.vaf-a4, body.vaf-a4 * { box-sizing: border-box !important; }
+                html, body.vaf-a4 { scrollbar-width: none !important; -ms-overflow-style: none !important; }
+                html::-webkit-scrollbar, body.vaf-a4::-webkit-scrollbar { display: none !important; }
+                html { width: 100% !important; margin: 0 !important; padding: 0 !important; }
+                body.vaf-a4 { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 16px 0 !important;
+                    min-height: 100%; background: #e5e7eb !important; overflow-y: auto; scroll-snap-type: y mandatory; }
+                body.vaf-a4 .vaf-a4-center { width: 100% !important; display: flex !important; flex-direction: column !important; align-items: center !important; justify-content: flex-start !important; flex-shrink: 0; }
+                body.vaf-a4 .a4-pages { display: flex; flex-direction: column; align-items: center; gap: 24px; width: 210mm !important; flex-shrink: 0; margin: 0 auto !important; }
+                body.vaf-a4 .a4-page { width: 210mm !important; height: 297mm !important; min-height: 297mm !important; max-height: 297mm !important; flex-shrink: 0; margin: 0 auto !important; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.12); padding: 25mm !important; box-sizing: border-box !important; overflow: hidden !important; scroll-snap-align: start; scroll-snap-stop: always; }
+            `;
 
-/** HTML-String in Block-Chunks zerlegen (an öffnenden Block-Tags). Liefert Array von HTML-Strings. */
-function splitHtmlIntoBlocks(html: string): string[] {
-    const trimmed = html.trim();
-    if (!trimmed) return [];
-    const parts = trimmed.split(/(?=<(?:p|h[1-6]|li|ul|ol|div|section|article)[\s>])/i).map((p) => p.trim()).filter(Boolean);
-    return parts;
+function ensureA4EditorStyles(doc: Document): void {
+    if (doc.querySelector('style[data-a4]')) return;
+    const style = doc.createElement('style');
+    style.setAttribute('data-a4', '1');
+    style.textContent = A4_EDITOR_STYLE;
+    doc.body.appendChild(style);
 }
 
-/** Inhalt auf mehrere DIN-A4-Seiten verteilen – per HTML-Split, Rest auf neue Seite darunter. */
+/** Research HTML often wraps everything in one div — unwrap so pagination sees many blocks. */
+function unwrapSingleBlockChildContainers(root: HTMLElement): void {
+    const BLOCK = new Set(['div', 'main', 'article', 'section']);
+    for (let pass = 0; pass < 30; pass++) {
+        const els = Array.from(root.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
+        if (els.length !== 1) break;
+        const only = els[0];
+        const tag = only.tagName.toLowerCase();
+        if (!BLOCK.has(tag)) break;
+        while (only.firstChild) root.insertBefore(only.firstChild, only);
+        root.removeChild(only);
+    }
+}
+
+/**
+ * Usable inner height for one A4 page (content box inside 25mm padding).
+ * When embedded CSS lets `.a4-page` grow, clientHeight matches full content — use a probe
+ * so we still paginate at real A4 size.
+ */
+function getA4UsableContentHeightPx(doc: Document, singlePage: HTMLElement): number {
+    const win = doc.defaultView;
+    if (!win) return 0;
+    const probe = doc.createElement('div');
+    probe.setAttribute('data-a4-height-probe', '1');
+    probe.style.cssText =
+        'position:absolute;left:-99999px;top:0;width:210mm;height:297mm;padding:25mm;box-sizing:border-box;margin:0;border:0;visibility:hidden;pointer-events:none;';
+    doc.body.appendChild(probe);
+    const pcs = win.getComputedStyle(probe);
+    const pTop = parseFloat(pcs.paddingTop) || 0;
+    const pBot = parseFloat(pcs.paddingBottom) || 0;
+    const probeInner = probe.clientHeight - pTop - pBot;
+    doc.body.removeChild(probe);
+
+    const pageStyle = win.getComputedStyle(singlePage);
+    const padTop = parseFloat(pageStyle.paddingTop) || 0;
+    const padBot = parseFloat(pageStyle.paddingBottom) || 0;
+    const fromClient = singlePage.clientHeight - padTop - padBot;
+
+    if (fromClient <= 0) return probeInner;
+    if (fromClient > probeInner * 1.12) return probeInner;
+    return fromClient;
+}
+
+/**
+ * Height-based pagination: measure rendered element heights and distribute
+ * across A4 pages so content flows naturally like Word / Google Docs.
+ */
 function paginateIntoA4Pages(doc: Document): void {
     const singlePage = doc.body.querySelector('.a4-page');
     if (!singlePage || !(singlePage instanceof HTMLElement)) return;
 
-    let html = singlePage.innerHTML.trim();
-    if (!html) return;
-
-    let blocks = splitHtmlIntoBlocks(html);
-    if (blocks.length <= 1 && /<div[\s>]/i.test(html)) {
-        const inner = html.replace(/^<div[^>]*>|<\/div>\s*$/gi, '').trim();
-        blocks = splitHtmlIntoBlocks(inner);
+    // Unwrap <section>/<article> wrappers so we get flat block-level elements
+    for (let pass = 0; pass < 5; pass++) {
+        const wrappers = singlePage.querySelectorAll(':scope > section, :scope > article');
+        if (wrappers.length === 0) break;
+        wrappers.forEach((w) => {
+            const parent = w.parentNode;
+            if (!parent) return;
+            while (w.firstChild) parent.insertBefore(w.firstChild, w);
+            parent.removeChild(w);
+        });
     }
-    if (blocks.length <= BLOCKS_PER_PAGE) return;
 
+    unwrapSingleBlockChildContainers(singlePage);
+
+    // Force layout so we can measure heights
+    void singlePage.offsetHeight;
+
+    // Collect element children (skip whitespace text nodes)
+    const children = Array.from(singlePage.childNodes).filter(
+        (n): n is HTMLElement => n.nodeType === 1
+    );
+    if (children.length <= 1) return;
+
+    const win = doc.defaultView;
+    if (!win) return;
+
+    const pageContentHeight = getA4UsableContentHeightPx(doc, singlePage);
+    if (pageContentHeight <= 0) return;
+
+    // Measure each child
+    const items: { el: HTMLElement; h: number }[] = [];
+    for (const el of children) {
+        const cs = win.getComputedStyle(el);
+        const mt = parseFloat(cs.marginTop) || 0;
+        const mb = parseFloat(cs.marginBottom) || 0;
+        items.push({ el, h: el.offsetHeight + mt + mb });
+    }
+
+    const totalH = items.reduce((s, i) => s + i.h, 0);
+    if (totalH <= pageContentHeight) return;
+
+    // Build pages
     const container = doc.createElement('div');
     container.className = 'a4-pages';
     container.setAttribute('contenteditable', 'true');
 
-    for (let i = 0; i < blocks.length; i += BLOCKS_PER_PAGE) {
-        const chunk = blocks.slice(i, i + BLOCKS_PER_PAGE).join('');
-        const page = doc.createElement('div');
-        page.className = 'a4-page';
-        page.setAttribute('contenteditable', 'true');
-        page.innerHTML = chunk;
-        container.appendChild(page);
+    let curPage = doc.createElement('div');
+    curPage.className = 'a4-page';
+    curPage.setAttribute('contenteditable', 'true');
+    container.appendChild(curPage);
+    let curH = 0;
+
+    for (const { el, h } of items) {
+        if (curH > 0 && curH + h > pageContentHeight) {
+            curPage = doc.createElement('div');
+            curPage.className = 'a4-page';
+            curPage.setAttribute('contenteditable', 'true');
+            container.appendChild(curPage);
+            curH = 0;
+        }
+        curPage.appendChild(el);
+        curH += h;
     }
 
-    singlePage.parentNode?.replaceChild(container, singlePage);
+    if (container.children.length > 1) {
+        singlePage.parentNode?.replaceChild(container, singlePage);
+    }
 }
 
 function injectHighlightsInBody(body: HTMLElement, segments: { start: number; end: number; colorIndex: number }[], doc: Document): void {
@@ -453,6 +552,8 @@ export default function DocumentEditor({
         doc.write(content);
         doc.close();
         doc.body.classList.add('vaf-a4');
+        // Before wrapping/measuring: lock A4 rules so embedded report CSS cannot expand one endless "page".
+        ensureA4EditorStyles(doc);
         if (!doc.body.querySelector('.a4-pages')) {
             const wrap = doc.createElement('div');
             wrap.className = 'a4-page';
@@ -479,22 +580,7 @@ export default function DocumentEditor({
             existingPages.parentNode?.insertBefore(centerWrap, existingPages);
             centerWrap.appendChild(existingPages);
         }
-        if (!doc.querySelector('style[data-a4]')) {
-            const style = doc.createElement('style');
-            style.setAttribute('data-a4', '1');
-            style.textContent = `
-                html, body.vaf-a4, body.vaf-a4 * { box-sizing: border-box !important; }
-                html, body.vaf-a4 { scrollbar-width: none !important; -ms-overflow-style: none !important; }
-                html::-webkit-scrollbar, body.vaf-a4::-webkit-scrollbar { display: none !important; }
-                html { width: 100% !important; margin: 0 !important; padding: 0 !important; }
-                body.vaf-a4 { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 16px 0 !important;
-                    min-height: 100%; background: #e5e7eb !important; overflow-y: auto; scroll-snap-type: y mandatory; }
-                body.vaf-a4 .vaf-a4-center { width: 100% !important; display: flex !important; flex-direction: column !important; align-items: center !important; justify-content: flex-start !important; flex-shrink: 0; }
-                body.vaf-a4 .a4-pages { display: flex; flex-direction: column; align-items: center; gap: 24px; width: 210mm !important; flex-shrink: 0; margin: 0 auto !important; }
-                body.vaf-a4 .a4-page { width: 210mm !important; height: 297mm; min-height: 297mm; flex-shrink: 0; margin: 0 auto !important; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.12); padding: 25mm; box-sizing: border-box; overflow: hidden; scroll-snap-align: start; scroll-snap-stop: always; }
-            `;
-            doc.body.appendChild(style);
-        }
+        ensureA4EditorStyles(doc);
         const editRoot = doc.body.querySelector('.a4-pages') || doc.body.querySelector('.a4-page') || doc.body;
         (editRoot as HTMLElement).contentEditable = 'true';
         (editRoot as HTMLElement).style.outline = 'none';

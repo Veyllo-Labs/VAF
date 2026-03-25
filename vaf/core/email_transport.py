@@ -231,9 +231,7 @@ def _get_email_config(
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Return email config for the given user. When username is None or local admin, use legacy email_config.
-    If user_scope_id is set, email_config_by_scope is tried first; then legacy for local admin scope.
-    Includes fallbacks for local mode where accounts might live in legacy or a single scope."""
+    """Return email config for the given user with strict scope isolation."""
     from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
     local_admin_scope = get_local_admin_scope_id()
     if user_scope_id:
@@ -243,25 +241,11 @@ def _get_email_config(
             if isinstance(ec, dict) and ec.get("accounts") is not None:
                 return ec
 
-        # Fallback: if current scope empty, but exactly ONE scope has accounts, use it (aligns with Dashboard)
-        if isinstance(by_scope, dict):
-            scopes_with_accounts = [
-                sid for sid, ec in by_scope.items()
-                if isinstance(ec, dict) and (ec.get("accounts") or [])
-            ]
-            if len(scopes_with_accounts) == 1:
-                return by_scope[scopes_with_accounts[0]]
-
         if str(user_scope_id).strip() == str(local_admin_scope).strip():
             raw = Config.get("email_config")
             if isinstance(raw, dict):
                 return raw
             return {"accounts": []}
-
-        # Fallback: try legacy config if current scope found nothing
-        raw = Config.get("email_config")
-        if isinstance(raw, dict) and raw.get("accounts"):
-            return raw
 
     local_admin = get_local_admin_username().lower()
     if not username or username.strip().lower() == local_admin:
@@ -271,12 +255,8 @@ def _get_email_config(
         return {"accounts": []}
     by_user = Config.get("email_config_by_user") or {}
     ec = by_user.get(username.strip()) if isinstance(by_user, dict) else {}
-    if isinstance(ec, dict) and ec.get("accounts"):
+    if isinstance(ec, dict) and ec.get("accounts") is not None:
         return ec
-    # Fallback: per-user bucket empty → use legacy config
-    raw = Config.get("email_config")
-    if isinstance(raw, dict):
-        return raw
     return {"accounts": []}
 
 
@@ -284,33 +264,11 @@ def _email_config_candidates(
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
 ) -> List[tuple]:
-    """Return [(ec_dict, effective_scope), ...] to try for account/credential lookup. Aligns with list_accounts fallbacks so tools find accounts when scope mismatches (e.g. JWT scope vs legacy)."""
-    from vaf.core.config import get_local_admin_scope_id
-    local_admin_scope = get_local_admin_scope_id()
-    candidates: List[tuple] = []
-    seen: set = set()
-
-    def add(ec: Dict[str, Any], scope: Optional[str]) -> None:
-        key = (id(ec), str(scope) if scope else "")
-        if key not in seen and isinstance(ec, dict) and (ec.get("accounts") or []):
-            seen.add(key)
-            candidates.append((ec, scope))
-
-    add(_get_email_config(username, user_scope_id=user_scope_id), user_scope_id)
-    add(_get_email_config(None, user_scope_id=None), None)
-    if username:
-        add(_get_email_config(username, user_scope_id=None), None)
-    by_scope = Config.get("email_config_by_scope") or {}
-    if isinstance(by_scope, dict):
-        scopes_with_accounts = [
-            (sid, (ec or {}).get("accounts") or [])
-            for sid, ec in by_scope.items()
-            if isinstance(ec, dict) and (ec.get("accounts") or [])
-        ]
-        if len(scopes_with_accounts) == 1:
-            sid, scope_accounts = scopes_with_accounts[0]
-            add({"accounts": scope_accounts}, str(sid).strip())
-    return candidates
+    """Return only the current user's config candidate (no cross-scope fallback)."""
+    ec = _get_email_config(username, user_scope_id=user_scope_id)
+    if isinstance(ec, dict) and (ec.get("accounts") or []):
+        return [(ec, user_scope_id)]
+    return []
 
 
 def get_account(
@@ -333,22 +291,8 @@ def _get_credentials_with_fallback(
     username: Optional[str],
     user_scope_id: Optional[str],
 ) -> Optional[Dict[str, Any]]:
-    """Try credential lookup with primary scope, then legacy (None), then single scope."""
-    creds = get_email_credentials(account_id, provider, username, user_scope_id=user_scope_id)
-    if creds:
-        return creds
-    creds = get_email_credentials(account_id, provider, username, user_scope_id=None)
-    if creds:
-        return creds
-    from vaf.core.config import get_local_admin_scope_id
-    by_scope = Config.get("email_config_by_scope") or {}
-    if isinstance(by_scope, dict):
-        scopes_with_accounts = [sid for sid, ec in by_scope.items() if isinstance(ec, dict) and (ec.get("accounts") or [])]
-        if len(scopes_with_accounts) == 1:
-            creds = get_email_credentials(account_id, provider, username, user_scope_id=scopes_with_accounts[0])
-            if creds:
-                return creds
-    return None
+    """Try credential lookup only in the current user scope."""
+    return get_email_credentials(account_id, provider, username, user_scope_id=user_scope_id)
 
 
 def get_credentials(
@@ -539,7 +483,7 @@ def _fetch_mail_gmail(
             headers_list = payload.get("headers") or []
             headers = {h["name"].lower(): h["value"] for h in headers_list if h.get("name")}
             from_str = headers.get("from", "")
-            category = apply_sender_rules_to_category(from_str, category, username)
+            category = apply_sender_rules_to_category(from_str, category, username, user_scope_id=user_scope_id)
             result.append({
                 "subject": headers.get("subject", ""),
                 "from": from_str,
@@ -737,7 +681,7 @@ def _fetch_mail_microsoft(
             from_email = (from_obj.get("emailAddress") or {}).get("address") or ""
             from_name = (from_obj.get("emailAddress") or {}).get("name") or ""
             from_str = from_name + (" <" + from_email + ">") if from_email else from_name or from_email
-            category = apply_sender_rules_to_category(from_str, "primary", username)
+            category = apply_sender_rules_to_category(from_str, "primary", username, user_scope_id=user_scope_id)
             result.append({
                 "subject": m.get("subject") or "",
                 "from": from_str,

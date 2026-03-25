@@ -109,6 +109,19 @@ def _is_whatsapp_admin(request: Request) -> bool:
     return scope is not None and str(scope) == str(get_local_admin_scope_id())
 
 
+def _whatsapp_enabled_for_request(request: Request, whatsapp_config: Dict[str, Any], user_scope_id: Optional[str]) -> bool:
+    """Return effective WhatsApp enabled flag for current user (admin=global, non-admin=scope toggle)."""
+    if _is_whatsapp_admin(request):
+        return bool((whatsapp_config or {}).get("enabled", False))
+    by_scope = Config.get("connection_enabled_by_scope") or {}
+    if not isinstance(by_scope, dict):
+        return False
+    toggles = by_scope.get(str(user_scope_id or "").strip(), {})
+    if not isinstance(toggles, dict):
+        return False
+    return bool(toggles.get("whatsapp", False))
+
+
 @router.get("/dashboard")
 async def get_whatsapp_dashboard(request: Request):
     """Data for the WhatsApp dashboard: status, sessions, activity, stats, whitelist. No sensitive data. Non-admins see only their own whitelist and sessions."""
@@ -308,8 +321,8 @@ async def get_whatsapp_dashboard(request: Request):
     user_scope_id = user_info.get("user_scope_id")
     try:
         from vaf.core.contacts_store import get_contact_name_by_phone
-        # Try current scope, then None, then local admin scope so we find names regardless of where contacts were saved
-        scope_candidates = [user_scope_id, None, get_local_admin_scope_id()]
+        # Strict isolation: only resolve names in the current user's scope.
+        scope_candidates = [user_scope_id]
         for rec in sessions_by_chat.values():
             if not (rec.get("name") or "").strip():
                 phone = rec.get("phone_number") or rec.get("chat_id") or ""
@@ -496,7 +509,7 @@ async def get_whatsapp_dashboard(request: Request):
             if phone:
                 try:
                     from vaf.core.contacts_store import get_contact_name_by_phone
-                    for scope in [user_info.get("user_scope_id"), None, get_local_admin_scope_id()]:
+                    for scope in [user_info.get("user_scope_id")]:
                         disp = get_contact_name_by_phone(phone, username, scope)
                         if disp:
                             break
@@ -521,7 +534,8 @@ async def get_whatsapp_dashboard(request: Request):
     stats_4h = [{"bucket_ts": ts, "count": c} for ts, c in sorted(buckets.items())]
 
     running = is_bridge_running()
-    connected = get_connection_status(username, wait_timeout=5.0) if running else False
+    enabled_effective = _whatsapp_enabled_for_request(request, whatsapp_config, user_scope_id)
+    connected = get_connection_status(username, wait_timeout=5.0) if (running and enabled_effective) else False
 
     try:
         from vaf.core.log_helper import get_dated_log_path
@@ -576,7 +590,7 @@ async def get_whatsapp_dashboard(request: Request):
         "linked": linked,
         "running": running,
         "connected": connected,
-        "enabled": whatsapp_config.get("enabled", False),
+        "enabled": enabled_effective,
         "username": username,
         "sessions": sessions,
         "stats_4h": stats_4h,
@@ -604,13 +618,25 @@ async def get_whatsapp_status(request: Request):
     if not isinstance(whatsapp_config, dict):
         whatsapp_config = {}
 
+    user_scope_id = user_info.get("user_scope_id")
+    whitelist_raw = list(whatsapp_config.get("whitelist") or [])
+    whitelist_raw = [e for e in whitelist_raw if isinstance(e, dict) and e.get("phone_number")]
+    if _is_whatsapp_admin(request):
+        whitelist = whitelist_raw
+    else:
+        whitelist = [e for e in whitelist_raw if str(e.get("user_scope_id")) == str(user_scope_id)]
+
+    enabled_effective = _whatsapp_enabled_for_request(request, whatsapp_config, user_scope_id)
     linked = whatsapp_auth_exists(username)
     running = is_bridge_running()
 
     return {
-        "enabled": whatsapp_config.get("enabled", False),
-        "running": running,
+        "enabled": enabled_effective,
+        "running": bool(running and enabled_effective),
         "linked": linked,
+        "configured": bool(whitelist) and linked,
+        "connected": bool(running and enabled_effective and linked),
+        "whitelist_count": len(whitelist),
         "username": username,
     }
 
@@ -686,10 +712,16 @@ def _get_whatsapp_compaction_info(session_id: str) -> tuple:
 
 
 @router.get("/session/{session_id}/history")
-async def get_whatsapp_session_history(session_id: str):
+async def get_whatsapp_session_history(session_id: str, request: Request):
     """Return message history and compaction stats for a WhatsApp session."""
     if not session_id.startswith("whatsapp_"):
         raise HTTPException(status_code=400, detail="Invalid session id")
+    current_user = get_current_vaf_user(request)
+    if not _is_whatsapp_admin(request):
+        # Session IDs are scoped by vaf_username: whatsapp_<username>_<digits>
+        prefix = f"whatsapp_{(current_user.get('username') or '').strip()}_"
+        if not session_id.startswith(prefix):
+            raise HTTPException(status_code=403, detail="Access denied")
     try:
         from vaf.core.session import SessionManager
 
@@ -925,8 +957,14 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
     phone = (body.phone_number or "").strip()
     if not phone:
         raise HTTPException(status_code=400, detail="phone_number required")
-    vaf_username = (body.vaf_username or user_info["username"]).strip()
-    user_scope_id = body.user_scope_id or user_info["user_scope_id"]
+    is_admin = _is_whatsapp_admin(request)
+    if is_admin:
+        vaf_username = (body.vaf_username or user_info["username"]).strip()
+        user_scope_id = body.user_scope_id or user_info["user_scope_id"]
+    else:
+        # Non-admin users may only create/update their own whitelist entry.
+        vaf_username = (user_info["username"] or "admin").strip()
+        user_scope_id = user_info["user_scope_id"]
 
     config = Config.load()
     wc = config.get("whatsapp_config") or {}
@@ -999,7 +1037,13 @@ async def get_whatsapp_config(request: Request):
     whatsapp_config = Config.get("whatsapp_config") or {}
     if not isinstance(whatsapp_config, dict):
         whatsapp_config = {}
+    user_scope_id = user_info.get("user_scope_id")
+    whitelist = list(whatsapp_config.get("whitelist") or [])
+    if _is_whatsapp_admin(request):
+        visible_whitelist = whitelist
+    else:
+        visible_whitelist = [e for e in whitelist if isinstance(e, dict) and str(e.get("user_scope_id")) == str(user_scope_id)]
     return {
-        "enabled": whatsapp_config.get("enabled", False),
-        "whitelist": whatsapp_config.get("whitelist", []),
+        "enabled": _whatsapp_enabled_for_request(request, whatsapp_config, user_scope_id),
+        "whitelist": visible_whitelist,
     }

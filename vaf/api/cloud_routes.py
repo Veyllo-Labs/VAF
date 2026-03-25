@@ -25,6 +25,7 @@ from vaf.cloud.oauth_cloud import (
     exchange_code_for_tokens,
     get_state_provider,
     get_state_redirect_base,
+    get_state_username,
     is_cloud_oauth_configured,
     get_cloud_callback_redirect_uri,
 )
@@ -178,6 +179,7 @@ async def oauth_start(
     request: Request,
     provider: str = "google_drive",
     redirect_base: Optional[str] = None,
+    _username: str = Depends(_get_current_username),
 ):
     """Start OAuth2 flow for a cloud storage provider. Returns authorization URL and state.
     redirect_base: frontend origin (e.g. http://localhost:3000) so post-OAuth redirect matches the host the user used."""
@@ -194,7 +196,12 @@ async def oauth_start(
     redirect_uri = get_cloud_callback_redirect_uri(base_url)
 
     try:
-        auth_url, state = get_authorization_url(provider, redirect_uri, redirect_base=redirect_base)
+        auth_url, state = get_authorization_url(
+            provider,
+            redirect_uri,
+            redirect_base=redirect_base,
+            username=_username,
+        )
         return {"authorization_url": auth_url, "state": state, "redirect_uri": redirect_uri}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -223,8 +230,9 @@ async def oauth_callback(
         if not provider:
             return _redirect_error("Invalid or expired state. Please start the login again.", redirect_base)
 
-        # Get the username from the request (if authenticated) or use admin
-        username = _get_current_username(request)
+        # Use username from OAuth state for strict user isolation.
+        state_username = get_state_username(state)
+        username = state_username or _get_current_username(request)
         cred_username = _get_cred_username(username)
 
         data = exchange_code_for_tokens(provider, code, state, redirect_uri, username=cred_username)

@@ -154,17 +154,6 @@ def get_cloud_credentials(account_id: str, provider: str, username: Optional[str
                 return json.loads(raw)
             except Exception:
                 continue
-    # Fallback: OAuth callback often runs without session (redirect from provider)
-    # and stores with username=None. Sync requests may have a session returning "admin".
-    if key_username is not None:
-        for aid in account_ids_to_try:
-            fallback_key = _credential_key(aid, provider, None)
-            raw = _get_credential_raw(fallback_key)
-            if raw:
-                try:
-                    return json.loads(raw)
-                except Exception:
-                    pass
     return None
 
 

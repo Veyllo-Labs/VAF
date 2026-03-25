@@ -37,6 +37,25 @@ export default function LoginPage() {
     const [showEmailWizard, setShowEmailWizard] = useState(false);
     const [backendUnreachable, setBackendUnreachable] = useState(false);
 
+    // If network TLS/proxy mode is active, avoid showing login on :3000.
+    // Redirect to HTTPS access port so login/session use the correct origin.
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (window.location.port !== '3000') return;
+        const ac = new AbortController();
+        fetch(`${getApiBase()}/api/network/ws-config`, { signal: ac.signal, cache: 'no-store' })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((cfg) => {
+                const useWss = !!cfg?.useWss;
+                const targetPort = String(cfg?.port || '');
+                if (!useWss || !targetPort || targetPort === '3000') return;
+                const targetUrl = `https://${window.location.hostname}:${targetPort}${window.location.pathname}${window.location.search}${window.location.hash}`;
+                window.location.replace(targetUrl);
+            })
+            .catch(() => {});
+        return () => ac.abort();
+    }, []);
+
     useEffect(() => {
         const apiBase = getApiBase();
         if (!apiBase) {

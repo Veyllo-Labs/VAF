@@ -499,15 +499,26 @@ async def startup_event():
     if Config.get("local_network_enabled", False) and Config.get("local_network_firewall_enabled", True):
         try:
             from vaf.network.firewall import setup_firewall, register_cleanup_on_exit
-            port = Config.get("local_network_port", 8001)
-            port_frontend = Config.get("local_network_port_frontend", 3000)
+            import platform as _platform
+            tls_on = bool(Config.get("local_network_tls_enabled", False))
+            if tls_on:
+                access_port = int(Config.get("local_network_https_port", 443) or 443)
+                # Keep behavior aligned with tray/proxy: Windows defaults to 8443 when configured 443.
+                if _platform.system() == "Windows" and access_port == 443:
+                    access_port = 8443
+                port = access_port
+                # Keep backend port rule too for compatibility with current internal routing.
+                port_frontend = int(Config.get("local_network_port", 8001) or 8001)
+            else:
+                port = int(Config.get("local_network_port", 8001) or 8001)
+                port_frontend = int(Config.get("local_network_port_frontend", 3000) or 3000)
             
             success = setup_firewall(port, port_frontend)
             if success:
                 register_cleanup_on_exit()
                 log("WebServer", f"Firewall rules created for ports {port}, {port_frontend}")
             else:
-                log("WebServer", "Firewall setup failed - may need elevated privileges")
+                log("WebServer", f"Firewall setup failed for ports {port}, {port_frontend} - may need elevated privileges (Run as Administrator)")
         except Exception as e:
             log("WebServer", f"Firewall setup error: {e}")
 

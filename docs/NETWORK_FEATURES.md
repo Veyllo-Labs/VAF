@@ -298,11 +298,22 @@ Implementation: `_build_cors_origins()` in `vaf/core/web_server.py`
 
 Network settings are managed via the Web UI (Settings -> Local Network).
 
+For dedicated server/appliance deployments, you can hard-lock hosting mode in `~/.vaf/config.json`:
+
+```json
+{
+  "local_network_force_enabled": true
+}
+```
+
+With this lock enabled, attempts to disable hosting in the UI/API are ignored and `local_network_enabled` remains `true`.
+
 ### All Network Configuration Keys
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `local_network_enabled` | `bool` | `false` | Master toggle for LAN access |
+| `local_network_force_enabled` | `bool` | `false` | Hard lock for server appliances. When `true`, hosting is always enforced (`local_network_enabled` is forced to `true` on load/save, even if UI/API tries to disable it). |
 | `local_network_port` | `int` | `8001` | Backend API port |
 | `local_network_port_frontend` | `int` | `3000` | Frontend port |
 | `local_network_firewall_enabled` | `bool` | `true` | Auto-configure OS firewall rules |
@@ -319,6 +330,11 @@ Network settings are managed via the Web UI (Settings -> Local Network).
 ### Live Updates
 
 Changes to network settings trigger an automatic, orchestrated restart of the frontend and backend services to apply new bindings (e.g., switching from `127.0.0.1` to `0.0.0.0`).
+
+When TLS is enabled, firewall setup uses the effective HTTPS access port (`local_network_https_port`, or `8443` on Windows when `443` would require elevation) so LAN clients can reach the proxy entry point.
+On Windows, creating firewall rules via `netsh advfirewall` requires elevated rights. If VAF is not started as Administrator, LAN access can fail even when hosting is enabled.
+The integrated HTTPS proxy is configured for broad client compatibility (`TLS 1.2+`) so older LAN devices do not fail with empty-response errors during TLS negotiation.
+Auto-generated TLS certificates are re-generated when the current LAN IP changes, so the certificate SAN list stays aligned with the active access IP.
 
 ---
 

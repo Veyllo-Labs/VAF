@@ -150,23 +150,22 @@ def get_github_oauth_token(
     Retrieve GitHub access token for an account.
     Returns None if not found or on error.
 
-    Lookup order:
-    1. Scoped key (user_scope_id or username specific)
-    2. Fallback to ``github:default:{account_id}`` (covers single-user setups
-       where the token was stored under admin but the current session has a
-       different scope/username, e.g. 'Mert' with a JWT scope).
+    Strict lookup:
+    - Non-admin context: scoped key only (no cross-user fallback).
+    - Local admin context: scoped/default key with legacy compatibility.
     """
     primary_key = _credential_key(
         account_id,
         _cred_key_username(username),
         user_scope_id=_cred_key_scope(user_scope_id) or user_scope_id,
     )
-    safe_id = (account_id or "").strip().lower().replace(" ", "_")
-    fallback_key = f"github:default:{safe_id}"
-    # Try primary key first, then fallback (skip fallback if same as primary)
     keys_to_try = [primary_key]
-    if fallback_key != primary_key:
-        keys_to_try.append(fallback_key)
+    is_local_admin_context = (_cred_key_username(username) is None and _cred_key_scope(user_scope_id) is None)
+    if is_local_admin_context:
+        safe_id = (account_id or "").strip().lower().replace(" ", "_")
+        fallback_key = f"github:default:{safe_id}"
+        if fallback_key != primary_key:
+            keys_to_try.append(fallback_key)
 
     if _keyring_available():
         import keyring

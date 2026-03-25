@@ -407,12 +407,22 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                         {/* Memory Learning: X/Y bis nächstes, letztes Mal */}
                         {historyCompaction && (
                             <div className="shrink-0 px-4 py-2 bg-violet-50/80 border-b border-violet-100 text-xs text-gray-700 flex flex-wrap items-center gap-x-4 gap-y-1">
-                                <span>
-                                    <span className="font-medium text-violet-700">{Math.max(0, historyCompaction.user_turn_count - historyCompaction.last_compaction_at_turn)}</span>
-                                    <span className="text-gray-500"> / </span>
-                                    <span className="font-medium">{historyCompaction.compaction_interval}</span>
-                                    {' '}Nachrichten bis Memory Learning
-                                </span>
+                                {(() => {
+                                    const interval = Math.max(1, Number(historyCompaction.compaction_interval) || 15);
+                                    const sinceLast = Math.max(
+                                        0,
+                                        Number(historyCompaction.user_turn_count || 0) - Number(historyCompaction.last_compaction_at_turn || 0)
+                                    );
+                                    const progress = sinceLast % interval;
+                                    return (
+                                        <span>
+                                            <span className="font-medium text-violet-700">{progress}</span>
+                                            <span className="text-gray-500"> / </span>
+                                            <span className="font-medium">{interval}</span>
+                                            {' '}Nachrichten bis Memory Learning
+                                        </span>
+                                    );
+                                })()}
                                 <span className="text-gray-500">
                                     {historyCompaction.last_compaction_at_turn === 0
                                         ? 'Letztes Memory Learning: noch keins'
@@ -429,12 +439,14 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                                 <div className="space-y-2 max-w-2xl mx-auto">
                                     {sessionHistory
                                         .filter((m) => m.role === 'user' || m.role === 'assistant')
+                                        .slice()
+                                        .reverse()
                                         .map((msg, i) => {
                                             const isBot = msg.role === 'assistant';
                                             const text = msg.content || '—';
                                             return (
                                                 <div
-                                                    key={i}
+                                                    key={`${msg.timestamp || 'no-ts'}-${i}`}
                                                     className={cn('flex gap-3 pt-4', isBot ? 'justify-start' : 'justify-end')}
                                                 >
                                                     {isBot && (

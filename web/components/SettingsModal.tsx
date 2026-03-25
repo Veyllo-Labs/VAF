@@ -894,7 +894,26 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     };
 
     const handleTelegramComplete = async (telegramConfig: TelegramConfig) => {
-        const merged = { ...(localConfig.telegram_config || {}), ...telegramConfig };
+        // IMPORTANT: Keep whitelist entries that were created in the wizard via API
+        // (telegram/whitelist-add) and avoid overwriting them with an incomplete local object.
+        let serverTelegramConfig: any = null;
+        try {
+            const fullRes = await fetch(apiBase ? `${apiBase}/api/config` : '/api/config', { credentials: 'include' });
+            const fullCfg = fullRes.ok ? await fullRes.json() : null;
+            serverTelegramConfig = fullCfg?.telegram_config && typeof fullCfg.telegram_config === 'object'
+                ? fullCfg.telegram_config
+                : null;
+        } catch {
+            serverTelegramConfig = null;
+        }
+
+        const merged = {
+            ...(serverTelegramConfig || localConfig.telegram_config || {}),
+            ...telegramConfig,
+            whitelist: (serverTelegramConfig?.whitelist ?? localConfig.telegram_config?.whitelist ?? []),
+            relay_whitelist: (serverTelegramConfig?.relay_whitelist ?? localConfig.telegram_config?.relay_whitelist ?? []),
+        };
+
         handleChange('telegram_config', merged);
         setShowTelegramWizard(false);
         // Persist immediately so the connection stays after closing/reopening the modal

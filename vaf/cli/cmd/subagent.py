@@ -205,7 +205,30 @@ def run_subagent(
                 pass
         elif lg:
             lg.event("subagent_result_empty_or_none", ok=True, **summarize_result(result))
-        
+
+        # Notify WebUI of successful completion
+        if session_id:
+            try:
+                from vaf.core.config import Config as _Cfg
+                _tls = _Cfg.get("local_network_tls_enabled", False)
+                _port = 8005 if _tls else 8001
+                import requests as _req
+                _title = (agent_type or "sub-agent").replace("_", " ").title()
+                _req.post(
+                    f"http://127.0.0.1:{_port}/api/subagent/stream",
+                    json={
+                        "type": "subagent_update",
+                        "sessionId": session_id,
+                        "taskId": task_id or None,
+                        "agentName": _title,
+                        "status": "Completed successfully",
+                        "presence": "idle",
+                    },
+                    timeout=1.0,
+                )
+            except Exception:
+                pass
+
         success = True
             
     except Exception as e:
@@ -227,6 +250,29 @@ def run_subagent(
             except Exception:
                 pass
         
+        # Notify WebUI immediately so the SubAgentWindow shows the error
+        if session_id:
+            try:
+                from vaf.core.config import Config as _Cfg
+                _tls = _Cfg.get("local_network_tls_enabled", False)
+                _port = 8005 if _tls else 8001
+                import requests as _req
+                _title = (agent_type or "sub-agent").replace("_", " ").title()
+                _req.post(
+                    f"http://127.0.0.1:{_port}/api/subagent/stream",
+                    json={
+                        "type": "subagent_update",
+                        "sessionId": session_id,
+                        "taskId": task_id or None,
+                        "agentName": _title,
+                        "status": f"ERROR: {error_msg[:120]}",
+                        "presence": "error",
+                    },
+                    timeout=1.0,
+                )
+            except Exception:
+                pass
+
         try:
             UI.error(f"Sub-agent execution failed: {error_msg}")
             traceback.print_exc()

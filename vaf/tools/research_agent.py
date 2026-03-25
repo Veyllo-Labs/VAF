@@ -597,16 +597,25 @@ class ResearchAgentTool(BaseTool):
                 try:
                     tls_on = Config.get("local_network_tls_enabled", False)
                     port = 8005 if tls_on else 8001
+                    payload = {
+                        "type": "subagent_update",
+                        "sessionId": session_id,
+                        "taskId": task_id or None,
+                        "agentName": "Research Agent",
+                        "status": message,
+                        "presence": presence,
+                    }
+                    if presence == "idle" and task_id:
+                        payload["steps"] = [{
+                            "id": task_id,
+                            "title": "Research Agent",
+                            "description": "Completed",
+                            "status": "completed",
+                            "actions": [],
+                        }]
                     requests.post(
                         f"http://127.0.0.1:{port}/api/subagent/stream",
-                        json={
-                            "type": "subagent_update",
-                            "sessionId": session_id,
-                            "taskId": task_id or None,
-                            "agentName": "Research Agent",
-                            "status": message,
-                            "presence": presence,
-                        },
+                        json=payload,
                         timeout=0.4,
                     )
                 except Exception:

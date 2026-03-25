@@ -2269,7 +2269,12 @@ def _process_agent_message(agent, user_input: str, tui, session):
         # Update Web Interface (with session scope)
         web_iface.log("Response complete", level="info", source="system", session_id=session_id)
         web_iface.update_status("idle", session_id=session_id)
-        
+        # Clears Web UI "generating" / stop button (frontend listens for message_complete).
+        try:
+            web_iface.emit_message_complete(full_response_clean or "", session_id=session_id)
+        except Exception:
+            pass
+
         # Emit Token Stats
         try:
             used, total = agent.get_token_usage()
@@ -2287,6 +2292,10 @@ def _process_agent_message(agent, user_input: str, tui, session):
         tui.error(f"Agent error: {e}")
         get_web_interface().log(f"Agent error: {e}", level="error", session_id=session_id)
         get_web_interface().update_status("idle", session_id=session_id)
+        try:
+            get_web_interface().emit_message_complete("", session_id=session_id)
+        except Exception:
+            pass
 
 
 def _run_classic(message: str, verbose: bool, session_id: str = None):

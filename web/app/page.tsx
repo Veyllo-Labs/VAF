@@ -1621,32 +1621,45 @@ function VAFDashboardContent() {
                         return;
                     }
 
-                    setLoading(false);
-                    setIsGenerating(true);
-                    setStatusMessage(''); // Clear status when answer starts
-                    setActiveToolName(''); // Clear active tool when answer starts
+                    // Same rules as inside setMessages: detect streaming updates to the existing assistant bubble.
+                    const prevMsgs = messagesRef.current;
+                    const lastMsg = prevMsgs[prevMsgs.length - 1];
+                    const expectNew = expectNewAssistantRef.current;
+                    const expectAfterTool = expectNewAssistantAfterToolRef.current;
+                    const tSend = lastUserSendTimeRef.current;
+                    const withinUserSendWindow = tSend && (Date.now() - tSend < 1500);
+                    const forceAppend = expectNew || expectAfterTool || withinUserSendWindow;
+                    const inPlaceAssistantStream = !!(lastMsg && lastMsg.role === 'assistant' && !forceAppend);
 
-                    // Update per-session loading state
-                    if (activeSessionId) {
-                        sessionLoadingStates.current[activeSessionId] = {
-                            loading: false,
-                            isGenerating: true,
-                            statusMessage: '',
-                            loadingMessageId: null
-                        };
+                    setLoading(false);
+                    // Only mark "generating" when starting a new assistant bubble. Re-applying full text
+                    // after stream (or out-of-order vs message_complete) was leaving Stop stuck on.
+                    if (!inPlaceAssistantStream) {
+                        setIsGenerating(true);
+                        setStatusMessage('');
+                        setActiveToolName('');
+                        if (activeSessionId) {
+                            sessionLoadingStates.current[activeSessionId] = {
+                                loading: false,
+                                isGenerating: true,
+                                statusMessage: '',
+                                loadingMessageId: null
+                            };
+                        }
                     }
+
                     setMessages(prev => {
                         const last = prev[prev.length - 1];
-                        const expectNew = expectNewAssistantRef.current;
-                        if (expectNew) expectNewAssistantRef.current = false;
-                        const expectAfterTool = expectNewAssistantAfterToolRef.current;
-                        if (expectAfterTool) expectNewAssistantAfterToolRef.current = false;
+                        const expectNewInner = expectNewAssistantRef.current;
+                        if (expectNewInner) expectNewAssistantRef.current = false;
+                        const expectAfterToolInner = expectNewAssistantAfterToolRef.current;
+                        if (expectAfterToolInner) expectNewAssistantAfterToolRef.current = false;
                         // Within 1.5s of user send: force append once (handles ms-level race before state has user msg)
                         const t = lastUserSendTimeRef.current;
-                        const withinUserSendWindow = t && (Date.now() - t < 1500);
-                        if (withinUserSendWindow) lastUserSendTimeRef.current = 0;
-                        const forceAppend = expectNew || expectAfterTool || withinUserSendWindow;
-                        if (last && last.role === 'assistant' && !forceAppend) {
+                        const withinUserSendWindowInner = t && (Date.now() - t < 1500);
+                        if (withinUserSendWindowInner) lastUserSendTimeRef.current = 0;
+                        const forceAppendInner = expectNewInner || expectAfterToolInner || withinUserSendWindowInner;
+                        if (last && last.role === 'assistant' && !forceAppendInner) {
                             const newMsgs = [...prev];
                             newMsgs[newMsgs.length - 1] = { ...last, content: data.content };
                             return newMsgs;

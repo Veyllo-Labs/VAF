@@ -154,6 +154,8 @@ const A4_EDITOR_STYLE = `
                 html { width: 100% !important; margin: 0 !important; padding: 0 !important; }
                 body.vaf-a4 { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 16px 0 !important;
                     min-height: 100%; background: #e5e7eb !important; overflow-y: auto; scroll-snap-type: y mandatory; }
+                /* Keep embedded report blocks from forcing a single oversized column */
+                body.vaf-a4 .a4-page * { max-width: 100% !important; }
                 body.vaf-a4 .vaf-a4-center { width: 100% !important; display: flex !important; flex-direction: column !important; align-items: center !important; justify-content: flex-start !important; flex-shrink: 0; }
                 body.vaf-a4 .a4-pages { display: flex; flex-direction: column; align-items: center; gap: 24px; width: 210mm !important; flex-shrink: 0; margin: 0 auto !important; }
                 body.vaf-a4 .a4-page { width: 210mm !important; height: 297mm !important; min-height: 297mm !important; max-height: 297mm !important; flex-shrink: 0; margin: 0 auto !important; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.12); padding: 25mm !important; box-sizing: border-box !important; overflow: hidden !important; scroll-snap-align: start; scroll-snap-stop: always; }
@@ -218,6 +220,20 @@ function findMonolithicA4Sheet(doc: Document): HTMLElement | null {
     return direct instanceof HTMLElement ? direct : null;
 }
 
+/**
+ * Research HTML often wraps the whole report in one div; pagination needs direct block children.
+ */
+function hoistDirectChildrenIfOneWrapper(page: HTMLElement): void {
+    const els = Array.from(page.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
+    if (els.length !== 1) return;
+    const shell = els[0];
+    const tag = shell.tagName.toLowerCase();
+    if (!['div', 'main', 'article', 'section'].includes(tag)) return;
+    if (shell.children.length < 5) return;
+    while (shell.firstChild) page.insertBefore(shell.firstChild, shell);
+    page.removeChild(shell);
+}
+
 function measureBlockHeight(win: Window, el: HTMLElement): number {
     const cs = win.getComputedStyle(el);
     const mt = parseFloat(cs.marginTop) || 0;
@@ -262,6 +278,8 @@ function getA4UsableContentHeightPx(doc: Document, singlePage: HTMLElement): num
 function paginateIntoA4Pages(doc: Document): void {
     const singlePage = findMonolithicA4Sheet(doc);
     if (!singlePage) return;
+
+    hoistDirectChildrenIfOneWrapper(singlePage);
 
     for (let pass = 0; pass < 5; pass++) {
         const wrappers = singlePage.querySelectorAll(':scope > section, :scope > article');
@@ -355,6 +373,30 @@ function paginateIntoA4Pages(doc: Document): void {
 
     if (container && container.children.length > 1) {
         singlePage.parentNode?.replaceChild(container, singlePage);
+        return;
+    }
+
+    // Fallback: many blocks + long text but height/scroll metrics did not trigger a split (fonts, iframe timing).
+    const blocks = Array.from(singlePage.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
+    const approxChars = (singlePage.innerText || '').trim().length;
+    if (blocks.length >= 3 && approxChars > 1400) {
+        const targetPages = Math.min(20, Math.max(2, Math.ceil(approxChars / 2000)));
+        const perPage = Math.max(1, Math.ceil(blocks.length / targetPages));
+        const fb = doc.createElement('div');
+        fb.className = 'a4-pages';
+        fb.setAttribute('contenteditable', 'true');
+        for (let i = 0; i < blocks.length; i += perPage) {
+            const pg = doc.createElement('div');
+            pg.className = 'a4-page';
+            pg.setAttribute('contenteditable', 'true');
+            for (let j = i; j < Math.min(i + perPage, blocks.length); j++) {
+                pg.appendChild(blocks[j]);
+            }
+            fb.appendChild(pg);
+        }
+        if (fb.children.length > 1) {
+            singlePage.parentNode?.replaceChild(fb, singlePage);
+        }
     }
 }
 

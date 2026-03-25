@@ -1470,7 +1470,7 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'tool_update') {
-                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
 
                     const { subType, toolId, name, data: eventData, timestamp } = data;
                     const toolName = String(name || '').toLowerCase();
@@ -1912,28 +1912,35 @@ function VAFDashboardContent() {
                     const statusText = String(data.status || '').trim();
                     const modelLabel = data.model ? `• ${String(data.model)}` : '';
                     const statusLine = `${statusText}${modelLabel ? ` ${modelLabel}` : ''}`.trim();
-                    const incomingSteps = Array.isArray(data.steps) ? data.steps : [];
-                    const prevSteps = subAgentStepsRef.current;
+                    const incomingSteps = Array.isArray(data.steps) ? data.steps.filter((s: unknown) => s && typeof s === 'object') : [];
+                    const prevSteps = Array.isArray(subAgentStepsRef.current) ? subAgentStepsRef.current : [];
                     // Keep previous step list if this update carries only status text.
                     // Otherwise, status-only updates clear steps and cause repeated generic "Running ..." entries.
-                    let newSteps = incomingSteps.length > 0 ? incomingSteps : prevSteps;
+                    let newSteps: any[] = incomingSteps.length > 0 ? incomingSteps : [...prevSteps];
                     // When agent signals idle/completed, mark any leftover "running" steps as completed
                     // so the stop button hides and the UI reflects the finished state.
-                    const incomingPresence = data.presence || '';
+                    const incomingPresence = String(data.presence || '').trim().toLowerCase();
                     if (incomingPresence === 'idle' || incomingPresence === 'error') {
-                        const hasRunning = newSteps.some((s: any) => s.status === 'running');
+                        const hasRunning = newSteps.some((s: any) => s?.status === 'running');
                         if (hasRunning) {
                             newSteps = newSteps.map((s: any) =>
-                                s.status === 'running' ? { ...s, status: incomingPresence === 'error' ? 'failed' : 'completed' } : s
+                                s?.status === 'running'
+                                    ? { ...s, status: incomingPresence === 'error' ? 'failed' : 'completed' }
+                                    : s
                             );
                         }
                     }
-                    const prevMap = new Map(prevSteps.map(step => [step.id, step.status]));
+                    newSteps = newSteps.filter((s: any) => s && typeof s === 'object');
+                    const prevMap = new Map(
+                        prevSteps.map((step: { id?: string; status?: string }) => [step.id ?? '', step.status])
+                    );
                     const statusLines: string[] = [];
 
                     if (incomingSteps.length > 0) {
                         newSteps.forEach((step: any) => {
-                            const prevStatus = prevMap.get(step.id);
+                            if (!step || typeof step !== 'object') return;
+                            const sid = step.id ?? '';
+                            const prevStatus = prevMap.get(sid);
                             if (!prevStatus || prevStatus !== step.status) {
                                 const label = step.status === 'completed'
                                     ? 'Completed'
@@ -1941,7 +1948,8 @@ function VAFDashboardContent() {
                                         ? 'Running'
                                         : 'Pending';
                                 const detail = step.description ? ` - ${step.description}` : '';
-                                statusLines.push(`${label}: ${step.title}${detail}`);
+                                const stitle = step.title != null ? String(step.title) : 'Step';
+                                statusLines.push(`${label}: ${stitle}${detail}`);
                             }
                         });
                     }
@@ -1952,9 +1960,7 @@ function VAFDashboardContent() {
                     }
 
                     subAgentStepsRef.current = newSteps;
-                    const presence = data.presence || subAgentState.presence;
                     const statusLower = String(data.status || '').toLowerCase();
-                    const isRunning = presence === 'online' || statusLower.includes('running') || statusLower.includes('pending');
                     const isGenericHeartbeatStatus = statusLower.startsWith('running sub-agent tasks');
                     const isDetailedStatus = !!statusText && !isGenericHeartbeatStatus;
                     if (isDetailedStatus && statusText !== lastSubAgentStatusRef.current) {
@@ -1962,22 +1968,33 @@ function VAFDashboardContent() {
                         appendSubAgentLine(`[${timeStamp}] ${statusText}`);
                         lastSubAgentStatusRef.current = statusText;
                     }
-                    // Don't force-reopen if user explicitly closed the panel
+                    setSubAgentState(prev => {
+                    const nextPresence: 'online' | 'idle' | 'error' =
+                        incomingPresence === 'online' || incomingPresence === 'idle' || incomingPresence === 'error'
+                            ? incomingPresence
+                            : prev.presence;
+                    // Sub-agent is busy only when presence says online or status clearly says so — not when idle/error.
+                    const isRunning =
+                        nextPresence === 'online' ||
+                        (nextPresence !== 'idle' &&
+                            nextPresence !== 'error' &&
+                            (statusLower.includes('running') || statusLower.includes('pending')));
                     const shouldOpen = isRunning && !subAgentUserClosedRef.current;
-                    setSubAgentState(prev => ({
+                    return {
                         ...prev,
                         isOpen: shouldOpen ? true : prev.isOpen,
                         agentName: data.agentName || prev.agentName,
                         // Keep detailed progress text visible; don't overwrite it every second with generic heartbeat status.
                         status: isGenericHeartbeatStatus && prev.status ? prev.status : (statusLine || prev.status),
-                        presence: presence,
+                        presence: nextPresence,
                         currentFile: data.file || prev.currentFile,
                         codeContent: data.code || prev.codeContent,
                         steps: newSteps,
                         artifactFile: artifactDirtyRef.current ? prev.artifactFile : (data.file || prev.artifactFile),
                         artifactCode: artifactDirtyRef.current ? prev.artifactCode : (data.code || prev.artifactCode),
                         artifactStatus: artifactDirtyRef.current ? prev.artifactStatus : (data.code || data.file ? 'Synced' : prev.artifactStatus)
-                    }));
+                    };
+                    });
                 }
                 else if (data.type === 'artifact_update') {
                     if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
@@ -3157,14 +3174,30 @@ function VAFDashboardContent() {
     };
 
     const subAgentStatusLower = subAgentState.status.toLowerCase();
-    const hasRunningSubAgentStep = subAgentState.steps.some(step => step.status === 'running');
-    const isSubAgentRunning = subAgentState.presence === 'online' || hasRunningSubAgentStep || subAgentStatusLower.includes('running') || subAgentStatusLower.includes('pending');
+    const subPresence = subAgentState.presence;
+    const subAgentTerminal = subPresence === 'idle' || subPresence === 'error';
+    const hasActiveSubAgentStep = subAgentState.steps.some(
+        (step) => step.status === 'running' || step.status === 'pending'
+    );
+    const allSubAgentStepsFinished =
+        subAgentState.steps.length > 0 &&
+        subAgentState.steps.every((step: { status?: string }) =>
+            ['completed', 'failed', 'timeout'].includes(String(step.status || ''))
+        );
+    // Idle/error from backend wins over status text (avoids false "running" from unrelated substrings).
+    const isSubAgentRunning =
+        !subAgentTerminal &&
+        !allSubAgentStepsFinished &&
+        (subPresence === 'online' ||
+            hasActiveSubAgentStep ||
+            (subAgentState.steps.length === 0 &&
+                (subAgentStatusLower.includes('running') || subAgentStatusLower.includes('pending'))));
     const hasCompletedOrDoneStep = subAgentState.steps.some(
         (step: { status?: string }) =>
             step.status === 'completed' || step.status === 'failed' || step.status === 'timeout'
     );
     // Allow close when subagent finished, failed, or timed out (so user can always close on error)
-    const subAgentCanClose = !hasRunningSubAgentStep && (
+    const subAgentCanClose = !hasActiveSubAgentStep && (
         subAgentStatusLower.includes('completed') ||
         subAgentStatusLower.includes('done') ||
         subAgentStatusLower.includes('failed') ||

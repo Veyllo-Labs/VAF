@@ -690,6 +690,13 @@ class Platform:
                                 "agentName": _agent_title,
                                 "status": f"Process exited with error (code {proc.returncode})",
                                 "presence": "error",
+                                "steps": [{
+                                    "id": task_id or "subagent",
+                                    "title": _agent_title,
+                                    "description": "Process error",
+                                    "status": "failed",
+                                    "actions": [],
+                                }],
                             })
                         else:
                             _agent_title = (agent_type or "Sub-Agent").replace("_", " ").title()
@@ -698,6 +705,13 @@ class Platform:
                                 "agentName": _agent_title,
                                 "status": "Completed",
                                 "presence": "idle",
+                                "steps": [{
+                                    "id": task_id or "subagent",
+                                    "title": _agent_title,
+                                    "description": "Completed",
+                                    "status": "completed",
+                                    "actions": [],
+                                }],
                             })
 
                     import threading

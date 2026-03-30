@@ -147,10 +147,12 @@ VAF supports full TLS encryption for both HTTP (HTTPS) and WebSocket (WSS) traff
 
 The simplest way to enable TLS:
 
-1. Set `local_network_tls_enabled` to `true` in `~/.vaf/config.json`
+1. Enable Local Network Hosting (`local_network_enabled=true`) in Settings or via `vaf server on`
 2. Restart VAF
 
 That's it. VAF automatically generates a local Certificate Authority (CA) and server certificate. No manual `openssl` commands needed.
+
+> **Important:** Network mode is TLS-only. If `local_network_enabled=true`, VAF automatically enforces `local_network_tls_enabled=true` when loading/saving config.
 
 ### How Auto-SSL Works
 
@@ -261,7 +263,7 @@ When TLS is active, the following changes take effect across the stack:
 
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
-| `local_network_tls_enabled` | `bool` | `false` | Master toggle for TLS |
+| `local_network_tls_enabled` | `bool` | `false` | TLS flag. Enforced to `true` whenever `local_network_enabled=true` |
 | `local_network_https_port` | `int` | `443` | HTTPS proxy listen port (8443 on Windows if 443 needs admin) |
 | `local_network_ssl_cert` | `string` | `""` | Path to PEM certificate (auto-populated if empty) |
 | `local_network_ssl_key` | `string` | `""` | Path to PEM private key (auto-populated if empty) |

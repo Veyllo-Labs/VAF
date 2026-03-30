@@ -34,6 +34,10 @@ from vaf.github.credential_github import (
     set_github_oauth_tokens,
 )
 from vaf.github.activity import get_github_activity
+from vaf.api.oauth_session_binding import (
+    enforce_callback_actor_binding,
+    require_oauth_actor_in_network_mode,
+)
 
 logger = logging.getLogger("vaf.api.github")
 
@@ -128,6 +132,7 @@ async def oauth_start(
     Start GitHub OAuth flow. Returns authorization URL and state.
     scope: 'read_only' for public_repo only; otherwise full repo access.
     """
+    require_oauth_actor_in_network_mode(request)
     if not is_github_oauth_configured():
         raise HTTPException(
             status_code=400,
@@ -227,6 +232,7 @@ async def oauth_callback(
     try:
         # Prefer user from state (set at start) so we attribute to the right user after redirect
         state_username, state_scope = get_state_user(state)
+        enforce_callback_actor_binding(request, state_username, state_scope)
         user = get_current_user_or_local_admin(request)
         username = state_username or user.get("username", "admin")
         user_scope_id = state_scope or user.get("user_scope_id")

@@ -36,6 +36,7 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 ### Security & Execution
 - **SANDBOXING.md**: Secure code execution using Docker.
 - **SANDBOX_MODULES.md**: Sandboxed module system.
+- **NETWORK_FEATURES.md**: Network-mode security model, OAuth session binding, and operational hardening checks (`vaf doctor` / `vaf security doctor`).
 
 ### Platform & Setup
 - **SYSTEM_TRAY.md**: Tray architecture and platform notes (Windows vs macOS implementation details).

@@ -189,7 +189,7 @@ The Discord configuration is stored locally in your VAF config:
 
 - Each whitelist entry links one Telegram user to one VAF user (user_scope_id and username from the Web UI session when that user was added).
 - **Verified account owner**: The user who linked their Telegram with the bot (via the whitelist step or by having sent at least one message) does not need to be manually re-added for proactive sends. The bot resolves their chat ID from the whitelist (with loose matching on scope and username) or from the single linked account when there is only one.
-- **Contact whitelist**: If a Telegram user ID is stored in a contact (Settings → Connections → Contacts) with **Can reach your assistant** enabled, that contact can send messages to your assistant (handled in your context, like a front office).
+- **Contact whitelist**: In strict pairing mode (`channel_ingress_policy.mode = paired_only`, default), contact-based fallback is disabled for Telegram. Contacts must be explicitly paired via Telegram whitelist/relay whitelist before inbound messages are accepted.
 - Only whitelisted users receive replies. Non-whitelisted inbound messages are dropped at ingress (no reply, no queue task), reducing abuse/amplification risk.
 - RAG, memories, and user identity are scoped per user, same as in the Web UI.
 
@@ -250,7 +250,7 @@ For full technical documentation (architecture, voice flow, configuration, troub
 
 - **Per-user isolation**: Each VAF user has their own WhatsApp session. Credentials are stored in `~/.vaf/users/<username>/whatsapp/`. Other users cannot see or use your WhatsApp.
 - **QR link**: Scan a QR code with WhatsApp (Linked Devices) to link your phone.
-- **Whitelist**: Only configured phone numbers (E.164) can send messages **and** receive replies. Each whitelist entry maps a phone number to a VAF user. Numbers in **Contacts** (Settings → Connections → Contacts) with **Can reach your assistant** (Front Office) can also send messages to your assistant (handled in your context). **For Front Office via WhatsApp**, the contact must have that WhatsApp number stored in their **Channels** (phone/WhatsApp); otherwise incoming messages from that number are rejected and the agent will not answer.
+- **Whitelist**: Only configured phone numbers (E.164) can send messages **and** receive replies. Each whitelist entry maps a phone number to a VAF user. In strict pairing mode (`channel_ingress_policy.mode = paired_only`, default), contact-based fallback is disabled for WhatsApp, so contacts must be explicitly paired in WhatsApp whitelist.
 - **Read-only for everyone else**: The bot replies only to numbers in your whitelist (config or contact whitelist). It does not message other contacts or react to messages from non-whitelisted numbers.
 - **Node.js required**: Uses Baileys via a Node subprocess. Run `npm install` in `vaf/whatsapp_node/` before first use.
 - **Agent tools**: `whatsapp_inbox`, `find_whatsapp_messages`, `read_whatsapp_chat` list/search/read chats. **`send_whatsapp`** sends text, voice (Sprachnachricht), or **documents (PDF, etc.)** to the user – WhatsApp as a channel where the bot can send the user content. `whatsapp_call` is a placeholder (not implemented).
@@ -457,6 +457,7 @@ Message bodies are always returned as plain text: HTML and MIME structure are st
 
 - **Good UX (like other local apps)**: The app can ship a **default** OAuth client ID so users never open Google Cloud Console. Distributors/packagers set env vars: `VAF_EMAIL_OAUTH_GOOGLE_CLIENT_ID`, `VAF_EMAIL_OAUTH_MICROSOFT_CLIENT_ID` (and optionally `VAF_EMAIL_OAUTH_GOOGLE_CLIENT_SECRET`, `VAF_EMAIL_OAUTH_MICROSOFT_CLIENT_SECRET`). User override in Settings (config) takes precedence over env.
 - **Flow**: Authorization Code with PKCE; redirect to the **local** VAF backend (for example `https://localhost:8443/api/email/oauth/callback` in TLS/network mode, or `http://127.0.0.1:8001/api/email/oauth/callback` in localhost mode). VAF is a **desktop/local** app—no public web app; the browser redirects to your machine’s backend, which exchanges the code for tokens.
+- **Network-mode session binding**: In network mode, OAuth start/callback for Email, Cloud, and GitHub require an authenticated Web session. The callback actor must match the user encoded in OAuth `state` (username/scope); mismatches are rejected to prevent cross-user token attachment.
 
 #### Gmail: Desktop vs Web OAuth client (Google)
 

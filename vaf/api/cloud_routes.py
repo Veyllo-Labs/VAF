@@ -26,6 +26,7 @@ from vaf.cloud.oauth_cloud import (
     get_state_provider,
     get_state_redirect_base,
     get_state_username,
+    get_state_user_scope_id,
     is_cloud_oauth_configured,
     get_cloud_callback_redirect_uri,
 )
@@ -37,6 +38,10 @@ from vaf.cloud.credential_cloud import (
 from vaf.cloud.sync_manifest import SyncManifest
 from vaf.cloud.sync_engine import SyncEngine
 from vaf.cloud.base import SYNC_FOLDER_NAME
+from vaf.api.oauth_session_binding import (
+    enforce_callback_actor_binding,
+    require_oauth_actor_in_network_mode,
+)
 
 logger = logging.getLogger("vaf.api.cloud")
 
@@ -58,6 +63,11 @@ def _get_current_username(request: Request) -> str:
     """Current user from auth middleware, or local admin. Used to scope cloud data per user."""
     from vaf.api.config_routes import get_current_username as get_username
     return get_username(request)
+
+
+def _get_current_user(request: Request) -> Dict[str, Any]:
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    return get_current_user_or_local_admin(request)
 
 
 # ── Config helpers ────────────────────────────────────────────────────────
@@ -179,10 +189,11 @@ async def oauth_start(
     request: Request,
     provider: str = "google_drive",
     redirect_base: Optional[str] = None,
-    _username: str = Depends(_get_current_username),
+    _user: Dict[str, Any] = Depends(_get_current_user),
 ):
     """Start OAuth2 flow for a cloud storage provider. Returns authorization URL and state.
     redirect_base: frontend origin (e.g. http://localhost:3000) so post-OAuth redirect matches the host the user used."""
+    require_oauth_actor_in_network_mode(request)
     if provider not in OAUTH_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Provider must be one of: {', '.join(OAUTH_PROVIDERS)}")
 
@@ -192,6 +203,8 @@ async def oauth_start(
             detail=f"OAuth is not configured for {provider}. An admin must set client ID and secret first.",
         )
 
+    _username = _user.get("username", "admin")
+    _user_scope_id = _user.get("user_scope_id")
     base_url = str(request.base_url).rstrip("/")
     redirect_uri = get_cloud_callback_redirect_uri(base_url)
 
@@ -201,6 +214,7 @@ async def oauth_start(
             redirect_uri,
             redirect_base=redirect_base,
             username=_username,
+            user_scope_id=_user_scope_id,
         )
         return {"authorization_url": auth_url, "state": state, "redirect_uri": redirect_uri}
     except ValueError as exc:
@@ -229,9 +243,11 @@ async def oauth_callback(
         provider = get_state_provider(state)
         if not provider:
             return _redirect_error("Invalid or expired state. Please start the login again.", redirect_base)
+        state_scope = get_state_user_scope_id(state)
+        state_username = get_state_username(state)
+        enforce_callback_actor_binding(request, state_username, state_scope)
 
         # Use username from OAuth state for strict user isolation.
-        state_username = get_state_username(state)
         username = state_username or _get_current_username(request)
         cred_username = _get_cred_username(username)
 

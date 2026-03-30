@@ -6642,6 +6642,7 @@ class Agent:
             return "Error: thinking_workspace tools are only available in background thinking mode."
 
         # So tools (e.g. document_writer) can notify Web UI; needed when run directly or via workflow in same process
+        sid = None
         try:
             from vaf.core.subagent_ipc import get_current_session_id
             sid = get_current_session_id() or getattr(self, "current_session_id", None)
@@ -6649,6 +6650,17 @@ class Agent:
                 os.environ["VAF_SESSION_ID"] = str(sid)
         except Exception:
             pass
+
+        current_source = str(getattr(self, "_current_chat_source", "") or "").strip().lower()
+        channel_sources = {"telegram", "whatsapp", "discord"}
+        channel_session_prefixes = ("telegram_", "whatsapp_", "discord_")
+        is_channel_session = (
+            current_source in channel_sources
+            or (isinstance(sid, str) and sid.startswith(channel_session_prefixes))
+        )
+
+        if is_channel_session and name == "python_exec":
+            return "Security Error: python_exec is blocked for channel-origin sessions."
 
         def emit(evt: dict):
             if callable(self._event_sink):
@@ -6791,6 +6803,9 @@ class Agent:
                 if name in ("python_sandbox", "python_exec"):
                     # Inject agent reference so with_vaf_tools=True can call back into the tool registry.
                     tool_args["_agent"] = self
+                    if name == "python_sandbox" and is_channel_session:
+                        # Non-main channel sessions must not bridge host tools from sandbox code.
+                        tool_args["with_vaf_tools"] = False
                 if name == "checkpoint_context":
                     # Inject agent reference so checkpoint_context can call agent.checkpoint_and_reset()
                     tool_args["_agent"] = self
@@ -6860,7 +6875,12 @@ class Agent:
 
         # If python_sandbox blocked the request, offer a gated fallback to python_exec
         # (once/always/cancel) so the user can explicitly override sandbox restrictions.
-        if name == "python_sandbox" and isinstance(result, str) and result.startswith("Security Error:"):
+        if (
+            name == "python_sandbox"
+            and not is_channel_session
+            and isinstance(result, str)
+            and result.startswith("Security Error:")
+        ):
             if "python_exec" in self.tools:
                 cwd = Path.cwd()
                 policy = get_tool_policy("python_exec")

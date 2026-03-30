@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import requests
 
 from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.messaging_connections import save_whatsapp_chat_jid
 from vaf.core.task_queue import TaskQueue
 from vaf.core.whatsapp_auth import get_whatsapp_auth_dir, whatsapp_auth_exists
@@ -923,30 +924,51 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             or (from_e164 and _allow_from_match(from_e164, allowed_phones))
             or (resolved_e164_from_config and _allow_from_match(resolved_e164_from_config, allowed_phones))
         )
-        if (from_jid or "").endswith("@lid") and not from_e164 and not resolved_e164_from_config and not allow_match:
+        explicit_allow = bool(config_phones) and (
+            _allow_from_match(from_jid or "", config_phones)
+            or (from_e164 and _allow_from_match(from_e164, config_phones))
+            or (resolved_e164_from_config and _allow_from_match(resolved_e164_from_config, config_phones))
+        )
+        contact_allow = bool(allow_match and not explicit_allow)
+        ingress_policy = Config.get("channel_ingress_policy")
+        policy_allowed, policy_reason = evaluate_ingress(
+            "whatsapp",
+            ingress_policy,
+            explicit_match=explicit_allow,
+            contact_match=contact_allow,
+        )
+        if (from_jid or "").endswith("@lid") and not from_e164 and not resolved_e164_from_config and not policy_allowed:
             try:
                 from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
                 log_whatsapp_inbound(f"REJECT unresolved @lid from={from_jid} (not in whitelist/contacts; LID is not a phone number)")
                 log_whatsapp_qr(f"[inbound] REJECT unresolved @lid from={from_jid} (not in whitelist/contacts)")
             except Exception:
                 pass
-        if not is_self_chat and not allow_match:
+        if not policy_allowed:
             from_digits = _phone_digits_canonical(from_jid or "") or (_phone_digits_canonical(from_e164 or "") if from_e164 else "")
             try:
                 from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
-                log_whatsapp_inbound(f"REJECT not_whitelist from={from_jid} allowed_count={len(allowed_phones)}")
-                log_whatsapp_qr(f"[inbound] REJECT from={from_jid} from_digits={from_digits or '?'} allowed_count={len(allowed_phones)}")
+                log_whatsapp_inbound(
+                    f"REJECT not_paired from={from_jid} allowed_count={len(allowed_phones)} reason={policy_reason}"
+                )
+                log_whatsapp_qr(
+                    f"[inbound] REJECT from={from_jid} from_digits={from_digits or '?'} allowed_count={len(allowed_phones)} reason={policy_reason}"
+                )
             except Exception:
                 pass
+            sender_for_throttle = str(from_jid or from_e164 or "")
+            if should_log_unauthorized("whatsapp", sender_for_throttle, ingress_policy):
+                logger.warning(
+                    "WhatsApp: dropped unauthorized inbound from=%s reason=%s explicit=%s contact=%s",
+                    from_jid,
+                    policy_reason,
+                    explicit_allow,
+                    contact_allow,
+                )
             # Record activity so dashboard still shows this chat (as Read-only) even when Node chat list omits it after reconnect
             _reject_chat_id = _to_e164_display(_jid_to_e164(from_jid or "")) if _jid_to_e164(from_jid or "") else str(from_jid or "")
             if _reject_chat_id:
                 _append_chat_activity(_reject_chat_id, None, "in")
-            logger.warning(
-                "WhatsApp: rejected message from %s (not in allowFrom). allowed_phones count=%s; check Front Office contact phone format (use +49… or 0…).",
-                from_jid,
-                len(allowed_phones),
-            )
             return
         try:
             from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
@@ -1023,10 +1045,8 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                 logger.info("WhatsApp: skip agent reply for %s (owner has control, 10 min not elapsed)", from_jid)
             else:
                 session_id = f"whatsapp_{username}_{resolved_digits or 'self'}"
-                in_config = _allow_from_match(from_jid or "", config_phones) or (
-                    from_e164 and _allow_from_match(from_e164, config_phones)
-                )
-                from_contact = allow_match and not in_config
+                in_config = explicit_allow
+                from_contact = contact_allow and not in_config
                 metadata: Dict[str, Any] = {
                     "user_scope_id": user_scope_id,
                     "username": username,

@@ -4156,6 +4156,7 @@ function VAFDashboardContent() {
                                 />
                             ) : documentEditorState.isOpen ? (
                                 <DocumentEditor
+                                    key={`${currentSessionId ?? 'default'}-ed-${documentEditorState.filePath || 'nofile'}`}
                                     isOpen={documentEditorState.isOpen}
                                     onClose={() => setDocumentEditorState(prev => ({ ...prev, isOpen: false }))}
                                     filePath={documentEditorState.filePath}

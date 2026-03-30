@@ -244,6 +244,9 @@ class Config:
             # when enabled, Local Network Hosting cannot be disabled via UI/API saves.
             if bool(result.get("local_network_force_enabled", False)):
                 result["local_network_enabled"] = True
+            # Security invariant: local network hosting must always run with TLS enabled.
+            if bool(result.get("local_network_enabled", False)):
+                result["local_network_tls_enabled"] = True
             return result
         except Exception:
             return cls.DEFAULTS.copy()
@@ -617,13 +620,26 @@ class Config:
         )
         if force_network:
             config["local_network_enabled"] = True
+        # Security invariant: it must not be possible to persist network mode with TLS disabled.
+        if bool(config.get("local_network_enabled", False)):
+            config["local_network_tls_enabled"] = True
 
         with open(cls.CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=4)
             
         # Detect and notify changes for critical keys
         # local_network_* for server restart; provider for tray VRAM load/unload; model for llama-server reload
-        critical_keys = ["local_network_enabled", "local_network_port", "local_network_port_frontend", "provider", "n_ctx", "gpu_layers", "model"]
+        critical_keys = [
+            "local_network_enabled",
+            "local_network_tls_enabled",
+            "local_network_https_port",
+            "local_network_port",
+            "local_network_port_frontend",
+            "provider",
+            "n_ctx",
+            "gpu_layers",
+            "model",
+        ]
         
         for key in critical_keys:
             old_val = existing_config.get(key)

@@ -146,27 +146,338 @@ function getTextNodesInOrder(root: Node): { node: Text; start: number; end: numb
     return result;
 }
 
-/** Injected early so embedded report CSS cannot grow `.a4-page` to full document height. */
+/** Injected in document head so report CSS inside the page body cannot override A4 sizing. */
 const A4_EDITOR_STYLE = `
                 html, body.vaf-a4, body.vaf-a4 * { box-sizing: border-box !important; }
                 html, body.vaf-a4 { scrollbar-width: none !important; -ms-overflow-style: none !important; }
                 html::-webkit-scrollbar, body.vaf-a4::-webkit-scrollbar { display: none !important; }
                 html { width: 100% !important; margin: 0 !important; padding: 0 !important; }
-                body.vaf-a4 { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 16px 0 !important;
-                    min-height: 100%; background: #e5e7eb !important; overflow-y: auto; scroll-snap-type: y mandatory; }
-                /* Keep embedded report blocks from forcing a single oversized column */
+                html body.vaf-a4 { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 16px 0 !important;
+                    min-height: 100%; background: #e5e7eb !important; overflow-y: auto !important; scroll-snap-type: y mandatory; }
                 body.vaf-a4 .a4-page * { max-width: 100% !important; }
-                body.vaf-a4 .vaf-a4-center { width: 100% !important; display: flex !important; flex-direction: column !important; align-items: center !important; justify-content: flex-start !important; flex-shrink: 0; }
-                body.vaf-a4 .a4-pages { display: flex; flex-direction: column; align-items: center; gap: 24px; width: 210mm !important; flex-shrink: 0; margin: 0 auto !important; }
-                body.vaf-a4 .a4-page { width: 210mm !important; height: 297mm !important; min-height: 297mm !important; max-height: 297mm !important; flex-shrink: 0; margin: 0 auto !important; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.12); padding: 25mm !important; box-sizing: border-box !important; overflow: hidden !important; scroll-snap-align: start; scroll-snap-stop: always; }
+                html body.vaf-a4 .vaf-a4-center { width: 100% !important; display: flex !important; flex-direction: column !important; align-items: center !important; justify-content: flex-start !important; flex-shrink: 0; }
+                html body.vaf-a4 .vaf-a4-center > .a4-pages,
+                html body.vaf-a4 .vaf-a4-center .a4-pages { display: flex !important; flex-direction: column !important; align-items: center !important; gap: 24px !important; width: 210mm !important; flex-shrink: 0 !important; margin: 0 auto !important; }
+                html body.vaf-a4 .vaf-a4-center > .a4-page,
+                html body.vaf-a4 .vaf-a4-center .a4-pages > .a4-page,
+                html body.vaf-a4 .a4-page.a4-page {
+                    width: 210mm !important; height: 297mm !important; min-height: 297mm !important; max-height: 297mm !important;
+                    flex-shrink: 0 !important; margin: 0 auto !important; background: white !important;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.12) !important; padding: 25mm !important; box-sizing: border-box !important;
+                    overflow: hidden !important; scroll-snap-align: start !important; scroll-snap-stop: always !important;
+                }
             `;
+
+/** Default iframe height is ~150px; expand so stacked A4 sheets are visible (outer panel scrolls). */
+function resizeEditorIframe(iframe: HTMLIFrameElement | null): void {
+    if (!iframe) return;
+    const d = iframe.contentDocument;
+    if (!d?.documentElement) return;
+    const sh = Math.max(d.documentElement.scrollHeight, d.body?.scrollHeight ?? 0, 320);
+    iframe.style.height = `${Math.ceil(sh)}px`;
+}
 
 function ensureA4EditorStyles(doc: Document): void {
     if (doc.querySelector('style[data-a4]')) return;
     const style = doc.createElement('style');
     style.setAttribute('data-a4', '1');
     style.textContent = A4_EDITOR_STYLE;
-    doc.body.appendChild(style);
+    const head = doc.head;
+    if (head) head.appendChild(style);
+    else doc.documentElement.appendChild(style);
+}
+
+/**
+ * Research exports are full HTML documents. Feeding that string to doc.write() can yield fragile iframe layout;
+ * we inject only body inner HTML plus original head styles so the editor shell (center + A4) is predictable.
+ */
+function extractEditorBodyAndHeadStyles(html: string): { bodyInner: string; headInjectHtml: string } {
+    const t = html.trim();
+    if (typeof window === 'undefined') {
+        return { bodyInner: html, headInjectHtml: '' };
+    }
+    if (!/^\s*<!doctype\b|<html[\s>]/i.test(t)) {
+        return { bodyInner: html, headInjectHtml: '' };
+    }
+    try {
+        const parsed = new DOMParser().parseFromString(t, 'text/html');
+        const headBits = Array.from(
+            parsed.head.querySelectorAll('style, link[rel="stylesheet"], meta[charset], meta[name="viewport"]')
+        )
+            .map((el) => el.outerHTML)
+            .join('');
+        return { bodyInner: parsed.body.innerHTML, headInjectHtml: headBits };
+    } catch {
+        return { bodyInner: html, headInjectHtml: '' };
+    }
+}
+
+/**
+ * Last resort: one physical page still taller than A4 — redistribute direct block children into new pages.
+ * Handles height=0 measurement glitches by splitting on block count + character length.
+ */
+function forceSplitIfSingleTallPage(doc: Document): void {
+    const win = doc.defaultView;
+    if (!win) return;
+    const center = doc.body.querySelector('.vaf-a4-center');
+    if (!center) return;
+
+    let targetPage: HTMLElement | null = null;
+    const pagesHost = center.querySelector(':scope > .a4-pages');
+    if (pagesHost && pagesHost.children.length === 1) {
+        const only = pagesHost.children[0];
+        if (only.classList.contains('a4-page') && only instanceof HTMLElement) targetPage = only;
+    } else if (!pagesHost) {
+        const d = center.querySelector(':scope > .a4-page');
+        if (d instanceof HTMLElement) targetPage = d;
+    }
+    if (!targetPage) return;
+
+    applyA4PageBoxLock(targetPage);
+    void targetPage.offsetHeight;
+    void doc.body.offsetHeight;
+
+    const limitPx = getA4UsableContentHeightPx(doc, targetPage);
+    if (limitPx <= 0) return;
+
+    let blocks = Array.from(targetPage.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
+    if (blocks.length === 1) {
+        const shell = blocks[0];
+        const inner = Array.from(shell.children).filter((n): n is HTMLElement => n.nodeType === 1);
+        if (inner.length >= 2) {
+            for (const x of inner) targetPage.insertBefore(x, shell);
+            targetPage.removeChild(shell);
+            blocks = Array.from(targetPage.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
+        }
+    }
+    if (blocks.length < 2) return;
+
+    const heights = blocks.map((el) => measureBlockHeight(win, el));
+    const useHeights = heights.some((h) => h >= 6);
+
+    const container = doc.createElement('div');
+    container.className = 'a4-pages';
+    container.setAttribute('contenteditable', 'true');
+
+    if (!useHeights) {
+        const approxChars = (targetPage.innerText || '').trim().length;
+        const targetPages = Math.min(18, Math.max(2, Math.ceil(approxChars / 2000)));
+        const perPage = Math.max(1, Math.ceil(blocks.length / targetPages));
+        for (let i = 0; i < blocks.length; i += perPage) {
+            const pg = doc.createElement('div');
+            pg.className = 'a4-page';
+            pg.setAttribute('contenteditable', 'true');
+            applyA4PageBoxLock(pg);
+            for (let j = i; j < Math.min(i + perPage, blocks.length); j++) {
+                pg.appendChild(blocks[j]);
+            }
+            container.appendChild(pg);
+        }
+    } else {
+        let curPage = doc.createElement('div');
+        curPage.className = 'a4-page';
+        curPage.setAttribute('contenteditable', 'true');
+        applyA4PageBoxLock(curPage);
+        container.appendChild(curPage);
+        let curH = 0;
+        for (let i = 0; i < blocks.length; i++) {
+            const el = blocks[i];
+            const h = Math.max(8, heights[i]);
+            if (curH > 0 && curH + h > limitPx) {
+                curPage = doc.createElement('div');
+                curPage.className = 'a4-page';
+                curPage.setAttribute('contenteditable', 'true');
+                applyA4PageBoxLock(curPage);
+                container.appendChild(curPage);
+                curH = 0;
+            }
+            curPage.appendChild(el);
+            curH += h;
+        }
+    }
+
+    if (container.children.length > 1) {
+        targetPage.parentNode?.replaceChild(container, targetPage);
+        applyA4PageLocksUnderCenter(doc);
+    }
+}
+
+function countEditorA4Pages(doc: Document): number {
+    const center = doc.body.querySelector('.vaf-a4-center');
+    if (!center) return 0;
+    const host = center.querySelector(':scope > .a4-pages');
+    if (host) {
+        return Array.from(host.children).filter((c) => (c as HTMLElement).classList?.contains('a4-page')).length || host.children.length;
+    }
+    return center.querySelector(':scope > .a4-page') ? 1 : 0;
+}
+
+/**
+ * Hard guarantee for research HTML: split using only character count + top-level block count.
+ * Does not use scrollHeight (often equals clientHeight when the "page" grows with content).
+ */
+function ensureMultipageFromBlockCountOnly(doc: Document): void {
+    if (countEditorA4Pages(doc) > 1) return;
+    const sp = findMonolithicA4Sheet(doc);
+    if (!sp) return;
+    applyA4PageBoxLock(sp);
+    for (let pass = 0; pass < 12; pass++) {
+        const secs = Array.from(sp.querySelectorAll(':scope > section, :scope > article'));
+        if (secs.length === 0) break;
+        for (const w of secs) {
+            const par = w.parentNode;
+            if (!par) continue;
+            while (w.firstChild) par.insertBefore(w.firstChild, w);
+            par.removeChild(w);
+        }
+    }
+    expandMonolithicShell(sp);
+    hoistMultiChildWrappers(sp);
+    unwrapSingleBlockChildContainers(sp);
+    hoistMultiChildWrappers(sp);
+    for (let peel = 0; peel < 40 && sp.childElementCount === 1; peel++) {
+        const sole = sp.firstElementChild as HTMLElement | null;
+        if (!sole) break;
+        const inner = Array.from(sole.children).filter((n): n is HTMLElement => n.nodeType === 1);
+        if (inner.length < 2) break;
+        for (const x of inner) sp.insertBefore(x, sole);
+        sp.removeChild(sole);
+    }
+    const blocks = Array.from(sp.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
+    const chars = (sp.innerText || '').trim().length;
+    if (blocks.length < 2 || chars < 900) return;
+    const desiredPages = Math.min(28, Math.max(2, Math.ceil(chars / 1300)));
+    let perPage = Math.max(1, Math.ceil(blocks.length / desiredPages));
+    if (perPage >= blocks.length) perPage = Math.max(1, Math.floor(blocks.length / 2));
+    const container = doc.createElement('div');
+    container.className = 'a4-pages';
+    container.setAttribute('contenteditable', 'true');
+    for (let i = 0; i < blocks.length; i += perPage) {
+        const pg = doc.createElement('div');
+        pg.className = 'a4-page';
+        pg.setAttribute('contenteditable', 'true');
+        applyA4PageBoxLock(pg);
+        for (let j = i; j < Math.min(i + perPage, blocks.length); j++) {
+            pg.appendChild(blocks[j]);
+        }
+        container.appendChild(pg);
+    }
+    if (container.children.length > 1) {
+        sp.parentNode?.replaceChild(container, sp);
+        applyA4PageLocksUnderCenter(doc);
+    }
+}
+
+/**
+ * Paginate *before* writing into the iframe, using a detached DOMParser document (always has no layout quirks).
+ * The iframe's own `defaultView` can be missing briefly; `paginateIntoA4Pages` then no-ops forever.
+ */
+function prepareEditorBodyHtml(bodyInner: string): string {
+    const raw = (bodyInner || '').trim();
+    if (typeof window === 'undefined' || raw.length < 400) return bodyInner;
+    const pageMarker = (raw.match(/\ba4-page\b/gi) || []).length;
+    if (pageMarker >= 2 && /\ba4-pages\b/i.test(raw)) return bodyInner;
+
+    try {
+        const pd = new DOMParser().parseFromString(
+            '<!DOCTYPE html><html><head></head><body class="vaf-a4"></body></html>',
+            'text/html'
+        );
+        const b = pd.body;
+        b.innerHTML = bodyInner;
+        const wrap = pd.createElement('div');
+        wrap.className = 'a4-page';
+        wrap.setAttribute('contenteditable', 'true');
+        while (b.firstChild) wrap.appendChild(b.firstChild);
+        const center = pd.createElement('div');
+        center.className = 'vaf-a4-center';
+        center.appendChild(wrap);
+        b.appendChild(center);
+        ensureMultipageFromBlockCountOnly(pd);
+        return b.innerHTML;
+    } catch {
+        return bodyInner;
+    }
+}
+
+/** Inline lock wins over almost all embedded report stylesheets (prevents one “infinite” sheet). */
+function applyA4PageBoxLock(el: HTMLElement): void {
+    el.style.setProperty('width', '210mm', 'important');
+    el.style.setProperty('height', '297mm', 'important');
+    el.style.setProperty('min-height', '297mm', 'important');
+    el.style.setProperty('max-height', '297mm', 'important');
+    el.style.setProperty('box-sizing', 'border-box', 'important');
+    el.style.setProperty('overflow', 'hidden', 'important');
+}
+
+/** Move direct element children of sole up to page (one shell → many blocks). */
+function hoistDirectChildrenOntoPage(page: HTMLElement, sole: HTMLElement): boolean {
+    const kids = Array.from(sole.children).filter((n): n is HTMLElement => n.nodeType === 1);
+    if (kids.length < 2) return false;
+    for (const k of kids) page.insertBefore(k, sole);
+    page.removeChild(sole);
+    return true;
+}
+
+/** Move only top-level <p> inside sole to page (common report pattern: one div > many p). */
+function hoistTopLevelParagraphsOntoPage(page: HTMLElement, sole: HTMLElement): boolean {
+    const kids = Array.from(sole.children) as HTMLElement[];
+    if (kids.length < 2) return false;
+    if (!kids.every((k) => k.tagName.toLowerCase() === 'p')) return false;
+    for (const p of kids) page.insertBefore(p, sole);
+    page.removeChild(sole);
+    return true;
+}
+
+/** Split one table across pages by row height (TR must sit in TBODY). */
+function paginateSingleTableIntoPages(
+    doc: Document,
+    singlePage: HTMLElement,
+    table: HTMLTableElement,
+    limit: number,
+    win: Window
+): HTMLDivElement | null {
+    const rows = Array.from(table.querySelectorAll('tr')) as HTMLTableRowElement[];
+    if (rows.length < 2) return null;
+    const tableClass = table.className;
+    const container = doc.createElement('div');
+    container.className = 'a4-pages';
+    container.setAttribute('contenteditable', 'true');
+    let curPage = doc.createElement('div');
+    curPage.className = 'a4-page';
+    curPage.setAttribute('contenteditable', 'true');
+    applyA4PageBoxLock(curPage);
+    container.appendChild(curPage);
+    let curH = 0;
+    let rowBuf: HTMLTableRowElement[] = [];
+
+    const flushBuf = () => {
+        if (rowBuf.length === 0) return;
+        const tbl = doc.createElement('table');
+        if (tableClass) tbl.className = tableClass;
+        const tb = doc.createElement('tbody');
+        for (const r of rowBuf) tb.appendChild(r);
+        tbl.appendChild(tb);
+        curPage.appendChild(tbl);
+        rowBuf = [];
+    };
+
+    for (const tr of rows) {
+        const h = measureBlockHeight(win, tr);
+        if (curH > 0 && curH + h > limit) {
+            flushBuf();
+            curPage = doc.createElement('div');
+            curPage.className = 'a4-page';
+            curPage.setAttribute('contenteditable', 'true');
+            applyA4PageBoxLock(curPage);
+            container.appendChild(curPage);
+            curH = 0;
+        }
+        rowBuf.push(tr);
+        curH += h;
+    }
+    flushBuf();
+    return container.children.length > 1 ? container : null;
 }
 
 /** Research HTML often wraps everything in one div — unwrap so pagination sees many blocks. */
@@ -184,6 +495,26 @@ function unwrapSingleBlockChildContainers(root: HTMLElement): void {
 }
 
 const HOIST_WRAPPER_TAGS = new Set(['div', 'main', 'article', 'section', 'center', 'form']);
+
+/** Flatten div>div>…>content until multiple top-level blocks or nothing left to peel. */
+function expandMonolithicShell(page: HTMLElement): void {
+    for (let z = 0; z < 80; z++) {
+        const els = Array.from(page.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
+        if (els.length > 1) return;
+        if (els.length === 0) return;
+        const sole = els[0];
+        if (hoistDirectChildrenOntoPage(page, sole)) continue;
+        if (hoistTopLevelParagraphsOntoPage(page, sole)) continue;
+        const tag = sole.tagName.toLowerCase();
+        if (HOIST_WRAPPER_TAGS.has(tag) && sole.children.length === 1) {
+            const inner = sole.children[0];
+            page.insertBefore(inner, sole);
+            page.removeChild(sole);
+            continue;
+        }
+        return;
+    }
+}
 
 /** Hoist when a single wrapper has multiple element children (nested report shells). */
 function hoistMultiChildWrappers(page: HTMLElement): void {
@@ -229,7 +560,7 @@ function hoistDirectChildrenIfOneWrapper(page: HTMLElement): void {
     const shell = els[0];
     const tag = shell.tagName.toLowerCase();
     if (!['div', 'main', 'article', 'section'].includes(tag)) return;
-    if (shell.children.length < 5) return;
+    if (shell.children.length < 2) return;
     while (shell.firstChild) page.insertBefore(shell.firstChild, shell);
     page.removeChild(shell);
 }
@@ -238,7 +569,8 @@ function measureBlockHeight(win: Window, el: HTMLElement): number {
     const cs = win.getComputedStyle(el);
     const mt = parseFloat(cs.marginTop) || 0;
     const mb = parseFloat(cs.marginBottom) || 0;
-    const h = Math.max(el.offsetHeight, el.getBoundingClientRect().height);
+    // Embedded report CSS (flex/%) can make offsetHeight match the clipped page; scrollHeight keeps real content height.
+    const h = Math.max(el.offsetHeight, el.scrollHeight, el.getBoundingClientRect().height);
     return h + mt + mb;
 }
 
@@ -275,9 +607,18 @@ function getA4UsableContentHeightPx(doc: Document, singlePage: HTMLElement): num
  * Height-based pagination: measure rendered element heights and distribute
  * across A4 pages so content flows naturally like Word / Google Docs.
  */
+function applyA4PageLocksUnderCenter(doc: Document): void {
+    doc.querySelectorAll('.vaf-a4-center .a4-page').forEach((el) => {
+        if (el instanceof HTMLElement) applyA4PageBoxLock(el);
+    });
+}
+
 function paginateIntoA4Pages(doc: Document): void {
     const singlePage = findMonolithicA4Sheet(doc);
     if (!singlePage) return;
+
+    applyA4PageBoxLock(singlePage);
+    expandMonolithicShell(singlePage);
 
     hoistDirectChildrenIfOneWrapper(singlePage);
 
@@ -296,6 +637,22 @@ function paginateIntoA4Pages(doc: Document): void {
     unwrapSingleBlockChildContainers(singlePage);
     hoistMultiChildWrappers(singlePage);
 
+    // One tall wrapper with many inner sections: hoist until we have multiple top-level blocks or layout stabilizes.
+    for (let pass = 0; pass < 25; pass++) {
+        const els = Array.from(singlePage.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
+        if (els.length !== 1) break;
+        const only = els[0];
+        const tag = only.tagName.toLowerCase();
+        if (!HOIST_WRAPPER_TAGS.has(tag)) break;
+        const subs = Array.from(only.children).filter((n): n is HTMLElement => n.nodeType === 1);
+        if (subs.length < 2) break;
+        const overflow = singlePage.scrollHeight > singlePage.clientHeight + 8;
+        const longText = (singlePage.innerText || '').trim().length > 900;
+        if (!overflow && !longText) break;
+        while (only.firstChild) singlePage.insertBefore(only.firstChild, only);
+        singlePage.removeChild(only);
+    }
+
     void singlePage.offsetHeight;
     void doc.body.offsetHeight;
 
@@ -304,6 +661,18 @@ function paginateIntoA4Pages(doc: Document): void {
 
     let pageContentHeight = getA4UsableContentHeightPx(doc, singlePage);
     if (pageContentHeight <= 0) return;
+
+    expandMonolithicShell(singlePage);
+    void singlePage.offsetHeight;
+    const topBlocks = Array.from(singlePage.children) as HTMLElement[];
+    if (topBlocks.length === 1 && topBlocks[0].tagName === 'TABLE') {
+        const tableBox = paginateSingleTableIntoPages(doc, singlePage, topBlocks[0] as HTMLTableElement, pageContentHeight, win);
+        if (tableBox && tableBox.children.length > 1) {
+            singlePage.parentNode?.replaceChild(tableBox, singlePage);
+            applyA4PageLocksUnderCenter(doc);
+            return;
+        }
+    }
 
     const buildPages = (limit: number): HTMLDivElement | null => {
         const children = Array.from(singlePage.childNodes).filter(
@@ -319,7 +688,9 @@ function paginateIntoA4Pages(doc: Document): void {
         const totalH = items.reduce((s, i) => s + i.h, 0);
         const overflowPx = singlePage.scrollHeight - singlePage.clientHeight;
         const visuallyOverflows = overflowPx > 10;
-        if (totalH <= limit && !visuallyOverflows) return null;
+        const longDoc = (singlePage.innerText || '').trim().length > 1600;
+        // When the box grows with content, scrollHeight ≈ clientHeight — still paginate long documents.
+        if (totalH <= limit && !visuallyOverflows && !longDoc) return null;
 
         // Layout not ready (all heights ~0) but box already clips — split by child count (print-engine style fallback).
         if (visuallyOverflows && items.length >= 2 && items.every((i) => i.h < 4)) {
@@ -331,6 +702,7 @@ function paginateIntoA4Pages(doc: Document): void {
                 const curPage = doc.createElement('div');
                 curPage.className = 'a4-page';
                 curPage.setAttribute('contenteditable', 'true');
+                applyA4PageBoxLock(curPage);
                 const slice = p === 0 ? items.slice(0, mid) : items.slice(mid);
                 for (const { el } of slice) curPage.appendChild(el);
                 container.appendChild(curPage);
@@ -345,6 +717,7 @@ function paginateIntoA4Pages(doc: Document): void {
         let curPage = doc.createElement('div');
         curPage.className = 'a4-page';
         curPage.setAttribute('contenteditable', 'true');
+        applyA4PageBoxLock(curPage);
         container.appendChild(curPage);
         let curH = 0;
 
@@ -353,6 +726,7 @@ function paginateIntoA4Pages(doc: Document): void {
                 curPage = doc.createElement('div');
                 curPage.className = 'a4-page';
                 curPage.setAttribute('contenteditable', 'true');
+                applyA4PageBoxLock(curPage);
                 container.appendChild(curPage);
                 curH = 0;
             }
@@ -365,6 +739,8 @@ function paginateIntoA4Pages(doc: Document): void {
 
     let container: HTMLDivElement | null = null;
     for (let attempt = 0; attempt < 8; attempt++) {
+        expandMonolithicShell(singlePage);
+        void singlePage.offsetHeight;
         container = buildPages(pageContentHeight);
         if (container) break;
         pageContentHeight *= 0.9;
@@ -373,14 +749,50 @@ function paginateIntoA4Pages(doc: Document): void {
 
     if (container && container.children.length > 1) {
         singlePage.parentNode?.replaceChild(container, singlePage);
+        applyA4PageLocksUnderCenter(doc);
         return;
     }
 
     // Fallback: many blocks + long text but height/scroll metrics did not trigger a split (fonts, iframe timing).
-    const blocks = Array.from(singlePage.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
-    const approxChars = (singlePage.innerText || '').trim().length;
-    if (blocks.length >= 3 && approxChars > 1400) {
-        const targetPages = Math.min(20, Math.max(2, Math.ceil(approxChars / 2000)));
+    const runCharBlockFallback = (): void => {
+        let blocks = Array.from(singlePage.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
+        const approxChars = (singlePage.innerText || '').trim().length;
+        const overflows = singlePage.scrollHeight > singlePage.clientHeight + 8;
+        // Single outer shell: distribute its element children across pages (common for research HTML).
+        if (blocks.length === 1 && approxChars > 500) {
+            const shell = blocks[0];
+            const inner = Array.from(shell.children).filter((n): n is HTMLElement => n.nodeType === 1);
+            if (inner.length >= 2) {
+                for (const n of inner) singlePage.insertBefore(n, shell);
+                singlePage.removeChild(shell);
+                blocks = Array.from(singlePage.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
+            }
+        }
+        // One leaf block with lots of plain text (no inner elements) — split on blank lines so pagination can run.
+        if (blocks.length === 1 && approxChars > 1400) {
+            const sole = blocks[0];
+            const t = sole.tagName.toLowerCase();
+            if ((t === 'p' || t === 'div' || t === 'pre') && sole.children.length === 0) {
+                const raw = sole.textContent || '';
+                const paras = raw
+                    .split(/\n{2,}/)
+                    .map((s) => s.trim())
+                    .filter((s) => s.length > 0);
+                if (paras.length >= 2) {
+                    sole.remove();
+                    for (const pr of paras) {
+                        const p = doc.createElement('p');
+                        p.textContent = pr;
+                        singlePage.appendChild(p);
+                    }
+                    blocks = Array.from(singlePage.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
+                }
+            }
+        }
+        const minBlocks = overflows && approxChars > 600 ? 2 : 3;
+        if (blocks.length < minBlocks || approxChars < 500) return;
+        if (!overflows && approxChars < 1200) return;
+        const targetPages = Math.min(20, Math.max(2, Math.ceil(approxChars / 1800)));
         const perPage = Math.max(1, Math.ceil(blocks.length / targetPages));
         const fb = doc.createElement('div');
         fb.className = 'a4-pages';
@@ -389,6 +801,7 @@ function paginateIntoA4Pages(doc: Document): void {
             const pg = doc.createElement('div');
             pg.className = 'a4-page';
             pg.setAttribute('contenteditable', 'true');
+            applyA4PageBoxLock(pg);
             for (let j = i; j < Math.min(i + perPage, blocks.length); j++) {
                 pg.appendChild(blocks[j]);
             }
@@ -396,8 +809,11 @@ function paginateIntoA4Pages(doc: Document): void {
         }
         if (fb.children.length > 1) {
             singlePage.parentNode?.replaceChild(fb, singlePage);
+            applyA4PageLocksUnderCenter(doc);
         }
-    }
+    };
+    runCharBlockFallback();
+    applyA4PageLocksUnderCenter(doc);
 }
 
 function injectHighlightsInBody(body: HTMLElement, segments: { start: number; end: number; colorIndex: number }[], doc: Document): void {
@@ -477,12 +893,18 @@ export default function DocumentEditor({
     insertedSelections = [],
 }: DocumentEditorProps) {
     const [content, setContent] = useState<string>(initialContent);
-    /** Sync from parent when content is pushed from outside (e.g. agent replace_editor_selection). */
+    /**
+     * Sync from parent when content is pushed from outside (e.g. agent replace_editor_selection).
+     * Parent often keeps `content` undefined/'' while `loadDocument()` runs — must not wipe fetched HTML.
+     */
     useEffect(() => {
-        if (isOpen && initialContent !== undefined && initialContent !== content) {
-            setContent(initialContent);
-        }
-    }, [isOpen, initialContent]);
+        if (!isOpen || initialContent === undefined) return;
+        if (initialContent === content) return;
+        const ic = (initialContent || '').trim();
+        // Parent often keeps '' while loadDocument() fills state — never wipe fetched HTML with empty prop.
+        if (ic === '' && content.trim().length > 0) return;
+        setContent(initialContent);
+    }, [isOpen, initialContent, content]);
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -663,13 +1085,73 @@ export default function DocumentEditor({
             contentFromIframeRef.current = false;
             return;
         }
+        const { bodyInner: rawBody, headInjectHtml } = extractEditorBodyAndHeadStyles(content);
+        const bodyInner = prepareEditorBodyHtml(rawBody);
         doc.open();
-        doc.write(content);
+        doc.write(
+            `<!DOCTYPE html><html><head><meta charset="utf-8"/>${headInjectHtml}</head><body></body></html>`
+        );
         doc.close();
+        doc.body.innerHTML = bodyInner;
         doc.body.classList.add('vaf-a4');
+        doc.body.style.setProperty('margin', '0', 'important');
+        doc.body.style.setProperty('max-width', 'none', 'important');
         // Before wrapping/measuring: lock A4 rules so embedded report CSS cannot expand one endless "page".
         ensureA4EditorStyles(doc);
-        if (!doc.body.querySelector('.a4-pages')) {
+
+        const scheduleA4Pagination = () => {
+            const delays = [40, 120, 320, 700, 1400];
+            paginatingIframeRef.current = true;
+            let attemptIndex = 0;
+            const runOne = () => {
+                if (attemptIndex >= delays.length) {
+                    paginatingIframeRef.current = false;
+                    resizeEditorIframe(iframeRef.current);
+                    return;
+                }
+                const ms = delays[attemptIndex];
+                attemptIndex += 1;
+                setTimeout(() => {
+                    requestAnimationFrame(() => {
+                        requestAnimationFrame(() => {
+                            try {
+                                ensureA4EditorStyles(doc);
+                                void doc.body.offsetHeight;
+                                paginateIntoA4Pages(doc);
+                                forceSplitIfSingleTallPage(doc);
+                                ensureMultipageFromBlockCountOnly(doc);
+                                const center = doc.body.querySelector('.vaf-a4-center');
+                                const pages = center?.querySelector(':scope > .a4-pages');
+                                const onePage =
+                                    pages?.children.length === 1
+                                        ? (pages.children[0] as HTMLElement)
+                                        : (center?.querySelector(':scope > .a4-page') as HTMLElement | null);
+                                const stillOverflows =
+                                    !!onePage &&
+                                    onePage.scrollHeight > onePage.clientHeight + 12 &&
+                                    (!pages || pages.children.length === 1);
+                                if (stillOverflows && attemptIndex < delays.length) {
+                                    runOne();
+                                } else {
+                                    paginatingIframeRef.current = false;
+                                    resizeEditorIframe(iframeRef.current);
+                                }
+                            } catch {
+                                paginatingIframeRef.current = false;
+                                resizeEditorIframe(iframeRef.current);
+                            }
+                        });
+                    });
+                }, ms);
+            };
+            runOne();
+            window.setTimeout(() => resizeEditorIframe(iframeRef.current), 1900);
+        };
+
+        // Loose HTML → center + one sheet. Skip if session restore already has .vaf-a4-center (avoid nesting).
+        const hasPagesHost = !!doc.body.querySelector('.a4-pages');
+        const hasCenter = !!doc.body.querySelector(':scope > .vaf-a4-center');
+        if (!hasPagesHost && !hasCenter) {
             const wrap = doc.createElement('div');
             wrap.className = 'a4-page';
             wrap.setAttribute('contenteditable', 'true');
@@ -678,49 +1160,6 @@ export default function DocumentEditor({
             centerWrap.className = 'vaf-a4-center';
             centerWrap.appendChild(wrap);
             doc.body.appendChild(centerWrap);
-            const runPaginate = () => {
-                const delays = [40, 120, 320, 700];
-                paginatingIframeRef.current = true;
-                let attemptIndex = 0;
-                const runOne = () => {
-                    if (attemptIndex >= delays.length) {
-                        paginatingIframeRef.current = false;
-                        return;
-                    }
-                    const ms = delays[attemptIndex];
-                    attemptIndex += 1;
-                    setTimeout(() => {
-                        requestAnimationFrame(() => {
-                            requestAnimationFrame(() => {
-                                try {
-                                    ensureA4EditorStyles(doc);
-                                    void doc.body.offsetHeight;
-                                    paginateIntoA4Pages(doc);
-                                    const center = doc.body.querySelector('.vaf-a4-center');
-                                    const pages = center?.querySelector(':scope > .a4-pages');
-                                    const onePage =
-                                        pages?.children.length === 1
-                                            ? (pages.children[0] as HTMLElement)
-                                            : (center?.querySelector(':scope > .a4-page') as HTMLElement | null);
-                                    const stillOverflows =
-                                        !!onePage &&
-                                        onePage.scrollHeight > onePage.clientHeight + 12 &&
-                                        (!pages || pages.children.length === 1);
-                                    if (stillOverflows && attemptIndex < delays.length) {
-                                        runOne();
-                                    } else {
-                                        paginatingIframeRef.current = false;
-                                    }
-                                } catch {
-                                    paginatingIframeRef.current = false;
-                                }
-                            });
-                        });
-                    }, ms);
-                };
-                runOne();
-            };
-            runPaginate();
         }
         const existingPages = doc.body.querySelector('.a4-pages') || doc.body.querySelector('.a4-page');
         if (existingPages && !doc.body.querySelector('.vaf-a4-center')) {
@@ -729,6 +1168,7 @@ export default function DocumentEditor({
             existingPages.parentNode?.insertBefore(centerWrap, existingPages);
             centerWrap.appendChild(existingPages);
         }
+        scheduleA4Pagination();
         ensureA4EditorStyles(doc);
         const editRoot = doc.body.querySelector('.a4-pages') || doc.body.querySelector('.a4-page') || doc.body;
         (editRoot as HTMLElement).contentEditable = 'true';
@@ -1348,10 +1788,10 @@ export default function DocumentEditor({
                                         <div className="flex-1 min-h-0 min-w-0 overflow-auto bg-[#e5e7eb] w-full scrollbar-hide">
                                             <div className="min-h-full flex flex-col items-center py-4 px-2 gap-6">
                                                 <div className="w-[210mm] max-w-full flex justify-center">
-                                                    <div className="w-[210mm] max-w-full min-h-[297mm] bg-white shadow-sm box-border rounded-sm flex flex-col overflow-hidden">
+                                                    <div className="w-[210mm] max-w-full min-h-[297mm] bg-white shadow-sm box-border rounded-sm flex flex-col overflow-visible">
                                                         <iframe
                                                             ref={iframeRef}
-                                                            className="flex-1 min-h-0 w-full border-0 block"
+                                                            className="w-full min-h-[297mm] border-0 block"
                                                             title="Document Editor"
                                                             sandbox="allow-same-origin allow-scripts allow-modals"
                                                         />
@@ -1507,10 +1947,10 @@ export default function DocumentEditor({
                                     <div className="flex-1 min-h-0 min-w-0 overflow-auto bg-[#e5e7eb] w-full scrollbar-hide">
                                         <div className="min-h-full flex flex-col items-center py-6 px-4 gap-6">
                                             <div className="w-[210mm] max-w-full flex justify-center">
-                                                <div className="w-[210mm] max-w-full min-h-[297mm] bg-white shadow-sm box-border rounded-sm flex flex-col overflow-hidden">
+                                                <div className="w-[210mm] max-w-full min-h-[297mm] bg-white shadow-sm box-border rounded-sm flex flex-col overflow-visible">
                                                     <iframe
                                                         ref={iframeRef}
-                                                        className="flex-1 min-h-0 w-full border-0 block"
+                                                        className="w-full min-h-[297mm] border-0 block"
                                                         title="Document Editor"
                                                         sandbox="allow-same-origin allow-scripts allow-modals"
                                                     />

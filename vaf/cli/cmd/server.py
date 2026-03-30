@@ -7,11 +7,15 @@ app = typer.Typer(help="Manage local network server mode (Hosting/SSL)")
 
 @app.command(name="on")
 def server_on():
-    """Enable local network hosting (bind to 0.0.0.0). Uses HTTP so the frontend starts reliably; enable TLS in Settings if you need HTTPS."""
+    """Enable local network hosting with mandatory TLS (HTTPS/WSS)."""
     Config.set("local_network_enabled", True)
-    Config.set("local_network_tls_enabled", False)
-    UI.success("✓ Local network hosting enabled (HTTP).")
-    UI.info("VAF will listen on 0.0.0.0. From other devices: http://<this-PC-IP>:3000 (e.g. http://192.168.2.114:3000).")
+    Config.set("local_network_tls_enabled", True)
+    https_port = Config.get("local_network_https_port", 443)
+    if platform.system() == "Windows" and https_port == 443:
+        https_port = 8443
+    suffix = "" if https_port == 443 else f":{https_port}"
+    UI.success("✓ Local network hosting enabled (HTTPS/TLS).")
+    UI.info(f"VAF serves encrypted LAN access via https://<this-PC-IP>{suffix}.")
     UI.info("")
     UI.info("Der Tray erkennt die Änderung innerhalb von ~30 Sekunden und startet neu. Für sofortige Wirkung: Tray beenden und neu starten (z. B. 'vaf tray').")
 

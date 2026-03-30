@@ -34,6 +34,7 @@ from vaf.core.email_sync_store import (
 )
 from vaf.core.email_transport import apply_sender_rules_to_category, fetch_mail, get_message_body_plain
 from vaf.tools.mail_utils import store_candidates_for_mail
+from vaf.core.platform import Platform
 from vaf.core.oauth_pkce import (
     exchange_code_for_tokens,
     get_authorization_url,
@@ -238,7 +239,18 @@ def _oauth_callback_base_url() -> str:
     explicit = (Config.get("email_oauth_callback_base_url") or "").strip().rstrip("/")
     if explicit:
         return explicit
-    port = Config.get("local_network_port", 8001)
+    # Default to the integrated HTTPS proxy when network mode is active.
+    # This avoids protocol mismatches (HTTP callback to a TLS-only backend),
+    # which surface in browsers as ERR_EMPTY_RESPONSE.
+    network_on = bool(Config.get("local_network_enabled", False))
+    tls_on = bool(Config.get("local_network_tls_enabled", False))
+    if network_on and tls_on:
+        https_port = int(Config.get("local_network_https_port", 443) or 443)
+        if Platform.is_windows() and https_port == 443:
+            https_port = 8443
+        suffix = "" if https_port == 443 else f":{https_port}"
+        return f"https://localhost{suffix}"
+    port = int(Config.get("local_network_port", 8001) or 8001)
     return f"http://localhost:{port}"
 
 

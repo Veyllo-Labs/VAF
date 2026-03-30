@@ -327,7 +327,7 @@ If none are set, the tool uses the default path (scrape Google, then DuckDuckGo)
 
 **API routing**: Next.js proxies `/api/*` to the backend via the catch-all API route (`app/api/[...path]/route.ts`), which forwards to `http://127.0.0.1:8005` (internal HTTP channel). Next.js also rewrites `/sounds/*` to the backend for notification sound files. The Mail dashboard calls the backend directly (`hostname:8001`) to avoid proxy-related 500 errors on sync and message-body fetches. Background subprocess bridges (e.g. sub-agent stream updates) also target this internal channel (`8005` with TLS-on, otherwise `8001`) so updates keep working when the main backend port is HTTPS-only.
 
-**Local network (other devices):** Enable local network and SSL/TLS in Settings → Local Network (or run `vaf server on` and enable TLS in settings). Access is via the integrated HTTPS proxy: this device at `https://127.0.0.1:8443` (or `:443`), other devices at `https://<LAN-IP>:8443`. Use `vaf server status` to see LAN URLs. The tray restarts services automatically when network settings change.
+**Local network (other devices):** Enable Local Network in Settings → Local Network (or run `vaf server on`). Network mode is TLS-only and always uses the integrated HTTPS proxy. Access is via `https://127.0.0.1:8443` (or `:443`), and from other devices via `https://<LAN-IP>:8443`. Use `vaf server status` to see active LAN URLs. The tray restarts services automatically when network settings change.
 
 **Entry-point behavior (`3000` vs `8443`)**:
 - `:3000` is the frontend runtime/dev entry point.

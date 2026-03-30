@@ -39,8 +39,13 @@ from vaf.core.oauth_pkce import (
     exchange_code_for_tokens,
     get_authorization_url,
     get_state_provider,
+    get_state_user,
     get_valid_access_token,
     is_oauth_provider_configured,
+)
+from vaf.api.oauth_session_binding import (
+    enforce_callback_actor_binding,
+    require_oauth_actor_in_network_mode,
 )
 
 logger = logging.getLogger("vaf.api.email")
@@ -276,10 +281,7 @@ async def oauth_start(request: Request, provider: str = "gmail", _user: Dict[str
     """
     if provider not in ("gmail", "microsoft", "apple"):
         raise HTTPException(status_code=400, detail="provider must be gmail, microsoft, or apple")
-    # In network mode, unauthenticated fallback-to-local-admin would store OAuth credentials
-    # under the wrong scope. Require a real authenticated user context.
-    if Config.get("local_network_enabled", False) and not getattr(request.state, "user", None):
-        raise HTTPException(status_code=401, detail="Login required before connecting email in network mode")
+    require_oauth_actor_in_network_mode(request)
     base_url = _oauth_callback_base_url()
     redirect_uri = f"{base_url}/api/email/oauth/callback"
     _username = _user.get("username")
@@ -312,6 +314,8 @@ async def oauth_callback(
         provider = get_state_provider(state)
         if not provider:
             return _redirect_error("Invalid or expired state. Please start the login again.")
+        state_username, state_scope = get_state_user(state)
+        enforce_callback_actor_binding(request, state_username, state_scope)
         data = exchange_code_for_tokens(provider, code, state, redirect_uri)
         account_id = data.get("account_id") or "unknown"
         # Use retrieved scope/user from OAuth state to add the account

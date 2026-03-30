@@ -68,7 +68,25 @@ request.state.user = {
 
 All API route files (`config_routes`, `email_routes`, `cloud_routes`, `whatsapp_routes`, `telegram_routes`, `contact_routes`, `user_persona_routes`, `memory/routes`) read `request.state.user` as a dict to extract the current user's identity. When running in localhost mode (no authentication), `request.state.user` is not set and routes fall back to the local admin defaults.
 
-Implementation: `vaf/auth/middleware.py` -> `AuthMiddleware`
+### OAuth Session Binding (Network Mode)
+
+OAuth start/callback endpoints for Email, Cloud, and GitHub enforce a strict actor binding in network mode:
+
+- OAuth start requires an authenticated user session (`request.state.user`).
+- OAuth callback validates that the authenticated actor matches the identity encoded in OAuth `state` (username and/or `user_scope_id`).
+- Mismatched callbacks are rejected with HTTP 403.
+
+This avoids accidental or malicious cross-user credential binding in multi-user deployments.
+
+Implementation: `vaf/api/oauth_session_binding.py` + OAuth routes in `vaf/api/email_routes.py`, `vaf/api/cloud_routes.py`, `vaf/api/github_routes.py`
+
+### Operational Hardening Check
+
+Use the built-in doctor command to detect common security misconfigurations before exposing VAF on LAN:
+
+- `vaf doctor` (alias for `vaf security doctor`)
+- Checks include weak network posture flags (TLS/firewall/login/2FA), permissive channel ingress policy, and channel-enabled-without-pairing states.
+- Output is intentionally non-secret and safe to share in internal troubleshooting.
 
 ### Layer 4: Rate Limiting
 

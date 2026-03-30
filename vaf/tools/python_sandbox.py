@@ -256,6 +256,11 @@ class PythonSandboxTool(BaseTool):
         timeout = int(kwargs.get("timeout", 30))
         packages = kwargs.get("packages", [])
         with_vaf_tools: bool = bool(kwargs.get("with_vaf_tools", False))
+        agent = kwargs.get("_agent") or getattr(self, "_agent", None)
+        current_source = str(getattr(agent, "_current_chat_source", "") or "").strip().lower()
+        if with_vaf_tools and current_source in {"telegram", "whatsapp", "discord"}:
+            logger.warning("python_sandbox: disabling with_vaf_tools for channel source=%s", current_source)
+            with_vaf_tools = False
         # User scope for workspace isolation — each user gets their own temp directory
         user_scope_id = kwargs.get("user_scope_id")
 

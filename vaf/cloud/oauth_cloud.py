@@ -229,11 +229,22 @@ def get_state_username(state: str) -> Optional[str]:
     return username or None
 
 
+def get_state_user_scope_id(state: str) -> Optional[str]:
+    """Return initiating user_scope_id from state, or None."""
+    states = _load_states()
+    entry = states.get(state)
+    if not entry:
+        return None
+    scope = str(entry.get("user_scope_id") or "").strip()
+    return scope or None
+
+
 def get_authorization_url(
     provider: str,
     redirect_uri: str,
     redirect_base: Optional[str] = None,
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Build OAuth URL with PKCE. Returns (auth_url, state). redirect_base = frontend origin (e.g. http://localhost:3000) for post-OAuth redirect."""
     if provider not in CLOUD_PROVIDERS:
@@ -270,6 +281,7 @@ def get_authorization_url(
         "redirect_uri": redirect_uri,
         "redirect_base": (redirect_base or "").strip() or None,
         "username": (username or "").strip() or None,
+        "user_scope_id": str(user_scope_id or "").strip() or None,
         "created_at": time.time(),
     }
     _save_states(states)

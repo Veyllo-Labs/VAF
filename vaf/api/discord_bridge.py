@@ -10,6 +10,7 @@ import time
 from typing import Any, Dict, Optional
 
 from vaf.core.config import Config
+from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.task_queue import TaskQueue
 from vaf.core.discord_reply import set_discord_reply_callback
 
@@ -132,11 +133,18 @@ def _run_bot() -> None:
     async def on_message(message: discord.Message):
         if message.author == client.user:
             return
-        # Only accept messages from the verified admin
-        if str(message.author.id) != admin_user_id:
-            return
-        # Only accept DMs for now
-        if not isinstance(message.channel, discord.DMChannel):
+        policy = Config.get("channel_ingress_policy")
+        explicit_match = str(message.author.id) == admin_user_id and isinstance(message.channel, discord.DMChannel)
+        allowed, reason = evaluate_ingress("discord", policy, explicit_match=explicit_match, contact_match=False)
+        if not allowed:
+            sender_id = str(message.author.id)
+            if should_log_unauthorized("discord", sender_id, policy):
+                logger.warning(
+                    "Dropped unauthorized Discord message author_id=%s channel_id=%s reason=%s",
+                    sender_id,
+                    str(getattr(message.channel, "id", "")),
+                    reason,
+                )
             return
 
         text = (message.content or "").strip()

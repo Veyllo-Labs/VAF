@@ -211,6 +211,19 @@ def get_state_provider(state: str) -> Optional[str]:
     return entry.get("provider")
 
 
+def get_state_user(state: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return (username, user_scope_id) from state for callback binding."""
+    states = _load_states()
+    entry = states.get(state)
+    if not entry:
+        return None, None
+    if (entry.get("created_at") or 0) + STATE_TTL_SECONDS < time.time():
+        return None, None
+    username = (entry.get("username") or "").strip() or None
+    scope = (str(entry.get("user_scope_id") or "").strip() or None)
+    return username, scope
+
+
 def get_authorization_url(
     provider: str, redirect_uri: str, username: Optional[str] = None, user_scope_id: Optional[str] = None
 ) -> Tuple[str, str]:

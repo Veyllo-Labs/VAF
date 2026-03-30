@@ -7,6 +7,7 @@ import subprocess
 from vaf.core.config import Config
 from vaf.cli.ui import UI
 from vaf.core.gpu_detection import detect_all_gpus, get_primary_gpu, get_gpu_support_info
+from vaf.core.security_misconfig import collect_security_findings
 import importlib.metadata
 
 app = typer.Typer()
@@ -86,6 +87,19 @@ def info():
     config = Config.load()
     for k, v in config.items():
         UI.print(f"[bold]{k}:[/bold] {v}")
+
+    # Security summary (non-secret)
+    try:
+        findings = collect_security_findings(config)
+        high = sum(1 for f in findings if str(f.get("severity", "")).lower() == "high")
+        medium = sum(1 for f in findings if str(f.get("severity", "")).lower() == "medium")
+        UI.print("\n[bold cyan]--- Security Summary ---[/bold cyan]")
+        if not findings:
+            UI.print("[green]No misconfiguration findings.[/green]")
+        else:
+            UI.print(f"[yellow]Findings:[/yellow] {len(findings)} total (high={high}, medium={medium})")
+    except Exception:
+        pass
 
     # Tip
     UI.print("\n[dim]To repair GPU support, run: 'vaf install-gpu'[/dim]")

@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from vaf.core.config import Config
+from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.task_queue import TaskQueue
 from vaf.core.telegram_reply import set_telegram_reply_callback
 from vaf.core.tray_context import TrayContext
@@ -35,30 +36,28 @@ _outgoing_queue: Optional[queue.Queue] = None
 # Per-chat debounce: wait for follow-up messages, then enqueue combined text
 _pending_by_chat: Dict[str, Dict[str, Any]] = {}
 _pending_lock = threading.Lock()
-_unauth_log_last: Dict[str, float] = {}
-_unauth_log_lock = threading.Lock()
-_UNAUTH_LOG_THROTTLE_SEC = 60.0
 
 
-def _drop_unauthorized_telegram(telegram_user_id: str, chat_id: str, message_kind: str = "text") -> None:
+def _drop_unauthorized_telegram(
+    telegram_user_id: str,
+    chat_id: str,
+    message_kind: str = "text",
+    reason: str = "not_paired",
+) -> None:
     """
     Silently drop unauthorized inbound Telegram traffic.
     Logging is throttled per user to avoid log amplification under abuse.
     """
     uid = str(telegram_user_id or "")
-    now = time.time()
-    should_log = False
-    with _unauth_log_lock:
-        last = float(_unauth_log_last.get(uid, 0.0))
-        if now - last >= _UNAUTH_LOG_THROTTLE_SEC:
-            _unauth_log_last[uid] = now
-            should_log = True
+    policy = Config.get("channel_ingress_policy")
+    should_log = should_log_unauthorized("telegram", uid, policy)
     if should_log:
         logger.warning(
-            "Dropped unauthorized Telegram %s message from user_id=%s chat_id=%s",
+            "Dropped unauthorized Telegram %s message from user_id=%s chat_id=%s reason=%s",
             message_kind,
             uid,
             str(chat_id or ""),
+            reason,
         )
 
 
@@ -88,17 +87,26 @@ def _relay_whitelist_lookup(telegram_user_id: str) -> Optional[Dict[str, Any]]:
 
 def _resolve_telegram_user(telegram_user_id: str) -> Tuple[Optional[Dict[str, Any]], bool]:
     """Resolve telegram_user_id to (whitelist/relay/contact entry, is_relay). Returns (None, False) if not allowed."""
+    policy = Config.get("channel_ingress_policy")
     entry = _whitelist_lookup(telegram_user_id)
     if entry:
-        return (entry, False)
+        allowed, _ = evaluate_ingress("telegram", policy, explicit_match=True, contact_match=False)
+        if allowed:
+            return (entry, False)
+        return (None, False)
     entry = _relay_whitelist_lookup(telegram_user_id)
     if entry:
-        return (entry, True)
+        allowed, _ = evaluate_ingress("telegram", policy, explicit_match=True, contact_match=False)
+        if allowed:
+            return (entry, True)
+        return (None, False)
     try:
         from vaf.core.messaging_connections import get_contact_whitelist_telegram_entry
         entry = get_contact_whitelist_telegram_entry(telegram_user_id)
         if entry:
-            return (entry, False)
+            allowed, _ = evaluate_ingress("telegram", policy, explicit_match=False, contact_match=True)
+            if allowed:
+                return (entry, False)
     except Exception:
         pass
     return (None, False)
@@ -812,6 +820,7 @@ def _run_bot():
             return
         entry, _ = _resolve_telegram_user(str(user.id))
         if not entry:
+            _drop_unauthorized_telegram(str(user.id), str(update.effective_chat.id if update.effective_chat else user.id), "photo")
             return  # Silently ignore unauthorized
         await update.message.reply_text(
             "📷 Foto-Unterstützung kommt bald. Aktuell kannst du mir Dokumente (PDF, DOCX) schicken – "

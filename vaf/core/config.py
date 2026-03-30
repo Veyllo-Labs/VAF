@@ -206,6 +206,18 @@ class Config:
         "whatsapp_config": None,                                   # { enabled, whitelist: [{ phone_number, user_scope_id, vaf_username }] }
         # Per-user connection toggles (sliders). Only non-admins use this; admin uses global telegram/whatsapp/discord_config.enabled.
         "connection_enabled_by_scope": None,                       # { "<user_scope_id>": { "telegram": bool, "whatsapp": bool, "discord": bool } }
+        # Channel ingress policy (default-deny / explicit pairing).
+        # mode:
+        #   - "paired_only": allow only explicitly paired senders (whitelist/verified admin)
+        #   - "permissive": allow explicit pairs and contact fallback
+        # Per-channel mode can be "inherit", "paired_only", or "permissive".
+        "channel_ingress_policy": {
+            "mode": "paired_only",
+            "throttle_seconds": 60,
+            "telegram": {"mode": "inherit", "allow_contact_fallback": False},
+            "whatsapp": {"mode": "inherit", "allow_contact_fallback": False},
+            "discord": {"mode": "inherit", "allow_contact_fallback": False},
+        },
 
         # Front Office: when True, replies to contacts (from_contact) require explicit approval in Web UI before sending.
         # Default False: contacts you added with "Can reach your assistant" get replies directly; set True to review each reply first.
@@ -281,6 +293,7 @@ class Config:
         "debug_logs_enabled", "server_idle_timeout", "telegram_idle_timeout", "telegram_debounce_seconds",
         "redis_url", "redis_enabled", "use_docker",
         "local_admin_scope_id", "local_admin_username",
+        "channel_ingress_policy",
     ])
 
     @classmethod

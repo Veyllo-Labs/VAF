@@ -390,16 +390,32 @@ class APIBackendManager:
                         or {'type': 'function', 'function': {'name': '...'}} for specific tool
         """
         # Determine model
+        default_models = {
+            "openai": "gpt-4o",
+            "anthropic": "claude-3-5-sonnet-20241022",
+            "deepseek": "deepseek-chat",
+            "google": "gemini-1.5-flash",
+            "openrouter": "anthropic/claude-3.5-sonnet",
+            "local": "llama3",
+        }
         if not model:
-            default_models = {
-                "openai": "gpt-4o",
-                "anthropic": "claude-3-5-sonnet-20241022",
-                "deepseek": "deepseek-chat",
-                "google": "gemini-1.5-flash",
-                "openrouter": "anthropic/claude-3.5-sonnet",
-                "local": "llama3"
-            }
             model = self.config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, "gpt-4o"))
+        # Guardrail: when using API providers, a stale local GGUF model value can be passed
+        # (e.g. "Veyllo/VQ-1_Instruct-q4_k_m"), which causes provider errors and long retry loops.
+        # In that case, force provider-specific model from config/default.
+        elif self.provider_name != "local":
+            model_s = str(model).strip().lower()
+            looks_like_local_model = (
+                model_s.endswith(".gguf")
+                or "vq-1" in model_s
+                or "instruct-q" in model_s
+                or model_s.startswith("veyllo/")
+            )
+            if looks_like_local_model:
+                model = self.config.get(
+                    f"api_model_{self.provider_name}",
+                    default_models.get(self.provider_name, "gpt-4o"),
+                )
 
         # DeepSeek Reasoner/R1: no function calling support; API returns 400 if tools passed
         if self.provider_name == "deepseek" and model:

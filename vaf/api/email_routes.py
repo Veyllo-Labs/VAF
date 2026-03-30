@@ -254,6 +254,20 @@ def _oauth_callback_base_url() -> str:
     return f"http://localhost:{port}"
 
 
+def _frontend_base_url() -> str:
+    """Return Web UI base URL for post-OAuth redirects."""
+    network_on = bool(Config.get("local_network_enabled", False))
+    tls_on = bool(Config.get("local_network_tls_enabled", False))
+    if network_on and tls_on:
+        https_port = int(Config.get("local_network_https_port", 443) or 443)
+        if Platform.is_windows() and https_port == 443:
+            https_port = 8443
+        suffix = "" if https_port == 443 else f":{https_port}"
+        return f"https://localhost{suffix}"
+    port = __import__("os").environ.get("VAF_WEB_UI_PORT", "3000")
+    return f"http://localhost:{port}"
+
+
 @router.get("/oauth/start")
 async def oauth_start(request: Request, provider: str = "gmail", _user: Dict[str, Any] = Depends(_get_current_user)):
     """
@@ -262,6 +276,10 @@ async def oauth_start(request: Request, provider: str = "gmail", _user: Dict[str
     """
     if provider not in ("gmail", "microsoft", "apple"):
         raise HTTPException(status_code=400, detail="provider must be gmail, microsoft, or apple")
+    # In network mode, unauthenticated fallback-to-local-admin would store OAuth credentials
+    # under the wrong scope. Require a real authenticated user context.
+    if Config.get("local_network_enabled", False) and not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Login required before connecting email in network mode")
     base_url = _oauth_callback_base_url()
     redirect_uri = f"{base_url}/api/email/oauth/callback"
     _username = _user.get("username")
@@ -314,16 +332,13 @@ async def oauth_callback(
 
 def _redirect_success(account_id: str, provider: str) -> RedirectResponse:
     # Redirect to frontend; use hash so server doesn't see token
-    # Frontend origin from env or default 3000
-    import os
-    port = os.environ.get("VAF_WEB_UI_PORT", "3000")
-    url = f"http://localhost:{port}/settings?connections=1&email_oauth=success&account={account_id}&provider={provider}"
+    frontend = _frontend_base_url()
+    url = f"{frontend}/settings?connections=1&email_oauth=success&account={account_id}&provider={provider}"
     return RedirectResponse(url=url, status_code=302)
 
 
 def _redirect_error(message: str) -> HTMLResponse:
-    port = __import__("os").environ.get("VAF_WEB_UI_PORT", "3000")
-    url = f"http://localhost:{port}/settings?connections=1&email_oauth=error"
+    url = f"{_frontend_base_url()}/settings?connections=1&email_oauth=error"
     html_content = f"""
     <!DOCTYPE html>
     <html><head><meta charset="utf-8"><title>Email connection failed</title></head>

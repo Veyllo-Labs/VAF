@@ -21,6 +21,8 @@ The memory system is **self-learning**: it improves with use. The more you chat 
 - **Automatic learning:** Every N user turns (default 15), [session compaction](#session-compaction-background) runs: the LLM is given a recent conversation excerpt and writes durable facts into RAG (preferences, decisions, events, follow-ups). No manual saving is required; normal chat is the main source of long-term memory.
 - **Explicit saves:** The agent can call the `memory_save` tool during a conversation to store important information immediately (e.g. after you state a preference or share a detail).
 - **Document learning:** The agent can ingest a document via the `learn_document` tool (one tag per document, LLM extraction per page/section); see [Document memories (learn_document)](#document-memories-learn_document).
+- **Attachment retrieval lane:** Web UI attachments are indexed in a separate ephemeral lane (`attachment_ephemeral`) scoped by `session_id + user_scope_id` (TTL-based). This lane is used for active attachment Q&A and is excluded from normal long-term RAG by default.
+- **Attachment → long-term transfer:** Use `learn_attached_knowledge` (explicit confirmation required) to persist selected attachment knowledge into long-term memory as `type=knowledge`.
 - **Better recall over time:** RAG retrieval runs before each reply. As more memories are stored (from compaction and `memory_save`), semantic search returns more relevant context, so answers become more personalized and consistent across sessions.
 - **Scope:** Learning is per user (`user_scope_id`). Only the main user’s Web UI conversations are compacted; contact chats (Telegram, WhatsApp, Discord) are not written to RAG for data protection.
 
@@ -190,7 +192,7 @@ Implementation: `vaf/tools/learn_document.py`; ingestion uses the same `RagPipel
 | `/api/memory/{id}` | PUT | Update memory content/metadata |
 | `/api/memory/{id}` | DELETE | Delete memory (soft/hard) |
 | `/api/memory/graph` | GET | Get graph data for visualization |
-| `/api/memory/rag/query` | POST | RAG query (returns answer + sources) |
+| `/api/memory/rag/query` | POST | Long-term RAG query (returns answer + sources; excludes ephemeral attachment lane by default) |
 | `/api/memory/rag/query/stream` | POST | Streaming RAG query (SSE) |
 | `/api/memory/search` | POST | Semantic search (no LLM) |
 | `/api/memory/stats` | GET | System statistics |
@@ -246,7 +248,7 @@ curl -X POST http://localhost:8000/api/memory/search \
     "metadata": {
         "title": "string",
         "tags": ["string"],
-        "type": "note|document|code|conversation",
+        "type": "note|document|code|conversation|knowledge",
         "preview": "string (first 200 chars)",
         "created_at": "ISO datetime"
     },

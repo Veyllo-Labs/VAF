@@ -984,8 +984,59 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         session_for_sidebar = session_mgr.load(task.session_id)
                         sidebar_docs = (getattr(session_for_sidebar, "runtime_state", None) or {}).get("sidebar_documents") or []
                         if sidebar_docs:
-                            sidebar_block = "\n\n".join(
-                                _format_sidebar_doc(d) for d in sidebar_docs
+                            sidebar_names = [str((d or {}).get("name") or "").strip() for d in sidebar_docs]
+                            sidebar_names = [n for n in sidebar_names if n]
+                            sidebar_name_list = ", ".join(sidebar_names[:5])
+                            if len(sidebar_names) > 5:
+                                sidebar_name_list += ", ..."
+                            # Explicit anchor so the model knows these documents are active working context
+                            # even when the user did not mark a specific selection in the editor/viewer.
+                            context_header = (
+                                "[DOCUMENT CONTEXT ACTIVE]\n"
+                                "The user currently works with attached document(s) in the Web UI.\n"
+                                "Use the retrieved attachment snippets below as primary context for this turn.\n"
+                            )
+                            if sidebar_name_list:
+                                context_header += f"Attached: {sidebar_name_list}\n"
+
+                            # Hybrid retrieval lane: query session-scoped attachment index instead of
+                            # prepending full attachment content every turn.
+                            snippet_lines = []
+                            try:
+                                from vaf.memory.attachment_rag import search_session_attachments_sync
+                                att_hits = search_session_attachments_sync(
+                                    query=(input_text or ""),
+                                    session_id=str(task.session_id),
+                                    user_scope_id=meta.get("user_scope_id"),
+                                )
+                                for idx, hit in enumerate(att_hits, 1):
+                                    h_name = str((hit or {}).get("attachment_name") or "Attachment")
+                                    h_score = float((hit or {}).get("score") or 0.0)
+                                    h_text = str((hit or {}).get("text") or "").strip()
+                                    if not h_text:
+                                        continue
+                                    snippet_lines.append(
+                                        f"[Attachment Source {idx}] {h_name} (Relevance: {h_score:.0%})\n{h_text}"
+                                    )
+                            except Exception as e:
+                                append_domain_log("rag", f"ATTACH_SEARCH failed: {e}")
+
+                            if not snippet_lines:
+                                # Fallback: keep context minimal and deterministic if index is not ready yet.
+                                fallback_chars = int(Config.get("attachment_rag_snippet_chars", 900) or 900)
+                                for idx, doc in enumerate(sidebar_docs[:2], 1):
+                                    d_name = str((doc or {}).get("name") or f"Attachment {idx}")
+                                    d_content = str((doc or {}).get("content") or "").strip()
+                                    if not d_content:
+                                        continue
+                                    if len(d_content) > fallback_chars:
+                                        d_content = d_content[:fallback_chars].rstrip() + "\n... [fallback truncated]"
+                                    snippet_lines.append(f"[Attachment Fallback {idx}] {d_name}\n{d_content}")
+
+                            sidebar_block = "\n\n".join([context_header, "\n\n".join(snippet_lines)])
+                            sidebar_block += (
+                                "\n\nIf the user asks to keep knowledge from these attachments for future chats, "
+                                "suggest using learn_attached_knowledge and ask explicit confirmation first."
                             )
                             if _meta.get("from_contact"):
                                 effective_input = effective_input + "\n\n" + sidebar_block

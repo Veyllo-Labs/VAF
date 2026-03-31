@@ -134,7 +134,9 @@ The Document Editor is a rich-text editor in the right panel (dock or overlay). 
 
 **Layout and behaviour:** A4 page layout (210×297 mm, Word-style; overflow flows to the next page below with a separator line every 297 mm). Per-session state: editor content and open file are stored per chat session; switching sessions restores the correct document and unsaved content.
 
-**Agent context:** When the editor is open, its plain-text content is sent with each chat message. The backend prepends it as `--- CURRENT DOCUMENT (Editor): <title> ---` so the agent sees the current document. You can select text in the editor (e.g. placeholders); the selection is added as a chip and sent with the message. The agent can replace that range via the `replace_editor_selection` tool (only available when there are marked selections); the UI applies the replacement and removes the chip.
+**Agent context:** When the editor is open, its plain-text content is sent with each chat message. The backend prepends it as `--- CURRENT DOCUMENT (Editor): <title> ---` so the agent sees the current document. You can select text in the editor (e.g. placeholders); the selection is added as a chip and sent with the message. The agent can replace that range via the `replace_editor_selection` tool (only available when there are marked selections); the UI applies the replacement and removes the chip.  
+For Document Viewer attachments (paperclip), the backend uses a **session-scoped attachment retrieval lane** (scoped by `session_id` + `user_scope_id`, TTL-based) and injects a "document context active" block plus **top-k relevant snippets** into each turn. This keeps context stable for large documents and avoids prepending full attachment text every message.  
+If you want durable long-term memory from current attachments, use `learn_attached_knowledge` (requires explicit confirmation).
 
 **Workflow behaviour:** If the message contains the editor document block (`CURRENT DOCUMENT (Editor)`), workflow matching is skipped so the agent uses tools (e.g. `replace_editor_selection`) instead of starting a workflow.
 

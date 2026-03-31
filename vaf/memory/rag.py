@@ -14,7 +14,7 @@ from typing import List, Optional, Dict, Any, AsyncGenerator, Tuple
 from uuid import UUID, uuid4
 from datetime import datetime
 from dataclasses import dataclass
-from sqlalchemy import select, and_, func, text, delete
+from sqlalchemy import select, and_, or_, func, text, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from vaf.memory.models import Memory, Chunk, Connection, EMBEDDING_DIM
@@ -30,6 +30,7 @@ import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+ATTACHMENT_EPHEMERAL_SOURCE = "attachment_ephemeral"
 
 
 @dataclass
@@ -259,6 +260,19 @@ class RagPipeline:
             Memory.is_deleted == False,
             Chunk.embedding.cosine_distance(query_embedding) < max_distance
         ]
+
+        # Keep long-term lane separate from ephemeral attachment lane by default.
+        # Explicit attachment lookups can still include source=attachment_ephemeral via metadata_filter.
+        wants_attachment_lane = bool(
+            metadata_filter and str(metadata_filter.get("source", "")).strip().lower() == ATTACHMENT_EPHEMERAL_SOURCE
+        )
+        if not wants_attachment_lane:
+            filters.append(
+                or_(
+                    Memory.meta["source"].astext.is_(None),
+                    Memory.meta["source"].astext != ATTACHMENT_EPHEMERAL_SOURCE,
+                )
+            )
 
         # Apply scope filter
         if user_scope_id:
@@ -657,6 +671,12 @@ Always cite which source(s) you used."""
             List of memory dicts (without content)
         """
         conditions = [Memory.is_deleted == include_deleted]
+        conditions.append(
+            or_(
+                Memory.meta["source"].astext.is_(None),
+                Memory.meta["source"].astext != ATTACHMENT_EPHEMERAL_SOURCE,
+            )
+        )
         if user_scope_id is not None:
             conditions.append(Memory.user_scope_id == user_scope_id)
 

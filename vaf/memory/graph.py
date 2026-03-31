@@ -65,6 +65,12 @@ class GraphManager:
         # Query memories (eager-load chunks so async session doesn't lazy-load)
         # Filter by user_scope_id if provided
         conditions = [Memory.is_deleted == include_deleted]
+        conditions.append(
+            or_(
+                Memory.meta["source"].astext.is_(None),
+                Memory.meta["source"].astext != "attachment_ephemeral",
+            )
+        )
         if user_scope_id is not None:
             conditions.append(Memory.user_scope_id == user_scope_id)
 
@@ -89,6 +95,7 @@ class GraphManager:
             "memory_flush": "#fb923c",
             "document": "#c084fc",
             "code": "#4ade80",
+            "knowledge": "#14b8a6",
         }
         default_stroke = "#9ca3af"
         memory_id_to_type = {str(m.id): (m.meta or {}).get("type", "note") for m in memories}

@@ -70,6 +70,12 @@ When the current user has at least one **messaging connection** (Telegram, Disco
 
 This block is built using `vaf/core/messaging_connections.get_messaging_connections(username, user_scope_id)` and is only shown when the list of available channels is non-empty. See [CONNECTIONS.md](CONNECTIONS.md) and [USER_IDENTITY.md](USER_IDENTITY.md) for proactive messaging and `main_messenger`.
 
+### 3c. Web UI attachment context (session-scoped lane)
+
+For Web UI turns with sidebar attachments, the headless runner injects a `DOCUMENT CONTEXT ACTIVE` block plus retrieved attachment snippets from a **session-scoped ephemeral attachment lane** (scoped by `session_id + user_scope_id`, TTL-based). This is separate from long-term RAG memories.
+
+If the user asks to keep attachment knowledge for future chats, the agent should suggest `learn_attached_knowledge` and ask for explicit confirmation before transfer.
+
 ### 4. When the block is not updated
 
 - System commands (`__CMD__:...`) do not update the store.

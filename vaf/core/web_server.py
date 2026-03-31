@@ -2630,6 +2630,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                         loaded.runtime_state["sidebar_documents"] = contents
                                         session_mgr.save(loaded, sync_state=False)
                                     log("WebServer", f"Injected {len(contents)} sidebar doc(s) for session {session_id} before chat")
+                                    try:
+                                        from vaf.memory.attachment_rag import index_session_attachments_async
+                                        await index_session_attachments_async(
+                                            session_id=session_id,
+                                            user_scope_id=user_scope_id,
+                                            documents=contents,
+                                        )
+                                    except Exception as e:
+                                        log("WebServer", f"attachment index (chat inject) failed: {e}")
                             except Exception as e:
                                 log("WebServer", f"sidebar_documents on chat failed: {e}")
 
@@ -2686,6 +2695,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
                         session_id = f"web-default-{safe_scope}"
                     documents = cmd.get("documents") or []
+                    contents = []
                     try:
                         if not documents:
                             loaded = session_mgr.load(session_id)
@@ -2693,6 +2703,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 loaded.runtime_state = {}
                             loaded.runtime_state["sidebar_documents"] = []
                             session_mgr.save(loaded, sync_state=False)
+                            try:
+                                from vaf.memory.attachment_rag import clear_session_attachments_async
+                                await clear_session_attachments_async(session_id=session_id, user_scope_id=user_scope_id)
+                            except Exception as e:
+                                log("WebServer", f"attachment clear failed: {e}")
                             await websocket.send_json({
                                 "type": "sidebar_documents_set",
                                 "contents": [],
@@ -2705,12 +2720,37 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 loaded.runtime_state = {}
                             loaded.runtime_state["sidebar_documents"] = contents
                             session_mgr.save(loaded, sync_state=False)
+                            try:
+                                from vaf.memory.attachment_rag import index_session_attachments_async
+                                await index_session_attachments_async(
+                                    session_id=session_id,
+                                    user_scope_id=user_scope_id,
+                                    documents=contents,
+                                )
+                            except Exception as e:
+                                log("WebServer", f"attachment index failed: {e}")
                             await websocket.send_json({
                                 "type": "sidebar_documents_set",
                                 "contents": contents,
                                 "sessionId": session_id
                             })
                     except FileNotFoundError:
+                        if not documents:
+                            try:
+                                from vaf.memory.attachment_rag import clear_session_attachments_async
+                                await clear_session_attachments_async(session_id=session_id, user_scope_id=user_scope_id)
+                            except Exception as e:
+                                log("WebServer", f"attachment clear failed (new session): {e}")
+                        else:
+                            try:
+                                from vaf.memory.attachment_rag import index_session_attachments_async
+                                await index_session_attachments_async(
+                                    session_id=session_id,
+                                    user_scope_id=user_scope_id,
+                                    documents=contents,
+                                )
+                            except Exception as e:
+                                log("WebServer", f"attachment index failed (new session): {e}")
                         new_sess = Session(
                             id=session_id,
                             name=f"Session {session_id}",

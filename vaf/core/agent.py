@@ -6794,6 +6794,10 @@ class Agent:
                 if name == "learn_document":
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                     tool_args["_agent"] = self
+                if name == "learn_attached_knowledge":
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                    tool_args["session_id"] = getattr(self, "current_session_id", None)
+                    tool_args["_agent"] = self
                 if name == "update_user_identity":
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp"):
@@ -6827,6 +6831,8 @@ class Agent:
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("list_calendar_events", "create_calendar_event", "update_calendar_event", "delete_calendar_event"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name in ("document_viewer", "document_editor", "replace_editor_selection"):
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("github_list_repos", "github_get_file", "github_list_issues", "github_list_pulls", "github_create_issue", "github_update_file"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"

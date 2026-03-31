@@ -116,6 +116,16 @@ Pass the full file path. The document appears in the right-hand Document Viewer 
             return f"Error: Could not save to session: {e}"
 
         try:
+            from vaf.memory.attachment_rag import index_session_attachments_sync
+            index_session_attachments_sync(
+                session_id=session_id,
+                user_scope_id=kwargs.get("user_scope_id"),
+                documents=sidebar,
+            )
+        except Exception:
+            pass
+
+        try:
             get_web_interface()._push_session_update(session_id, {
                 "type": "sidebar_documents_set",
                 "contents": sidebar,

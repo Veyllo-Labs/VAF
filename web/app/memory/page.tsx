@@ -136,6 +136,7 @@ function CreateMemoryModal({
                                     <option value="document">Document</option>
                                     <option value="code">Code</option>
                                     <option value="conversation">Conversation</option>
+                                    <option value="knowledge">Knowledge</option>
                                 </select>
                             </div>
                         </div>

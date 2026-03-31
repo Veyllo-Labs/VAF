@@ -151,6 +151,7 @@ const TYPE_STROKE_COLORS: Record<string, string> = {
     memory_flush: '#fb923c',
     document: '#c084fc',
     code: '#4ade80',
+    knowledge: '#14b8a6',
 };
 const DEFAULT_STROKE = '#9ca3af';
 
@@ -184,6 +185,7 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
         code: 'border-green-400 bg-green-50',
         conversation: 'border-orange-400 bg-orange-50',  // compaction (15 msgs)
         memory_flush: 'border-orange-400 bg-orange-50',  // legacy compaction – same as conversation
+        knowledge: 'border-teal-400 bg-teal-50',         // learned durable knowledge
         default: 'border-gray-400 bg-gray-50'
     };
 
@@ -793,6 +795,10 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                         <div className="flex items-center gap-2">
                             <span className="w-3 h-3 rounded border border-green-400 bg-green-50 flex-shrink-0" />
                             <span>Code</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="w-3 h-3 rounded border border-teal-400 bg-teal-50 flex-shrink-0" />
+                            <span>Knowledge</span>
                         </div>
                         <div className="flex items-center gap-2">
                             <span className="w-3 h-3 rounded border border-gray-400 bg-gray-50 flex-shrink-0" />

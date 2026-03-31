@@ -794,10 +794,11 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                                             <span className="font-medium text-gray-900 truncate text-sm flex items-center gap-1.5">
                                                                 <span className="truncate">{m.subject || '(No subject)'}</span>
                                                                 {m.suspicious_for_agent && (
-                                                                    <AlertTriangle
-                                                                        className="w-3.5 h-3.5 text-amber-600 shrink-0"
-                                                                        title={suspiciousTooltip(m)}
-                                                                    />
+                                                                    <span title={suspiciousTooltip(m)} className="inline-flex">
+                                                                        <AlertTriangle
+                                                                            className="w-3.5 h-3.5 text-amber-600 shrink-0"
+                                                                        />
+                                                                    </span>
                                                                 )}
                                                             </span>
                                                             <span className="text-xs text-gray-500 shrink-0 flex items-center gap-1.5">

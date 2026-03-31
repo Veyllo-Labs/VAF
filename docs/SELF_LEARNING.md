@@ -6,7 +6,7 @@ This document describes how VAF learns from usage and improves over time. It is 
 
 **Self-learning** in VAF means: the system gets better with use without manual configuration. User interaction (chat, tools, automations) produces durable state that is reused in later runs, so the agent’s behavior becomes more personalized and consistent.
 
-- **Current scope:** (1) Long-term memory (RAG): facts, preferences, and context from conversation. (2) User profile: name, language, location, do’s/don’ts, and preferences—the model updates this from what the user says so it knows the user better over time.
+- **Current scope:** (1) Long-term memory (RAG): facts, preferences, and context from conversation. (2) User profile: name, language, location, do’s/don’ts, and preferences—the model updates this from what the user says so it knows the user better over time. (3) Attachment-scoped retrieval lane (ephemeral, session + user scoped) with optional transfer to long-term memory.
 - **Future scope:** Additional subsystems (e.g. workflow patterns, feedback loops) can be documented in this file as they are added.
 
 ---
@@ -51,6 +51,19 @@ When the user provides a **document** (PDF, TXT, or MD), the agent can learn it 
 **Effect over time:** User-provided documents become queryable knowledge; the memory graph shows one tag per document with many purple document nodes. Learning is per user (`user_scope_id`).
 
 **Implementation:** `vaf/tools/learn_document.py`; `vaf/core/agent.py` (`_generate_for_document_extraction`).
+
+### 4. Attachment-scoped learning lane (ephemeral + transfer)
+
+For active Web UI work with attached documents, VAF uses a **separate ephemeral retrieval lane**. This keeps temporary attachment context separate from long-term memory.
+
+| Mechanism | What it does | Where it's documented |
+|-----------|--------------|------------------------|
+| **Attachment index (ephemeral)** | On sidebar document updates, extracted content is indexed with `source=attachment_ephemeral`, scoped by `session_id + user_scope_id`, and expires via TTL (default 24h). Retrieval injects top-k snippets into the current turn. | [MEMORY_SYSTEM.md](MEMORY_SYSTEM.md), [WEBUI_WEBSOCKET_FLOW.md](WEBUI_WEBSOCKET_FLOW.md) |
+| **learn_attached_knowledge tool** | Transfers selected attachment knowledge into long-term memory only after explicit confirmation (`confirm_learn=true`). Created memories use `type=knowledge` and origin metadata (attachment transfer). | [MEMORY_SYSTEM.md](MEMORY_SYSTEM.md), tool `learn_attached_knowledge` |
+
+**Effect over time:** During active sessions, large attachments are handled via snippet retrieval (not full prepend), reducing token pressure. Important knowledge can be promoted intentionally into durable memory as `knowledge` nodes.
+
+**Implementation:** `vaf/memory/attachment_rag.py`, `vaf/core/web_server.py`, `vaf/core/headless_runner.py`, `vaf/tools/learn_attached_knowledge.py`, `vaf/memory/rag.py` (lane separation), memory graph type mapping in `vaf/memory/graph.py` and `web/components/memory/MemoryGraph.tsx`.
 
 ---
 

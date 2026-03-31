@@ -1,6 +1,6 @@
 # Coder Sub-Agent: Comprehensive Code Reference
 
-This document provides an exhaustive, block-by-block explanation of the `vaf/tools/coder.py` module (~6600 lines). It documents the logic, state transitions, enforcement mechanisms, and control flow.
+This document provides an exhaustive, block-by-block explanation of the `vaf/tools/coder.py` module (large multi-thousand-line module). It documents the logic, state transitions, enforcement mechanisms, and control flow.
 
 ---
 
@@ -69,7 +69,7 @@ This is the massive entry point method.
 *   **Check:** Is `VAF_IN_SUBAGENT_TERMINAL` env var set?
 *   **IF NOT (Main Process):**
     *   Check `Config.sub_agents_in_separate_terminals`.
-    *   **Spawning:** Uses `sys.executable` to spawn a NEW process running `vaf.main subagent run`.
+    *   **Spawning:** Uses `sys.executable` to spawn a NEW process via `python -m vaf.main subagent run coding_agent`.
     *   **IPC:** Creates a task in `subagent_ipc` and passes the ID.
     *   **Return:** Returns a placeholder string `[SUBAGENT_ASYNC:...]` to the main agent.
 *   **IF YES (Sub-Agent Process):**
@@ -104,11 +104,11 @@ This loop runs until the project is complete.
 ### D. Tool Schema Generation (Dynamic)
 Inside the loop, `current_tools` is generated dynamically based on state:
 *   **IF `task_mgr.has_plan() == False`:**
-    *   **Allowed:** `set_todos`, `web_search`, `read_file`.
+    *   **Allowed:** `set_todos`, `read_file`, `list_files`.
     *   **Hidden:** `write_file`, `task_done`.
     *   **Goal:** Force the agent to plan.
 *   **IF `task_mgr.has_plan() == True`:**
-    *   **Allowed:** `write_file`, `read_file`, `web_search`, `python_sandbox`, `task_done`, `bash`.
+    *   **Allowed:** `write_file`, `read_file`, `list_files`, `web_search`, `python_sandbox`, `task_done`, `bash` (when loaded), plus plug-and-play runtime tools.
     *   **Hidden:** `set_todos` (to prevent re-planning loops).
 
 ### E. LLM Interaction & Safety Nets

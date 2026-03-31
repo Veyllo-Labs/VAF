@@ -144,15 +144,16 @@ On systems with limited RAM (e.g. 32 GB total), a lower value (e.g. 2048 or 0) r
 
 The agent talks to the local llama-server at `http://127.0.0.1:8080/v1/chat/completions` with a **streamed** response. To avoid the chat queue hanging when the server stops sending data (e.g. model stuck, long “thinking”, or overload), timeouts are applied:
 
-- **Connect:** 60 seconds to establish the connection.
-- **Read:** 300 seconds (5 minutes) maximum wait for the next chunk. If no data is received in that time, the request is treated as failed.
+- **Connect:** 30 seconds to establish the connection.
+- **Read:** 60 seconds for blocking reads from the stream.
+- **Heartbeat stall guard:** During streaming, an additional heartbeat guard aborts when no usable chunks arrive for ~30 seconds.
 
 On timeout:
 
 - If the timeout happens **before** any response body is received, the agent retries (same as for connection errors), then gives up after retries.
 - If the timeout happens **during** streaming, the agent stops waiting, appends a short message to the user (e.g. “Answer aborted due to timeout. Please try again.”), and ends the step so the queue can process the next message.
 
-Logs: `backend.log` may show `server(8080) read_timeout no_data_300s` (timeout before body) or `server(8080) read_timeout_during_stream` (timeout while reading chunks). If you see these often, the model or machine may be overloaded or the prompt may be too large.
+Logs: `backend.log` may show `server(8080) read_timeout no_data_60s`, `server(8080) heartbeat_timeout no_data_30s`, or `server(8080) read_timeout_during_stream`. If you see these often, the model or machine may be overloaded or the prompt may be too large.
 
 ## API Features
 

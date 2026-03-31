@@ -387,27 +387,27 @@ When you have one or more messaging connections (e.g. Telegram, Discord), the ag
 - **Tool availability**: Only tools for **configured** connections are exposed to the agent: `send_telegram` when Telegram is connected, `send_discord` when Discord is connected, `send_slack` for Slack (when supported), and `send_whatsapp` when WhatsApp is linked. The agent never sees a send tool for a channel you do not have.
 - **First time**: If you have not set a preferred channel, the agent will ask once (e.g. "Should I send it via Discord, Telegram or Slack?") and store your answer in User Identity as `main_messenger` (via the `update_user_identity` tool).
 - **Sending**: The agent uses the matching tool (`send_telegram`, `send_discord`, `send_slack`, or `send_whatsapp`) to deliver the content. For **Telegram**, the agent can send to you once your account is linked (whitelist entry or one message from you); the verified account owner is recognized without a separate manual step. For **WhatsApp**, the whitelist phone number is used. Chat IDs / endpoints are stored in `messaging_endpoints.json` under the platform data directory.
-- **Discord**: Proactive send to Discord is planned for a later phase; Telegram is supported first.
+- **Discord**: Proactive send is implemented via `send_discord` (with the same user-scope checks used by other messaging tools).
 
 ## Architecture
 
 ```
-┌──────────────┐     WebSocket      ┌──────────────┐
-│   Discord    │◄──────────────────►│  VAF Gateway │
-│   (Users)    │                    │   (ws://)    │
-└──────────────┘                    └──────────────┘
-       │                                   │
-       │                                   │
-       ▼                                   ▼
-┌──────────────┐                    ┌──────────────┐
-│ Discord Bot  │                    │  VAF Agent   │
-│  (Bridge)    │                    │   (Core)     │
-└──────────────┘                    └──────────────┘
+┌──────────────┐      Discord API      ┌──────────────┐
+│   Discord    │◄─────────────────────►│ Discord Bot  │
+│   (Users)    │                       │   (Bridge)   │
+└──────────────┘                       └──────────────┘
+                                                │
+                                                │ TaskQueue task
+                                                ▼
+                                       ┌──────────────┐
+                                       │ Headless +   │
+                                       │   VAF Agent  │
+                                       └──────────────┘
 ```
 
 The Discord bridge:
 1. Receives messages from Discord users
-2. Forwards them to the VAF Gateway via WebSocket
+2. Enqueues tasks directly on `TaskQueue` with `source="discord"`
 3. Receives responses from the agent
 4. Sends responses back to Discord
 
@@ -427,21 +427,33 @@ Telegram uses the same pipeline as the Web UI:
 - **Agent tools**: When at least one email account is connected, the agent can use `mail_inbox`, `find_mail`, `read_mail`, `mark_mail_answered`, `label_mail`, and `send_mail`. Credentials are never passed to the agent; the transport layer resolves them by `account_id`. Access tokens are refreshed automatically when expired.
 - **Dashboard–tool alignment**: Message listing still uses sync-store fallbacks so already-synced mail remains visible. **Account visibility is strict per user scope** in network mode: a user only sees accounts connected in that same authenticated scope. There is no cross-user account fallback.
 - **Mail dashboard during sync**: The Mail dashboard shows already-synced messages while a sync or refresh is in progress, so you can read mail without waiting for the sync to finish. A small "Updating…" indicator appears in the header during refresh.
+- **Phishing visibility split (UI vs agent)**: Suspicious mails remain visible in the Mail dashboard, marked with a warning icon and explanation tooltip. The same mails are hidden from agent-facing mail tools by default, so they cannot be used as normal context for automated actions.
 
 #### Agent email tools (mail_inbox, find_mail, read_mail, mark_mail_answered, label_mail, send_mail)
 
 | Tool | Purpose | When to use |
 |------|---------|-------------|
-| `mail_inbox` | List messages in a folder. **Omit `account_id`** to list from **all connected accounts**. Supports filtering by **`label`** (e.g., `primary`, `social`, `promotions`, or custom labels like `invoice`). Output: a compact list (index, From, Date, Subject, optional account) plus an "IDs by index" block for `read_mail`. | User asks to check email, show inbox, list N mails, or find mails with a specific label (e.g., "show my invoices") → call mail_inbox (with `label="invoice"` and `max_messages=N` if specified). |
-| `find_mail` | Search the synced mailbox by subject or sender (`query`, optional `folder`, `limit`). Returns matches with `account_id`, `message_id`, `provider_message_id`; if exactly one match, returns the full body. | User asks "what does the X mail say?" or "details about the Postman/Twitch/… email" → use find_mail(query="X"); if result includes full body use it, else call read_mail with first match's IDs. |
+| `mail_inbox` | List messages in a folder. **Omit `account_id`** to list from **all connected accounts**. Supports filtering by **`label`** (e.g., `primary`, `social`, `promotions`, or custom labels like `invoice`). Output: a compact list (index, From, Date, Subject, optional account) plus an "IDs by index" block for `read_mail`. Includes a security note when suspicious messages were hidden from the agent view. | User asks to check email, show inbox, list N mails, or find mails with a specific label (e.g., "show my invoices") → call mail_inbox (with `label="invoice"` and `max_messages=N` if specified). |
+| `find_mail` | Search the synced mailbox by subject or sender (`query`, optional `folder`, `limit`). Returns matches with `account_id`, `message_id`, `provider_message_id`; if exactly one match, returns the full body. Suspicious matches are filtered from agent output by default. | User asks "what does the X mail say?" or "details about the Postman/Twitch/… email" → use find_mail(query="X"); if result includes full body use it, else call read_mail with first match's IDs. |
 | `read_mail` | Return the full body of one message as plain text. Parameters: `account_id`, `message_id`, `folder` (default INBOX), optional `provider_message_id`. Use IDs from the mail_inbox "IDs by index" block or from find_mail. | When the user wants to read a message; use the IDs from the mail_inbox output (by index) or find_mail; do not ask the user for these. |
 | `mark_mail_answered` | Mark a message as answered by the agent (`account_id`, `message_id`, `folder`). Sets a timestamp so the Mail UI shows an answered indicator and the message is not handled twice. | After the agent has processed or replied to an email. |
 | `label_mail` | Set a message's label/category (`account_id`, `message_id`, `category`; optional `folder`). Use categories like `promotions`, `newsletter`, `social`, `primary`, or a custom label. Adds a sender rule so future mails from that sender get the same label (same as changing the label in the Mail dashboard). | User asks to label emails (e.g. "label newsletters as promotions", "mark this as newsletter"). Use message_id from mail_inbox "IDs by index" block. |
-| `send_mail` | Send an email (`account_id`, `to`, `subject`, `body`; optional `attachment_paths` for documents). Paths support folder aliases (Downloads, Desktop, Documents). | User asks to send or reply to an email; for documents pass `attachment_paths`. |
+| `send_mail` | Send an email (`account_id`, `to`, `subject`, `body`; optional `attachment_paths` for documents). Paths support folder aliases (Downloads, Desktop, Documents). High-risk patterns (e.g., urgency + transfer/credential requests) are blocked unless explicitly confirmed with `confirm_high_risk=true`. | User asks to send or reply to an email; for documents pass `attachment_paths`. For sensitive requests, require explicit user confirmation before retrying with `confirm_high_risk=true`. |
 
 The `mail_inbox` tool uses a compact list format (truncated From/Subject, short date) plus a separate "IDs by index" block so more messages fit in context and the agent can present N distinct emails when the user asks for "N mails". Best practice: when the user requests a number (e.g. 15 or 20), call `mail_inbox(max_messages=N)` and relay the tool result; do not invent or repeat entries from a previous turn.
 
 Message bodies are always returned as plain text: HTML and MIME structure are stripped, and the same cleaned text is used in the Mail dashboard and for the agent. This keeps context size low and avoids raw markup.
+
+### Agent-side phishing protection
+
+- **Goal**: reduce prompt-injection and social-engineering risk from email content while keeping operator visibility in the dashboard.
+- **Agent filter scope**: `mail_inbox` and `find_mail` apply a phishing heuristic filter before returning results to the agent. Messages over the configured risk threshold are hidden from tool results.
+- **Dashboard scope**: suspicious messages are still shown in the Web UI Mail dashboard with a warning indicator and reason tooltip.
+- **Config keys**:
+  - `email_agent_phishing_filter_enabled` (default `true`)
+  - `email_agent_phishing_score_threshold` (default `3`, range `1..10`)
+  - `email_agent_trusted_sender_domains` (list of domains that bypass suspicious classification)
+- **Important**: this layer is additive to provider spam filtering; it does not delete or modify mailbox data.
 
 ### Setup
 

@@ -19,11 +19,11 @@ That data is stored per user and injected into the system prompt each turn. Beca
 - **Contents**: `name`, `preferred_language`, `city`, `country` (location), `preferences` (list of strings), `dos` (list), `donts` (list), `main_messenger` (optional: `"telegram"` | `"discord"` | `"slack"` | `"whatsapp"`), `timezone` (optional IANA e.g. `Europe/Berlin`), `date_format` (optional e.g. `dd.mm.yyyy`), `time_format` (optional `24h` | `12h`), `change_log` (list of `{ "at": "<ISO8601>", "action": "<summary>" }`).
 - **Created**: When the workspace is first used; default `name` is the username, other fields empty.
 
-Do not confuse with `identity.json` in the same directory: that file holds the **agent's** display name, emoji, and theme (used in the Soul block). User identity is only about the human user.
+Do not confuse with `identity.json`: that file holds the **agent's** display name, emoji, and theme (persona data). User identity is only about the human user.
 
 ## System prompt injection
 
-In `vaf/core/system_prompt.py`, `build_prompt()` adds a block **"## User identity (current user)"** when a username (or user_scope_id) is available. It reads `user_identity.json` via `UserWorkspace.get_user_identity()` and appends:
+In `vaf/core/system_prompt.py`, `build_prompt()` adds a user-identity block when a username (or user_scope_id) is available. It reads `user_identity.json` via `UserWorkspace.get_user_identity()` and appends:
 
 - Name, preferred language, and location (city, country) when set.
 - Preferences, Do, and Don't lists.
@@ -94,8 +94,10 @@ Each user's `user_identity.json` (and change log) is loaded because the backend 
 
 | Key | What is keyed by it |
 |-----|---------------------|
-| **username** | `user_identity.json`, change log, `identity.json`, `soul.md`, workspace dir `~/.vaf/users/<username>/` |
+| **username** | `user_identity.json`, change log, workspace dir `~/.vaf/users/<username>/` |
 | **user_scope_id** | RAG/memories (PostgreSQL), email_sync.db path (when not legacy admin path), contacts, credentials, cache keys |
+
+Note: the shared Soul/persona block is currently loaded from the admin workspace in `system_prompt.py`; it is not a per-user `soul.md` swap for every request.
 
 As long as both keys are set correctly for the session (from JWT or config), each user gets their own identity file and scoped data.
 

@@ -238,18 +238,18 @@ key = f"memory_graph:{user_scope_id}:{limit}"
 #### SQLite (Email Sync, WhatsApp, Contacts)
 
 ```python
-# Current: path determined by username
+# Current hybrid: scope path preferred, username path kept as fallback
+~/.vaf/scopes/<user_scope_id>/email_sync.db
+~/.vaf/scopes/<user_scope_id>/whatsapp_messages.db
+~/.vaf/scopes/<user_scope_id>/contacts.json
+```
+
+**Legacy fallback (still supported for older data):**
+```python
+# Username-based legacy paths
 ~/.vaf/users/<username>/email_sync.db
 ~/.vaf/users/<username>/whatsapp_messages.db
 ~/.vaf/users/<username>/contacts.json
-```
-
-**Target state (migration):**
-```python
-# Better: path determined by user_scope_id
-~/.vaf/users/<user_scope_id>/email_sync.db
-~/.vaf/users/<user_scope_id>/whatsapp_messages.db
-~/.vaf/users/<user_scope_id>/contacts.json
 ```
 
 This makes user data independent of username changes.
@@ -257,7 +257,16 @@ This makes user data independent of username changes.
 #### Config (JSON)
 
 ```json
-// Current: keyed by username
+// Current primary: keyed by user_scope_id
+{
+  "email_config_by_scope": {
+    "f01a10fe-e959-4c71-b93f-6bc4073d2072": { "accounts": [...] }
+  }
+}
+```
+
+```json
+// Legacy fallback: keyed by username
 {
   "email_config_by_user": {
     "Mert": { "accounts": [...] },
@@ -266,7 +275,7 @@ This makes user data independent of username changes.
 }
 ```
 
-**Target state (migration):**
+**Target end-state (migration complete):**
 ```json
 // Better: keyed by user_scope_id
 {

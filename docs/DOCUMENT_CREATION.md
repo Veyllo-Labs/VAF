@@ -231,34 +231,36 @@ Result: 40K token document generated within 8K context!
 
 ## Configuration
 
-Document generation settings in `~/.vaf/config.json`:
+Current document generation behavior is primarily controlled inside the tool/workflow implementations.
+There is no dedicated `document_agent_*` config block in `config.py` defaults at the moment.
+
+General runtime flags still apply, for example:
 
 ```json
 {
-  "document_agent_max_sections": 20,
-  "document_agent_section_tokens": 2048,
-  "document_agent_default_format": "docx",
   "sub_agents_in_separate_terminals": true
 }
 ```
 
 ## Workflow Integration
 
-The `create_document` workflow automatically routes to the appropriate tool:
+The `create_document` workflow currently uses `document_agent` for generation:
 
-**Triggers:**
-- "erstelle dokument"
-- "create document"
-- "erstelle vertrag"
-- "create contract"
+**Workflow triggers (current template):**
+- "erstelle einfaches dokument"
+- "create simple document"
+- "erstelle schnell dokument"
+- "create quick document"
 - "schreibe brief"
 - "write letter"
-- "arbeitsvertrag"
-- "employment contract"
+- "erstelle vorlage"
+- "create template"
+- "erstelle nachricht"
+- "create message"
 
-**Auto-Routing:**
-- Simple request → `document_writer` (fast)
-- Complex request → `document_agent` (thorough)
+**Behavior:**
+- Workflow template step tool: `document_agent`
+- For ad-hoc chat use outside workflows, the agent may still use `document_writer` or `document_agent` based on context and tool routing.
 
 ## Use Cases
 

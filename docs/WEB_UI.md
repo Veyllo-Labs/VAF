@@ -115,7 +115,7 @@ Under **Settings → Interface** you can set:
 
 **Settings → AI — Download model from Hugging Face:** This option is only available when the **local** model provider is selected. You can paste a Hugging Face repo id that **contains GGUF files** (e.g. `seanbailey518/Nanbeige4.1-3B-GGUF` or `Edge-Quant/Nanbeige4.1-3B-Q8_0-GGUF`). Base-model repos (safetensors only) do not offer GGUF; if you see "No GGUF files found", search on Hugging Face for "<model name> GGUF" and use that repo. Click Download to open the confirmation dialog. A confirmation dialog opens with the model card (README) and a list of GGUF files to choose from; after you confirm, the download starts. Progress (percentage, bytes, speed) and a Cancel button are shown in Settings. If you close Settings while a download is in progress, the download continues in the background; a compact progress indicator appears on the main chat page so you can see status and cancel from there. When the download finishes, a toast shows success or error and the model list refreshes.
 
-**Settings → Connections:** Manage external integrations (Email, Calendar, Cloud, Discord, Telegram, WhatsApp, GitHub, etc.). A search field at the top filters the list by name or category (e.g. type “GitHub” or “Kalender” to jump to that connection). The **GitHub** category opens a dashboard with a rights-overview strip (toggle read/write per account), connected accounts, an event timeline (agent actions, newest first), and a repositories panel (repos for the selected account with links to GitHub). The **Calendar** category shows Google Calendar and Microsoft Outlook; they use the same OAuth connection as Email (connect Gmail or Outlook under Email first). When a calendar is connected, the settings (gear) icon opens the **Calendar Dashboard**: left sidebar lists connected accounts with links to open Google Calendar or Outlook in the browser; main area shows upcoming events from the API with selectable range and refresh. See [CONNECTIONS.md](CONNECTIONS.md) and [CALENDAR_INTEGRATION.md](CALENDAR_INTEGRATION.md).
+**Settings → Connections:** Manage external integrations (Email, Calendar, Cloud, Discord, Telegram, WhatsApp, GitHub, etc.). A search field at the top filters the list by name or category (e.g. type “GitHub” or “Kalender” to jump to that connection). The **GitHub** category opens a dashboard with a rights-overview strip (toggle read/write per account), connected accounts, an event timeline (agent actions, newest first), and a repositories panel (repos for the selected account with links to GitHub). The **Calendar** category shows Google Calendar and Microsoft Outlook; they use the same OAuth connection as Email (connect Gmail or Outlook under Email first). In the **Mail dashboard**, suspicious emails are marked with a warning icon and tooltip reason; these remain visible to the user, but are hidden from agent mail tools by default for safety. When a calendar is connected, the settings (gear) icon opens the **Calendar Dashboard**: left sidebar lists connected accounts with links to open Google Calendar or Outlook in the browser; main area shows upcoming events from the API with selectable range and refresh. See [CONNECTIONS.md](CONNECTIONS.md) and [CALENDAR_INTEGRATION.md](CALENDAR_INTEGRATION.md).
 
 **Settings → Automations:** View scheduled automations (user-scoped when multi-user is used; root/global automations such as "Daily calendar check" are also shown so the list matches the agent's `list_automations` tool). To create one manually: click **Create New** (or use the **Automation** entry in the sidebar footer) to open the calendar; choose month, then day, then an hour slot. The sidebar footer also includes **Notifications** (opens the Notifications popup) and **Settings**. Opening the Automation popup (footer) also triggers the calendar ensure-daily-check API when a calendar is connected, so the Daily calendar check appears in the list without opening Settings first. A popup lets you set repeat (once, daily, weekly, monthly, hourly), time, a detailed prompt, and an optional name. Creation is sent via WebSocket (`create_automation`); the list refreshes on success. The agent can also create automations via the `create_automation` tool in chat.
 
@@ -288,7 +288,7 @@ vaf run --no-web  # Disable Web UI
 vaf run --web     # Enable Web UI (default)
 ```
 
-**Via Config File** (`vaf.config.json`):
+**Via Config File** (`config.json` in the VAF app directory):
 ```json
 {
   "web_ui_enabled": true
@@ -325,7 +325,7 @@ If none are set, the tool uses the default path (scrape Google, then DuckDuckGo)
 **Backend Port**: Hardcoded to 8001 in `web_server.py`
 **Frontend Port**: Auto-detected (starts at 3000, increments if occupied)
 
-**API routing**: Next.js proxies `/api/*` to the backend via the catch-all API route (`app/api/[...path]/route.ts`), which forwards to `http://127.0.0.1:8005` (internal HTTP channel). Next.js also rewrites `/sounds/*` to the backend for notification sound files. The Mail dashboard calls the backend directly (`hostname:8001`) to avoid proxy-related 500 errors on sync and message-body fetches. Background subprocess bridges (e.g. sub-agent stream updates) also target this internal channel (`8005` with TLS-on, otherwise `8001`) so updates keep working when the main backend port is HTTPS-only.
+**API routing**: Next.js proxies `/api/*` to the backend via the catch-all API route (`app/api/[...path]/route.ts`), which forwards to `http://127.0.0.1:8005` (internal HTTP channel). Next.js also rewrites `/sounds/*` to the backend for notification sound files. Mail dashboard and other Web UI features use the same proxy path (`/api/...`) so frontend calls stay same-origin while backend transport stays internal.
 
 **Local network (other devices):** Enable Local Network in Settings → Local Network (or run `vaf server on`). Network mode is TLS-only and always uses the integrated HTTPS proxy. Access is via `https://127.0.0.1:8443` (or `:443`), and from other devices via `https://<LAN-IP>:8443`. Use `vaf server status` to see active LAN URLs. The tray restarts services automatically when network settings change.
 
@@ -410,8 +410,8 @@ The Web UI runs alongside the CLI interface:
 
 ### Performance
 
-- **Message Limit**: System logs capped at 1000 entries
-- **Session List**: Limited to 20 most recent sessions
+- **Bounded UI buffers**: UI keeps recent entries bounded for smooth rendering (for example, the sub-agent console panel keeps the latest 500 lines).
+- **Session list paging**: Backend session list limit is configured server-side (currently 500 in `web_server.py`).
 - **Auto-Scroll**: Smooth scroll to latest message
 - **Debouncing**: WebSocket messages processed immediately (no artificial delay)
 
@@ -423,8 +423,7 @@ The Web UI runs alongside the CLI interface:
 
 ### Security
 
-- **CORS**: Currently allows all origins (development mode)
-- **Production**: Should restrict to specific domains
+- **CORS**: Restricted by middleware (localhost and private-LAN origin patterns), not unrestricted `*`.
 - **Authentication**: Implemented. The UI verifies session state via `GET /api/auth/me` and requires a valid auth token/cookie. Unauthenticated clients are redirected to `/login`.
 - **Login UX guard**: `web/proxy.ts` redirects authenticated requests away from `/login` to `/`, so logged-in users do not stay on the login page.
 - **Origin scope note**: Auth state can differ between `http://localhost:3000` and `https://localhost:8443` because cookies/storage are origin-scoped.
@@ -435,16 +434,16 @@ The Web UI runs alongside the CLI interface:
 
 **Check**:
 1. npm installed: `npm --version`
-2. Port 8001 available: `lsof -i :8001`
-3. Port 3000+ available: `lsof -i :3000`
+2. Backend/proxy status: `vaf server status`
+3. Frontend process started and reachable (`http://localhost:3000` in local mode or `https://localhost:8443` in TLS/network mode)
 
 **Logs**: `logs/web_debug.log`
 
 ### Server not reachable (full-screen message)
 
-When the backend is down or unreachable, the Web UI shows a full-screen message: *"Server not reachable. Make sure VAF is running (e.g. \"vaf run\")."* with a **Try again** button. This appears when the initial auth/health check to the backend fails (e.g. VAF not started, or port 8001 not reachable).
+When the backend is down or unreachable, the Web UI shows a full-screen message: *"Server not reachable. Make sure VAF is running (e.g. \"vaf run\")."* with a **Try again** button. This appears when the initial auth/health check fails (for example VAF not started, proxy/backend not reachable, or TLS endpoint unavailable).
 
-**What to do**: Start VAF (`vaf run` or open Web UI from the system tray). Ensure nothing else is using port 8001. Then click **Try again** or refresh the page.
+**What to do**: Start VAF (`vaf run` or open Web UI from the system tray). Ensure backend/proxy ports are free, then click **Try again** or refresh the page.
 
 ### WebSocket Connection Failed
 

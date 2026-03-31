@@ -33,12 +33,12 @@ def should_compress(self, history: List[Dict]) -> bool:
     return usage >= self.trigger_threshold
 ```
 
-- **`trigger_threshold`:** Standard **0.85** (85 % des Kontext-Limits).
+- **`trigger_threshold`:** Dynamisch nach `max_tokens` (z. B. 0.70 bei kleinen Fenstern, 0.85 bei großen Fenstern bis 128k, 0.90 bei sehr großen Fenstern).
 - **`get_usage_percent(history)`:**  
   `estimate_tokens(history) / max_tokens`  
   – also geschätzte Token der aktuellen History geteilt durch das konfigurierte Kontext-Limit (z. B. 8192 oder 128000).
 
-**Kurz:** Kompression wird ausgelöst, sobald die geschätzte Nutzung der History **≥ 85 %** des `max_tokens` ist.
+**Kurz:** Kompression wird ausgelöst, sobald die geschätzte Nutzung der History den dynamischen Schwellenwert des aktuellen Kontextfensters erreicht.
 
 ---
 
@@ -47,8 +47,9 @@ def should_compress(self, history: List[Dict]) -> bool:
 **Datei:** `vaf/core/context.py`
 
 - Pro Nachricht:
-  - `content`: Wenn `"```"` im Inhalt → `len(content) / 2.5` (Code), sonst `len(content) / 3.0` (Text).
-  - `role`: `len(role) / 3.0`.
+  - Die Schätzung nutzt dynamische Ratios abhängig von `max_tokens`.
+  - Kleine Kontexte (`<= 16384`) nutzen konservativere Ratios (mehr geschätzte Tokens pro Zeichen) als große Kontexte.
+  - Rollenfelder werden ebenfalls mit dem aktiven Text-Ratio mitgerechnet.
 - Danach: **+10 %** Sicherheitsmargin auf die Gesamtsumme (Spezial-Tokens, Formatierung).
 
 Es wird **kein** echtes Tokenisieren (z. B. tiktoken) verwendet, nur Zeichen-basierte Schätzung.
@@ -61,7 +62,7 @@ Es wird **kein** echtes Tokenisieren (z. B. tiktoken) verwendet, nur Zeichen-b
 
 ### 4.1 Voraussetzung
 
-- Wenn `len(history) <= recent_memory_size + 2` (Standard: 12): **keine** Kompression, `history` wird unverändert zurückgegeben.
+- Wenn `len(history) < 3`: **keine** Kompression, `history` wird unverändert zurückgegeben.
 
 ### 4.2 Schritt 1: Archivieren
 
@@ -85,14 +86,14 @@ Damit sind Intent und State **vor** dem Verwerfen der alten Nachrichten auf dem 
 ### 4.4 Schritt 3: Kritische Tool-Ergebnisse aus dem „Mittelteil“
 
 - **Mittelteil:** `history[1 : -recent_memory_size]` (alles außer erstem Eintrag und den letzten `recent_memory_size` Nachrichten).
-- Darin werden Nachrichten mit `role == "tool"` und `name` in `preserve_tools` gesucht (Default: `["set_todos", "write_file", "read_file"]`).
+- Darin werden Nachrichten mit `role == "tool"` und `name` in `preserve_tools` gesucht (inkl. Kern-Tools wie `set_todos`, `write_file`, `read_file` sowie weiterer sicherheitsrelevanter Tools je nach aktueller Implementierung).
 - Pro Treffer: Inhalt auf 300 Zeichen gekürzt, als Nachricht mit `role`, `name`, `content`, `tool_call_id` in `critical_tools` gesammelt.
 - Später werden maximal die **letzten 5** dieser kritischen Tool-Nachrichten in die neue History übernommen.
 
 ### 4.5 Schritt 4: Bausteine der neuen History
 
 - **System-Prompt:** `system_prompt = history[0]` (wird **immer** übernommen; der Inhalt kann im Agent danach noch durch `new_prompt` ersetzt werden).
-- **Recent:** `recent_messages = history[-recent_memory_size:]` (Standard: letzte 10 Nachrichten) – bleiben **unverändert** („raw“).
+- **Recent:** `recent_messages = history[-recent_memory_size:]` (dynamisch, je nach `max_tokens`) – bleiben **unverändert** („raw“).
 
 ### 4.6 Schritt 5: Context Summary („Glue“) bauen
 
@@ -139,7 +140,7 @@ Ergebnis: Deutlich weniger Nachrichten, stark reduzierte Token-Zahl bei erhalten
 
 | Schritt                    | Wo / Wann |
 |---------------------------|-----------|
-| Prüfung „soll komprimiert werden?“ | Jeder Turn in `chat_step()`, wenn `usage >= 0.85` |
+| Prüfung „soll komprimiert werden?“ | Jeder Turn in `chat_step()`, wenn `usage >= trigger_threshold` (dynamisch) |
 | `compress(history)`       | Nur wenn `should_compress(history)` True |
 | Archiv (Memory + Disk)    | Immer zu Beginn von `compress()` |
 | Intent/State aus History   | In `compress()` über alle Nachrichten |
@@ -151,21 +152,15 @@ Ergebnis: Deutlich weniger Nachrichten, stark reduzierte Token-Zahl bei erhalten
 ## 7. Konfiguration (ContextManager)
 
 - **`max_tokens`:** Wird beim Anlegen des `ContextManager` gesetzt (z. B. aus Agent-Config/`n_ctx`), Standard 8192 (kann z. B. auf 128000 erhöht werden).
-- **`trigger_threshold`:** 0.85 (85 %).
-- **`recent_memory_size`:** 10 (letzte 10 Nachrichten bleiben roh).
-- **`preserve_tools`:** `["set_todos", "write_file", "read_file"]` – nur diese Tool-Ergebnisse werden im Mittelteil explizit erhalten (max. 5).
+- **`trigger_threshold`:** Dynamisch je nach `max_tokens` (small/medium/large windows).
+- **`recent_memory_size`:** Dynamisch je nach `max_tokens` (von kleinen Fenstern bis zu 200 bei sehr großen Fenstern).
+- **`preserve_tools`:** Tool-Liste ist erweitert; Kern-Tools bleiben erhalten, zusätzliche Tool-Typen werden ebenfalls berücksichtigt.
 
 ---
 
 ## 8. Bekannte Probleme
 
-1. **Dynamischer System-Prompt nur bei Kompression:**  
-   `new_prompt` wird bei jedem User-Input gebaut, aber `history[0]["content"]` wird nur im Kompression-Block mit `new_prompt` überschrieben. Ohne Kompression bleibt der alte System-Prompt erhalten.
-
-2. **`new_prompt` undefiniert bei Kompression ohne User-Input:**  
-   Wenn in einem Turn **kein** `user_input` da ist (z. B. nur Sub-Agent-Ergebnisse), wird `new_prompt` nie gesetzt. Tritt in dem Turn trotzdem Kompression ein, führt `new_prompt += ...` zu einem `NameError`.
-
-Diese Punkte sollten in `agent.py` behoben werden (z. B. `new_prompt` immer setzen wenn `prompt_manager` existiert, und System-Prompt auch ohne Kompression aktualisieren; bei Kompression ohne `new_prompt` den bestehenden `history[0]` behalten oder aus `history[0]` ableiten).
+Historische Hinweise auf einen `new_prompt`-`NameError` bei Kompression ohne User-Input sind in aktuellen Builds nicht mehr der relevante Hauptfehlerpfad. Falls hier neue Bugs auftreten, bitte anhand aktueller `agent.py`-Logs/Code prüfen statt ältere Bugbeschreibungen zu übernehmen.
 
 ---
 

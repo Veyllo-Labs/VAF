@@ -1,6 +1,9 @@
-# 🚀 Python Sandbox - Extended Capabilities
+# 🚀 Python Sandbox - Module Reference
 
-The Python Sandbox has been expanded with **10 new modules**! All are safe (no network/filesystem access).
+This file documents the common standard-library modules that are expected to work in sandbox snippets.
+
+> Runtime note: VAF executes `python_sandbox` in a dedicated Docker-based sandbox.  
+> The exact import policy is enforced by the runtime image and sandbox guardrails, not by this markdown file.
 
 ## ✨ Newly Added:
 
@@ -142,19 +145,20 @@ textwrap.wrap('Long text...', width=10) # → ['Long', 'text...']
 
 ## 🔒 Security
 
-**Blocked** (Not Available):
-- ❌ File system access (`open`, `file`)
-- ❌ Network access (`socket`, `urllib`, `http`)
-- ❌ Subprocesses (`subprocess`, `os.system`)
-- ❌ Dynamic imports (`__import__`, `importlib`)
-- ❌ Dangerous Builtins (`eval`, `exec`, `compile`)
+**Blocked / restricted** (policy enforced by sandbox runtime):
+- ❌ Host file-system access outside sandbox policy
+- ❌ Raw network/socket usage
+- ❌ Process spawning (`subprocess`, `os.system`)
+- ❌ Arbitrary runtime escapes / unsafe dynamic execution
 
-**Allowed** (All modules are safe):
+**Allowed** (typical in-sandbox usage):
 - ✅ Pure calculations and data processing
 - ✅ String manipulation and Regex
 - ✅ Hashing and Encoding
 - ✅ Algorithms and Data Structures
 - ✅ Timestamps (read-only, no system modification)
+
+For architecture and isolation details, see [`SANDBOXING.md`](SANDBOXING.md).
 
 ---
 

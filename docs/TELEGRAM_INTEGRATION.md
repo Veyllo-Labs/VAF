@@ -125,6 +125,7 @@ The agent can send you messages via Telegram (e.g. "send me the result via Teleg
 
 - **Internal Filtering**: You receive only the agent’s final reply. Internal reasoning blocks (e.g. `<think>...</think>`) and raw tool-call JSON are automatically removed from replies.
 - **System Log Suppression**: Pure internal system logs (e.g. "API returned empty responses") are never sent to Telegram.
+- **Formatting rendering**: Outgoing text replies are sent with Telegram HTML parse mode when formatting markers are present, so common markdown-like output renders correctly in chat (for example `**bold**`, `` `inline code` ``, code fences, and links). If Telegram rejects parsed entities, VAF automatically falls back to plain text delivery.
 
 ---
 

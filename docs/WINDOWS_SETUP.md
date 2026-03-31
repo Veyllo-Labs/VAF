@@ -47,7 +47,7 @@ vaf run
 The tray icon provides immediate visual feedback on the agent's state:
 - 🟢 **Green (Active)**: The agent is currently processing a request or task.
 - 🟡 **Yellow (Idle)**: The agent is standing by. Resources (VRAM) may be released depending on configuration.
-- 🔴 **Red (Persistent)**: The model remains loaded in memory for instant response times.
+- 🔵 **Blue (Persistent)**: The model remains loaded in memory for instant response times.
 
 ---
 

@@ -170,7 +170,7 @@ The **Inter-Process Communication (IPC)** system enables communication between t
 
 ### Team State Synchronization
 
-In addition to the IPC queue, Sub-Agents synchronize their status with the **Main Persistence Layer** (`.vaf/main/team_state.json`). This ensures the Main Agent's "brain" (System Prompt) is always aware of the team's status, even if the IPC message hasn't been processed yet.
+In addition to the IPC queue, Sub-Agents synchronize their status with the **Main Persistence Layer** (`{current_working_directory}/.vaf/main/team_state.json`). This ensures the Main Agent's "brain" (System Prompt) is always aware of the team's status, even if the IPC message hasn't been processed yet.
 
 **Synchronization Bridge:**
 1. IPC receives result.
@@ -809,7 +809,7 @@ The Sub-Agent terminal **automatically closes after 5 seconds** when the task is
 │                           TIMEOUT HANDLING                                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│   After 30 minutes without a result:                                        │
+│   After the configured timeout without a result:                            │
 │                                                                             │
 │   cleanup_stale_active_tasks() is called                                    │
 │                                                                             │
@@ -817,7 +817,7 @@ The Sub-Agent terminal **automatically closes after 5 seconds** when the task is
 │   │   active_tasks      │                    │  completed_results  │        │
 │   │                     │                    │                     │        │
 │   │   Task a1b2c3d4     │ ──── timeout ────► │  Task a1b2c3d4      │        │
-│   │   (30+ min old)     │                    │  status: "timeout"  │        │
+│   │   (stale > timeout) │                    │  status: "timeout"  │        │
 │   │                     │                    │  error: "Sub-agent  │        │
 │   └─────────────────────┘                    │   task timed out"   │        │
 │                                              └─────────────────────┘        │
@@ -932,4 +932,4 @@ Write operations are atomic through:
 - `vaf/tools/research_agent.py` - Research Sub-Agent
 - `vaf/tools/coder.py` - Coding Sub-Agent
 - `vaf/core/agent.py` - Main Agent Integration
-- `vaf/workflows/engine.py` - Workflow Engine (blocking mode)
+- `vaf/workflows/engine.py` - Workflow Engine (paused/resume integration for async sub-agent steps)

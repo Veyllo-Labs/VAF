@@ -4,8 +4,11 @@ Only available when at least one email account is configured in Settings → Con
 Supports optional file attachments (e.g. invoices, documents).
 """
 
+import re
+from email.utils import parseaddr
 from pathlib import Path
 
+from vaf.core.config import Config
 from vaf.core.email_transport import send_mail, get_account
 from vaf.tools.base import BaseTool
 from vaf.tools.filesystem import is_safe_path
@@ -24,6 +27,86 @@ def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
     if not safe:
         return None, result  # result = error message
     return Path(result), None
+
+
+_FREE_MAIL_DOMAINS = {
+    "gmail.com",
+    "googlemail.com",
+    "outlook.com",
+    "hotmail.com",
+    "live.com",
+    "yahoo.com",
+    "icloud.com",
+    "gmx.de",
+    "gmx.net",
+    "mail.com",
+    "proton.me",
+    "protonmail.com",
+}
+
+_EXEC_IMPERSONATION_WORDS = (
+    "ceo",
+    "cfo",
+    "finance",
+    "accounts payable",
+    "buchhaltung",
+    "geschaeftsfuehrung",
+    "geschäftsführung",
+    "director",
+    "vorstand",
+)
+
+_HIGH_RISK_REQUEST_WORDS = (
+    "urgent",
+    "dringend",
+    "immediately",
+    "sofort",
+    "wire transfer",
+    "bank transfer",
+    "überweisung",
+    "gift card",
+    "amazon card",
+    "credentials",
+    "passwort",
+    "password",
+    "api key",
+    "secret",
+    "bank details",
+    "account number",
+)
+
+
+def _domain_from_address(address_or_header: str) -> str:
+    _, addr = parseaddr(address_or_header or "")
+    if "@" not in addr:
+        return ""
+    return addr.rsplit("@", 1)[-1].strip().lower()
+
+
+def _high_risk_send_reasons(to: str, subject: str, body: str, attachments: list[dict]) -> list[str]:
+    reasons: list[str] = []
+    to_domain = _domain_from_address(to)
+    text = f"{subject}\n{body}".lower()
+
+    trusted_domains_cfg = Config.get("email_agent_trusted_sender_domains") or []
+    trusted_domains = {str(x).strip().lower() for x in trusted_domains_cfg if str(x).strip()}
+
+    if to_domain and to_domain not in trusted_domains and to_domain in _FREE_MAIL_DOMAINS:
+        if any(word in text for word in _EXEC_IMPERSONATION_WORDS):
+            reasons.append("possible_exec_impersonation_to_free_mail_domain")
+
+    if any(word in text for word in _HIGH_RISK_REQUEST_WORDS):
+        reasons.append("high_risk_request_language_detected")
+
+    if attachments and any(
+        token in text for token in ("send", "forward", "share", "daten", "export", "credentials", "secret")
+    ):
+        reasons.append("attachment_exfiltration_pattern")
+
+    if re.search(r"\b(asap|immediate action required|confidential transfer)\b", text):
+        reasons.append("coercive_urgency_pattern")
+
+    return reasons
 
 
 class SendMailTool(BaseTool):
@@ -68,6 +151,10 @@ class SendMailTool(BaseTool):
                 "items": {"type": "string"},
                 "description": "Optional. Full paths to files to attach (e.g. invoice PDF, contract).",
             },
+            "confirm_high_risk": {
+                "type": "boolean",
+                "description": "Optional safety override. Set true only if the user explicitly confirmed sending a high-risk email request.",
+            },
         },
         "required": ["to", "subject", "body"],
     }
@@ -79,6 +166,7 @@ class SendMailTool(BaseTool):
         to = (kwargs.get("to") or "").strip()
         subject = (kwargs.get("subject") or "").strip()
         body = (kwargs.get("body") or "").strip()
+        confirm_high_risk = bool(kwargs.get("confirm_high_risk", False))
         attachment_paths = kwargs.get("attachment_paths") or []
         if not isinstance(attachment_paths, list):
             attachment_paths = []
@@ -112,6 +200,17 @@ class SendMailTool(BaseTool):
                 return path_error
             if resolved and resolved.is_file():
                 attachments.append({"path": str(resolved), "filename": resolved.name})
+
+        # Safety gate: do not auto-send potentially fraudulent/social-engineering requests.
+        # The user must explicitly confirm before we allow risky messages.
+        risk_reasons = _high_risk_send_reasons(to=to, subject=subject, body=body or "", attachments=attachments)
+        if risk_reasons and not confirm_high_risk:
+            reasons = ", ".join(risk_reasons)
+            return (
+                "Security check blocked this email as potentially high-risk. "
+                f"Reasons: {reasons}. "
+                "If the user confirms this exact send action is legitimate, call send_mail again with confirm_high_risk=true."
+            )
 
         try:
             ok = send_mail(

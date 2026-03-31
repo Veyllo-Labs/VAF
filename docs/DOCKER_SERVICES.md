@@ -10,9 +10,7 @@ VAF uses **one** Docker Compose file for auxiliary services: **`docker-compose.m
 | Redis | `vaf-redis` | 6379 | Cache (embeddings, sessions) |
 | Sandbox | `vaf-sandbox` | — | Python sandbox for safe code execution |
 | Gotenberg | `vaf-gotenberg` | 5005 | LibreOffice-based Office→PDF (DOCX, XLSX, PPTX, ODT, ODS, ODP) |
-| TTS Multi-Lang | `vaf-tts` | 5002 | Piper TTS with German, English, French voices + OGG output |
-| TTS English | `vaf-tts-en` | 5004 | Dedicated English TTS (Kusal) |
-| TTS French | `vaf-tts-fr` | 5006 | Dedicated French TTS (Siwis) |
+| TTS Multi-Lang | `vaf-tts` | 5002 | Piper TTS (single container, multi-language, on-demand model install) |
 | STT | `vaf-stt` | 5003 | Whisper ASR for speech-to-text |
 
 All services start by default when you run `docker compose up -d`.
@@ -42,10 +40,8 @@ Expected output:
 ```
 CONTAINER ID   IMAGE                      PORTS                    NAMES
 ...            vaf-tts-multilang:latest   0.0.0.0:5002->5000/tcp   vaf-tts
-...            vaf-tts-en                 0.0.0.0:5004->5000/tcp   vaf-tts-en
-...            vaf-tts-fr                 0.0.0.0:5006->5000/tcp   vaf-tts-fr
 ...            whisper-asr-webservice     0.0.0.0:5003->9000/tcp   vaf-stt
-...            postgres:15                0.0.0.0:5432->5432/tcp   vaf-memory-db
+...            pgvector/pgvector:pg16     0.0.0.0:5432->5432/tcp   vaf-memory-db
 ...            redis:7-alpine             0.0.0.0:6379->6379/tcp   vaf-redis
 ...            vaf-sandbox                                         vaf-sandbox
 ```
@@ -108,14 +104,9 @@ curl -X POST http://localhost:5002/synthesize \
 
 The conversion uses ffmpeg built into the container - no local installation required.
 
-#### Dedicated Language Containers
+#### Language Handling
 
-For high-volume single-language deployments:
-
-| Container | Port | Voice |
-|-----------|------|-------|
-| `vaf-tts-en` | 5004 | English (Kusal) |
-| `vaf-tts-fr` | 5006 | French (Siwis) |
+The current compose stack uses one TTS container (`tts`) and installs language voices on demand.
 
 ### Speech-to-Text (STT)
 
@@ -211,9 +202,8 @@ All data is preserved across container restarts:
 | `vaf_memory_pgdata` | PostgreSQL data (users, memories) | **NO** |
 | `vaf_redis_data` | Redis cache | Yes |
 | `vaf_sandbox_workspace` | Sandbox working directory | Yes |
-| `vaf_tts_models` | TTS German voice cache | Yes |
-| `vaf_tts_models_en` | TTS English voice cache | Yes |
-| `vaf_tts_models_fr` | TTS French voice cache | Yes |
+| `vaf_tts_models` | TTS model cache (all languages) | Yes |
+| `vaf_tts_config` | TTS runtime/config cache | Yes |
 | `vaf_stt_models` | STT model cache | Yes |
 
 **Stop containers without removing data:**
@@ -233,7 +223,7 @@ docker compose -f docker-compose.memory.yml down -v
 ### Stop Only Speech Services
 
 ```bash
-docker compose -f docker-compose.memory.yml stop tts tts-en tts-fr stt
+docker compose -f docker-compose.memory.yml stop tts stt
 ```
 
 ### Start Only Database and Redis
@@ -293,8 +283,8 @@ VAF configuration for Docker services (`~/.vaf/config.json`):
   "speech_tts_engine": "docker",
   "speech_tts_docker_url": "http://localhost:5002",
   "speech_tts_docker_url_de": "http://localhost:5002",
-  "speech_tts_docker_url_en": "http://localhost:5004",
-  "speech_tts_docker_url_fr": "http://localhost:5006",
+  "speech_tts_docker_url_en": "http://localhost:5002",
+  "speech_tts_docker_url_fr": "http://localhost:5002",
 
   "speech_stt_enabled": true,
   "speech_stt_engine": "docker",

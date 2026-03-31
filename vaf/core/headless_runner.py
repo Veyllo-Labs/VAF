@@ -568,6 +568,15 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             session_mgr.save(session)
                         except Exception:
                             pass
+                    # Re-apply task user context after session load:
+                    # load_session_context() may hydrate stale session metadata (e.g. legacy admin scope),
+                    # but for queued channel tasks the TaskQueue metadata is authoritative for routing/isolation.
+                    if meta.get("user_scope_id") is not None:
+                        agent._current_user_scope_id = meta.get("user_scope_id")
+                    if meta.get("username") is not None:
+                        agent._current_username = meta.get("username")
+                    if meta.get("role") is not None:
+                        agent._current_user_role = meta.get("role")
                     # Sync internal session ID
                     if hasattr(agent, '_session_id') and agent._session_id != task.session_id:
                         agent._unregister_session()

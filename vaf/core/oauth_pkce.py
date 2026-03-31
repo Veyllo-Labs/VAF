@@ -174,7 +174,8 @@ def _get_oauth_client_credential(provider: str, key_kind: str) -> str:
     env_key = env_map.get(key_kind)
     if env_key:
         value = (os.environ.get(env_key) or "").strip()
-        return value
+        if value:
+            return value
     if provider == "gmail" and key_kind == "client_id":
         return _SHIPPED_GOOGLE_CLIENT_ID
     return ""

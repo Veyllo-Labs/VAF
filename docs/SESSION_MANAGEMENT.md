@@ -80,6 +80,8 @@ agent.load_session_context(task.session_id)
 # ... then process task.input_text (chat) or _handle_command (system command)
 ```
 
+For channel-origin tasks (Telegram/WhatsApp/Discord), the queue task metadata is authoritative for user identity (`user_scope_id`, `username`, `role`). After loading session context, the runner re-applies these metadata fields to avoid stale session metadata overriding channel routing or user-scoped tools.
+
 When the session is loaded, `SessionManager.load(session_id, restore_state=True)` restores `runtime_state` (including ContextManager: intent, state, narrative summary) from the session file, so the agent has the correct high-level context for that session.
 
 ### 3b. Session switch (Web UI)
@@ -161,6 +163,16 @@ if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
 agent._session_id = current_session.id
 agent._register_session()
 ```
+
+---
+
+### Issue: Telegram Uses Wrong User Context (stale data/date/email list)
+
+**Symptom:** Web UI answers are current, but Telegram answers look stale (old date references, old inbox view, wrong user scope behavior).
+
+**Cause:** The channel session file can contain legacy metadata from an older identity mapping. If this stale metadata is applied during session load, it can temporarily override the intended channel user mapping.
+
+**Current Behavior / Fix:** In the headless queue path, channel task metadata is re-applied immediately after `load_session_context(...)`, so queued channel tasks keep the correct user identity. This prevents stale session metadata from overriding Telegram/WhatsApp/Discord task routing.
 
 ---
 

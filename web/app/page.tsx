@@ -3561,7 +3561,7 @@ function VAFDashboardContent() {
                                 {(() => {
                                     const isThinkingSession = (sessions.find(s => s.id === currentSessionId) as Session | undefined)?.source === 'thinking';
                                     const filteredMessages = messages
-                                        .filter(m => !m.content.includes('__CMD__'))
+                                        .filter(m => !String(m?.content ?? '').includes('__CMD__'))
                                         .filter(m => {
                                             if (!isThinkingSession) return true;
                                             if ((m.role === 'system' || m.role === 'user') && isThinkingModePrompt(String(m.content ?? ''))) return false;

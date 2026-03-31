@@ -108,7 +108,7 @@ Useful files when debugging WebUI / LLM / queue (all under the log dir above):
 | File | Contents |
 |------|----------|
 | `queue.log` | **QUEUE_ADD**, **QUEUE_GET**, **QUEUE_CHAT_START** / **QUEUE_CHAT_END**, **QUEUE_CHAT_FAIL**, **QUEUE_DONE**, **[METRICS]** (class depths, inflight, oldest wait, policy) |
-| `backend.log` | Backend per chat_step `[api(...)` / `server(8080)` / `library(...)]`, **503 model_loading retry**, **unavailable_after_retries**, **calling_8080**, **read_timeout no_data_300s** / **read_timeout_during_stream**, **\[CHUNK\]** / **\[CONTENT\]** (API stream) |
+| `backend.log` | Backend per chat_step `[api(...)` / `server(8080)` / `library(...)]`, **503 model_loading retry**, **unavailable_after_retries**, **calling_8080**, **read_timeout no_data_60s** / **heartbeat_timeout no_data_30s** / **read_timeout_during_stream**, **\[CHUNK\]** / **\[CONTENT\]** (API stream) |
 | `webui.log` | **\[WARNING\]** only when a message is dropped (no server loop). Stream/emit logging is disabled to avoid UI lag. |
 | `rag.log` | RAG timing, search debug, embed calls, snippet count, user scope, failures |
 | `memory.log` | **\[COMPACTION\]**, **\[USAGE\]** RSS, **\[EMBED\]** load, **\[PROFILER\]**, **\[WHISPER\]** (all timestamped) |

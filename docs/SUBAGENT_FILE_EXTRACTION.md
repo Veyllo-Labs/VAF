@@ -21,7 +21,7 @@ Agent: ❌ Verwirrt → fragt nach Dateipfad (obwohl er schon da ist!)
 Sub-Agent Result:
 📄 Saved to: C:\Users\...\research_report.html
 
-🔗 EXTRACTED FILE PATHS:
+🔗 **EXTRACTED FILE PATHS (from Sub-Agent output):**
 - C:\Users\...\research_report.html
 
 💡 TIP: Use read_file('...') or librarian_agent(file='...')
@@ -103,31 +103,26 @@ the path is already in the conversation context!
 
 ## 🎯 Use Cases
 
-### Use Case 1: Research Agent → Zusammenfassung
+### Use Case 1: Coding Sub-Agent → Datei direkt lesen
 
 ```
-1. User: "Recherchiere Quantum Computing"
-2. research_agent erstellt Report → research_quantum_20260113.html
+1. User: "Erstelle eine JSON-Datei mit Beispielwerten"
+2. coding_agent erstellt Datei → output_data.json
 3. System Message:
-   🔗 EXTRACTED FILE PATHS:
-   - C:\Users\...\research_quantum_20260113.html
-   💡 TIP: read_file('C:\Users\...\research_quantum_20260113.html')
-4. User: "Fasse das zusammen"
-5. Agent: ✅ read_file("C:\Users\...\research_quantum_20260113.html")
-   → librarian_agent(file="...", task="Summarize")
+   🔗 **EXTRACTED FILE PATHS (from Sub-Agent output):**
+   - C:\Users\...\output_data.json
+   💡 TIP: read_file('C:\Users\...\output_data.json')
+4. User: "Zeig mir den Inhalt"
+5. Agent: ✅ read_file("C:\Users\...\output_data.json")
 ```
 
-### Use Case 2: Document Agent → Review
+### Use Case 2: Hinweis für Research/Document Sub-Agents
 
 ```
-1. User: "Erstelle Arbeitsvertrag"
-2. document_agent erstellt → Arbeitsvertrag_2026.docx
-3. System Message:
-   🔗 EXTRACTED FILE PATHS:
-   - D:\Dokumente\Arbeitsvertrag_2026.docx
-4. User: "Prüfe den Vertrag"
-5. Agent: ✅ read_file("D:\Dokumente\Arbeitsvertrag_2026.docx")
-   → Analyzes content
+1. User startet `research_agent` oder `document_agent`
+2. Ergebnis wird als dokument-orientierter Follow-up-Hinweis verarbeitet (Editor/Viewer-Flow)
+3. Es gibt dabei nicht zwingend den normalen "EXTRACTED FILE PATHS"-Block
+4. Für diese Agent-Typen sollte der Main-Agent die dokument-spezifischen Hinweise beachten
 ```
 
 ### Use Case 3: Mehrere Dateien
@@ -140,7 +135,7 @@ Generated 3 files:
 - Saved to: /home/user/data.json
 
 System Message:
-🔗 EXTRACTED FILE PATHS:
+🔗 **EXTRACTED FILE PATHS (from Sub-Agent output):**
 - /home/user/report.pdf
 - /home/user/summary.txt
 - /home/user/data.json
@@ -150,14 +145,10 @@ System Message:
 
 ## 🧪 Testing
 
-Run tests with:
-```bash
-python test_file_path_extraction.py
-```
+Run the project test suite for sub-agent result handling (no standalone `test_file_path_extraction.py` in this repository).
 
 **Test Coverage:**
-- ✅ Research Agent (English)
-- ✅ Document Agent (German)
+- ✅ Generic sub-agent result parsing
 - ✅ Multiple Files
 - ✅ Linux/macOS Paths
 - ✅ Windows Paths
@@ -209,5 +200,5 @@ cleaned_paths = [re.sub(r'\x1b\[[0-9;]*m', '', fp).strip() for fp in file_paths]
 
 - Paths werden **nicht validiert** (Existenz-Check erfolgt beim Lesen)
 - Limit auf **3 Dateien** im System Message (um Context zu schonen)
-- Funktioniert mit **allen Sub-Agents** (research, document, coding, librarian)
+- Hauptsächlich für Sub-Agent-Typen mit klassischer Text-Result-Ausgabe (z. B. coding/librarian-style outputs)
 - Unterstützt **Windows, Linux, macOS** Pfade

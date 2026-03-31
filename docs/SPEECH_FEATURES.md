@@ -22,9 +22,7 @@ VAF supports fully offline speech processing using Docker containers for high-qu
 
 | Service | Container | Port | Purpose |
 |---------|-----------|------|---------|
-| TTS Multi-Lang | `vaf-tts` | 5002 | Piper TTS with German, English, French voices |
-| TTS English | `vaf-tts-en` | 5004 | Dedicated English TTS (Kusal) |
-| TTS French | `vaf-tts-fr` | 5006 | Dedicated French TTS (Siwis) |
+| TTS Multi-Lang | `vaf-tts` | 5002 | Piper TTS (single container, multi-language, voices installed on demand) |
 | STT | `vaf-stt` | 5003 | Whisper ASR (onerahmet/openai-whisper-asr-webservice) |
 
 ### Core Components
@@ -355,8 +353,8 @@ Requires `speech_stt_docker_url` (port 5003) and `speech_tts_docker_url` (port 5
   "speech_tts_engine": "docker",
   "speech_tts_docker_url": "http://localhost:5002",
   "speech_tts_docker_url_de": "http://localhost:5002",
-  "speech_tts_docker_url_en": "http://localhost:5004",
-  "speech_tts_docker_url_fr": "http://localhost:5006",
+  "speech_tts_docker_url_en": "http://localhost:5002",
+  "speech_tts_docker_url_fr": "http://localhost:5002",
 
   "speech_stt_enabled": true,
   "speech_stt_engine": "docker",
@@ -404,8 +402,6 @@ docker ps --filter "name=vaf-"
 
 Expected containers:
 - `vaf-tts` (port 5002)
-- `vaf-tts-en` (port 5004)
-- `vaf-tts-fr` (port 5006)
 - `vaf-stt` (port 5003)
 
 ### Test TTS

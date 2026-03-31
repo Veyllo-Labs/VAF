@@ -14,6 +14,7 @@ from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import (
     cred_scope_from_kwargs,
     cred_username_from_kwargs,
+    filter_phishing_messages_for_agent,
     list_accounts_for_user,
     store_candidates_for_mail,
     store_scope_from_kwargs,
@@ -186,10 +187,22 @@ class MailInboxTool(BaseTool):
                 break
         
         cat_suffix = f" (category: {category})" if category else ""
+        blocked_count = 0
         if messages:
+            messages, blocked_count = filter_phishing_messages_for_agent(messages)
             if account_id:
-                return _format_inbox(messages, folder) + cat_suffix
-            return _format_inbox_all_accounts(messages, folder) + cat_suffix
+                if messages:
+                    out = _format_inbox(messages, folder) + cat_suffix
+                    if blocked_count:
+                        out += f"\n\n(Security) Hidden {blocked_count} suspicious message(s) by phishing filter."
+                    return out
+                return f"No safe messages in {folder}. Hidden {blocked_count} suspicious message(s) by phishing filter."
+            if messages:
+                out = _format_inbox_all_accounts(messages, folder) + cat_suffix
+                if blocked_count:
+                    out += f"\n\n(Security) Hidden {blocked_count} suspicious message(s) by phishing filter."
+                return out
+            return f"No safe messages across connected accounts in {folder}. Hidden {blocked_count} suspicious message(s) by phishing filter."
         
         if category:
             return f"No messages found with category '{category}' in {folder} across any connected account."
@@ -209,4 +222,10 @@ class MailInboxTool(BaseTool):
         messages = store_list_messages(
             account_id=account_id, folder=folder, limit=max_messages, offset=0, username=store_username, user_scope_id=user_scope_id, category=category
         )
-        return _format_inbox(messages, folder) + cat_suffix
+        messages, blocked_count = filter_phishing_messages_for_agent(messages)
+        if not messages:
+            return f"No safe messages in {folder}. Hidden {blocked_count} suspicious message(s) by phishing filter."
+        out = _format_inbox(messages, folder) + cat_suffix
+        if blocked_count:
+            out += f"\n\n(Security) Hidden {blocked_count} suspicious message(s) by phishing filter."
+        return out

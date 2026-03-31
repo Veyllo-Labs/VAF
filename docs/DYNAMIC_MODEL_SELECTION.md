@@ -17,7 +17,7 @@ When you configure an API provider, VAF automatically:
 | Provider | Models Fetched | API Endpoint |
 |----------|---------------|--------------|
 | **OpenAI** | ✅ Dynamic | `GET /v1/models` |
-| **Anthropic** | ⚠️ Static (no public endpoint) | Curated list |
+| **Anthropic** | ✅ Dynamic (Web UI path) | `GET /v1/models` |
 | **Google** | ✅ Dynamic | `GET /v1beta/models` |
 | **OpenRouter** | ✅ Dynamic | `GET /v1/models` |
 | **DeepSeek** | ✅ Dynamic | `GET /v1/models` |
@@ -269,7 +269,7 @@ Error: Model not found
 
 OpenRouter returns 100+ models. We limit display to:
 - OpenAI: Top 15 (most recent)
-- OpenRouter: Top 30 (sorted)
+- OpenRouter: Top 50
 - Others: All available
 
 Use "Enter custom model ID" for unlisted models.
@@ -294,4 +294,6 @@ These endpoints are **free** and don't count toward usage quotas.
 
 ---
 
-**Last Updated:** January 2026
+**Note:** Web UI fetches provider model lists dynamically. Some CLI/provider-manager paths may still rely on legacy static fallback lists.
+
+**Last Updated:** March 2026

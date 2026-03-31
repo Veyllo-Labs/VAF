@@ -107,13 +107,12 @@ Workflow selection behavior can be tuned in `~/.vaf/config.json`:
 
 ```json
 {
-  "workflows_enabled": true,
-  "force_server": false
+  "workflows_enabled": true
 }
 ```
 
 - **`workflows_enabled`**: Toggle the entire system.
-- **`force_server`**: Force using a remote LLM server for routing logic (recommended for complex decisions).
+- **Routing backend note**: Workflow routing follows the active backend mode (`api_backend` / local-server path / selector fallback). `force_server` is primarily a local model loading/runtime flag, not a dedicated "workflow router" switch.
 
 ## Related Documentation
 

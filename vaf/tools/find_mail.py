@@ -10,6 +10,7 @@ from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import (
     cred_scope_from_kwargs,
     cred_username_from_kwargs,
+    filter_phishing_messages_for_agent,
     store_candidates_for_mail,
     store_scope_from_kwargs,
     store_username_from_kwargs,
@@ -73,6 +74,9 @@ class FindMailTool(BaseTool):
             )
             if matches:
                 break
+        matches, blocked_count = filter_phishing_messages_for_agent(matches)
+        if blocked_count and not matches:
+            return f"No safe emails matching '{query}' in {folder}. Hidden {blocked_count} suspicious message(s) by phishing filter."
         if not matches:
             return f"No emails matching '{query}' in {folder}. Sync in Settings → Connections → Email if needed."
         lines = []
@@ -84,7 +88,9 @@ class FindMailTool(BaseTool):
                 f"{i}. From: {m.get('from', '')} | Date: {m.get('date', '')} | Subject: {m.get('subject', '')} | "
                 f"account_id: {acc} | message_id: {mid} | provider_message_id: {pid}"
             )
-        out = f"Found {len(matches)} match(es) for '{query}':\n" + "\n".join(lines)
+        out = f"Found {len(matches)} safe match(es) for '{query}':\n" + "\n".join(lines)
+        if blocked_count:
+            out += f"\n\n(Security) Hidden {blocked_count} suspicious message(s) by phishing filter."
         if len(matches) == 1:
             m = matches[0]
             body = get_message_body_plain(

@@ -57,7 +57,9 @@ Opening the GitHub dashboard from the Connections panel shows:
 
 ## Tools in the Web UI
 
-The six GitHub tools (e.g., `github_list_repos`, `github_get_file`) are automatically discovered at startup. They appear in **Settings → Advanced → Tools** only if the **PyGithub** package is installed in the Python environment used by VAF. 
+The GitHub toolset is automatically discovered at startup. Current tool surface includes:
+`github_list_repos`, `github_get_file`, `github_list_directory`, `github_search_files`, `github_get_tree`, `github_list_issues`, `github_list_pulls`, `github_create_issue`, and `github_update_file`.
+These tools appear in **Settings → Advanced → Tools** only if the **PyGithub** package is installed in the Python environment used by VAF.
 
 VAF uses a **robust loading mechanism**: if the GitHub module fails to load (e.g., due to a missing dependency), VAF will log a `[WARN]` message but continue loading all other tools.
 
@@ -70,9 +72,10 @@ VAF uses a **robust loading mechanism**: if the GitHub module fails to load (e.g
 
 When using **network mode** (multiple users with different JWT scopes):
 
-- **Account lookup**: The agent first searches `github_config_by_user[username]` for per-user configurations. If empty, it falls back to the main `github_config` (single-user setup where the GitHub account was connected as admin). This pattern ensures **all users on the same VAF instance can access a GitHub account connected by the admin**, without duplicating the setup per user.
-- **Token storage**: GitHub tokens are stored by `account_id` and credential key. If a user with a different scope requests the same account, the token lookup first tries the scoped key, then falls back to the default key `github:default:{account_id}`. This allows **single-instance, multi-user setups** (e.g., Mert with a JWT scope and the admin) to share one GitHub connection.
-- **Example**: Admin connects `mert-veyllo` GitHub account → token stored under `github:default:mert-veyllo`. Later, Mert (JWT user) asks "show my repos" → agent looks in `github_config_by_user["Mert"]` (empty) → falls back to `github_config` (finds account) → looks for token under `github:f01a10fe-...:mert-veyllo` (not found) → falls back to `github:default:mert-veyllo` (found, works).
+- **Account lookup**: Non-admin users read `github_config_by_user[username]`. Local admin uses `github_config`.
+- **Token storage**: Tokens are scope-aware. For non-admin contexts, lookup stays within the scoped credential key set.
+- **Isolation behavior**: There is no automatic cross-user fallback from a non-admin user's missing config to admin's `github_config`.
+- **Operational implication**: If user A connected GitHub as admin, user B still needs their own GitHub connection metadata (and token) for GitHub tools to work in user-B scope.
 
 ## Troubleshooting
 
@@ -86,10 +89,10 @@ When using **network mode** (multiple users with different JWT scopes):
   Ensure an admin has entered the Client ID in the Connections tab.
 
 - **"GitHub is not connected" (multi-user setups)**
-  If you are a non-admin user (with a JWT scope) and the GitHub account was connected by the admin:
-  1. The agent should automatically find the account via the fallback mechanism (checks legacy `github_config` after finding no per-user config).
-  2. If it still fails, check the server logs for `GitHub client request:` messages to verify the username and scope being used.
-  3. Ensure **PyGithub is installed** (`pip install PyGithub`) and the server was restarted after installation.
+  If you are a non-admin user (with a JWT scope), verify that this same user has a connected GitHub account in Connections.
+  1. Confirm the account exists for your current username/scope (not only admin scope).
+  2. Check server logs for `GitHub client request:` entries to verify the effective username/scope.
+  3. Ensure **PyGithub is installed** (`pip install PyGithub`) and restart VAF after installation.
 
 - **GitHub tools missing from the Tools list**
   The most common cause is a missing `PyGithub` package. VAF isolates tool loading, so a failure here won't crash the app, but the tools will be skipped. Install the dependency and restart. You can click the **Refresh** icon in the Tools modal to force the UI to refetch the tool list from the running agent.

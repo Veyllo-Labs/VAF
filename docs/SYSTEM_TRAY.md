@@ -16,7 +16,7 @@ VAF includes a persistent background service managed by a system tray applicatio
 - **Graceful Shutdown**: Checks for active CLI sessions before quitting to prevent data loss.
 - **Single HTTP Backend**: The tray manages a single `llama-server` on `127.0.0.1:8080`. Other components reuse it instead of spawning duplicates.
 - **Hot-Reload Settings**: Changing `n_ctx` (context size) or `gpu_layers` in the Web UI settings automatically restarts the `llama-server` with the new values — no full app restart required.
-- **Provider Switch**: Switching the provider in settings (Local ↔ API) immediately unloads the local model from VRAM (Local → API) or loads it on demand (API → Local).
+- **Provider Switch**: Switching provider triggers backend config reload (`RELOAD_CONFIG`) and updates local/API execution mode; local server lifecycle then follows normal tray/runtime management.
 
 ## Usage
 
@@ -63,13 +63,13 @@ Certain settings trigger an automatic server restart when changed in the Web UI:
 | :--- | :--- |
 | `n_ctx`, `gpu_layers` | Stops and restarts `llama-server` with new values (local provider only). |
 | `local_network_enabled`, `local_network_port`, `local_network_port_frontend` | Restarts both uvicorn backend and Next.js frontend with new network binding. |
-| `provider` | Switches between local model and API backend; unloads/loads VRAM as needed. |
+| `provider` | Marks config refresh (`requires_refresh`) and triggers backend `RELOAD_CONFIG` path. |
 
 You can also toggle local network hosting and SSL from the CLI (no UI needed):
 
 | Command | Effect |
 | :--- | :--- |
-| `vaf server on` | Enable local network (bind to 0.0.0.0) and turn on SSL/TLS (HTTPS). Tray restarts backend and frontend automatically. |
+| `vaf server on` | Enable local network + TLS/HTTPS entrypoint. Tray restarts backend and frontend automatically. |
 | `vaf server off` | Disable local network (back to 127.0.0.1) and SSL. Tray restarts with localhost-only binding. |
 | `vaf server status` | Show whether hosting is enabled, SSL state, backend port, and the network URLs (e.g. https://192.168.x.x:3000) for other devices. |
 
@@ -107,5 +107,5 @@ When modifying the tray or adding platform-specific logic, observe these differe
 
 ### Cross-platform
 
-- Use `platform.system() == "Darwin"` for macOS, `== "Windows"` for Windows.
+- Prefer `vaf.core.platform.Platform` helpers for OS checks and paths (instead of direct `platform.system()` checks in new code).
 - Callbacks (e.g. pystray `checked`): accept `(icon, item)`; Rumps passes `(sender)`—handle both.

@@ -33,7 +33,7 @@ from vaf.core.email_sync_store import (
     upsert_messages,
 )
 from vaf.core.email_transport import apply_sender_rules_to_category, fetch_mail, get_message_body_plain
-from vaf.tools.mail_utils import store_candidates_for_mail
+from vaf.tools.mail_utils import annotate_messages_with_agent_visibility, store_candidates_for_mail
 from vaf.core.platform import Platform
 from vaf.core.oauth_pkce import (
     exchange_code_for_tokens,
@@ -652,6 +652,7 @@ async def get_synced_messages(
         )
         if items:
             break
+    items = annotate_messages_with_agent_visibility(items)
     return {"messages": items, "folder": folder, "category": category}
 
 
@@ -684,6 +685,7 @@ async def search_synced_messages(
         )
         if items:
             break
+    items = annotate_messages_with_agent_visibility(items)
     return {"messages": items, "query": query, "folder": folder}
 
 

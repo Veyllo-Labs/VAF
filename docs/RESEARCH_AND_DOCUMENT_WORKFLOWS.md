@@ -270,16 +270,9 @@ Sections: 12-15 (Problem, Solution, Market, Revenue, Team, etc.)
 
 ## Configuration
 
-Workflow settings in `~/.vaf/config.json`:
-
-```json
-{
-  "research_max_results": 5,
-  "research_format": "markdown",
-  "document_default_format": "docx",
-  "workflow_enable_research_cache": false
-}
-```
+These workflows are currently configured through workflow templates and tool logic in code.
+There is no dedicated `research_max_results` / `document_default_format` / `workflow_enable_research_cache`
+config block in `config.py` defaults at the moment.
 
 ## Benefits vs. Single-Stage
 

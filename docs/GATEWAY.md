@@ -10,7 +10,7 @@ Instead of a monolithic script, VAF uses a client-server model:
 2.  **Clients:**
     *   **CLI:** The standard terminal interface.
     *   **Bridge:** Connectors for external platforms (Discord, Slack).
-    *   **Web UI:** (Planned) React-based frontend.
+    *   **Web UI:** Active React/Next.js frontend used in production.
 
 ## Protocol
 

@@ -14,17 +14,18 @@ Das Overlay entspricht dem Verhalten beim Umschalten der Netzwerk-Einstellungen 
 ## Verhalten im Backend (Speicher / VRAM)
 
 - **Wechsel von Local zu API:**  
-  Das lokale Modell wird sofort aus dem Speicher (VRAM) entladen. Der llama-Server wird beendet, damit keine unnötige Grafikspeicher-Belegung entsteht.
+  Der Config-Save triggert einen `RELOAD_CONFIG`-Pfad im Headless Runner. Dabei wird der Agent auf API-Betrieb umgestellt und die lokale Agent-LLM-Instanz zurückgesetzt. Der Server-Prozess wird nicht über einen dedizierten `provider`-Observer in `tray.py` gestoppt, sondern folgt dem laufenden Runtime-/Idle-Management.
 
 - **Wechsel von API zu Local:**  
-  Das lokale Modell wird nach dem Speichern der Einstellung geladen. Der Tray startet den Server und das Modell liegt im VRAM bereit, so dass die erste Anfrage ohne zusätzliche Wartezeit ausgeführt werden kann.
+  Nach `RELOAD_CONFIG` wird wieder der lokale Laufweg aktiv. Das lokale Modell/der Server wird dann über die normale Aktivitäts- und Laderoutine bereitgestellt.
 
-Die Steuerung erfolgt über den Config-Observer: Änderungen am Schlüssel `provider` werden an den Tray gemeldet; der Tray führt Entladen bzw. Laden aus und die Activity-Loop arbeitet wie beim normalen Idle-Timeout bzw. bei Aktivität.
+Die Umschaltung läuft über Config-Save + Queue-Kommando (`__CMD__:RELOAD_CONFIG`) und nicht über einen expliziten `provider`-Branch in `tray.py`.
 
 ## Technische Stichpunkte
 
-- **Config:** Der Schlüssel `provider` zählt zu den „critical keys“. Beim Speichern der Config werden die Observer mit altem und neuem Wert aufgerufen.
-- **Tray:** `on_config_changed` erkennt Provider-Wechsel und ruft entweder `server_mgr.stop_server()` + `set_model_loaded(False)` auf (Local → API) oder setzt `request_model_load = True` (API → Local). Die Activity-Loop startet dann den Server.
+- **Config/WebSocket:** Beim Speichern markiert die API den Providerwechsel (`requires_refresh: true`) und queued `__CMD__:RELOAD_CONFIG`.
+- **Headless runner:** `RELOAD_CONFIG` aktualisiert den Agenten-Kontext (Provider/Backend, LLM-Reset, `use_server`-Pfad).
+- **Tray:** `on_config_changed` behandelt model-/context-/gpu- und network-bezogene Schlüssel; kein eigener `provider`-Sonderzweig.
 - **WebSocket:** Beim Speichern der Config kann die Antwort `config_saved` das Feld `requires_refresh: true` enthalten (z. B. bei Provider-Änderung). Die Web-UI zeigt in diesem Fall dasselbe Overlay und lädt nach 5 Sekunden die Seite neu.
 
 ## Verwandte Dokumentation

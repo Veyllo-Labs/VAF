@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Mail, Loader2, UserPlus, RefreshCw, Inbox, Search } from 'lucide-react';
+import { X, Mail, Loader2, UserPlus, RefreshCw, Inbox, Search, AlertTriangle } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 
 /** Use direct backend (port 8001) to bypass Next.js proxy which can return 500 on sync/body. */
@@ -46,6 +46,9 @@ interface SyncedMessage {
     body_snippet: string;
     synced_at: string;
     answered_at?: string;
+    suspicious_for_agent?: boolean;
+    suspicious_reasons?: string[];
+    suspicious_score?: number;
 }
 
 /** Provider auto-detected categories (e.g. Gmail: Primary, Social, Promotions). Always shown in filter bar. */
@@ -98,6 +101,23 @@ function formatMessageDate(m: SyncedMessage): string {
         }
     }
     return m.date || '';
+}
+
+function suspiciousReasonLabel(reason: string): string {
+    const map: Record<string, string> = {
+        provider_spam_category: 'Provider marked as spam/junk',
+        punycode_domain: 'Internationalized/punycode sender domain',
+        social_engineering_language: 'Urgency or social-engineering language detected',
+        exec_impersonation_free_mail: 'Possible executive impersonation via free-mail domain',
+        phishing_pattern: 'Known phishing-like wording pattern detected',
+    };
+    return map[reason] || reason;
+}
+
+function suspiciousTooltip(m: SyncedMessage): string {
+    const reasons = (m.suspicious_reasons || []).map(suspiciousReasonLabel);
+    const reasonText = reasons.length > 0 ? reasons.join('; ') : 'Heuristic phishing filter matched';
+    return `Suspicious email (${reasonText}). For safety, the agent does not see this message in mail tools.`;
 }
 
 export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refreshTrigger = 0 }: MailDashboardProps) {
@@ -771,7 +791,15 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                                 >
                                                     <div className="flex flex-col gap-0.5 min-w-0">
                                                         <div className="flex items-baseline justify-between gap-2">
-                                                            <span className="font-medium text-gray-900 truncate text-sm">{m.subject || '(No subject)'}</span>
+                                                            <span className="font-medium text-gray-900 truncate text-sm flex items-center gap-1.5">
+                                                                <span className="truncate">{m.subject || '(No subject)'}</span>
+                                                                {m.suspicious_for_agent && (
+                                                                    <AlertTriangle
+                                                                        className="w-3.5 h-3.5 text-amber-600 shrink-0"
+                                                                        title={suspiciousTooltip(m)}
+                                                                    />
+                                                                )}
+                                                            </span>
                                                             <span className="text-xs text-gray-500 shrink-0 flex items-center gap-1.5">
                                                                 {m.answered_at && (
                                                                     <span className="text-green-600 font-medium" title={formatAnsweredAt(m.answered_at)}>Beantwortet</span>
@@ -840,6 +868,14 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                     <p className="text-xs text-green-700 mt-1 font-medium">
                                         Benatwortet am {formatAnsweredAt(selectedMessage.answered_at)}
                                     </p>
+                                )}
+                                {selectedMessage.suspicious_for_agent && (
+                                    <div
+                                        className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+                                        title={suspiciousTooltip(selectedMessage)}
+                                    >
+                                        <span className="font-semibold">Security:</span> This email is flagged as suspicious and is hidden from agent mail tools.
+                                    </div>
                                 )}
                             </div>
                             {/* Labels — changing a label automatically applies to all mails from this sender */}

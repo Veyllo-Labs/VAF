@@ -31,11 +31,41 @@ MEMORY_CRITICAL_MB = 4096  # Force aggressive cleanup above 4GB
 
 # Throttle stream updates to WebUI so the UI does not lag behind (max ~12 updates/sec)
 STREAM_EMIT_THROTTLE_SEC = 0.08
+CHANNEL_HISTORY_WINDOW_MESSAGES = 15
 
 
 class _StopGenerationRequested(Exception):
     """Internal control-flow exception for cooperative user stop."""
     pass
+
+
+def _apply_channel_history_window(agent, source: str) -> None:
+    """
+    Keep only a small recent window for channel sessions (Telegram/WhatsApp/Discord)
+    so stale long-tail chat history does not dominate tool decisions.
+    """
+    if source not in {"telegram", "whatsapp", "discord"}:
+        return
+    try:
+        raw_limit = Config.get("channel_history_window_messages", CHANNEL_HISTORY_WINDOW_MESSAGES)
+        limit = int(raw_limit)
+    except Exception:
+        limit = CHANNEL_HISTORY_WINDOW_MESSAGES
+    limit = max(6, min(limit, 80))
+
+    history = getattr(agent, "history", None)
+    if not isinstance(history, list):
+        return
+    if len(history) <= limit + 1:
+        return
+
+    # Preserve system prompt if present, then keep only latest conversation entries.
+    first = history[0] if history else None
+    tail = history[-limit:]
+    if isinstance(first, dict) and first.get("role") == "system":
+        agent.history = [first] + tail
+    else:
+        agent.history = tail
 
 def _strip_tool_calls_json(text: str) -> str:
     """Remove raw tool_calls JSON blobs and fragments from reply text."""
@@ -582,6 +612,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         agent._unregister_session()
                         agent._session_id = task.session_id
                         agent._register_session()
+                    # Channel sessions are intentionally bounded to a short recent history
+                    # window to avoid stale chat outputs being reused instead of fresh tool calls.
+                    _apply_channel_history_window(agent, getattr(task, "source", None))
                 except Exception as e:
                     print(f"[Headless] Failed to load session context: {e}")
                     # Create fallback session?

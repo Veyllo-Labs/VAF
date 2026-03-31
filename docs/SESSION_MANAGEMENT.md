@@ -82,6 +82,14 @@ agent.load_session_context(task.session_id)
 
 For channel-origin tasks (Telegram/WhatsApp/Discord), the queue task metadata is authoritative for user identity (`user_scope_id`, `username`, `role`). After loading session context, the runner re-applies these metadata fields to avoid stale session metadata overriding channel routing or user-scoped tools.
 
+For channel-origin tasks, the runtime prompt context is additionally bounded to a recent history window (default: `15`, configurable via `channel_history_window_messages`):
+
+- The window applies to **history elements** (e.g., `user`, `assistant`, and any replayed tool/system entries), not only user prompts.
+- The effective in-memory prompt is `system prompt + last N elements` (when a system prompt exists at index 0).
+- This is a sliding window: when a new element arrives, the oldest element in the window drops out.
+- Older messages are **not deleted** from session storage; they remain in the session file for persistence/debugging.
+- This window is independent from tool-loop protection. The separate "15 tool turns" limit controls recursion depth in one generation step, not session replay size.
+
 When the session is loaded, `SessionManager.load(session_id, restore_state=True)` restores `runtime_state` (including ContextManager: intent, state, narrative summary) from the session file, so the agent has the correct high-level context for that session.
 
 ### 3b. Session switch (Web UI)
@@ -173,6 +181,8 @@ agent._register_session()
 **Cause:** The channel session file can contain legacy metadata from an older identity mapping. If this stale metadata is applied during session load, it can temporarily override the intended channel user mapping.
 
 **Current Behavior / Fix:** In the headless queue path, channel task metadata is re-applied immediately after `load_session_context(...)`, so queued channel tasks keep the correct user identity. This prevents stale session metadata from overriding Telegram/WhatsApp/Discord task routing.
+
+**Related behavior:** Channel sessions also use a bounded recent-history window for prompt construction, so stale long-tail chat entries are less likely to be reused instead of triggering fresh tool calls.
 
 ---
 

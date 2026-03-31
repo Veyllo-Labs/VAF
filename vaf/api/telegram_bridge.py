@@ -9,9 +9,11 @@ so TTS responses can be sent back in the same language.
 """
 import asyncio
 import base64
+import html
 import logging
 import os
 import queue
+import re
 import tempfile
 import threading
 import time
@@ -36,6 +38,50 @@ _outgoing_queue: Optional[queue.Queue] = None
 # Per-chat debounce: wait for follow-up messages, then enqueue combined text
 _pending_by_chat: Dict[str, Dict[str, Any]] = {}
 _pending_lock = threading.Lock()
+
+
+def _to_telegram_html(text: str) -> str:
+    """
+    Convert a small Markdown-like subset to Telegram HTML.
+    Supported: **bold**, `inline code`, [label](https://url), and fenced code blocks.
+    """
+    if not text:
+        return ""
+    escaped = html.escape(text, quote=False)
+
+    # Fenced code blocks first so inner markers are not transformed.
+    escaped = re.sub(
+        r"```([\s\S]*?)```",
+        lambda m: f"<pre>{m.group(1).strip()}</pre>",
+        escaped,
+    )
+    # Inline links (http/https only).
+    escaped = re.sub(
+        r"\[([^\]]+)\]\((https?://[^\s)]+)\)",
+        lambda m: f'<a href="{m.group(2)}">{m.group(1)}</a>',
+        escaped,
+    )
+    # Inline code.
+    escaped = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", escaped)
+    # Bold with double-asterisk.
+    escaped = re.sub(r"\*\*([^\n*][^*]*?)\*\*", r"<b>\1</b>", escaped)
+    return escaped
+
+
+def _telegram_text_payload(chat_id: str, text: str) -> Dict[str, Any]:
+    """Build sendMessage payload; prefer formatted HTML when markdown markers are present."""
+    raw = str(text or "")[:4096]
+    if any(marker in raw for marker in ("**", "`", "[", "```")):
+        return {"chat_id": chat_id, "text": _to_telegram_html(raw), "parse_mode": "HTML"}
+    return {"chat_id": chat_id, "text": raw}
+
+
+def _telegram_caption_data(chat_id: str, caption: str) -> Dict[str, Any]:
+    """Build sendDocument data with optional HTML parse mode."""
+    raw = str(caption or "")[:1024]
+    if any(marker in raw for marker in ("**", "`", "[", "```")):
+        return {"chat_id": chat_id, "caption": _to_telegram_html(raw), "parse_mode": "HTML"}
+    return {"chat_id": chat_id, "caption": raw}
 
 
 def _drop_unauthorized_telegram(
@@ -437,12 +483,22 @@ def _sender_loop(bot_token: str):
             if file_path and os.path.isfile(file_path):
                 try:
                     with open(file_path, "rb") as doc_file:
+                        doc_data = _telegram_caption_data(chat_id, text)
                         resp = requests.post(
                             url_document,
-                            data={"chat_id": chat_id, "caption": text[:1024]},
+                            data=doc_data,
                             files={"document": (os.path.basename(file_path), doc_file)},
                             timeout=30,
                         )
+                    if (not resp.ok) and ("parse entities" in (resp.text or "").lower() or "can't parse" in (resp.text or "").lower()):
+                        # Fallback: retry without parse mode/caption formatting.
+                        with open(file_path, "rb") as doc_file:
+                            resp = requests.post(
+                                url_document,
+                                data={"chat_id": chat_id, "caption": str(text or "")[:1024]},
+                                files={"document": (os.path.basename(file_path), doc_file)},
+                                timeout=30,
+                            )
                     if resp.ok:
                         try:
                             from vaf.core.log_helper import log_telegram_reply
@@ -479,8 +535,12 @@ def _sender_loop(bot_token: str):
                     logger.warning("Voice reply failed, falling back to text: %s", e)
 
             # 3. Text: send as plain message
-            payload = {"chat_id": chat_id, "text": text[:4096]}
+            payload = _telegram_text_payload(chat_id, text)
             resp = requests.post(url_message, json=payload, timeout=10)
+            if (not resp.ok) and ("parse entities" in (resp.text or "").lower() or "can't parse" in (resp.text or "").lower()):
+                # Fallback: retry without parse mode/formatting.
+                payload = {"chat_id": chat_id, "text": str(text or "")[:4096]}
+                resp = requests.post(url_message, json=payload, timeout=10)
             if not resp.ok:
                 logger.warning("Telegram sendMessage failed: %s %s", resp.status_code, resp.text)
                 try:

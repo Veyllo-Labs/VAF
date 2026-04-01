@@ -179,6 +179,7 @@ class TaskQueue:
         worker_key = worker_id or str(threading.get_ident())
         deadline = time.time() + max(0.0, float(timeout))
         with self._cv:
+            self._cleanup_stale_inflight_locked()
             while True:
                 task = self._pop_next_task_locked()
                 if task is not None:
@@ -191,6 +192,27 @@ class TaskQueue:
                 if remaining <= 0:
                     return None
                 self._cv.wait(timeout=remaining)
+
+    def reset_runtime_state(self, include_queued: bool = False) -> None:
+        """
+        Reset runtime-only queue state (in-flight locks and active task pointers).
+        Useful after worker crashes/restarts where stale in-flight locks can block dequeue.
+        """
+        with self._cv:
+            self.active_task = None
+            self._session_inflight.clear()
+            self._inflight_by_worker.clear()
+            if include_queued:
+                if self._legacy_mode:
+                    self._legacy_heap.clear()
+                else:
+                    for task_class in (
+                        self.TASK_CLASS_INTERACTIVE,
+                        self.TASK_CLASS_AUTOMATION,
+                        self.TASK_CLASS_BACKGROUND,
+                    ):
+                        self._queues[task_class].clear()
+            self._cv.notify_all()
 
     def task_done(self, task: Optional[AgentTask] = None, worker_id: Optional[str] = None):
         """Mark a task as done and release session in-flight lock."""
@@ -356,3 +378,25 @@ class TaskQueue:
                 )
                 return task
         return None
+
+    def _cleanup_stale_inflight_locked(self) -> None:
+        """
+        Remove stale in-flight reservations when worker threads are gone.
+        Prevents permanent session lock where tasks are queued but never dequeued.
+        """
+        alive_thread_ids = {str(t.ident) for t in threading.enumerate() if t.ident is not None}
+        stale_keys = []
+        for key in list(self._inflight_by_worker.keys()):
+            # Default worker keys are thread identifiers (stringified ints).
+            # Only auto-clean numeric keys; custom keys are left untouched.
+            if str(key).isdigit() and str(key) not in alive_thread_ids:
+                stale_keys.append(key)
+        if not stale_keys:
+            return
+        for key in stale_keys:
+            task = self._inflight_by_worker.pop(key, None)
+            if task is not None:
+                self._session_inflight.discard(task.session_id)
+        if self.active_task is not None and self.active_task.session_id not in self._session_inflight:
+            self.active_task = next(iter(self._inflight_by_worker.values()), None)
+        self._cv.notify_all()

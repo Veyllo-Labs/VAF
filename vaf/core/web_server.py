@@ -34,6 +34,29 @@ app = FastAPI(title="VAF Local Server")
 
 # Active model download cancel events keyed by websocket id (for cancel_model_download)
 _active_model_download_cancels: dict[int, threading.Event] = {}
+_headless_agent_thread: Optional[threading.Thread] = None
+_headless_agent_lock = threading.Lock()
+
+
+def _ensure_headless_agent_runner(origin: str = "web_server") -> None:
+    """
+    Ensure exactly one in-process headless runner thread is alive.
+    Queue producers (WebSocket/API) run in this process, so the consumer must also
+    live here to avoid QUEUE_ADD without QUEUE_GET.
+    """
+    global _headless_agent_thread
+    with _headless_agent_lock:
+        if _headless_agent_thread is not None and _headless_agent_thread.is_alive():
+            return
+        from vaf.core.headless_runner import run_headless_agent
+
+        _headless_agent_thread = threading.Thread(
+            target=run_headless_agent,
+            daemon=True,
+            name="HeadlessAgent",
+        )
+        _headless_agent_thread.start()
+        log("WebServer", f"Headless agent runner started ({origin})")
 
 
 @app.exception_handler(Exception)
@@ -567,16 +590,11 @@ async def startup_event():
             log("WebServer", f"Thinking mode start error: {e}")
     log("WebServer", "Email auto-sync background task started (every 30 min)")
 
-    # In Docker mode, start the headless agent runner
-    # This handles task processing (chat, tools, etc.) within the container
+    # In Docker mode, the tray app doesn't run, so we must start the headless runner here.
     if Config.is_docker_mode():
         log("WebServer", "Docker mode detected - starting headless agent runner...")
         try:
-            from vaf.core.headless_runner import run_headless_agent
-            import threading
-            agent_thread = threading.Thread(target=run_headless_agent, daemon=True, name="HeadlessAgent")
-            agent_thread.start()
-            log("WebServer", "Headless agent runner started in background thread")
+            _ensure_headless_agent_runner(origin="docker_startup")
         except Exception as e:
             log("WebServer", f"Failed to start headless agent: {e}")
             import traceback

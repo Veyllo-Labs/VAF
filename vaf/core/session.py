@@ -221,7 +221,13 @@ class SessionManager:
             try:
                 from vaf.core.session_state import StateSnapshot
                 snapshot = self.state_registry.capture_snapshot()
-                session.runtime_state = snapshot.to_dict()
+                # Preserve non-provider runtime keys (e.g. sidebar_documents, editor_selections)
+                # while refreshing provider snapshot fields (timestamp/schema_version/providers).
+                existing_runtime = dict(session.runtime_state or {})
+                snapshot_runtime = snapshot.to_dict()
+                merged_runtime = dict(existing_runtime)
+                merged_runtime.update(snapshot_runtime)
+                session.runtime_state = merged_runtime
             except Exception as e:
                 import logging
                 logging.error(f"Failed to capture state before save: {e}")

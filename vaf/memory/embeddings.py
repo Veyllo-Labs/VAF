@@ -15,6 +15,7 @@ import logging
 import os
 import time
 import numpy as np
+import traceback
 from vaf.core.config import Config
 from vaf.core.log_helper import append_domain_log
 
@@ -29,6 +30,31 @@ import threading
 _model = None
 _model_name = None
 _model_lock = threading.Lock()
+
+
+def _log_model_access(action: str, model_id: str, reused: bool, instance: Any):
+    """
+    Instrument model singleton access to diagnose repeated ONNX loads.
+    """
+    try:
+        stack = traceback.format_stack(limit=10)
+        # keep non-empty frame lines; join compactly for log readability
+        frames = []
+        for raw in stack[:-1]:
+            line = raw.strip().replace("\n", " ")
+            if line:
+                frames.append(line)
+        stack_compact = " | ".join(frames[-6:])
+        append_domain_log(
+            "memory",
+            (
+                f"[EMBED_MODEL_ACCESS] action={action} reused={str(reused).lower()} "
+                f"model_id={model_id} instance_id={id(instance) if instance is not None else 'none'} "
+                f"thread_id={threading.get_ident()} stack={stack_compact}"
+            ),
+        )
+    except Exception:
+        pass
 
 class OnnxEmbeddingModel:
     """
@@ -64,6 +90,13 @@ class OnnxEmbeddingModel:
         self.session = ort.InferenceSession(model_path, sess_options, providers=["CPUExecutionProvider"])
         self.input_names = [i.name for i in self.session.get_inputs()]
         self.output_names = [o.name for o in self.session.get_outputs()]
+        self.run_options = ort.RunOptions()
+        try:
+            # Ask ORT to shrink CPU arena usage between runs when possible.
+            self.run_options.add_run_config_entry("memory.enable_memory_arena_shrinkage", "cpu:0")
+        except Exception:
+            # Keep runtime robust if this entry is unsupported in a given ORT build.
+            self.run_options = None
 
     def encode(self, sentences: Union[str, List[str]], convert_to_numpy: bool = True, normalize_embeddings: bool = True, show_progress_bar: bool = False) -> Union[List[float], np.ndarray]:
         """Mimics SentenceTransformer.encode"""
@@ -92,7 +125,7 @@ class OnnxEmbeddingModel:
             inputs["token_type_ids"] = token_type_ids
 
         # Run Inference
-        outputs = self.session.run(None, inputs)
+        outputs = self.session.run(None, inputs, self.run_options)
         
         # Mean Pooling
         # last_hidden_state: [batch, seq, dim]
@@ -142,12 +175,14 @@ def get_model():
 
     # Fast path: model already loaded (no lock needed for read)
     if _model is not None and _model_name == model_id:
+        _log_model_access(action="get_model", model_id=model_id, reused=True, instance=_model)
         return _model
 
     # Slow path: need to load model (acquire lock)
     with _model_lock:
         # Double-check after acquiring lock (another thread may have loaded it)
         if _model is not None and _model_name == model_id:
+            _log_model_access(action="get_model_after_lock", model_id=model_id, reused=True, instance=_model)
             return _model
 
         # Log memory BEFORE loading
@@ -160,6 +195,7 @@ def get_model():
                     _model = OnnxEmbeddingModel(model_id)
                     _model_name = model_id
                     append_domain_log("memory", f"[EMBED] Loaded ONNX {model_id}")
+                    _log_model_access(action="load_onnx", model_id=model_id, reused=False, instance=_model)
                 except Exception as e:
                     logger.warning(f"ONNX load failed ({e}), falling back to PyTorch...")
                     use_onnx = False
@@ -171,6 +207,7 @@ def get_model():
                 from sentence_transformers import SentenceTransformer
                 _model = SentenceTransformer(model_id, device="cpu")
                 _model_name = model_id
+                _log_model_access(action="load_pytorch", model_id=model_id, reused=False, instance=_model)
 
             # Log memory AFTER loading
             mem_after = get_memory_usage_mb()

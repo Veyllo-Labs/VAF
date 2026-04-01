@@ -1002,24 +1002,25 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             # Hybrid retrieval lane: query session-scoped attachment index instead of
                             # prepending full attachment content every turn.
                             snippet_lines = []
-                            try:
-                                from vaf.memory.attachment_rag import search_session_attachments_sync
-                                att_hits = search_session_attachments_sync(
-                                    query=(input_text or ""),
-                                    session_id=str(task.session_id),
-                                    user_scope_id=meta.get("user_scope_id"),
-                                )
-                                for idx, hit in enumerate(att_hits, 1):
-                                    h_name = str((hit or {}).get("attachment_name") or "Attachment")
-                                    h_score = float((hit or {}).get("score") or 0.0)
-                                    h_text = str((hit or {}).get("text") or "").strip()
-                                    if not h_text:
-                                        continue
-                                    snippet_lines.append(
-                                        f"[Attachment Source {idx}] {h_name} (Relevance: {h_score:.0%})\n{h_text}"
+                            if bool(Config.get("attachment_rag_enabled", False)):
+                                try:
+                                    from vaf.memory.attachment_rag import search_session_attachments_sync
+                                    att_hits = search_session_attachments_sync(
+                                        query=(input_text or ""),
+                                        session_id=str(task.session_id),
+                                        user_scope_id=meta.get("user_scope_id"),
                                     )
-                            except Exception as e:
-                                append_domain_log("rag", f"ATTACH_SEARCH failed: {e}")
+                                    for idx, hit in enumerate(att_hits, 1):
+                                        h_name = str((hit or {}).get("attachment_name") or "Attachment")
+                                        h_score = float((hit or {}).get("score") or 0.0)
+                                        h_text = str((hit or {}).get("text") or "").strip()
+                                        if not h_text:
+                                            continue
+                                        snippet_lines.append(
+                                            f"[Attachment Source {idx}] {h_name} (Relevance: {h_score:.0%})\n{h_text}"
+                                        )
+                                except Exception as e:
+                                    append_domain_log("rag", f"ATTACH_SEARCH failed: {e}")
 
                             if not snippet_lines:
                                 # Fallback: keep context minimal and deterministic if index is not ready yet.
@@ -1609,12 +1610,24 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         if pending_results:
                             found_results_text = []
                             any_needs_retry = False
+                            cancelled_sessions = set()
                             for result_task in pending_results:
                                 # Ensure agent context is aligned with result session
                                 session_id = result_task.session_id or getattr(agent, "current_session_id", None)
                                 if session_id:
                                     agent.load_session_context(session_id)
                                     subagent_last_activity[session_id] = now
+                                err_text = str(getattr(result_task, "error", "") or "")
+                                err_lower = err_text.lower()
+                                is_user_cancelled = (
+                                    result_task.status == "failed"
+                                    and (
+                                        "[user_cancelled]" in err_lower
+                                        or "stopped/cancelled by user via stop button" in err_lower
+                                        or "stopped by user via stop button" in err_lower
+                                        or "cancelled by user via stop button" in err_lower
+                                    )
+                                )
                                 if agent._process_subagent_result(result_task):
                                     any_needs_retry = True
                                 
@@ -1622,13 +1635,15 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 sid = session_id
                                 if sid:
                                     status_label = "Completed"
-                                    if result_task.status == "failed":
+                                    if is_user_cancelled:
+                                        status_label = "Stopped/Cancelled"
+                                    elif result_task.status == "failed":
                                         status_label = "Failed"
                                     elif result_task.status == "timeout":
                                         status_label = "Timed out"
-                                    presence = "error" if result_task.status in ("failed", "timeout") else "idle"
+                                    presence = "idle" if is_user_cancelled else ("error" if result_task.status in ("failed", "timeout") else "idle")
                                     provider, model = _get_subagent_model_info()
-                                    step_status = "completed" if result_task.status in ("completed", "failed", "timeout") else "running"
+                                    step_status = "timeout" if is_user_cancelled else ("completed" if result_task.status in ("completed", "failed", "timeout") else "running")
                                     steps = [{
                                         "id": result_task.task_id,
                                         "title": result_task.agent_type.replace("_", " ").title(),
@@ -1671,6 +1686,19 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     found_results_text.append(
                                         f"Sub-Agent '{result_task.agent_type}' completed:\n{result_task.result}"
                                     )
+                                elif is_user_cancelled:
+                                    try:
+                                        if session_id:
+                                            cancelled_sessions.add(session_id)
+                                            get_web_interface()._push_session_update(session_id, {
+                                                "type": "subagent_output",
+                                                "taskId": result_task.task_id,
+                                                "agentType": result_task.agent_type,
+                                                "status": "timeout",
+                                                "output": "Sub-Agent stopped/cancelled by user."
+                                            })
+                                    except Exception:
+                                        pass
                                 elif result_task.status == "failed":
                                     try:
                                         error_text = str(result_task.error or "")
@@ -1704,6 +1732,14 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         f"Sub-Agent '{result_task.agent_type}' TIMEOUT."
                                     )
 
+                            if cancelled_sessions:
+                                try:
+                                    from vaf.core.task_queue import TaskQueue
+                                    tq_local = TaskQueue()
+                                    for sid in cancelled_sessions:
+                                        tq_local.clear_stop(sid)
+                                except Exception:
+                                    pass
                             if found_results_text or any_needs_retry:
                                 user_lang = "auto"
                                 for msg in reversed(agent.history):

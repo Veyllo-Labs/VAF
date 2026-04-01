@@ -1534,18 +1534,36 @@ class Agent:
                     )
                 })
         elif task.status == "failed":
-            UI.error(f"✗ Sub-Agent [{task.task_id}] failed: {task.error}")
-            
-            self.history.append({
-                "role": "system",
-                "content": (
-                    f"[X] **Sub-Agent Task FAILED / TERMINATED** [Task: {task.task_id}]\n"
-                    f"Agent: {task.agent_type}\n"
-                    f"Error: {task.error}\n\n"
-                    f"IMPORTANT: The task has stopped. Do not say it is still running.\n"
-                    f"Inform the user about the error."
-                )
-            })
+            err_text = str(task.error or "")
+            is_user_cancelled = (
+                "[user_cancelled]" in err_text.lower()
+                or "stopped/cancelled by user via stop button" in err_text.lower()
+                or "stopped by user via stop button" in err_text.lower()
+                or "cancelled by user via stop button" in err_text.lower()
+            )
+            if is_user_cancelled:
+                UI.warning(f"⏹ Sub-Agent [{task.task_id}] stopped/cancelled by user.")
+                self.history.append({
+                    "role": "system",
+                    "content": (
+                        f"⏹ **Sub-Agent Task STOPPED/CANCELLED BY USER** [Task: {task.task_id}]\n"
+                        f"Agent: {task.agent_type}\n\n"
+                        f"The user pressed stop. This is an intentional cancel, not a sub-agent failure.\n"
+                        f"Do not report this as an error."
+                    )
+                })
+            else:
+                UI.error(f"✗ Sub-Agent [{task.task_id}] failed: {task.error}")
+                self.history.append({
+                    "role": "system",
+                    "content": (
+                        f"[X] **Sub-Agent Task FAILED / TERMINATED** [Task: {task.task_id}]\n"
+                        f"Agent: {task.agent_type}\n"
+                        f"Error: {task.error}\n\n"
+                        f"IMPORTANT: The task has stopped. Do not say it is still running.\n"
+                        f"Inform the user about the error."
+                    )
+                })
         elif task.status == "timeout":
             UI.warning(f"⏰ Sub-Agent [{task.task_id}] did not respond (Timeout)")
             

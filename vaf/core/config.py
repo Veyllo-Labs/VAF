@@ -170,12 +170,13 @@ class Config:
         "memory_chunk_overlap": 50,                                # Chunk overlap in tokens
         "memory_db_echo": False,                                   # Enable SQL query logging (debug)
         # Attachment RAG lane (session-scoped, ephemeral, isolated from long-term memory lane)
-        "attachment_rag_enabled": True,                             # Enable attachment retrieval lane for Web UI sidebar documents
+        "attachment_rag_enabled": False,                            # Emergency default OFF: enable only after stability validation
         "attachment_rag_k": 4,                                      # Top-k attachment snippets per query (1-12)
         "attachment_rag_threshold": 0.28,                           # Min similarity for attachment snippet retrieval
         "attachment_rag_ttl_hours": 24,                             # TTL for ephemeral attachment index
         "attachment_rag_max_chars_per_doc": 24000,                 # Max chars per attached doc indexed into ephemeral lane
         "attachment_rag_snippet_chars": 900,                        # Max chars per retrieved attachment snippet inserted into prompt
+        "attachment_rag_max_rss_gb": 4.0,                           # Hard guard: kill attachment lane when process RSS exceeds this limit
         
         # Redis Cache Settings
         "redis_url": "redis://localhost:6379/0",                   # Redis connection URL

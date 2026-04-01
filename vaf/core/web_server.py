@@ -2630,15 +2630,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                         loaded.runtime_state["sidebar_documents"] = contents
                                         session_mgr.save(loaded, sync_state=False)
                                     log("WebServer", f"Injected {len(contents)} sidebar doc(s) for session {session_id} before chat")
-                                    try:
-                                        from vaf.memory.attachment_rag import index_session_attachments_async
-                                        await index_session_attachments_async(
-                                            session_id=session_id,
-                                            user_scope_id=user_scope_id,
-                                            documents=contents,
-                                        )
-                                    except Exception as e:
-                                        log("WebServer", f"attachment index (chat inject) failed: {e}")
+                                    if bool(Config.get("attachment_rag_enabled", False)):
+                                        try:
+                                            from vaf.memory.attachment_rag import index_session_attachments_async
+                                            await index_session_attachments_async(
+                                                session_id=session_id,
+                                                user_scope_id=user_scope_id,
+                                                documents=contents,
+                                            )
+                                        except Exception as e:
+                                            log("WebServer", f"attachment index (chat inject) failed: {e}")
                             except Exception as e:
                                 log("WebServer", f"sidebar_documents on chat failed: {e}")
 
@@ -2703,11 +2704,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 loaded.runtime_state = {}
                             loaded.runtime_state["sidebar_documents"] = []
                             session_mgr.save(loaded, sync_state=False)
-                            try:
-                                from vaf.memory.attachment_rag import clear_session_attachments_async
-                                await clear_session_attachments_async(session_id=session_id, user_scope_id=user_scope_id)
-                            except Exception as e:
-                                log("WebServer", f"attachment clear failed: {e}")
+                            if bool(Config.get("attachment_rag_enabled", False)):
+                                try:
+                                    from vaf.memory.attachment_rag import clear_session_attachments_async
+                                    await clear_session_attachments_async(session_id=session_id, user_scope_id=user_scope_id)
+                                except Exception as e:
+                                    log("WebServer", f"attachment clear failed: {e}")
                             await websocket.send_json({
                                 "type": "sidebar_documents_set",
                                 "contents": [],
@@ -2720,15 +2722,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 loaded.runtime_state = {}
                             loaded.runtime_state["sidebar_documents"] = contents
                             session_mgr.save(loaded, sync_state=False)
-                            try:
-                                from vaf.memory.attachment_rag import index_session_attachments_async
-                                await index_session_attachments_async(
-                                    session_id=session_id,
-                                    user_scope_id=user_scope_id,
-                                    documents=contents,
-                                )
-                            except Exception as e:
-                                log("WebServer", f"attachment index failed: {e}")
+                            if bool(Config.get("attachment_rag_enabled", False)):
+                                try:
+                                    from vaf.memory.attachment_rag import index_session_attachments_async
+                                    await index_session_attachments_async(
+                                        session_id=session_id,
+                                        user_scope_id=user_scope_id,
+                                        documents=contents,
+                                    )
+                                except Exception as e:
+                                    log("WebServer", f"attachment index failed: {e}")
                             await websocket.send_json({
                                 "type": "sidebar_documents_set",
                                 "contents": contents,
@@ -2736,21 +2739,23 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             })
                     except FileNotFoundError:
                         if not documents:
-                            try:
-                                from vaf.memory.attachment_rag import clear_session_attachments_async
-                                await clear_session_attachments_async(session_id=session_id, user_scope_id=user_scope_id)
-                            except Exception as e:
-                                log("WebServer", f"attachment clear failed (new session): {e}")
+                            if bool(Config.get("attachment_rag_enabled", False)):
+                                try:
+                                    from vaf.memory.attachment_rag import clear_session_attachments_async
+                                    await clear_session_attachments_async(session_id=session_id, user_scope_id=user_scope_id)
+                                except Exception as e:
+                                    log("WebServer", f"attachment clear failed (new session): {e}")
                         else:
-                            try:
-                                from vaf.memory.attachment_rag import index_session_attachments_async
-                                await index_session_attachments_async(
-                                    session_id=session_id,
-                                    user_scope_id=user_scope_id,
-                                    documents=contents,
-                                )
-                            except Exception as e:
-                                log("WebServer", f"attachment index failed (new session): {e}")
+                            if bool(Config.get("attachment_rag_enabled", False)):
+                                try:
+                                    from vaf.memory.attachment_rag import index_session_attachments_async
+                                    await index_session_attachments_async(
+                                        session_id=session_id,
+                                        user_scope_id=user_scope_id,
+                                        documents=contents,
+                                    )
+                                except Exception as e:
+                                    log("WebServer", f"attachment index failed (new session): {e}")
                         new_sess = Session(
                             id=session_id,
                             name=f"Session {session_id}",
@@ -3613,7 +3618,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             active = ipc.get_active_tasks(session_id=str(session_id))
                             for t in active:
                                 try:
-                                    ipc.fail_task(t.task_id, "Stopped by user via stop button.")
+                                    ipc.fail_task(t.task_id, "[USER_CANCELLED] Stopped/Cancelled by user via stop button.")
                                 except Exception:
                                     pass
                         except Exception:

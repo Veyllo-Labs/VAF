@@ -31,6 +31,7 @@ _main_engine: Optional[AsyncEngine] = None
 _main_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
 _main_thread_id: Optional[int] = None
 _engine_lock = threading.Lock()
+_migrations_attempted = False
 
 # Track which thread is the main thread
 def _is_main_thread() -> bool:
@@ -89,7 +90,7 @@ async def get_engine() -> AsyncEngine:
     This prevents memory leaks from daemon threads creating new event loops
     with their own connection pools that never get disposed.
     """
-    global _main_engine, _main_thread_id
+    global _main_engine, _main_thread_id, _migrations_attempted
 
     url = get_database_url()
 
@@ -118,8 +119,14 @@ async def get_engine() -> AsyncEngine:
                 pool_recycle=300,
             )
 
-    # Run migrations only once from main thread
-    if _main_engine is not None:
+    run_migrations = False
+    with _engine_lock:
+        if not _migrations_attempted:
+            _migrations_attempted = True
+            run_migrations = True
+
+    # Run migrations only once per process (best effort).
+    if run_migrations and _main_engine is not None:
         try:
             await _run_schema_migrations(_main_engine)
         except Exception:
@@ -181,9 +188,11 @@ async def get_db(user_scope_id: Optional[str] = None) -> AsyncGenerator[AsyncSes
     try:
         # Set RLS context for this session (defense-in-depth)
         if user_scope_id:
+            # asyncpg does not accept bind parameters in SET LOCAL directly.
+            # Use set_config(..., true) to scope the value to current transaction.
             await session.execute(
-                text("SET LOCAL app.current_user_scope_id = :scope"),
-                {"scope": str(user_scope_id)}
+                text("SELECT set_config('app.current_user_scope_id', :scope, true)"),
+                {"scope": str(user_scope_id)},
             )
         yield session
         await session.commit()

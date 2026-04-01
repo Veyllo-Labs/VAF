@@ -191,6 +191,53 @@ def _build_lexical_snippet(content: str, query_tokens: List[str], max_chars: int
     return snippet
 
 
+def _rrf_fuse_ranked(
+    vector_ranked: List[Dict[str, Any]],
+    lexical_ranked: List[Dict[str, Any]],
+    *,
+    top_k: int,
+    rrf_k: int = 60,
+) -> List[Dict[str, Any]]:
+    """
+    Reciprocal Rank Fusion over two ranked result lists.
+
+    Each item must contain:
+    - key (stable doc id)
+    - text
+    - attachment_name
+    """
+    scores: Dict[str, float] = {}
+    payload: Dict[str, Dict[str, Any]] = {}
+
+    for rank, item in enumerate(vector_ranked, start=1):
+        key = str(item.get("key") or "")
+        if not key:
+            continue
+        scores[key] = scores.get(key, 0.0) + (1.0 / (rrf_k + rank))
+        payload.setdefault(key, item)
+
+    for rank, item in enumerate(lexical_ranked, start=1):
+        key = str(item.get("key") or "")
+        if not key:
+            continue
+        scores[key] = scores.get(key, 0.0) + (1.0 / (rrf_k + rank))
+        payload.setdefault(key, item)
+
+    merged = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[: max(1, int(top_k or 4))]
+    out: List[Dict[str, Any]] = []
+    for key, score in merged:
+        item = payload.get(key) or {}
+        out.append(
+            {
+                "doc_key": key,
+                "text": str(item.get("text") or ""),
+                "score": float(score),
+                "attachment_name": str(item.get("attachment_name") or "Attachment"),
+            }
+        )
+    return out
+
+
 def _process_rss_bytes() -> Optional[int]:
     try:
         import psutil
@@ -702,8 +749,10 @@ async def _search_session_async(
 
     k = int(Config.get("attachment_rag_k", 4) or 4)
     k = max(1, min(12, k))
-    threshold = float(Config.get("attachment_rag_threshold", 0.28) or 0.28)
-    threshold = max(0.0, min(1.0, threshold))
+    vector_threshold = float(Config.get("attachment_rag_threshold", 0.28) or 0.28)
+    vector_threshold = max(0.0, min(1.0, vector_threshold))
+    lexical_min_score = float(Config.get("attachment_rag_lexical_min_score", 0.05) or 0.05)
+    lexical_min_score = max(0.0, min(1.0, lexical_min_score))
     snippet_chars = int(Config.get("attachment_rag_snippet_chars", 900) or 900)
     snippet_chars = max(200, min(4000, snippet_chars))
     safe_mode = _safe_mode_enabled()
@@ -726,10 +775,12 @@ async def _search_session_async(
         with _safe_store_lock:
             docs = list((_safe_session_store.get(cache_key) or {}).get("docs") or [])
         scored: List[Dict[str, Any]] = []
+        lexical_scored: List[float] = []
         for doc in docs:
             content = str((doc or {}).get("content") or "")
             score = _lexical_score(q, query_tokens, content)
-            if score < threshold:
+            lexical_scored.append(float(score))
+            if score < lexical_min_score:
                 continue
             meta = (doc or {}).get("metadata") or {}
             snippet = _build_lexical_snippet(content, query_tokens, snippet_chars)
@@ -739,6 +790,17 @@ async def _search_session_async(
                     "score": score,
                     "attachment_name": str(meta.get("attachment_name") or meta.get("title") or "Attachment"),
                 }
+            )
+        if bool(Config.get("debug_logs_enabled", False)):
+            top_scored = sorted(lexical_scored, reverse=True)[:5]
+            top_scored_str = ",".join(f"{s:.3f}" for s in top_scored) if top_scored else "none"
+            append_domain_log(
+                "rag",
+                (
+                    f"ATTACH_LEXICAL_DEBUG mode=safe session={session_id} scope={user_scope_id} "
+                    f"scored_rows={len(lexical_scored)} kept_after_min_score={len(scored)} "
+                    f"lexical_min_score={lexical_min_score:.3f} top_scores={top_scored_str}"
+                ),
             )
 
         scored.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
@@ -756,30 +818,158 @@ async def _search_session_async(
         async with get_db(user_scope_id=str(user_scope_id) if user_scope_id else None) as db:
             from vaf.memory.rag import RagPipeline
 
+            hybrid_enabled = bool(Config.get("attachment_rag_hybrid_enabled", True))
+            hybrid_rrf_k = int(Config.get("attachment_rag_hybrid_rrf_k", 60) or 60)
+            hybrid_rrf_k = max(1, min(500, hybrid_rrf_k))
+            vector_k = int(Config.get("attachment_rag_hybrid_vector_k", max(k * 4, 16)) or max(k * 4, 16))
+            vector_k = max(k, min(80, vector_k))
+
             pipeline = RagPipeline(db)
             sources = await asyncio.wait_for(
                 pipeline.search(
                     q,
-                    k=k,
-                    threshold=threshold,
+                    k=vector_k,
+                    threshold=vector_threshold,
                     metadata_filter={"source": ATTACHMENT_SOURCE, "session_id": str(session_id)},
                     user_scope_id=user_scope_id,
                 ),
                 timeout=op_timeout,
             )
-            out: List[Dict[str, Any]] = []
+
+            vector_ranked: List[Dict[str, Any]] = []
             for src in sources:
                 text = (src.text or "").strip()
                 if len(text) > snippet_chars:
                     text = text[:snippet_chars].rstrip() + "\n... [snippet truncated]"
-                out.append(
+                key = f"m:{str(getattr(src, 'memory_id', '') or '')}"
+                if key == "m:":
+                    key = f"v:{hash((text, (src.metadata or {}).get('attachment_name') or 'Attachment'))}"
+                vector_ranked.append(
                     {
+                        "key": key,
                         "text": text,
                         "score": src.score,
                         "attachment_name": (src.metadata or {}).get("attachment_name") or "Attachment",
                     }
                 )
-            return out
+
+            if not hybrid_enabled:
+                return vector_ranked[:k]
+
+            lexical_k = int(Config.get("attachment_rag_hybrid_lexical_k", max(k * 4, 16)) or max(k * 4, 16))
+            lexical_k = max(k, min(120, lexical_k))
+            scan_limit = int(Config.get("attachment_rag_hybrid_lexical_scan_limit", 96) or 96)
+            scan_limit = max(lexical_k, min(400, scan_limit))
+            now_iso = _now_iso()
+            filters = [
+                Memory.meta["source"].astext == ATTACHMENT_SOURCE,
+                Memory.meta["session_id"].astext == str(session_id),
+                *_scope_filters(user_scope_id),
+                or_(
+                    Memory.meta["expires_at"].astext.is_(None),
+                    Memory.meta["expires_at"].astext >= now_iso,
+                ),
+            ]
+            stmt = (
+                select(Memory)
+                .where(and_(*filters))
+                .order_by(Memory.updated_at.desc())
+                .limit(scan_limit)
+            )
+            rows = (await db.execute(stmt)).scalars().all()
+            lexical_debug_enabled = bool(Config.get("debug_logs_enabled", False))
+            if lexical_debug_enabled:
+                append_domain_log(
+                    "rag",
+                    (
+                        f"ATTACH_HYBRID_LEXICAL_DEBUG stage=rows session={session_id} scope={user_scope_id} "
+                        f"pre_score_rows={len(rows)} scan_limit={scan_limit} lexical_min_score={lexical_min_score:.3f}"
+                    ),
+                )
+            crypto = get_crypto()
+            lexical_ranked: List[Dict[str, Any]] = []
+            lexical_scored: List[float] = []
+            for m in rows:
+                try:
+                    content = crypto.decrypt(m.encrypted_content, m.nonce)
+                except Exception:
+                    continue
+                lex_score = _lexical_score(q, query_tokens, content)
+                lexical_scored.append(float(lex_score))
+                if lex_score < lexical_min_score:
+                    continue
+                meta = m.meta or {}
+                snippet = _build_lexical_snippet(content, query_tokens, snippet_chars)
+                lexical_ranked.append(
+                    {
+                        "key": f"m:{str(getattr(m, 'id', '') or '')}",
+                        "text": snippet,
+                        "score": float(lex_score),
+                        "attachment_name": str(meta.get("attachment_name") or meta.get("title") or "Attachment"),
+                    }
+                )
+            if lexical_debug_enabled:
+                top_scored = sorted(lexical_scored, reverse=True)[:5]
+                top_scored_str = ",".join(f"{s:.3f}" for s in top_scored) if top_scored else "none"
+                append_domain_log(
+                    "rag",
+                    (
+                        f"ATTACH_HYBRID_LEXICAL_DEBUG stage=scored session={session_id} scope={user_scope_id} "
+                        f"scored_rows={len(lexical_scored)} kept_after_min_score={len(lexical_ranked)} "
+                        f"top_scores={top_scored_str}"
+                    ),
+                )
+
+            lexical_ranked.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
+            lexical_ranked = lexical_ranked[:lexical_k]
+            vector_ranked = vector_ranked[:vector_k]
+            fused = _rrf_fuse_ranked(
+                vector_ranked,
+                lexical_ranked,
+                top_k=k,
+                rrf_k=hybrid_rrf_k,
+            )
+            if fused:
+                vector_keys = {str(it.get("key") or "") for it in vector_ranked if str(it.get("key") or "")}
+                lexical_keys = {str(it.get("key") or "") for it in lexical_ranked if str(it.get("key") or "")}
+                top_keys = [str(it.get("doc_key") or "") for it in fused if str(it.get("doc_key") or "")]
+                both = 0
+                vector_only = 0
+                lexical_only = 0
+                for key in top_keys:
+                    in_v = key in vector_keys
+                    in_l = key in lexical_keys
+                    if in_v and in_l:
+                        both += 1
+                    elif in_v:
+                        vector_only += 1
+                    elif in_l:
+                        lexical_only += 1
+                append_domain_log(
+                    "rag",
+                    (
+                        f"ATTACH_HYBRID_FUSION session={session_id} scope={user_scope_id} "
+                        f"topk={len(top_keys)} both={both} vector_only={vector_only} lexical_only={lexical_only} "
+                        f"vector_candidates={len(vector_keys)} lexical_candidates={len(lexical_keys)}"
+                    ),
+                )
+                return [
+                    {
+                        "text": str(it.get("text") or ""),
+                        "score": float(it.get("score") or 0.0),
+                        "attachment_name": str(it.get("attachment_name") or "Attachment"),
+                    }
+                    for it in fused
+                ]
+            append_domain_log(
+                "rag",
+                (
+                    f"ATTACH_HYBRID_FUSION session={session_id} scope={user_scope_id} "
+                    f"topk=0 both=0 vector_only=0 lexical_only=0 "
+                    f"vector_candidates={len(vector_ranked)} lexical_candidates={len(lexical_ranked)} fallback=vector_only"
+                ),
+            )
+            return vector_ranked[:k]
     finally:
         _maybe_unload_attachment_vector_model("search")
 

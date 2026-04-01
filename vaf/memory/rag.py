@@ -31,6 +31,90 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 ATTACHMENT_EPHEMERAL_SOURCE = "attachment_ephemeral"
+_ingest_profile_lock = threading.Lock()
+_ingest_profile_seq = 0
+
+
+def _next_ingest_profile_id() -> int:
+    global _ingest_profile_seq
+    with _ingest_profile_lock:
+        _ingest_profile_seq += 1
+        return _ingest_profile_seq
+
+
+def _ingest_profile_enabled() -> bool:
+    return bool(Config.get("memory_ingest_profile_enabled", False))
+
+
+def _rss_mb() -> float:
+    try:
+        import os
+        import psutil
+
+        return float(psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024)
+    except Exception:
+        return -1.0
+
+
+def _log_ingest_profile(profile_id: int, stage: str, **fields: Any) -> None:
+    if not _ingest_profile_enabled():
+        return
+    extras = " ".join(f"{k}={v}" for k, v in fields.items())
+    append_domain_log("rag", f"INGEST_PROFILE id={profile_id} stage={stage} rss_mb={_rss_mb():.2f} {extras}".strip())
+
+
+def _tokenize_lexical_query(query: str) -> List[str]:
+    return [t for t in re.findall(r"[a-zA-Z0-9_]+", (query or "").lower()) if len(t) >= 2]
+
+
+def _lexical_score_query_to_text(query_tokens: List[str], text: str) -> float:
+    if not text:
+        return 0.0
+    text_l = text.lower()
+    text_tokens = set(_tokenize_lexical_query(text_l))
+    q_set = set(query_tokens)
+    if not q_set:
+        return 0.0
+    overlap = len(text_tokens & q_set) / len(q_set)
+    phrase = " ".join(query_tokens)
+    exact = 1.0 if phrase and phrase in text_l else 0.0
+    return min(1.0, (0.75 * overlap) + (0.25 * exact))
+
+
+def _rrf_merge_sources(
+    vector_sources: List["RagSource"],
+    lexical_sources: List["RagSource"],
+    *,
+    top_k: int,
+    rrf_k: int = 60,
+) -> List["RagSource"]:
+    scores: Dict[str, float] = {}
+    payload: Dict[str, RagSource] = {}
+
+    for rank, src in enumerate(vector_sources, start=1):
+        key = f"{src.memory_id}:{src.chunk_id}"
+        scores[key] = scores.get(key, 0.0) + (1.0 / (rrf_k + rank))
+        payload.setdefault(key, src)
+
+    for rank, src in enumerate(lexical_sources, start=1):
+        key = f"{src.memory_id}:{src.chunk_id}"
+        scores[key] = scores.get(key, 0.0) + (1.0 / (rrf_k + rank))
+        payload.setdefault(key, src)
+
+    merged = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[: max(1, int(top_k or 5))]
+    out: List[RagSource] = []
+    for key, score in merged:
+        src = payload[key]
+        out.append(
+            RagSource(
+                memory_id=src.memory_id,
+                chunk_id=src.chunk_id,
+                text=src.text,
+                score=float(score),
+                metadata=src.metadata,
+            )
+        )
+    return out
 
 
 @dataclass
@@ -111,6 +195,9 @@ class RagPipeline:
         Returns:
             Created Memory object
         """
+        profile_id = _next_ingest_profile_id() if _ingest_profile_enabled() else 0
+        _log_ingest_profile(profile_id, "baseline", content_len=len(content or ""))
+
         if not content or not content.strip():
             raise ValueError("Cannot ingest empty content")
         
@@ -138,6 +225,7 @@ class RagPipeline:
         
         # 1. Encrypt content
         encrypted_content, nonce = self.crypto.encrypt(content)
+        _log_ingest_profile(profile_id, "after_encrypt")
         
         # 2. Create memory embedding (from title/summary)
         # Note: Only E5 models need prefix; MiniLM works without
@@ -145,6 +233,7 @@ class RagPipeline:
         use_prefix = "e5" in model_name.lower()
         summary = f"{metadata.get('title', '')} {' '.join(metadata.get('tags', []))}"
         memory_embedding = await self.embeddings.embed(summary, prefix="passage" if use_prefix else None)
+        _log_ingest_profile(profile_id, "after_memory_embedding")
         
         # 3. Create memory record
         memory = Memory(
@@ -158,13 +247,18 @@ class RagPipeline:
         )
         self.db.add(memory)
         await self.db.flush()
+        _log_ingest_profile(profile_id, "after_memory_flush")
         
         # 4. Chunk and embed
+        _log_ingest_profile(profile_id, "before_chunking")
         chunks_data = self.chunker.chunk(content)
+        _log_ingest_profile(profile_id, "after_chunking", chunks=len(chunks_data))
         
         if chunks_data:
             chunk_texts = [c["text"] for c in chunks_data]
+            _log_ingest_profile(profile_id, "before_chunk_embedding_batch", chunk_texts=len(chunk_texts))
             chunk_embeddings = await self.embeddings.embed_batch(chunk_texts, prefix="passage" if use_prefix else None)
+            _log_ingest_profile(profile_id, "after_chunk_embedding_batch", embeddings=len(chunk_embeddings))
             
             for chunk_data, embedding in zip(chunks_data, chunk_embeddings):
                 chunk = Chunk(
@@ -179,13 +273,16 @@ class RagPipeline:
                 self.db.add(chunk)
         
         await self.db.flush()
+        _log_ingest_profile(profile_id, "after_chunk_flush")
         
         # 5. Auto-connect to similar memories (scoped!)
         if auto_connect:
             # TODO: Update graph manager to respect scope
             await self.graph.auto_connect_memory(memory)
+            _log_ingest_profile(profile_id, "after_auto_connect")
         
         logger.info(f"Ingested memory {memory.id} with {len(chunks_data)} chunks (Scope: {user_scope_id})")
+        _log_ingest_profile(profile_id, "before_return", memory_id=memory.id, chunks=len(chunks_data))
         
         return memory
     
@@ -329,6 +426,120 @@ class RagPipeline:
         if sources:
             top = " ".join(f"{s.score:.0%}" for s in sources[:3])
             append_domain_log("rag", f"SEARCH top_scores={top}")
+
+        # Optional hybrid retrieval for long-term RAG:
+        # combine vector ranking with lexical ranking on the same Chunk store via RRF.
+        hybrid_enabled = bool(Config.get("memory_hybrid_enabled", False))
+        if not hybrid_enabled:
+            return sources
+
+        lexical_k = int(Config.get("memory_hybrid_lexical_k", max(k * 4, 20)) or max(k * 4, 20))
+        lexical_k = max(k, min(120, lexical_k))
+        lexical_scan = int(Config.get("memory_hybrid_lexical_scan_limit", 400) or 400)
+        lexical_scan = max(lexical_k, min(2000, lexical_scan))
+        rrf_k = int(Config.get("memory_hybrid_rrf_k", 60) or 60)
+        rrf_k = max(1, min(500, rrf_k))
+        lexical_min_score = float(Config.get("memory_hybrid_lexical_min_score", 0.0) or 0.0)
+        lexical_min_score = max(0.0, min(1.0, lexical_min_score))
+        query_tokens = _tokenize_lexical_query(query)
+
+        lexical_filters = [Memory.is_deleted == False]
+        if not wants_attachment_lane:
+            lexical_filters.append(
+                or_(
+                    Memory.meta["source"].astext.is_(None),
+                    Memory.meta["source"].astext != ATTACHMENT_EPHEMERAL_SOURCE,
+                )
+            )
+        if user_scope_id:
+            lexical_filters.append(Memory.user_scope_id == user_scope_id)
+
+        if query_tokens:
+            token_ors = [Chunk.text.ilike(f"%{tok}%") for tok in query_tokens[:8]]
+            lexical_filters.append(or_(*token_ors))
+
+        lex_stmt = (
+            select(Chunk, Memory)
+            .join(Memory, Chunk.memory_id == Memory.id)
+            .where(and_(*lexical_filters))
+            .limit(lexical_scan)
+        )
+        lex_rows = (await self.db.execute(lex_stmt)).all()
+        lexical_debug_enabled = bool(Config.get("debug_logs_enabled", False))
+        if lexical_debug_enabled:
+            append_domain_log(
+                "rag",
+                (
+                    f"SEARCH_HYBRID_LEXICAL_DEBUG stage=rows query_tokens={len(query_tokens)} "
+                    f"user_scope_id={user_scope_id} pre_score_rows={len(lex_rows)} "
+                    f"scan_limit={lexical_scan} lexical_min_score={lexical_min_score:.3f}"
+                ),
+            )
+        lexical_sources: List[RagSource] = []
+        lexical_scored: List[float] = []
+        for chunk, memory in lex_rows:
+            if metadata_filter:
+                skip = False
+                for key, value in metadata_filter.items():
+                    mem_value = memory.meta.get(key) if memory.meta else None
+                    if isinstance(value, list):
+                        if not mem_value or not any(v in mem_value for v in value):
+                            skip = True
+                            break
+                    elif mem_value != value:
+                        skip = True
+                        break
+                if skip:
+                    continue
+            lscore = _lexical_score_query_to_text(query_tokens, chunk.text or "")
+            lexical_scored.append(float(lscore))
+            if lscore < lexical_min_score:
+                continue
+            lexical_sources.append(
+                RagSource(
+                    memory_id=str(memory.id),
+                    chunk_id=str(chunk.id),
+                    text=chunk.text,
+                    score=float(lscore),
+                    metadata=memory.meta or {},
+                )
+            )
+        if lexical_debug_enabled:
+            top_scored = sorted(lexical_scored, reverse=True)[:5]
+            top_scored_str = ",".join(f"{s:.3f}" for s in top_scored) if top_scored else "none"
+            append_domain_log(
+                "rag",
+                (
+                    f"SEARCH_HYBRID_LEXICAL_DEBUG stage=scored scored_rows={len(lexical_scored)} "
+                    f"kept_after_min_score={len(lexical_sources)} top_scores={top_scored_str}"
+                ),
+            )
+        lexical_sources.sort(key=lambda s: s.score, reverse=True)
+        lexical_sources = lexical_sources[:lexical_k]
+
+        fused = _rrf_merge_sources(sources, lexical_sources, top_k=k, rrf_k=rrf_k)
+        if fused:
+            vector_keys = {f"{s.memory_id}:{s.chunk_id}" for s in sources}
+            lexical_keys = {f"{s.memory_id}:{s.chunk_id}" for s in lexical_sources}
+            both = 0
+            vector_only = 0
+            lexical_only = 0
+            for s in fused:
+                key = f"{s.memory_id}:{s.chunk_id}"
+                if key in vector_keys and key in lexical_keys:
+                    both += 1
+                elif key in vector_keys:
+                    vector_only += 1
+                elif key in lexical_keys:
+                    lexical_only += 1
+            append_domain_log(
+                "rag",
+                (
+                    f"SEARCH_HYBRID_FUSION topk={len(fused)} both={both} vector_only={vector_only} "
+                    f"lexical_only={lexical_only} vector_candidates={len(sources)} lexical_candidates={len(lexical_sources)}"
+                ),
+            )
+            return fused
 
         return sources
     

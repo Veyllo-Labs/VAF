@@ -158,6 +158,11 @@ class Config:
         "memory_rag_refine_query": True,                           # Refine vague queries (e.g. "who am I") for better RAG hits
         "memory_rag_k": 5,                                        # Max RAG snippets per query (1-20); applies to chat, gateway, automation
         "memory_rag_threshold": 0.3,                               # Min relevance score (0.0-1.0); only snippets >= this % are in RAG results. 0.3 = 30%
+        "memory_hybrid_enabled": True,                             # Long-term RAG: enable vector+lexical hybrid fusion (RRF)
+        "memory_hybrid_rrf_k": 60,                                 # RRF denominator constant (typical default: 60)
+        "memory_hybrid_lexical_k": 20,                             # Max lexical candidates retained before fusion
+        "memory_hybrid_lexical_scan_limit": 400,                   # Max lexical rows scanned for hybrid retrieval
+        "memory_hybrid_lexical_min_score": 0.05,                   # Min lexical score (0.0-1.0) before fusion; 0.05 filters zero-overlap noise conservatively
         "memory_auto_capture": False,                               # DISABLED: Auto-capture causes memory spikes (investigating)
         "memory_compaction_enabled": True,                          # Session compaction: prompt to store durable memories every N turns
         "memory_compaction_interval": 15,                           # Run compaction every N user/assistant turns
@@ -170,9 +175,10 @@ class Config:
         "memory_chunk_overlap": 50,                                # Chunk overlap in tokens
         "memory_db_echo": False,                                   # Enable SQL query logging (debug)
         # Attachment RAG lane (session-scoped, ephemeral, isolated from long-term memory lane)
-        "attachment_rag_enabled": False,                            # Emergency default OFF: enable only after stability validation
+        "attachment_rag_enabled": True,                             # Attachment lane enabled by default after staged stability validation
         "attachment_rag_k": 4,                                      # Top-k attachment snippets per query (1-12)
         "attachment_rag_threshold": 0.28,                           # Min similarity for attachment snippet retrieval
+        "attachment_rag_lexical_min_score": 0.05,                   # Min lexical score for attachment lexical retrieval (safe mode + hybrid lexical candidates)
         "attachment_rag_ttl_hours": 24,                             # TTL for ephemeral attachment index
         "attachment_rag_max_chars_per_doc": 24000,                 # Max chars per attached doc indexed into ephemeral lane
         "attachment_rag_snippet_chars": 900,                        # Max chars per retrieved attachment snippet inserted into prompt

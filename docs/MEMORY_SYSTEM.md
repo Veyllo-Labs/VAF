@@ -134,8 +134,32 @@ Additional settings in `~/.vaf/config.json`:
 | `memory_rag_k` | `5` | Max RAG snippets per query (1–20). Configured in Settings → Persona & Memory. |
 | `memory_rag_threshold` | `0.3` | Min relevance score (0.0–1.0). Only snippets with relevance ≥ this value are included (e.g. 0.3 = 30%). Configured as "Min Relevance %" in Settings → Persona & Memory. |
 | `memory_rag_refine_query` | `true` | Expand short user-profile-style queries (e.g. "who am I", "preferences") before search to improve recall. Set to `false` to use the raw user message only. |
+| `memory_hybrid_enabled` | `true` | Enable long-term RAG hybrid retrieval (vector + lexical) with RRF fusion. |
+| `memory_hybrid_rrf_k` | `60` | Reciprocal Rank Fusion denominator constant (higher values smooth rank impact). |
+| `memory_hybrid_lexical_k` | `20` | Max lexical candidates retained before fusion. |
+| `memory_hybrid_lexical_scan_limit` | `400` | Max lexical chunk rows scanned for hybrid retrieval. |
+| `memory_hybrid_lexical_min_score` | `0.05` | Min lexical score required before fusion. Conservative floor to remove zero-overlap lexical noise while preserving recall for RRF fusion. |
 | `memory_compaction_interval` | `15` | Run session compaction every N user turns (cumulative per session). |
 | `memory_compaction_max_tokens` | `4000` | Max tokens for the compaction LLM reply (API, local LLM, and server mode). Allows more `MEMORY:` lines per run. |
+
+### Attachment Lane Retrieval Tuning (config.json)
+
+Use separate thresholds for vector and lexical scoring in the attachment lane:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `attachment_rag_enabled` | `true` | Enable the attachment-specific RAG lane used for session-scoped uploaded documents. |
+| `attachment_rag_threshold` | `0.28` | Vector similarity threshold used by attachment vector retrieval (cosine-like relevance scale). |
+| `attachment_rag_lexical_min_score` | `0.05` | Lexical score floor used by attachment lexical retrieval (safe mode + hybrid lexical candidate filtering). Keeps lexical scale independent from vector scale. |
+| `attachment_rag_safe_mode` | `true` | If enabled, attachment retrieval uses the bounded lexical safe lane (no embedding/pgvector path). |
+| `attachment_rag_hybrid_enabled` | `true` | In vector mode, combine vector + lexical candidates with RRF fusion. |
+| `attachment_rag_hybrid_lexical_k` | `16` (dynamic default) | Max lexical candidates retained before fusion in attachment hybrid mode. |
+| `attachment_rag_hybrid_lexical_scan_limit` | `96` | Max attachment rows scanned for lexical candidates before filtering/ranking. |
+
+Practical guidance:
+- Start with `attachment_rag_lexical_min_score=0.05` as a conservative floor.
+- Raise only if lexical-only noise starts dominating fused top-k.
+- Keep `attachment_rag_threshold` and `attachment_rag_lexical_min_score` independent; they are different score scales.
 
 ### Session Compaction (background)
 
@@ -422,6 +446,30 @@ If you see "[Decryption failed]" for memory content:
 - The encryption key may have changed
 - Memory data may be corrupted
 - Check `memory_encryption_key` in config
+
+### Attachment-RAG Memory Spike (Resolved Root Cause)
+
+If Attachment-RAG vector indexing shows rapid RSS growth under repeated loops (for example index/search/clear stress), check the chunking path first.
+
+Root cause fixed in this codebase:
+- A chunk-tail edge case could keep `start` below `len(text)` forever when overlap was applied at end-of-text.
+- This created an effectively unbounded chunk loop, which then amplified memory usage when chunks were embedded and written.
+
+What is now implemented:
+- End-of-text hard break in `TextChunker.chunk()`.
+- Non-progress guard (`next_start <= start`) with warning log, so future overlap regressions fail safe instead of looping forever.
+
+Operational debugging checklist (fast isolation):
+1. Run three isolated tests with the same guard window:
+   - ONNX-only embedding loop
+   - pgvector/DB-only insert loop
+   - full `RagPipeline.ingest()` loop
+2. Compare peak RSS:
+   - if only full ingest explodes, inspect chunking/embedding handoff and per-phase ingest logs.
+3. Enable phase logs for ingest:
+   - set `memory_ingest_profile_enabled = true` and inspect `INGEST_PROFILE` lines in `rag_YYYY-MM-DD.log`.
+
+This incident showed that component-level stability can still fail in composition. Use isolation early before tuning allocator or thread settings.
 
 ## Security Considerations
 

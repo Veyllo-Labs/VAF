@@ -90,13 +90,17 @@ class OnnxEmbeddingModel:
         self.session = ort.InferenceSession(model_path, sess_options, providers=["CPUExecutionProvider"])
         self.input_names = [i.name for i in self.session.get_inputs()]
         self.output_names = [o.name for o in self.session.get_outputs()]
-        self.run_options = ort.RunOptions()
-        try:
-            # Ask ORT to shrink CPU arena usage between runs when possible.
-            self.run_options.add_run_config_entry("memory.enable_memory_arena_shrinkage", "cpu:0")
-        except Exception:
-            # Keep runtime robust if this entry is unsupported in a given ORT build.
-            self.run_options = None
+        # IMPORTANT:
+        # memory.enable_memory_arena_shrinkage requires an arena allocator.
+        # If CPU arena is disabled, setting this run option can raise INVALID_ARGUMENT.
+        # So we enable shrinkage only when arena is active.
+        self.run_options = None
+        if bool(sess_options.enable_cpu_mem_arena):
+            try:
+                self.run_options = ort.RunOptions()
+                self.run_options.add_run_config_entry("memory.enable_memory_arena_shrinkage", "cpu:0")
+            except Exception:
+                self.run_options = None
 
     def encode(self, sentences: Union[str, List[str]], convert_to_numpy: bool = True, normalize_embeddings: bool = True, show_progress_bar: bool = False) -> Union[List[float], np.ndarray]:
         """Mimics SentenceTransformer.encode"""
@@ -438,6 +442,7 @@ class TextChunker:
         index = 0
         while start < len(text):
             end = start + self.char_chunk_size
+            reached_end = False
             if end < len(text):
                 search_start = max(start + self.char_min_size, end - 200)
                 search_text = text[search_start:end + 100]
@@ -451,12 +456,33 @@ class TextChunker:
                 else:
                     space_idx = text[start:end].rfind(' ')
                     if space_idx > self.char_min_size: end = start + space_idx + 1
-            else: end = len(text)
+            else:
+                end = len(text)
+                reached_end = True
             chunk_text = text[start:end].strip()
             if chunk_text:
                 chunks.append({"text": chunk_text, "start_char": start, "end_char": end, "index": index})
                 index += 1
-            start = end - self.char_overlap
+            # IMPORTANT:
+            # If we already consumed to text end, stop now.
+            # Otherwise overlap subtraction can pin `start` below len(text) forever
+            # and create an infinite chunk loop with unbounded memory growth.
+            if reached_end or end >= len(text):
+                break
+            next_start = end - self.char_overlap
+            # Safety invariant: chunk loop must make forward progress.
+            # If overlap math ever produces a non-increasing start offset,
+            # stop to avoid an unbounded loop and runaway memory usage.
+            if next_start <= start:
+                logger.warning(
+                    "TextChunker non-progress guard triggered (start=%s, next_start=%s, end=%s, text_len=%s)",
+                    start,
+                    next_start,
+                    end,
+                    len(text),
+                )
+                break
+            start = next_start
             if start >= len(text): break
         return chunks
     

@@ -20,7 +20,7 @@ from vaf.core.session import SessionManager, Session
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
 from vaf.core.platform import Platform
-from vaf.core.log_helper import append_domain_log, get_app_log_dir, get_dated_log_path, is_debug_logging_enabled
+from vaf.core.log_helper import append_domain_log, append_domain_log_always, get_app_log_dir, get_dated_log_path, is_debug_logging_enabled
 from vaf.core.config import Config
 from pathlib import Path
 
@@ -256,18 +256,27 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     Run a headless agent loop that processes tasks from the TaskQueue.
     This is designed to run in a background thread within the Tray App.
     """
+    def _lifecycle(msg: str) -> None:
+        """Log lifecycle events unconditionally (ignores debug_logs_enabled toggle)."""
+        try:
+            append_domain_log_always("headless", f"[LIFECYCLE] {msg}")
+        except Exception:
+            pass
+
     # IMMEDIATE: Create log dir and write startup marker (consolidated in headless_YYYY-MM-DD.log)
+    # Uses _always variant so these appear even when debug_logs_enabled=False.
     log_dir = get_app_log_dir()
     try:
-        append_domain_log("headless", f"[STARTUP] Headless Runner STARTING (worker={worker_id}/{total_workers})")
-        append_domain_log("headless", f"[STARTUP] PID: {os.getpid()} worker={worker_id}")
-        append_domain_log("headless", f"[STARTUP] Log dir: {log_dir}")
+        append_domain_log_always("headless", f"[STARTUP] Headless Runner STARTING (worker={worker_id}/{total_workers})")
+        append_domain_log_always("headless", f"[STARTUP] PID: {os.getpid()} worker={worker_id}")
+        append_domain_log_always("headless", f"[STARTUP] Log dir: {log_dir}")
     except Exception as e:
         print(f"[Headless] Failed to write startup log: {e}")
 
     # Clean up ALL IPC queues from previous runs.
     # Active/pending tasks from a dead process can never complete,
     # and completed results from old sessions confuse the new agent.
+    _lifecycle("IPC cleanup starting")
     if worker_id == 1:
         try:
             from vaf.core.subagent_ipc import get_ipc
@@ -278,22 +287,25 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
             total = len(stale_active) + len(stale_pending) + len(stale_results)
             if total:
                 ipc.clear_all()
-                append_domain_log("headless", f"[STARTUP] Cleared {total} stale IPC entries "
+                append_domain_log_always("headless", f"[STARTUP] Cleared {total} stale IPC entries "
                                   f"(active={len(stale_active)}, pending={len(stale_pending)}, "
                                   f"results={len(stale_results)})")
                 print(f"[Headless] Cleared {total} stale IPC entries from previous run")
         except Exception as e:
+            _lifecycle(f"IPC cleanup failed (non-critical): {e}")
             print(f"[Headless] IPC cleanup failed (non-critical): {e}")
 
     # Kill leftover sub-agent processes from previous runs.
+    _lifecycle("Stale process cleanup starting")
     if worker_id == 1:
         try:
             from vaf.core.platform import Platform
             killed = Platform.stop_webui_subagent_processes(session_id=None)
             if killed:
-                append_domain_log("headless", f"[STARTUP] Killed {killed} stale sub-agent processes")
+                append_domain_log_always("headless", f"[STARTUP] Killed {killed} stale sub-agent processes")
                 print(f"[Headless] Killed {killed} stale sub-agent processes")
         except Exception as e:
+            _lifecycle(f"Stale process cleanup failed (non-critical): {e}")
             print(f"[Headless] Stale process cleanup failed (non-critical): {e}")
 
     # Start Memory Profiler IMMEDIATELY
@@ -304,7 +316,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
             print(f"[Headless] Memory Profiler started - logging to {get_dated_log_path('memory', 'log')}")
         except Exception as e:
             print(f"[Headless] Memory Profiler failed to start: {e}")
-            append_domain_log("headless", f"[STARTUP] Memory Profiler FAILED: {e}")
+            append_domain_log_always("headless", f"[STARTUP] Memory Profiler FAILED: {e}")
 
     # Ensure UTF-8 output to avoid Windows charmap crashes
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
@@ -316,20 +328,27 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     except Exception:
         pass
     print("[Headless] Starting Agent Loop...")
+    _lifecycle("Pre-Agent-init: starting Agent() constructor")
     
     # Initialize Agent (retry on failure)
     # We use verbose=False to keep logs clean
     agent = None
+    _agent_attempt = 0
     while agent is None:
+        _agent_attempt += 1
+        _lifecycle(f"Agent init attempt {_agent_attempt}")
         try:
             agent = Agent(verbose=False, register_signals=False)
+            _lifecycle("Agent() constructor OK, calling init_chat()")
             agent.init_chat()
+            _lifecycle("init_chat() OK")
 
             # Register with Web Interface (single owner to avoid pointer races)
             if worker_id == 1:
                 get_web_interface().register_agent(agent)
 
             print(f"[Headless] Agent initialized and ready (worker={worker_id}).")
+            _lifecycle(f"Agent initialized and ready (worker={worker_id})")
             try:
                 if worker_id == 1:
                     get_web_interface().log("Headless agent initialized and ready.", level="info", source="System")
@@ -358,6 +377,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
             except Exception:
                 pass
         except Exception as e:
+            _lifecycle(f"Agent init FAILED attempt {_agent_attempt}: {e}")
             print(f"[Headless] Agent initialization failed: {e}")
             traceback.print_exc()
             try:
@@ -366,10 +386,23 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 pass
             time.sleep(2)
 
-    # Task Queue
-    tq = TaskQueue()
-    # CRITICAL: Connect SessionManager to agent's registry for full state persistence
-    session_mgr = SessionManager(state_registry=agent.state_registry)
+    # Task Queue — wrapped in try/except so daemon thread crashes are captured
+    try:
+        _lifecycle("Creating TaskQueue singleton")
+        tq = TaskQueue()
+        _lifecycle("TaskQueue OK, resetting runtime state")
+        # Self-heal: after worker restarts, clear stale in-flight runtime locks so
+        # queued tasks cannot remain blocked behind orphaned session locks.
+        tq.reset_runtime_state(include_queued=False)
+        _lifecycle("TaskQueue runtime state reset OK")
+        # CRITICAL: Connect SessionManager to agent's registry for full state persistence
+        _lifecycle("Creating SessionManager")
+        session_mgr = SessionManager(state_registry=agent.state_registry)
+        _lifecycle("SessionManager OK")
+    except Exception as _setup_err:
+        _lifecycle(f"FATAL setup crash after Agent init: {_setup_err}")
+        append_domain_log_always("headless", f"[FATAL] {traceback.format_exc()}")
+        raise
     
     # Main Loop
     last_subagent_check = 0.0
@@ -381,6 +414,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     subagent_last_activity = {}
     subagent_last_steps = {}
     from vaf.core.config import Config
+    _lifecycle("Config imported, ready for main loop")
 
     # Optional parallel worker pool (safe rollout via config).
     if worker_id == 1 and total_workers == 1:
@@ -395,9 +429,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         kwargs={"worker_id": wid, "total_workers": worker_count},
                         daemon=True,
                     ).start()
-                append_domain_log("headless", f"[STARTUP] Spawned {worker_count - 1} additional worker(s)")
+                append_domain_log_always("headless", f"[STARTUP] Spawned {worker_count - 1} additional worker(s)")
         except Exception as e:
-            append_domain_log("headless", f"[STARTUP] Worker spawn skipped: {e}")
+            append_domain_log_always("headless", f"[STARTUP] Worker spawn skipped: {e}")
 
     def _check_and_cleanup_memory():
         """Check memory usage and cleanup if needed."""
@@ -488,23 +522,31 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
         else:
             model = cfg.get("model", "")
         return effective_provider, model
+
+    _lifecycle(">>> ENTERING MAIN LOOP <<<")
+    _loop_iteration_count = 0
     while True:
         try:
+            _loop_iteration_count += 1
+            if _loop_iteration_count <= 3:
+                _lifecycle(f"Main loop iteration {_loop_iteration_count}")
             if worker_id == 1:
                 _now = time.time()
                 if _now - last_queue_metrics >= 2.0:
                     last_queue_metrics = _now
                     try:
                         qstats = tq.get_queue_stats()
-                        append_domain_log(
-                            "queue",
-                            "[METRICS] "
-                            f"interactive={qstats.get('interactive', 0)} "
-                            f"automation={qstats.get('automation', 0)} "
-                            f"background={qstats.get('background', 0)} "
-                            f"inflight_total={qstats.get('inflight_total', 0)} "
-                            f"inflight_sessions={qstats.get('inflight_sessions', 0)}"
-                        )
+                        if is_debug_logging_enabled():
+                            from datetime import datetime as _dt
+                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
+                                f.write(
+                                    f"{_dt.now().isoformat()} [METRICS] "
+                                    f"interactive={qstats.get('interactive', 0)} "
+                                    f"automation={qstats.get('automation', 0)} "
+                                    f"background={qstats.get('background', 0)} "
+                                    f"inflight_total={qstats.get('inflight_total', 0)} "
+                                    f"inflight_sessions={qstats.get('inflight_sessions', 0)}\n"
+                                )
                         get_web_interface().push_update(
                             {
                                 "type": "queue_stats",
@@ -1734,10 +1776,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
 
                             if cancelled_sessions:
                                 try:
-                                    from vaf.core.task_queue import TaskQueue
-                                    tq_local = TaskQueue()
                                     for sid in cancelled_sessions:
-                                        tq_local.clear_stop(sid)
+                                        tq.clear_stop(sid)
                                 except Exception:
                                     pass
                             if found_results_text or any_needs_retry:

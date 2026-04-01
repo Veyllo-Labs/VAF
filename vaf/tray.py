@@ -1115,9 +1115,10 @@ if platform.system() == "Darwin":
             t = threading.Thread(target=start_uvicorn, daemon=True)
             t.start()
             
-            # Start Headless Agent Loop
+            # Start Headless Agent Loop (for Web UI processing)
+            logger.info("[Tray] Starting Agent thread...")
             from vaf.core.headless_runner import run_headless_agent
-            t_agent = threading.Thread(target=run_headless_agent, daemon=True)
+            t_agent = threading.Thread(target=run_headless_agent, daemon=True, name="HeadlessAgent")
             t_agent.start()
             
             # Start Frontend
@@ -1291,8 +1292,9 @@ def run_headless():
     t.start()
     
     # Start Headless Agent Loop
+    print("[VAF] Starting Agent thread...")
     from vaf.core.headless_runner import run_headless_agent
-    t_agent = threading.Thread(target=run_headless_agent, daemon=True)
+    t_agent = threading.Thread(target=run_headless_agent, daemon=True, name="HeadlessAgent")
     t_agent.start()
     
     # Start Frontend
@@ -1371,7 +1373,7 @@ def run_app():
     print("[Tray] Starting Agent thread...")
     log("Tray", "Spawning Agent thread...")
     from vaf.core.headless_runner import run_headless_agent
-    t_agent = threading.Thread(target=run_headless_agent, daemon=True)
+    t_agent = threading.Thread(target=run_headless_agent, daemon=True, name="HeadlessAgent")
     t_agent.start()
 
     # Start Frontend (Next.js) automatically

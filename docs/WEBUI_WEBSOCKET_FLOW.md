@@ -112,7 +112,7 @@ Useful files when debugging WebUI / LLM / queue (all under the log dir above):
 | `webui.log` | **\[WARNING\]** only when a message is dropped (no server loop). Stream/emit logging is disabled to avoid UI lag. |
 | `rag.log` | RAG timing, search debug, embed calls, snippet count, user scope, failures |
 | `memory.log` | **\[COMPACTION\]**, **\[USAGE\]** RSS, **\[EMBED\]** load, **\[PROFILER\]**, **\[WHISPER\]** (all timestamped) |
-| `headless.log` | **\[STARTUP\]** Headless PID, log dir, Memory Profiler status |
+| `headless.log` | **\[STARTUP\]** Headless PID, log dir, Memory Profiler status; **\[LIFECYCLE\]** checkpoints from IPC cleanup through Agent init to main loop entry (always written, independent of `debug_logs_enabled`); **\[FATAL\]** full traceback if the worker thread crashes before entering the main loop |
 | `prompt.log` | **\[SOUL\]** persona block, **\[SYSTEM_FULL\]** full prompt dump (multi-line) |
 
 ### 1) WebSocket Connected, But No Answer
@@ -124,7 +124,10 @@ Useful files when debugging WebUI / LLM / queue (all under the log dir above):
 
 If `Queued input...` is present but no further logs appear:
 - **Headless agent is not consuming the queue.**
-- Check `vaf/core/headless_runner.py` loop and ensure it uses `tq.get()` directly.
+- Open `headless.log` and check `[LIFECYCLE]` entries — they trace every startup phase (IPC cleanup → Agent init → TaskQueue → SessionManager → main loop). The last `[LIFECYCLE]` entry shows where the worker stalled or crashed.
+- If `[FATAL]` appears, it contains the full traceback of an unhandled exception that killed the worker thread.
+- If no `[LIFECYCLE]` entries appear at all, `headless_runner.py` was never called — verify the tray starts the `HeadlessAgent` thread.
+- On startup the headless runner calls `tq.reset_runtime_state()` to clear orphaned in-flight session locks from a previous crash. If tasks are queued but the worker loops without picking them up, check for stale `session_inflight` entries via `tq.get_queue_stats()`.
 
 If enqueue is accepted but task appears in a messenger session unexpectedly:
 - Check for routing guard logs: `[ROUTING_WARN]` / `[ROUTING_BLOCK]` in `headless.log`/`backend.log`.
@@ -134,6 +137,12 @@ If `Starting chat_step...` appears but no response:
 - **chat_step crashed or hung**.
 - Check if the error mentions encoding (`charmap`); fix with UTF-8 output.
 - For local backend: if `backend.log` shows `calling_8080 attempt=1` and nothing after, the server may have stopped sending data. The agent now applies a 5‑minute read timeout; after that it ends the step and the queue continues. Check `server.log` and machine load if timeouts repeat.
+
+If the agent replies with "I cannot see/open the attachment" even though files were uploaded:
+- Confirm attachment indexing exists in `rag.log` (`ATTACH_INDEX session=... indexed=...`).
+- Check the session file (`~/.vaf/sessions/<session>.json`) and verify `runtime_state.sidebar_documents` is not empty.
+- Root cause seen in production: `SessionManager.save(sync_state=True)` overwrote `runtime_state` with provider snapshot data and dropped non-provider keys such as `sidebar_documents` and `editor_selections`.
+- Fix: merge snapshot keys into existing `runtime_state` instead of replacing it; preserve non-provider runtime keys.
 
 ### 1b) Local Backend Not Reachable
 
@@ -188,7 +197,9 @@ If the tool card expands but the panel does not open:
 | `LLM Call Failed: HTTPConnectionPool(127.0.0.1:8080)` | Backend not running or duplicate server start | Restart tray; ensure only one `llama-server` is running |
 | Chat stuck after `calling_8080` (no `QUEUE_CHAT_END`) | Local server stopped sending stream data | Agent now times out after 5 min and ends the step. If it keeps happening, check model load and RAM; see **Local Server: Request Timeouts** in `docs/API_INTEGRATION.md`. |
 | Prompt is processed (`QUEUE_CHAT_END`) but Web UI shows only loader/no live answer | Stale `_server_loop` in `web_interface` (pushes are dropped with `PUSH_DROP _server_loop is NOT RUNNING`) | `WebInterfaceManager.connect()` re-binds to the active loop, invalid loop refs are auto-cleared, and a HTTP fallback push path is used when no loop is available. Subprocess bridge events are also posted to the internal non-SSL API channel (`127.0.0.1:8005`) when TLS is enabled. |
-| Messages appear in CLI only | Headless agent not running | Ensure tray starts `run_headless_agent()` |
+| Messages appear in CLI only | Headless agent not running | Ensure tray starts `run_headless_agent()` thread |
+| `QUEUE_ADD` in queue.log but no `QUEUE_GET` | Worker thread crashed during startup (e.g. `UnboundLocalError` from local re-import shadowing a module-level import) | Check `headless.log` for `[FATAL]` traceback; avoid `from ... import X` inside `run_headless_agent()` when `X` is already imported at module level |
+| Attachments are indexed (`ATTACH_INDEX`) but agent says it cannot see document | `runtime_state` overwrite during `SessionManager.save(sync_state=True)` dropped `sidebar_documents` | Preserve non-provider runtime keys when syncing provider snapshot (merge instead of replace) |
 | WebUI shows only system logs | `agent_message_update` filtered by session | Fix session sync and auto-load `history_update` |
 | Sub-agent window never appears | No `subagent_update` emitted | Send periodic sub-agent status updates from headless loop |
 | `False promise detected` loop in API mode | Tool calls missing function name in stream | Drop invalid tool calls; do not retry |

@@ -14,6 +14,8 @@ class BatchTool(BaseTool):
     """Execute multiple tool calls concurrently."""
     
     name = "batch"
+    permission_level = "system"
+    side_effect_class = "reversible"
     coder_only = True  # Only available to Coder Sub-Agent
     description = """Execute multiple independent tool calls concurrently.
 

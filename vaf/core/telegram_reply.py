@@ -15,13 +15,18 @@ def set_telegram_reply_callback(cb: Optional[Callable[..., None]]) -> None:
     _send_callback = cb
 
 
+def has_telegram_reply_callback() -> bool:
+    """Return True if Telegram reply callback is currently registered in this process."""
+    return _send_callback is not None
+
+
 def send_telegram_reply(
     chat_id: str,
     text: str,
     *,
     voice_lang: Optional[str] = None,
     file_path: Optional[str] = None,
-) -> None:
+) -> bool:
     """If a Telegram reply callback is registered, invoke it. Used by headless_runner and send_telegram tool.
     Pass voice_lang (e.g. 'de', 'en') to send as Sprachnachricht."""
     try:
@@ -37,5 +42,7 @@ def send_telegram_reply(
                 _send_callback(chat_id, text, voice_lang=voice_lang)
             else:
                 _send_callback(chat_id, text)
+            return True
         except Exception:
-            pass
+            return False
+    return False

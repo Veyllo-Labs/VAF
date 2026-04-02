@@ -11,6 +11,8 @@ class FindWhatsAppMessagesTool(BaseTool):
     Use when the user asks 'find messages from Anne' or 'what did X say in WhatsApp'.
     """
     name = "find_whatsapp_messages"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "Search WhatsApp messages by query. Matches message body, chat name, and sender. "
         "Use when user asks 'find messages from Anne', 'what did X say in WhatsApp', etc. "

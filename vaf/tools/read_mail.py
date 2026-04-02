@@ -23,6 +23,8 @@ class ReadMailTool(BaseTool):
     Call mail_inbox first to get message_id and provider_message_id for the message you want.
     """
     name = "read_mail"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "Read the full body of a single email as plain text. "
         "When the user asks 'what does the [Subject] mail say?' (e.g. Postman, Twitch), use the account_id, message_id, and provider_message_id from your recent mail_inbox output for the line with that subject – do NOT ask the user for these. "

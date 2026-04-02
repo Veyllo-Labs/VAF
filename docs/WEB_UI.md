@@ -132,15 +132,26 @@ Planner data is loaded with `get_automation_notes` and `get_automation_todos` wh
 
 The Document Editor is a rich-text editor in the right panel (dock or overlay). It supports opening files (HTML, DOCX, etc.), editing, and exporting.
 
-**Layout and behaviour:** A4 page layout (210×297 mm, Word-style; overflow flows to the next page below with a separator line every 297 mm). Per-session state: editor content and open file are stored per chat session; switching sessions restores the correct document and unsaved content.
+**Editor split:** The Web UI now has two editor paths:
 
-**Agent context:** When the editor is open, its plain-text content is sent with each chat message. The backend prepends it as `--- CURRENT DOCUMENT (Editor): <title> ---` so the agent sees the current document. You can select text in the editor (e.g. placeholders); the selection is added as a chip and sent with the message. The agent can replace that range via the `replace_editor_selection` tool (only available when there are marked selections); the UI applies the replacement and removes the chip.  
+- **Native DOCX editor** for `.docx` files. This path is model-driven and uses a native `DOCX -> NativeDocxDocument -> DOCX` flow instead of the old HTML roundtrip.
+- **Legacy HTML editor** for HTML and other non-DOCX editor flows. This path still uses the iframe/contentEditable editor.
+
+See also: [DOCUMENT_EDITOR_NATIVE_DOCX.md](DOCUMENT_EDITOR_NATIVE_DOCX.md)
+
+**Layout and behaviour:** The editor keeps an A4-like page layout in the right panel. Per-session state stores the open file plus unsaved editor state. For DOCX files this includes the native document model; for legacy flows it includes HTML/text content.
+
+**Agent context:** When the editor is open, its plain-text content is sent with each chat message. The backend prepends it as `--- CURRENT DOCUMENT (Editor): <title> ---` so the agent sees the current document. For native DOCX sessions this plain text is derived from the native document model, not from browser HTML. You can select text in the editor (e.g. placeholders); the selection is added as a chip and sent with the message. The agent can replace that range via the `replace_editor_selection` tool when a marked region exists. Without a manual marking, the agent can still rewrite a specific sentence or paragraph from the open editor document via `replace_editor_text`, which targets an exact snippet from the current editor content.  
 For Document Viewer attachments (paperclip), the backend uses a **session-scoped attachment retrieval lane** (scoped by `session_id` + `user_scope_id`, TTL-based) and injects a "document context active" block plus **top-k relevant snippets** into each turn. This keeps context stable for large documents and avoids prepending full attachment text every message.  
 If you want durable long-term memory from current attachments, use `learn_attached_knowledge` (requires explicit confirmation).
 
 **Workflow behaviour:** If the message contains the editor document block (`CURRENT DOCUMENT (Editor)`), workflow matching is skipped so the agent uses tools (e.g. `replace_editor_selection`) instead of starting a workflow.
 
-**UI:** Closing the editor (X) shows a browser confirm dialog. PDF export preserves formatting (font size, bold, italic) by cloning content into the main document before conversion (html2pdf.js/html2canvas).
+**DOCX behaviour:** The native DOCX editor loads `.docx` through dedicated backend endpoints and saves back to `.docx` from the same native model. This avoids the old lossy `DOCX -> HTML -> DOCX` save path for DOCX editing.
+
+**Preview and PDF:** Gotenberg/LibreOffice remains the high-fidelity Office-to-PDF solution for the Document Viewer and future preview workflows, but it is not the mutable editing engine for the native DOCX editor. The editor's immediate PDF export is generated from the current editor preview state.
+
+**UI:** Closing the editor (X) shows a browser confirm dialog.
 
 **Drafts from agent:** When you ask in the Web UI for the agent to write or compose text (e.g. *"Schreib mir einen Text …"*, *"Verfasse …"*, *"Write me a text …"*), the agent’s reply is also opened in the **Document Editor** as a draft. The draft is saved under the session’s data folder (`data_dir/drafts/<session_id>/entwurf.md`). You can edit the text there, improve it, and use **Save** to overwrite the draft or **Download HTML** to export it. This only applies to Web UI prompts (not e.g. Telegram), and only when the reply is substantial (after stripping `<think>` blocks).
 
@@ -171,7 +182,7 @@ The local LLM runs as a single HTTP backend on `127.0.0.1:8080`. When a prompt a
 }
 ```
 
-- `sessionId` is required. Optional: `sidebarDocuments` (Document Viewer attachments), `editorDocument` (when Document Editor is open; plain text only), `editorSelections` (marked ranges in the editor for `replace_editor_selection`).
+- `sessionId` is required. Optional: `sidebarDocuments` (Document Viewer attachments), `editorDocument` (when Document Editor is open; plain text only, derived from the current editor state; for native DOCX sessions this is flattened from the native model), `editorSelections` (marked ranges in the editor for `replace_editor_selection`).
 
 ```json
 {
@@ -263,7 +274,7 @@ The local LLM runs as a single HTTP backend on `127.0.0.1:8080`. When a prompt a
   "end": 10
 }
 ```
-Sent when the agent calls `replace_editor_selection`; the frontend replaces the character range `[start, end]` in the Document Editor with `newText` and removes that selection chip.
+Sent when the agent calls `replace_editor_selection` or when a text-targeted editor edit resolves to a concrete character range. The frontend replaces the character range `[start, end]` in the Document Editor with `newText` and removes the matching selection chip if one existed. For native DOCX sessions the edit is applied to the native document model; for legacy sessions it is still applied to HTML/text content.
 
 ```json
 {

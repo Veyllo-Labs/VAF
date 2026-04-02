@@ -28,6 +28,8 @@ class MCPClientTool(BaseTool):
     """
     
     name = "mcp_call"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     description = "Call external tools via Model Context Protocol (MCP). Connects to MCP servers to access tools written in any language."
     
     parameters = {

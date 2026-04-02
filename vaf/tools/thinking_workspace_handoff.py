@@ -17,6 +17,8 @@ class ThinkingWorkspaceHandoffTool(BaseTool):
     """Create approval-required handoff proposals in Thinking Workspace."""
 
     name = "thinking_workspace_handoff"
+    permission_level = "system"
+    side_effect_class = "reversible"
     description = (
         "Create a pending handoff proposal in Thinking Workspace. "
         "Use this for externally visible actions that require user approval."

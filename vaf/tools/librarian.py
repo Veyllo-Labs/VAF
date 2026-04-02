@@ -28,7 +28,12 @@ from vaf.tools.filesystem import (
     is_safe_path,
 )
 from vaf.tools.python_sandbox import PythonSandboxTool
-from vaf.tools.document_viewer import DocumentViewerTool, DocumentEditorTool, ReplaceEditorSelectionTool
+from vaf.tools.document_viewer import (
+    DocumentViewerTool,
+    DocumentEditorTool,
+    ReplaceEditorSelectionTool,
+    ReplaceEditorTextTool,
+)
 from vaf.tools.cloud_storage import CloudStorageTool
 from vaf.core.fs_map import CachedFilesystemMap
 
@@ -49,6 +54,8 @@ class LibrarianTool(BaseTool):
     """
     
     name = "librarian_agent"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = """A specialized Sub-Agent for File System, Storage & Information Retrieval.
     **PRIMARY TOOL for:**
     - **Folder Sizes:** "How big is Downloads?", "Check folder size", "Disk usage analysis"
@@ -84,6 +91,7 @@ class LibrarianTool(BaseTool):
             "document_viewer": DocumentViewerTool(),
             "document_editor": DocumentEditorTool(),
             "replace_editor_selection": ReplaceEditorSelectionTool(),
+            "replace_editor_text": ReplaceEditorTextTool(),
             "move_file": MoveFileTool(),
             "cloud_storage": CloudStorageTool(),
         }
@@ -2099,7 +2107,7 @@ Common paths:
                         # Get available tool names dynamically
                         available_tool_names = list(self.tools.keys()) if hasattr(self, 'tools') and self.tools else []
                         # Also check for common tool names used by librarian
-                        common_tool_names = ["read_file", "write_file", "list_files", "find_files", "tree", "folder_size", "cloud_storage", "python_sandbox", "document_viewer", "document_editor", "replace_editor_selection"]
+                        common_tool_names = ["read_file", "write_file", "list_files", "find_files", "tree", "folder_size", "cloud_storage", "python_sandbox", "document_viewer", "document_editor", "replace_editor_selection", "replace_editor_text"]
                         all_tool_names = list(set(available_tool_names + common_tool_names))
                         
                         # Check if any tool name appears in the last assistant message (case-insensitive)
@@ -2221,6 +2229,7 @@ Common paths:
                         "document_viewer": "Opening in viewer",
                         "document_editor": "Opening in editor",
                         "replace_editor_selection": "Replacing marked text in editor",
+                        "replace_editor_text": "Replacing unmarked text in editor",
                     }
                     icon = tool_icons.get(fn_name, "Calling")
                     UI.event("Librarian", f"{icon}: {fn_name}", style="bold green")

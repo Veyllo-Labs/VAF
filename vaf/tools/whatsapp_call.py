@@ -11,6 +11,8 @@ class WhatsAppCallTool(BaseTool):
     Placeholder for WhatsApp voice or video calls. Not implemented yet.
     """
     name = "whatsapp_call"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     description = (
         "Placeholder: Initiate a WhatsApp voice or video call. Not implemented yet. "
         "Use send_whatsapp to send a text message instead."

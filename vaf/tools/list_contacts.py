@@ -14,6 +14,8 @@ class ListContactsTool(BaseTool):
     Use get_contact(name) to get full details (e.g. for 'has Max written to me?' then read_whatsapp_chat(chat_id=contact's whatsapp_phone)).
     """
     name = "list_contacts"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "List all contacts from the central contact list (Settings → Connections → Contacts). "
         "Returns each contact's name and which channels they have (WhatsApp, Telegram, email). "

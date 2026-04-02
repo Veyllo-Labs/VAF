@@ -33,6 +33,8 @@ class SendTelegramTool(BaseTool):
     For documents (invoices, contracts, PDFs): pass file_path after creating/finding the file.
     """
     name = "send_telegram"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     description = (
         "Send a message to the user via Telegram. "
         "Use when the user asked you to send them something (e.g. 'send me the result via Telegram' or when main_messenger is Telegram). "
@@ -76,7 +78,8 @@ class SendTelegramTool(BaseTool):
 
         try:
             from vaf.core.messaging_connections import get_telegram_chat_id
-            from vaf.core.telegram_reply import send_telegram_reply
+            from vaf.core.telegram_reply import has_telegram_reply_callback, send_telegram_reply
+            from vaf.api.telegram_bridge import send_telegram_message_direct
         except ImportError as e:
             return f"Telegram send unavailable: {e}"
 
@@ -103,16 +106,32 @@ class SendTelegramTool(BaseTool):
             return "Message was blocked (contained internal system content). Send a clean user-facing message without any internal context markers."
 
         voice_lang = (kwargs.get("voice_lang") or "").strip()
-        try:
-            text_to_send = out[:4096]
-            send_telegram_reply(
+        if not has_telegram_reply_callback():
+            ok, error = send_telegram_message_direct(
                 chat_id,
-                text_to_send,
+                out[:4096],
                 voice_lang=voice_lang[:2].lower() if voice_lang else None,
                 file_path=str(file_path) if file_path else None,
             )
-        except Exception as e:
-            return f"Failed to send Telegram message: {e}"
+            if not ok:
+                return f"Failed to send Telegram message: {error}"
+            text_to_send = out[:4096]
+        else:
+            try:
+                text_to_send = out[:4096]
+                sent = send_telegram_reply(
+                    chat_id,
+                    text_to_send,
+                    voice_lang=voice_lang[:2].lower() if voice_lang else None,
+                    file_path=str(file_path) if file_path else None,
+                )
+                if not sent:
+                    return (
+                        "Failed to send Telegram message: bridge callback did not accept the message "
+                        "(callback missing or enqueue failure)."
+                    )
+            except Exception as e:
+                return f"Failed to send Telegram message: {e}"
 
         # Append the sent message to the Telegram session so when the user replies (e.g. "Danke!"),
         # the agent has context (the proactive message and links) in that session.

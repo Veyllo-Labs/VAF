@@ -261,3 +261,15 @@ When **Debug Logs** are enabled (Advanced → Debug Logs), each tool execution i
 - `args_preview` — truncated arguments (first 200 chars)
 
 Use this to verify which user scope UUID is used for each tool call when debugging local vs multi-user or isolation issues. Log files are dated and cleaned by the garbage collector like other app logs.
+
+---
+
+## 9. Declarative Tool Contract
+
+VAF tools can now declare a small, centralized contract in the tool class itself:
+
+- `permission_level` — `read`, `write`, `dangerous`, or `system`
+- `channel_restrictions` — blocked sources such as `telegram`, `whatsapp`, `discord`, or generic `channel`
+- `side_effect_class` — `none`, `reversible`, or `irreversible`
+
+This contract is evaluated in the central `execute_tool()` path before the tool runs. The first version is intentionally scoped: it does **not** replace router behavior or all existing trust logic. Instead, it gives built-in tools, MCP-backed tools, and future sub-agent tools a shared policy surface so permission checks can become more consistent over time.

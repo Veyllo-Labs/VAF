@@ -1375,6 +1375,8 @@ class ContextState:
 class GitInitTool(BaseTool):
     """Initialize a Git repository in the project directory."""
     name = "git_init"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = "Initialize a Git repository in the current project directory. Creates .git directory and .gitignore file."
     
     parameters = {
@@ -1404,6 +1406,8 @@ class GitInitTool(BaseTool):
 class GitAddCommitTool(BaseTool):
     """Add files to Git staging area and commit them."""
     name = "git_add_commit"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     description = "Add files to Git staging area and create a commit with a message. Use this to save your work progress."
     
     parameters = {
@@ -1458,6 +1462,8 @@ class GitAddCommitTool(BaseTool):
 class GitStatusTool(BaseTool):
     """Get the current Git status of the repository."""
     name = "git_status"
+    permission_level = "read"
+    side_effect_class = "none"
     description = "Check the current Git status: shows modified, staged, and untracked files."
     
     parameters = {
@@ -1491,6 +1497,8 @@ class GitStatusTool(BaseTool):
 class GitLogTool(BaseTool):
     """View Git commit history."""
     name = "git_log"
+    permission_level = "read"
+    side_effect_class = "none"
     description = "View the Git commit history. Shows recent commits with messages."
     
     parameters = {
@@ -1538,6 +1546,8 @@ class GitLogTool(BaseTool):
 
 class CodingAgentTool(BaseTool):
     name = "coding_agent"
+    permission_level = "write"
+    side_effect_class = "reversible"
     
     # Class-level lock to prevent multiple instances running simultaneously
     _instance_lock = threading.Lock()

@@ -77,6 +77,8 @@ def _no_github_message() -> str:
 class GitHubListReposTool(BaseTool):
     """List the user's GitHub repositories."""
     name = "github_list_repos"
+    permission_level = "read"
+    side_effect_class = "none"
     category = "github"
     description = (
         "List the user's GitHub repositories. Use when the user asks about their repos, projects on GitHub, or which repos they have. "
@@ -138,6 +140,8 @@ class GitHubListReposTool(BaseTool):
 class GitHubGetFileTool(BaseTool):
     """Get the content of a file from a GitHub repository."""
     name = "github_get_file"
+    permission_level = "read"
+    side_effect_class = "none"
     category = "github"
     description = (
         "Get the content of a file from a GitHub repository. Use when the user wants to read code or a file from their GitHub repo. "
@@ -218,6 +222,8 @@ class GitHubGetFileTool(BaseTool):
 class GitHubListDirectoryTool(BaseTool):
     """List the contents of a directory in a GitHub repository."""
     name = "github_list_directory"
+    permission_level = "read"
+    side_effect_class = "none"
     category = "github"
     description = (
         "List the contents of a directory in a GitHub repository. Use to explore the project structure. "
@@ -284,6 +290,8 @@ class GitHubListDirectoryTool(BaseTool):
 class GitHubSearchFilesTool(BaseTool):
     """Search for files in a GitHub repository."""
     name = "github_search_files"
+    permission_level = "read"
+    side_effect_class = "none"
     category = "github"
     description = (
         "Search for files in a GitHub repository by name or extension. "
@@ -346,6 +354,8 @@ class GitHubSearchFilesTool(BaseTool):
 class GitHubGetTreeTool(BaseTool):
     """Get the full file tree of a GitHub repository (recursive)."""
     name = "github_get_tree"
+    permission_level = "read"
+    side_effect_class = "none"
     category = "github"
     description = (
         "Get a recursive list of all files in a GitHub repository. Use to get a bird's eye view of the project. "
@@ -416,6 +426,8 @@ class GitHubGetTreeTool(BaseTool):
 class GitHubListIssuesTool(BaseTool):
     """List issues for a GitHub repository."""
     name = "github_list_issues"
+    permission_level = "read"
+    side_effect_class = "none"
     category = "github"
     description = (
         "List issues for a GitHub repository. Use when the user asks about issues, bugs, or open items. "
@@ -481,6 +493,8 @@ class GitHubListIssuesTool(BaseTool):
 class GitHubListPullsTool(BaseTool):
     """List pull requests for a GitHub repository."""
     name = "github_list_pulls"
+    permission_level = "read"
+    side_effect_class = "none"
     category = "github"
     description = (
         "List pull requests for a GitHub repository. Use when the user asks about PRs, pull requests, or reviews. "
@@ -544,6 +558,8 @@ class GitHubListPullsTool(BaseTool):
 class GitHubCreateIssueTool(BaseTool):
     """Create a new issue in a GitHub repository."""
     name = "github_create_issue"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     category = "github"
     description = (
         "Create a new issue in a GitHub repository. Parameters: owner, repo, title, body (optional). "
@@ -600,6 +616,8 @@ class GitHubCreateIssueTool(BaseTool):
 class GitHubUpdateFileTool(BaseTool):
     """Create or update a file in a GitHub repository."""
     name = "github_update_file"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     category = "github"
     description = (
         "Create or update a file in a GitHub repository (commit). Parameters: owner, repo, path, content, message (commit message), branch (optional). "

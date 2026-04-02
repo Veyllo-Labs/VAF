@@ -180,6 +180,8 @@ curl -X POST http://localhost:5005/forms/libreoffice/convert \
 
 When Gotenberg is running, uploaded Office documents in the Document Viewer are converted to PDF and displayed in their original design. Without Gotenberg, VAF falls back to HTML rendering (python-docx, openpyxl, python-pptx).
 
+Important: Gotenberg is a **preview/rendering** service, not the mutable editing engine for the native DOCX editor. The native DOCX editor uses VAF's own DOCX-first document model and dedicated load/save endpoints; Gotenberg remains responsible for high-fidelity Office-to-PDF rendering.
+
 **License:** Gotenberg is MIT; LibreOffice is MPL 2.0 – both compatible with MIT+Conclus projects.
 
 ---

@@ -26,6 +26,8 @@ class AddAutomationNoteTool(BaseTool):
     """Add a note to the automation calendar. User sees it in the Note section."""
 
     name = "add_automation_note"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = """Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation calendar. Use when the user or you want to remember something for automation planning."""
 
     parameters = {
@@ -55,6 +57,8 @@ class AddAutomationTodoTool(BaseTool):
     """Add a to-do to the automation calendar. User sees it in the To-do list."""
 
     name = "add_automation_todo"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = """Add a to-do for the automation calendar. The user sees it in the To-do list. Use when the user or you want to track a task (e.g. 'Prepare report by Friday'). Optional due_at: ISO8601 or YYYY-MM-DD."""
 
     parameters = {
@@ -84,6 +88,8 @@ class ListAutomationNotesTool(BaseTool):
     """List automation notes for the current user."""
 
     name = "list_automation_notes"
+    permission_level = "read"
+    side_effect_class = "none"
     description = "List current automation notes (with created_at). Shown in the automation calendar Note section."
 
     parameters = {"type": "object", "properties": {}, "required": []}
@@ -108,6 +114,8 @@ class ListAutomationTodosTool(BaseTool):
     """List automation to-dos for the current user."""
 
     name = "list_automation_todos"
+    permission_level = "read"
+    side_effect_class = "none"
     description = "List current automation to-dos (created_at, due_at, done). Shown in the automation calendar To-do list."
 
     parameters = {"type": "object", "properties": {}, "required": []}
@@ -132,6 +140,8 @@ class DeleteAutomationNoteTool(BaseTool):
     """Delete an automation note by id."""
 
     name = "delete_automation_note"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = "Delete an automation note when it is no longer needed. Use note_id from list_automation_notes."
 
     parameters = {
@@ -159,6 +169,8 @@ class DeleteAutomationTodoTool(BaseTool):
     """Delete an automation to-do by id."""
 
     name = "delete_automation_todo"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = "Delete an automation to-do (e.g. after completion or when obsolete). Use todo_id from list_automation_todos."
 
     parameters = {

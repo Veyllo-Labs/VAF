@@ -194,6 +194,8 @@ def get_web_search_results(query: str, max_results: int) -> tuple[list, str, str
 
 class WebSearchTool(BaseTool):
     name = "web_search"
+    permission_level = "read"
+    side_effect_class = "none"
     description = """Search the web for information. Automatically fetches full page content for accurate data extraction.
 
 **USE THIS FOR:**

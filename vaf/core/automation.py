@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field, asdict
 from enum import Enum
+from vaf.core.log_helper import append_domain_log
 
 # Cross-platform scheduler
 try:
@@ -267,6 +268,28 @@ class AutomationManager:
         self._running = False
         self._create_readme()
         self._load_tasks()
+
+    def _log_scheduler_event(self, message: str) -> None:
+        """Write scheduler diagnostics only when debug logging is enabled."""
+        append_domain_log("backend", f"[AUTOMATION_SCHEDULER] {message}")
+
+    def _run_scheduled_task(self, task: AutomationTask) -> str:
+        """Wrapper for scheduled executions so we can trace trigger points."""
+        self._log_scheduler_event(
+            f"TRIGGER task_id={task.id} name={task.name!r} frequency={task.frequency} time={task.time}"
+        )
+        try:
+            result = self.run_task(task, new_terminal=True)
+            preview = (result or "").replace("\n", " ")[:200]
+            self._log_scheduler_event(
+                f"DISPATCHED task_id={task.id} result_preview={preview!r}"
+            )
+            return result
+        except Exception as e:
+            self._log_scheduler_event(
+                f"ERROR task_id={task.id} name={task.name!r} error={e!r}"
+            )
+            raise
     
     def _create_readme(self):
         """Create README in automations folder if it doesn't exist."""
@@ -590,6 +613,11 @@ vaf automation delete <id>   # Delete task
         # next_run is calculated dynamically - no need to store it
         self._save_task(task)
         self._sync_workspace_automation_state(task, event="automation_updated")
+        # Keep the live scheduler in sync with on-disk changes (e.g. updated time).
+        try:
+            refresh_scheduler_from_disk(origin=f"update:{task.id}")
+        except Exception:
+            pass
         return task
     
     def delete(self, task_id: str, permanent: bool = False) -> bool:
@@ -1311,20 +1339,28 @@ vaf automation delete <id>   # Delete task
     def start_scheduler(self):
         """Start the background scheduler."""
         if not HAS_SCHEDULE:
+            self._log_scheduler_event("START_FAILED reason='schedule package missing'")
             raise ImportError("'schedule' package required. Install: pip install schedule")
         
         if self._running:
+            self._log_scheduler_event("START_SKIPPED reason='already running'")
             return
         
         self._running = True
+        enabled_tasks = self.list(enabled_only=True)
+        self._log_scheduler_event(
+            f"START task_count={len(enabled_tasks)} storage_dir={str(self.storage_dir)!r}"
+        )
         
         def scheduler_loop():
+            self._log_scheduler_event("LOOP_STARTED")
             while self._running:
                 schedule.run_pending()
                 time.sleep(30)  # Check every 30 seconds
+            self._log_scheduler_event("LOOP_STOPPED")
         
         # Schedule all enabled tasks
-        for task in self.list(enabled_only=True):
+        for task in enabled_tasks:
             self._schedule_task(task)
         
         self._scheduler_thread = threading.Thread(target=scheduler_loop, daemon=True)
@@ -1332,33 +1368,57 @@ vaf automation delete <id>   # Delete task
     
     def stop_scheduler(self):
         """Stop the background scheduler."""
+        self._log_scheduler_event("STOP_REQUESTED")
         self._running = False
         schedule.clear()
     
     def _schedule_task(self, task: AutomationTask):
         """Add a task to the scheduler."""
         if not task.enabled:
+            self._log_scheduler_event(
+                f"REGISTER_SKIPPED task_id={task.id} name={task.name!r} reason='disabled'"
+            )
             return
         
         # Run in new terminal window by default
-        job_func = lambda t=task: self.run_task(t, new_terminal=True)
+        job_func = lambda t=task: self._run_scheduled_task(t)
         
         if task.frequency == Frequency.HOURLY:
             schedule.every().hour.at(f":{task.time.split(':')[1]}").do(job_func)
+            self._log_scheduler_event(
+                f"REGISTERED task_id={task.id} name={task.name!r} frequency=hourly time={task.time}"
+            )
         
         elif task.frequency == Frequency.DAILY:
             schedule.every().day.at(task.time).do(job_func)
+            self._log_scheduler_event(
+                f"REGISTERED task_id={task.id} name={task.name!r} frequency=daily time={task.time}"
+            )
         
         elif task.frequency == Frequency.WEEKLY:
             weekday = task.weekday or "monday"
             getattr(schedule.every(), weekday).at(task.time).do(job_func)
+            self._log_scheduler_event(
+                f"REGISTERED task_id={task.id} name={task.name!r} frequency=weekly weekday={weekday} time={task.time}"
+            )
         
         elif task.frequency == Frequency.MONTHLY:
             # Monthly is trickier - check daily and run if day matches
             def monthly_check(t=task):
                 if datetime.now().day == (t.day or 1):
-                    self.run_task(t, new_terminal=True)
+                    self._run_scheduled_task(t)
+                else:
+                    self._log_scheduler_event(
+                        f"MONTHLY_SKIP task_id={t.id} name={t.name!r} expected_day={t.day or 1} current_day={datetime.now().day}"
+                    )
             schedule.every().day.at(task.time).do(monthly_check)
+            self._log_scheduler_event(
+                f"REGISTERED task_id={task.id} name={task.name!r} frequency=monthly day={task.day or 1} time={task.time}"
+            )
+        else:
+            self._log_scheduler_event(
+                f"REGISTER_SKIPPED task_id={task.id} name={task.name!r} reason='unsupported frequency {task.frequency}'"
+            )
 
 
 def get_next_automation_run_utc(user_scope_id: Optional[str]) -> Optional[datetime]:
@@ -1515,12 +1575,81 @@ import typer
 automation_app = typer.Typer(help="Manage scheduled automations")
 
 _manager: Optional[AutomationManager] = None
+_scheduler_manager: Optional[AutomationManager] = None
+_scheduler_manager_lock = threading.Lock()
 
 def get_manager() -> AutomationManager:
     global _manager
     if _manager is None:
         _manager = AutomationManager()
     return _manager
+
+
+def ensure_scheduler_started(origin: str = "unknown") -> tuple[AutomationManager, bool]:
+    """
+    Ensure the process-wide automation scheduler is running exactly once.
+
+    Returns:
+        (manager, started_now)
+    """
+    global _scheduler_manager
+    with _scheduler_manager_lock:
+        if _scheduler_manager is None:
+            _scheduler_manager = AutomationManager()
+
+        thread_alive = bool(
+            _scheduler_manager._scheduler_thread and _scheduler_manager._scheduler_thread.is_alive()
+        )
+        if _scheduler_manager._running and thread_alive:
+            _scheduler_manager._log_scheduler_event(
+                f"ENSURE_SKIPPED origin={origin!r} reason='already running'"
+            )
+            return _scheduler_manager, False
+
+        if _scheduler_manager._running and not thread_alive:
+            _scheduler_manager._log_scheduler_event(
+                f"ENSURE_RECOVER origin={origin!r} reason='thread not alive'"
+            )
+            _scheduler_manager._running = False
+            try:
+                schedule.clear()
+            except Exception:
+                pass
+
+        _scheduler_manager.reload_tasks()
+        _scheduler_manager._log_scheduler_event(f"ENSURE_START origin={origin!r}")
+        _scheduler_manager.start_scheduler()
+        return _scheduler_manager, True
+
+
+def refresh_scheduler_from_disk(origin: str = "unknown") -> bool:
+    """
+    If the process-wide scheduler is running, reload tasks from disk and
+    rebuild all schedule jobs so updates (like changed HH:MM) apply immediately.
+
+    Returns:
+        True if a running scheduler was refreshed, False otherwise.
+    """
+    global _scheduler_manager
+    with _scheduler_manager_lock:
+        if _scheduler_manager is None:
+            return False
+
+        thread_alive = bool(
+            _scheduler_manager._scheduler_thread and _scheduler_manager._scheduler_thread.is_alive()
+        )
+        if not (_scheduler_manager._running and thread_alive):
+            return False
+
+        _scheduler_manager._log_scheduler_event(f"REFRESH_START origin={origin!r}")
+        _scheduler_manager.reload_tasks()
+        schedule.clear()
+        for task in _scheduler_manager.list(enabled_only=True):
+            _scheduler_manager._schedule_task(task)
+        _scheduler_manager._log_scheduler_event(
+            f"REFRESH_DONE origin={origin!r} task_count={len(_scheduler_manager.list(enabled_only=True))}"
+        )
+        return True
 
 
 @automation_app.command("list")

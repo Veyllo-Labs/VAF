@@ -116,6 +116,8 @@ class SendMailTool(BaseTool):
     When sending a document (invoice, contract, PDF), pass attachment_paths with full paths.
     """
     name = "send_mail"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     description = (
         "Send an email from a connected email account. "
         "Use when the user asks to send an email. Pass to, subject, body; account_id is optional. "

@@ -29,6 +29,8 @@ class SendWhatsAppTool(BaseTool):
     Use to_phone when the user asks to send a message to someone (e.g. Anne); get the number from get_contact(name='Anne').
     """
     name = "send_whatsapp"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     description = (
         "Send content via WhatsApp: text, voice message (voice_lang), or document (file_path). "
         "Default: sends to the account owner. To send to a contact (e.g. Anne), use to_phone with the contact's WhatsApp number from get_contact(name='...'). "
@@ -93,24 +95,11 @@ class SendWhatsAppTool(BaseTool):
         try:
             from vaf.core.messaging_connections import get_whatsapp_chat_jid
             from vaf.api.whatsapp_bridge import (
-                is_bridge_running,
-                has_process_for_user,
                 send_whatsapp_with_confirmation,
                 _e164_to_jid,
             )
         except ImportError as e:
             return f"WhatsApp send unavailable: {e}"
-
-        if not is_bridge_running():
-            return (
-                "WhatsApp bridge is not running. Start it in Settings → Connections → WhatsApp "
-                "(click Start). The bridge must be connected for sends to work."
-            )
-        if not has_process_for_user(username):
-            return (
-                "WhatsApp process for this user is not running (bridge may have just started or auth expired). "
-                "Try: Settings → Connections → WhatsApp → Stop, then Start. Ensure WhatsApp is linked (QR scanned) and your number is in the whitelist."
-            )
 
         to_phone = (kwargs.get("to_phone") or kwargs.get("phone_number") or "").strip()
         allow_contact_send = False

@@ -12,6 +12,8 @@ class UpdateContactTool(BaseTool):
     You must use contact_id (from list_contacts or get_contact). If get_contact returns multiple contacts with the same name, do NOT guess – ask the user which one to update and use the contact_id they confirm.
     """
     name = "update_contact"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = (
         "Update a contact by contact_id. Required: contact_id (from list_contacts or get_contact). "
         "Optional: name, email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, allow_as_assistant_user. "

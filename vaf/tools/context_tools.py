@@ -37,6 +37,8 @@ class UpdateIntentTool(BaseTool):
     Do NOT use for preferences like language or "remember that..." – use memory_save for long-term facts.
     """
     name = "update_intent"
+    permission_level = "system"
+    side_effect_class = "reversible"
     description = (
         "Update the primary User Intent (session goal/task). Use for the user's current objective, not for preferences "
         "(e.g. language) or 'remember that...' – use memory_save for those."
@@ -74,6 +76,8 @@ class UpdateWorkingMemoryTool(BaseTool):
     Use for multi-step tasks: save your plan, notes, and checkable tasks (pending/done; done removed after 12h).
     """
     name = "update_working_memory"
+    permission_level = "system"
+    side_effect_class = "reversible"
     description = (
         "Update working memory (notes, plan, tasks) that persists across turns and appears in <working_memory>. "
         "Use notes/plan to set the full list (replaces existing). Use add_notes/add_plan to append. "
@@ -165,6 +169,8 @@ class RequestClarificationTool(BaseTool):
     Use this instead of failing or guessing.
     """
     name = "request_clarification"
+    permission_level = "system"
+    side_effect_class = "reversible"
     description = "Signal a blocker and ask the Main Agent/User for clarification."
     coder_only = True  # Only available to sub-agents
     
@@ -221,6 +227,8 @@ class MemorySearchTool(BaseTool):
     Do NOT use memory_save for lookup – memory_save only saves new facts.
     """
     name = "memory_search"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "🔍 SEARCH your long-term memory database (RAG) for stored facts, notes, preferences, or past conversations. "
         "USE THIS when user asks: 'who am I?', 'what do you know about me?', 'was hast du über mich gespeichert?', 'what have I told you?'. "
@@ -284,6 +292,8 @@ class MemorySaveTool(BaseTool):
     Do NOT use for 'who am I?' or 'what do you remember?' – use memory_search or the Memory context block for that.
     """
     name = "memory_save"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     description = (
         "💾 SAVE new information to your long-term memory database (RAG). "
         "USE THIS when user explicitly asks: 'remember that...', 'merke dir...', 'save this...', 'speichere...'. "

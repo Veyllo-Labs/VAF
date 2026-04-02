@@ -2900,7 +2900,13 @@ class Agent:
 
         # Compress with Cursor-style algorithm (now includes the new narrative_summary)
         old_count = len(self.history)
-        self.history = cm.compress(self.history)
+        working_memory = None
+        if getattr(self, "main_persistence", None):
+            try:
+                working_memory = self.main_persistence.get_working_memory()
+            except Exception:
+                working_memory = None
+        self.history = cm.compress(self.history, working_memory=working_memory)
         new_count = len(self.history)
         
         try:
@@ -2957,7 +2963,15 @@ class Agent:
         recent = self.history[-6:] if len(self.history) >= 6 else self.history[:]
 
         context_summary = cm._build_context_summary()
-        glue_msg = {"role": "user", "content": f"[CONTEXT RESTORED]\n{context_summary}"}
+        working_memory = None
+        if getattr(self, "main_persistence", None):
+            try:
+                working_memory = self.main_persistence.get_working_memory()
+            except Exception:
+                working_memory = None
+        resume_block = cm.build_resume_block(self.history, working_memory=working_memory)
+        restored_parts = [part for part in (context_summary, resume_block) if part]
+        glue_msg = {"role": "user", "content": f"[CONTEXT RESTORED]\n" + "\n\n".join(restored_parts)}
 
         new_history = []
         if system_msg and system_msg.get("role") == "system":
@@ -4505,7 +4519,13 @@ class Agent:
         compression_happened = False
         if hasattr(self, 'context_manager') and self.context_manager.should_compress(self.history):
             UI.event("Context", f"Threshold reached ({self.context_manager.get_usage_percent(self.history):.0%}) - compressing...", style="warning")
-            self.history = self.context_manager.compress(self.history)
+            working_memory = None
+            if getattr(self, "main_persistence", None):
+                try:
+                    working_memory = self.main_persistence.get_working_memory()
+                except Exception:
+                    working_memory = None
+            self.history = self.context_manager.compress(self.history, working_memory=working_memory)
             compression_happened = True
             
         # Apply updated system prompt + context glue + project context
@@ -6650,7 +6670,8 @@ class Agent:
     def execute_tool(self, name, args):
         from vaf.cli.ui import UI
         from pathlib import Path
-        from vaf.core.trust import should_gate_tool, get_tool_policy, set_tool_policy, mark_trusted_dir, is_trusted_dir, explain_gate
+        from vaf.core.trust import get_tool_policy, set_tool_policy, mark_trusted_dir, is_trusted_dir
+        from vaf.core.tool_contract import evaluate_tool_policy
 
         # Thinking-only tool guard (runtime): never allow these in normal chat turns.
         is_thinking_turn = bool(getattr(self, "_current_turn_thinking_mode", False))
@@ -6677,8 +6698,15 @@ class Agent:
             or (isinstance(sid, str) and sid.startswith(channel_session_prefixes))
         )
 
-        if is_channel_session and name == "python_exec":
-            return "Security Error: python_exec is blocked for channel-origin sessions."
+        tool_instance = self.tools.get(name)
+        policy_decision = evaluate_tool_policy(
+            tool_name=name,
+            tool=tool_instance,
+            current_source=current_source,
+            is_channel_session=is_channel_session,
+        )
+        if policy_decision.blocked:
+            return f"Security Error: {policy_decision.reason}"
 
         def emit(evt: dict):
             if callable(self._event_sink):
@@ -6765,7 +6793,7 @@ class Agent:
             return result
 
         # Gate risky tools with once/always/cancel (no persistent deny)
-        if should_gate_tool(name):
+        if policy_decision.requires_confirmation:
             policy = get_tool_policy(name)
             cwd = Path.cwd()
             trusted = is_trusted_dir(cwd)
@@ -6774,9 +6802,9 @@ class Agent:
             if policy != "allow" and not trusted and not allowed_once:
                 emit({"type": "gate_required", "tool": name, "cwd": str(cwd)})
                 if self._noninteractive:
-                    return f"[ERROR] Tool '{name}' requires confirmation ({explain_gate(name)}). Re-run interactively or mark folder trusted."
+                    return f"[ERROR] Tool '{name}' requires confirmation ({policy_decision.reason}). Re-run interactively or mark folder trusted."
                 
-                UI.event("Security", f"Tool '{name}' requires confirmation. {explain_gate(name)}", style="warning")
+                UI.event("Security", f"Tool '{name}' requires confirmation. {policy_decision.reason}", style="warning")
                 choice = UI.prompt("Allow? [o]nce / [a]lways / [c]ancel: ").strip().lower()
                 if choice in ("o", "once"):
                     self._allow_once_tools.add(name)

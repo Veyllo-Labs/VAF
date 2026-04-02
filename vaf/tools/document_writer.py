@@ -6,11 +6,16 @@ For complex/large documents, use document_agent instead.
 """
 
 import os
-import shutil
-import tempfile
 from pathlib import Path
 
 from vaf.tools.base import BaseTool
+from vaf.core.document_formatting import (
+    estimate_document_length,
+    infer_document_model,
+    render_markdown,
+    render_text,
+    save_document_model_as_docx,
+)
 
 class DocumentWriterTool(BaseTool):
     """
@@ -26,6 +31,8 @@ class DocumentWriterTool(BaseTool):
     """
     
     name = "document_writer"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = """Creates simple structured documents (contracts, letters, messages, templates).
 Supports: Text (.txt), Markdown (.md), Word (.docx).
 For large/complex documents, use document_agent instead."""
@@ -108,73 +115,48 @@ For large/complex documents, use document_agent instead."""
     
     def _create_text_document(self, file_path: Path, content: str, doc_type: str) -> str:
         """Create plain text document."""
+        model = infer_document_model(title="", document_type=doc_type, content=content)
+        rendered_text = render_text(model)
         with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content)
+            f.write(rendered_text)
         
         return f"""### {doc_type.capitalize()} created!
 
 **File:** {file_path.name}
 **Path:** {file_path.absolute()}
 **Format:** Text
-**Size:** {len(content):,} characters
+**Size:** {estimate_document_length(model):,} characters
 
 ✅ Document saved successfully."""
     
     def _create_markdown_document(self, file_path: Path, content: str, doc_type: str) -> str:
         """Create Markdown document."""
+        model = infer_document_model(title="", document_type=doc_type, content=content)
+        rendered_markdown = render_markdown(model)
         with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content)
+            f.write(rendered_markdown)
         
         return f"""### {doc_type.capitalize()} created!
 
 **File:** {file_path.name}
 **Path:** {file_path.absolute()}
 **Format:** Markdown
-**Size:** {len(content):,} characters
+**Size:** {estimate_document_length(model):,} characters
 
 ✅ Markdown document saved successfully."""
     
     def _create_word_document(self, file_path: Path, content: str, doc_type: str) -> str:
-        """Create Word document (.docx). Writes to temp file then replaces target so the ZIP is never half-written."""
+        """Create Word document from the normalized document model."""
         try:
-            from docx import Document
-            
-            doc = Document()
-            
-            # Add title
-            doc.add_heading(doc_type.capitalize(), 0)
-            
-            # Split content into paragraphs and add to document
-            for paragraph in content.split('\n\n'):
-                if paragraph.strip():
-                    # Check if it's a heading (starts with § or #)
-                    if paragraph.strip().startswith('§') or paragraph.strip().startswith('#'):
-                        doc.add_heading(paragraph.strip().lstrip('#§ '), level=2)
-                    else:
-                        doc.add_paragraph(paragraph.strip())
-            
-            parent = file_path.parent
-            parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(prefix="vaf_", suffix=".docx", dir=str(parent))
-            try:
-                os.close(fd)
-                doc.save(tmp_path)
-                if file_path.exists():
-                    file_path.unlink()
-                shutil.move(tmp_path, str(file_path))
-            finally:
-                if os.path.exists(tmp_path):
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-            
+            model = infer_document_model(title="", document_type=doc_type, content=content)
+            save_document_model_as_docx(model, file_path)
+
             return f"""### {doc_type.capitalize()} created!
 
 **File:** {file_path.name}
 **Path:** {file_path.absolute()}
 **Format:** Microsoft Word (.docx)
-**Size:** {len(content):,} characters
+**Size:** {estimate_document_length(model):,} characters
 
 ✅ Word document saved successfully.
    Open with: Microsoft Word, LibreOffice, Google Docs"""

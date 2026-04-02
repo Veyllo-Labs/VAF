@@ -57,6 +57,8 @@ class LabelMailTool(BaseTool):
     Use account_id, message_id, folder from mail_inbox output.
     """
     name = "label_mail"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = (
         "Set an email's label/category (e.g. promotions, newsletter, social, primary). "
         "Use after the user asks to label mails (e.g. 'label newsletters as promotions'). "

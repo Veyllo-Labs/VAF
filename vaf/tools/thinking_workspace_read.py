@@ -17,6 +17,8 @@ class ThinkingWorkspaceReadTool(BaseTool):
     """Read-only access to per-user thinking workspace."""
 
     name = "thinking_workspace_read"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "Read per-user Thinking Workspace data: open tasks, pending handoffs, or a workspace file."
     )

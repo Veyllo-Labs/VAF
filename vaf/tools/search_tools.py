@@ -32,6 +32,8 @@ class SearchToolsTool(BaseTool):
     """Discover available tools by keyword query."""
 
     name = "search_tools"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "Search the available tool catalogue by keyword or description of what you need. "
         "Returns tool names and one-line descriptions. "

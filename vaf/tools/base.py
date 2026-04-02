@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Literal
 
 class BaseTool(ABC):
     """
@@ -67,6 +67,12 @@ class BaseTool(ABC):
     #       {"query": "population of Tokyo", "language": "de"},
     #   ]
     input_examples: List[Dict[str, Any]] = []
+
+    # Declarative tool contract metadata.
+    # Keep the first version intentionally simple.
+    permission_level: Literal["read", "write", "dangerous", "system"] = "read"
+    channel_restrictions: tuple[str, ...] = ()
+    side_effect_class: Literal["none", "reversible", "irreversible"] = "none"
     
     # ═══════════════════════════════════════════════════════════════════════════
     # ABSTRACT METHOD
@@ -222,6 +228,15 @@ class BaseTool(ABC):
                 "description": self.get_description_with_examples(),
                 "parameters": self.parameters
             }
+        }
+
+    def get_contract_metadata(self) -> Dict[str, Any]:
+        """Return declarative tool metadata for central policy checks."""
+        return {
+            "name": self.name,
+            "permission_level": getattr(self, "permission_level", "read"),
+            "channel_restrictions": list(getattr(self, "channel_restrictions", []) or []),
+            "side_effect_class": getattr(self, "side_effect_class", "none"),
         }
     
     def __repr__(self) -> str:

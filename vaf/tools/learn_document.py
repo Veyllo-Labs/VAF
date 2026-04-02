@@ -162,6 +162,8 @@ class LearnDocumentTool(BaseTool):
     """
 
     name = "learn_document"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     description = (
         "Learn a document into long-term memory. Use when the user wants you to "
         "'learn', 'remember', or 'ingest' a document (PDF, TXT, MD) so you can answer "

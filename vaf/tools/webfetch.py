@@ -29,6 +29,8 @@ MIN_DELAY = 1.0
 
 class WebFetchTool(BaseTool):
     name = "webfetch"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "Retrieves content from a URL and converts it to readable Markdown. "
         "IMPORTANT: For long pages, tracking sites (DHL, UPS), or when searching for specific info, "

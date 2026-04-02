@@ -329,6 +329,8 @@ class ResearchAgentTool(BaseTool):
     """
 
     name = "research_agent"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "Comprehensive multi-section research with detailed analysis. "
         "USE ONLY FOR: Deep research (10+ sources), multi-perspective analysis, detailed reports. "

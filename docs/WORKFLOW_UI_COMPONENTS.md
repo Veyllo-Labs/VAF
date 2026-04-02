@@ -70,7 +70,22 @@ Located at `web/components/DocumentEditor.tsx`
 
 A single right-side panel used for (1) workflow-generated documents and (2) attachments (Anhänge). Styled identically to SubAgentWindow.
 
-**Kernel editor mode** (when `filePath` is set):
+**Kernel editor mode** (when `filePath` is set) now has two sub-paths:
+
+#### Native DOCX editor path
+
+Used for `.docx` files.
+
+- Loads a native DOCX model from the backend (`/api/file/docx-model`)
+- Saves back to `.docx` through `/api/file/save-docx-native`
+- Uses a model-driven editor instead of `iframe + contentEditable`
+- Keeps DOCX save logic out of the old HTML roundtrip
+- Exposes the current document to the agent as flattened plain text derived from the native model
+
+#### Legacy editor path
+
+Used for HTML and the older non-DOCX editor flows.
+
 - Displays in the same panel area as SubAgentWindow (dock mode)
 - Loads HTML content via `/api/file?path=...`
 - Editable iframe with contentEditable
@@ -80,6 +95,8 @@ A single right-side panel used for (1) workflow-generated documents and (2) atta
 - Opened via `document_ready` WebSocket event from workflow
 - Uses `getApiBase()` for API calls
 - Optional: text selection in the iframe can be sent as a quote chip (via `onInsertSelection`)
+
+See also: [DOCUMENT_EDITOR_NATIVE_DOCX.md](DOCUMENT_EDITOR_NATIVE_DOCX.md)
 
 **Attachments mode** (when `documents` are passed, no `filePath`):
 - Same panel area; no right-side document list (compact dropdown in header instead)

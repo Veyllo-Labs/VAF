@@ -38,6 +38,8 @@ class CodeSearchTool(BaseTool):
     """Search through the codebase for code patterns."""
     
     name = "codesearch"
+    permission_level = "read"
+    side_effect_class = "none"
     coder_only = True  # Only available to Coder Sub-Agent
     description = """Search through the codebase for code patterns, function definitions, and text.
 

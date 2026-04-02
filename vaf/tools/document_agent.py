@@ -13,14 +13,22 @@ Similar architecture to research_agent but for document creation.
 import os
 import re
 import json
-import shutil
-import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 from vaf.tools.base import BaseTool
 from vaf.cli.ui import UI
+from vaf.core.document_formatting import (
+    DocumentModel,
+    DocumentSection,
+    build_document_model,
+    coerce_section,
+    estimate_document_length,
+    render_markdown,
+    render_text,
+    save_document_model_as_docx,
+)
 
 class DocumentAgentTool(BaseTool):
     """
@@ -37,6 +45,8 @@ class DocumentAgentTool(BaseTool):
     """
     
     name = "document_agent"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = """Specialized Sub-Agent for creating large, structured documents (contracts, reports, letters, templates).
 Supports multi-format output: Word (.docx), PDF (.pdf), Markdown (.md), Text (.txt).
 Handles documents of any size using section-by-section generation (no context overflow)."""
@@ -152,7 +162,7 @@ Handles documents of any size using section-by-section generation (no context ov
         # STEP 2: Generate each section independently (no context overflow!)
         # ═══════════════════════════════════════════════════════════════════════
         
-        sections_content = []
+        sections_content: list[DocumentSection] = []
         for i, section in enumerate(plan['sections'], 1):
             UI.event("Document Agent", f"Generating section {i}/{len(plan['sections'])}: {section['title']}", style="dim")
             
@@ -165,10 +175,7 @@ Handles documents of any size using section-by-section generation (no context ov
                 total_sections=len(plan['sections'])
             )
             
-            sections_content.append({
-                'title': section['title'],
-                'content': content
-            })
+            sections_content.append(content)
         
         # ═══════════════════════════════════════════════════════════════════════
         # STEP 3: Assemble final document
@@ -176,7 +183,7 @@ Handles documents of any size using section-by-section generation (no context ov
         
         UI.event("Document Agent", "Assembling final document...", style="dim")
         
-        final_content = self._assemble_document(
+        document_model = self._assemble_document(
             title=plan['title'],
             document_type=plan['document_type'],
             sections=sections_content
@@ -189,7 +196,7 @@ Handles documents of any size using section-by-section generation (no context ov
         output_format = plan.get('format', 'docx')
         filename = plan.get('filename', self._generate_filename(plan['title'], output_format))
         
-        file_path = self._save_document(final_content, filename, output_format, plan['document_type'])
+        file_path = self._save_document(document_model, filename, output_format, plan['document_type'])
 
         # Notify Web UI so the Document Editor opens with the created document (same process or subprocess)
         try:
@@ -214,7 +221,11 @@ Handles documents of any size using section-by-section generation (no context ov
         except Exception as e:
             UI.warning(f"Could not open folder: {e}")
             
-        return self._format_success_message(file_path, plan, len(final_content))
+        return self._format_success_message(
+            file_path,
+            plan,
+            estimate_document_length(document_model),
+        )
     
     def _extract_json_from_response(self, content: str) -> Optional[Dict]:
         """
@@ -342,13 +353,12 @@ Replace TITLE_HERE and add more sections (5-15 total) based on the task. Output 
         section_description: str,
         section_index: int,
         total_sections: int
-    ) -> str:
+    ) -> DocumentSection:
         """
         Generate a single section with its own isolated context.
         This prevents context overflow for large documents.
         """
-        
-        # Context-efficient prompt (only this section)
+
         prompt = f"""You are writing section {section_index} of {total_sections} for a {document_type}.
 
 Document: {document_title}
@@ -357,44 +367,73 @@ Requirements: {section_description}
 
 Write this section completely and professionally. Include all necessary details, clauses, or content for this section only.
 
-Output format: Clean text ready for document (no markdown headers, just content).
-Language: Match the document type (German for German contracts, etc.)."""
+Return ONLY valid JSON with this exact shape:
+{{
+  "title": "{section_title}",
+  "heading_level": 2,
+  "blocks": [
+    {{"type": "paragraph", "text": "A complete paragraph."}},
+    {{"type": "bullet_list", "items": ["Item 1", "Item 2"]}}
+  ]
+}}
+
+Style rules:
+- Keep the title aligned with the requested section title.
+- Use one semantic block type at a time: paragraph, bullet_list, numbered_list.
+- Do not emit markdown headings, separator lines, bold markers, or decorative formatting.
+- Use lists only when an actual list improves readability.
+- Keep paragraph spacing compact and the structure clean.
+- Language: Match the requested document language and context."""
 
         try:
             content = self.query_llm(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=2048,
-                temperature=0.5
+                temperature=0.2
             )
-            
+
             if content:
-                return content.strip()
-            else:
-                return "[ERROR generating section: No response from LLM]"
-                
+                parsed = self._extract_json_from_response(content)
+                if parsed:
+                    return self._validate_and_repair_section(parsed, section_title)
+
+                fallback_prompt = f"""Convert this section into the required JSON structure only.
+
+Section title: {section_title}
+Text:
+{content}
+"""
+                repaired_content = self.query_llm(
+                    messages=[{"role": "user", "content": fallback_prompt}],
+                    max_tokens=1536,
+                    temperature=0.1,
+                )
+                parsed_repaired = self._extract_json_from_response(repaired_content or "")
+                if parsed_repaired:
+                    return self._validate_and_repair_section(parsed_repaired, section_title)
+
+                return self._validate_and_repair_section(content.strip(), section_title)
+
+            return self._validate_and_repair_section("", section_title)
         except Exception as e:
-            return f"[ERROR generating section: {e}]"
-    
-    def _assemble_document(self, title: str, document_type: str, sections: List[Dict]) -> str:
-        """Assemble all sections into final document."""
-        
-        # Build document with proper structure
-        parts = []
-        
-        # Title
-        parts.append(f"{title}\n")
-        parts.append("=" * len(title) + "\n\n")
-        
-        # Sections
-        for i, section in enumerate(sections, 1):
-            parts.append(f"\n{section['title']}\n")
-            parts.append("-" * len(section['title']) + "\n\n")
-            parts.append(section['content'])
-            parts.append("\n\n")
-        
-        return "".join(parts)
-    
-    def _save_document(self, content: str, filename: str, format: str, doc_type: str) -> Path:
+            return self._validate_and_repair_section(f"[ERROR generating section: {e}]", section_title)
+
+    def _validate_and_repair_section(self, section_payload: Any, fallback_title: str) -> DocumentSection:
+        """Normalize section output into the canonical representation."""
+
+        return coerce_section(section_payload, fallback_title=fallback_title, default_level=2)
+
+    def _assemble_document(
+        self,
+        title: str,
+        document_type: str,
+        sections: List[DocumentSection],
+    ) -> DocumentModel:
+        """Assemble all sections into the canonical document model."""
+
+        return build_document_model(title=title, document_type=document_type, sections=sections)
+
+    def _save_document(self, content: DocumentModel, filename: str, format: str, doc_type: str) -> Path:
         """Save document in requested format. Uses Documents/VAF_Documents (never project root)."""
         from vaf.core.platform import Platform
         
@@ -419,68 +458,22 @@ Language: Match the document type (German for German contracts, etc.)."""
             # Fallback to text
             return self._save_as_text(content, file_path.with_suffix('.txt'))
     
-    def _save_as_text(self, content: str, file_path: Path) -> Path:
+    def _save_as_text(self, content: DocumentModel, file_path: Path) -> Path:
         """Save as plain text file."""
         with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content)
+            f.write(render_text(content))
         return file_path
-    
-    def _save_as_markdown(self, content: str, file_path: Path) -> Path:
+
+    def _save_as_markdown(self, content: DocumentModel, file_path: Path) -> Path:
         """Save as Markdown file."""
         with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content)
+            f.write(render_markdown(content))
         return file_path
-    
-    def _save_as_word(self, content: str, file_path: Path, doc_type: str) -> Path:
-        """Save as Word document (.docx). Writes to temp file then replaces target so the ZIP is never half-written."""
+
+    def _save_as_word(self, content: DocumentModel, file_path: Path, doc_type: str) -> Path:
+        """Save as Word document from the canonical model."""
         try:
-            from docx import Document
-            
-            doc = Document()
-            
-            # Parse content and add to document
-            for paragraph in content.split('\n'):
-                if paragraph.strip():
-                    # Check if it's a title (starts with special characters or all caps)
-                    if paragraph.strip().startswith('===') or paragraph.strip().startswith('---'):
-                        continue  # Skip separator lines
-                    elif len(paragraph.strip()) < 100 and paragraph.strip().isupper():
-                        doc.add_heading(paragraph.strip(), level=1)
-                    elif paragraph.strip().startswith('§') or re.match(r'^\d+\.', paragraph.strip()):
-                        doc.add_heading(paragraph.strip(), level=2)
-                    else:
-                        doc.add_paragraph(paragraph.strip())
-            
-            parent = file_path.parent.resolve()
-            parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(prefix="vaf_", suffix=".docx", dir=str(parent))
-            try:
-                os.close(fd)
-                doc.save(tmp_path)
-                if file_path.exists():
-                    file_path.unlink()
-                shutil.move(tmp_path, str(file_path))
-                # Verify the saved file is a valid DOCX (ZIP format) before returning
-                try:
-                    Document(str(file_path))
-                except Exception as verify_err:
-                    if "zip" in str(verify_err).lower() or "not a zip" in str(verify_err).lower():
-                        UI.warning(f"DOCX verification failed ({verify_err}), falling back to text format")
-                        if file_path.exists():
-                            try:
-                                file_path.unlink()
-                            except OSError:
-                                pass
-                        return self._save_as_text(content, file_path.with_suffix('.txt'))
-                    raise
-            finally:
-                if os.path.exists(tmp_path):
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-            return file_path
-            
+            return save_document_model_as_docx(content, file_path)
         except ImportError:
             UI.warning("python-docx not installed. Saving as text instead.")
             return self._save_as_text(content, file_path.with_suffix('.txt'))

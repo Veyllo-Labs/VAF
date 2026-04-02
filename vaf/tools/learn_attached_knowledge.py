@@ -14,6 +14,8 @@ from vaf.memory.attachment_rag import read_session_attachments_sync
 
 class LearnAttachedKnowledgeTool(BaseTool):
     name = "learn_attached_knowledge"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     description = (
         "Persist knowledge from currently attached Web UI documents into long-term memory. "
         "This requires explicit confirmation via confirm_learn=true. "

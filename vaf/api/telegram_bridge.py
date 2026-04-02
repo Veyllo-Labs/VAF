@@ -454,6 +454,112 @@ def _ensure_sender_thread(bot_token: str) -> bool:
     return True
 
 
+def send_telegram_message_direct(
+    chat_id: str,
+    text: str,
+    *,
+    voice_lang: Optional[str] = None,
+    file_path: Optional[str] = None,
+) -> tuple[bool, str]:
+    """
+    Send a Telegram message directly via Bot API without relying on the in-process
+    bridge callback. This is used by background/subprocess tools that do not share
+    the main process callback registry.
+    """
+    telegram_config = Config.get("telegram_config") or {}
+    if not isinstance(telegram_config, dict):
+        return False, "telegram_config missing or invalid"
+
+    bot_token = (telegram_config.get("bot_token") or "").strip()
+    if not bot_token:
+        return False, "telegram_config.bot_token missing"
+
+    if not chat_id or not text:
+        return False, "chat_id and text are required"
+
+    url_message = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    url_document = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+
+    try:
+        if file_path and os.path.isfile(file_path):
+            with open(file_path, "rb") as doc_file:
+                data = _telegram_caption_data(chat_id, text)
+                resp = requests.post(
+                    url_document,
+                    data=data,
+                    files={"document": (os.path.basename(file_path), doc_file)},
+                    timeout=30,
+                )
+            if (not resp.ok) and ("parse entities" in (resp.text or "").lower() or "can't parse" in (resp.text or "").lower()):
+                with open(file_path, "rb") as doc_file:
+                    resp = requests.post(
+                        url_document,
+                        data={"chat_id": chat_id, "caption": str(text or "")[:1024]},
+                        files={"document": (os.path.basename(file_path), doc_file)},
+                        timeout=30,
+                    )
+            if resp.ok:
+                try:
+                    from vaf.core.log_helper import log_telegram_reply
+
+                    log_telegram_reply(f"DIRECT document ok chat_id={chat_id} file={os.path.basename(file_path)}")
+                except Exception:
+                    pass
+                return True, ""
+            try:
+                from vaf.core.log_helper import log_telegram_reply
+
+                log_telegram_reply(f"DIRECT failed chat_id={chat_id} status={resp.status_code} body={resp.text[:200]}")
+            except Exception:
+                pass
+            return False, f"Telegram sendDocument failed: {resp.status_code} {resp.text[:200]}"
+
+        if voice_lang:
+            loop = asyncio.new_event_loop()
+            try:
+                success = loop.run_until_complete(_send_voice_reply(bot_token, chat_id, text, voice_lang))
+            finally:
+                loop.close()
+            if success:
+                try:
+                    from vaf.core.log_helper import log_telegram_reply
+
+                    log_telegram_reply(f"DIRECT voice ok chat_id={chat_id} lang={voice_lang}")
+                except Exception:
+                    pass
+                return True, ""
+            return False, "Telegram sendVoice failed"
+
+        payload = _telegram_text_payload(chat_id, text)
+        resp = requests.post(url_message, json=payload, timeout=10)
+        if (not resp.ok) and ("parse entities" in (resp.text or "").lower() or "can't parse" in (resp.text or "").lower()):
+            payload = {"chat_id": chat_id, "text": str(text or "")[:4096]}
+            resp = requests.post(url_message, json=payload, timeout=10)
+        if resp.ok:
+            try:
+                from vaf.core.log_helper import log_telegram_reply
+
+                log_telegram_reply(f"DIRECT ok chat_id={chat_id}")
+            except Exception:
+                pass
+            return True, ""
+        try:
+            from vaf.core.log_helper import log_telegram_reply
+
+            log_telegram_reply(f"DIRECT failed chat_id={chat_id} status={resp.status_code} body={resp.text[:200]}")
+        except Exception:
+            pass
+        return False, f"Telegram sendMessage failed: {resp.status_code} {resp.text[:200]}"
+    except Exception as e:
+        try:
+            from vaf.core.log_helper import log_telegram_reply
+
+            log_telegram_reply(f"DIRECT error {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        return False, str(e)
+
+
 def _sender_loop(bot_token: str):
     """Run in a thread: read (chat_id, text, voice_lang?, file_path?) from _outgoing_queue and POST to Telegram."""
     global _outgoing_queue

@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional
+from vaf.core.config import Config
 
 
 @dataclass
@@ -350,7 +351,12 @@ class ContextManager:
         usage = self.get_usage_percent(history)
         return usage >= self.trigger_threshold
     
-    def compress(self, history: List[Dict], preserve_tools: List[str] = None) -> List[Dict]:
+    def compress(
+        self,
+        history: List[Dict],
+        preserve_tools: List[str] = None,
+        working_memory: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict]:
         """
         Cursor-style compression with tool result preservation:
         1. Archive full history for potential restoration
@@ -362,6 +368,7 @@ class ContextManager:
         Args:
             history: Full history to compress
             preserve_tools: List of tool names whose results should be preserved
+            working_memory: Optional working memory snapshot for resume-block enrichment
         """
         from vaf.cli.ui import UI
 
@@ -411,14 +418,17 @@ class ContextManager:
 
         # 5. Build context summary
         context_summary = self._build_context_summary()
+        resume_block = self.build_resume_block(history, working_memory=working_memory)
+        summary_parts = [part for part in (context_summary, resume_block) if part]
+        combined_summary = "\n\n".join(summary_parts)
 
         # 6. Construct new history
         new_history = [system_prompt]
 
-        if context_summary:
+        if combined_summary:
             new_history.append({
                 "role": "system",
-                "content": context_summary
+                "content": combined_summary
             })
 
         # Add critical tool results (max 5)
@@ -487,6 +497,176 @@ class ContextManager:
         return (
             f"{main_header}\n\n"
             + "\n\n".join(parts)
+        )
+
+    @staticmethod
+    def _resume_text(value: Any) -> str:
+        """Normalize values to one-line deterministic resume text."""
+        text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+        text = re.sub(r"\s+", " ", text)
+        return text
+
+    @staticmethod
+    def _truncate_resume_text(text: str, limit: int = 180) -> str:
+        """Keep resume fields compact and predictable."""
+        text = ContextManager._resume_text(text)
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3].rstrip() + "..."
+
+    @staticmethod
+    def _flatten_working_memory_entries(entries: Any) -> List[str]:
+        """Extract plain text from working-memory notes/plan/tasks."""
+        texts: List[str] = []
+        if not isinstance(entries, list):
+            return texts
+        for entry in entries:
+            if isinstance(entry, dict):
+                if entry.get("text") is not None:
+                    texts.append(str(entry.get("text")))
+                elif entry.get("content") is not None:
+                    texts.append(str(entry.get("content")))
+            elif entry is not None:
+                texts.append(str(entry))
+        return [ContextManager._resume_text(text) for text in texts if ContextManager._resume_text(text)]
+
+    @staticmethod
+    def _extract_file_references(text: str) -> List[str]:
+        """Collect likely file references from free-form text."""
+        pattern = r"(?:[A-Za-z]:)?[A-Za-z0-9_.\\/\-]+\.[A-Za-z0-9]{1,10}"
+        refs: List[str] = []
+        for match in re.findall(pattern, text):
+            cleaned = match.strip("`\"'()[]{}.,;:")
+            if cleaned and "://" not in cleaned and not cleaned.lower().startswith(("http.", "https.")):
+                refs.append(cleaned)
+        return refs
+
+    @staticmethod
+    def _dedupe_preserve_order(values: List[str], limit: int) -> List[str]:
+        """Deduplicate values while preserving original order."""
+        seen = set()
+        result: List[str] = []
+        for value in values:
+            key = value.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(value)
+            if len(result) >= limit:
+                break
+        return result
+
+    @staticmethod
+    def _latest_user_message(history: List[Dict]) -> str:
+        """Return the latest user message for deterministic fallback logic."""
+        for msg in reversed(history):
+            if msg.get("role") == "user":
+                content = ContextManager._resume_text(msg.get("content", ""))
+                if content:
+                    return content
+        return ""
+
+    def build_resume_block(
+        self,
+        history: List[Dict],
+        working_memory: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Build a deterministic operational resume block for compression/checkpoint."""
+        if not bool(Config.get("resume_compaction_enabled", True)):
+            return ""
+
+        wm = working_memory if isinstance(working_memory, dict) else {}
+        wm_notes = self._flatten_working_memory_entries(wm.get("notes", []))
+        wm_plan = self._flatten_working_memory_entries(wm.get("plan", []))
+
+        pending_tasks: List[str] = []
+        for task in wm.get("tasks", []) if isinstance(wm.get("tasks"), list) else []:
+            if not isinstance(task, dict):
+                continue
+            if str(task.get("status") or "pending").lower() != "pending":
+                continue
+            text = self._resume_text(task.get("text", ""))
+            if text:
+                pending_tasks.append(text)
+
+        latest_user_message = self._latest_user_message(history)
+
+        current_focus = pending_tasks[0] if pending_tasks else ""
+        if not current_focus and wm_plan:
+            current_focus = wm_plan[-1]
+        if not current_focus and self.state.narrative_summary:
+            current_focus = self.state.narrative_summary
+        if not current_focus:
+            current_focus = latest_user_message
+
+        goal = self._resume_text(self.intent.primary_goal)
+        if goal and current_focus:
+            current_work = f"Working toward {goal}. Current focus: {current_focus}"
+        elif goal:
+            current_work = f"Working toward {goal}."
+        elif current_focus:
+            current_work = current_focus
+        else:
+            current_work = "Continuing the previous task."
+        current_work = self._truncate_resume_text(current_work, limit=220)
+
+        pending_items = pending_tasks[:]
+        if not pending_items and self.intent.sub_goals:
+            pending_items.extend(self.intent.sub_goals[-3:])
+        pending_items = self._dedupe_preserve_order(
+            [self._truncate_resume_text(item, limit=80) for item in pending_items if item],
+            limit=5,
+        )
+        pending_work = ", ".join(pending_items) if pending_items else "none"
+
+        key_file_candidates: List[str] = []
+        for text in wm_notes + wm_plan + pending_tasks:
+            key_file_candidates.extend(self._extract_file_references(text))
+        key_file_candidates.extend([path for path, _ttl in self.state.files_created[-6:]])
+        key_file_candidates.extend([path for path, _ttl in self.state.files_modified[-6:]])
+        key_file_candidates.extend([path for path, _ttl in self.state.files_read[-6:]])
+        key_files_list = self._dedupe_preserve_order(
+            [self._truncate_resume_text(ref, limit=90) for ref in key_file_candidates if ref],
+            limit=8,
+        )
+        key_files = ", ".join(key_files_list) if key_files_list else "none"
+
+        tools_used_list = self._dedupe_preserve_order(
+            [self._resume_text(tool) for tool in self.state.tools_used if self._resume_text(tool)],
+            limit=10,
+        )
+        tools_used = ", ".join(tools_used_list) if tools_used_list else "none"
+
+        decision_candidates: List[str] = []
+        for text in wm_notes[-5:]:
+            if any(token in text.lower() for token in ("decision", "decided", "choose", "chosen", "use ", "using ")):
+                decision_candidates.append(text)
+        decision_candidates.extend(self.state.key_decisions[-3:])
+        key_decisions_list = self._dedupe_preserve_order(
+            [self._truncate_resume_text(item, limit=90) for item in decision_candidates if item],
+            limit=4,
+        )
+        key_decisions = ", ".join(key_decisions_list) if key_decisions_list else "none"
+
+        if pending_items:
+            next_action = f"Continue with: {pending_items[0]}"
+        elif goal:
+            next_action = f"Continue work toward {goal}."
+        elif latest_user_message:
+            next_action = f"Continue the previous request: {latest_user_message}"
+        else:
+            next_action = "continue previous task"
+        next_action = self._truncate_resume_text(next_action, limit=140)
+
+        return (
+            "=== RESUME CONTEXT ===\n"
+            f"CURRENT_WORK: {current_work}\n"
+            f"PENDING_WORK: {pending_work}\n"
+            f"KEY_FILES: {key_files}\n"
+            f"TOOLS_USED: {tools_used}\n"
+            f"KEY_DECISIONS: {key_decisions}\n"
+            f"NEXT_ACTION: {next_action}\n"
+            "=== END RESUME ==="
         )
     
     # ═══════════════════════════════════════════════════════════════════════════

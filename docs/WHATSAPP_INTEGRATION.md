@@ -67,6 +67,7 @@ Key components:
 
 - **Node (vaf/whatsapp_node/wa-bridge.js)**: Started by Python with `node wa-bridge.js --auth-dir <path>`. Reads JSON commands from stdin (`send`, `send_voice`, `send_document`, `getChats`), writes events to stdout (`message`, `send_result`, `qr`, `connected`, etc.).
 - **Python (vaf/api/whatsapp_bridge.py)**: Spawns and manages the Node process with **stdout/stderr opened as UTF-8** so JSON lines (including transcribed text with non-ASCII) decode correctly on all platforms. Maintains `_outgoing_queue`, implements STT/TTS for voice, and enqueues incoming messages to the VAF task queue with session ID `whatsapp_{username}_{digits}`.
+- **Background send IPC**: Proactive sends from background/subprocess runs (for example automations) do not share the main process memory. For those cases, `send_whatsapp` writes a request into a small file-based IPC queue under the platform data directory. The main WhatsApp bridge process reads that request, forwards it to the correct Node session, and writes back the delivery result. This lets background runs use the same live WhatsApp connection without needing their own bridge process.
 
 ---
 
@@ -134,6 +135,7 @@ The bridge builds the allowed set from the config whitelist plus all WhatsApp/ph
 - **Whitelist format:** Use E.164 for all phone numbers (e.g. `+491761234567`). The bridge normalizes JIDs; leading zeros or missing country codes can cause mismatches.
 - **user_scope_id and username:** Use the same `user_scope_id` and username as the Web UI for that user. For the local admin, use `local_admin_scope_id` and the configured local admin username so Web, CLI, WhatsApp, and other tools (e.g. `list_contacts`, `get_contact`, `send_whatsapp`) resolve the same identity. Consistent identity avoids "no contacts" or "no Telegram/WhatsApp contact" when the agent runs from the Web UI or from a bridge.
 - **Automations and WhatsApp:** Scheduled automations (e.g. Daily calendar check or reminder tasks) run with the **task owner's** `user_scope_id`. When such an automation calls `send_whatsapp` (or other messaging tools), the backend injects that scope so the correct WhatsApp session and identity are used. Use the same `user_scope_id` in whitelist/contacts as in the Web UI so reminders and automation-driven messages go to the right user.
+- **Background delivery path:** If `send_whatsapp` is called from a subprocess that does not hold the live bridge state in memory, the request is forwarded to the main bridge over the IPC queue instead of failing immediately. The WhatsApp bridge still has to be running and connected.
 - **Credentials:** Do not commit `~/.vaf/users/<username>/whatsapp/` (or the platform data dir equivalent) to version control; it contains the Baileys session.
 - **Send-only mode:** Set `inbound_to_agent: false` when you only want the bot to send you content (e.g. reports, voice notes); incoming messages will not trigger the agent.
 - **Front Office:** For contacts who can reach your assistant via WhatsApp, add their number in the contact’s **Channels** (type "phone" or "WhatsApp"). Without a WhatsApp channel, messages from that number are rejected.
@@ -148,6 +150,18 @@ If a number you did not add appears as admin and the agent writes to it:
 2. **Or edit config:** Open your VAF config (e.g. `~/.vaf/config.json` or `%APPDATA%\\vaf\\config.json` on Windows), find `whatsapp_config.whitelist`, and delete the entry with that `phone_number`. Save and restart the WhatsApp bridge if needed.
 
 The whitelist is the only source for the "admin" label; removing the entry stops that number from being treated as admin and from being allowed to receive/send via the bridge.
+
+### Troubleshooting: Proactive Send Fails From Automation Or Background Task
+
+**Symptom:** A scheduled automation or other background run tries to call `send_whatsapp`, but the send does not go through.
+
+**How it works now:** Background runs no longer need direct access to the in-memory bridge objects. They hand the send request to the main WhatsApp bridge process through the IPC queue in the platform data directory, and the main bridge returns the delivery result.
+
+**What to check:**
+
+1. **Bridge status:** The main WhatsApp bridge must still be running and connected in Settings → Connections → WhatsApp.
+2. **User session:** The target user must have a linked WhatsApp session and, if applicable, the correct whitelist entry or contact mapping.
+3. **Result message:** If `send_whatsapp` returns an error, treat it as a real delivery problem. The tool now waits for bridge confirmation instead of assuming success from the caller's process alone.
 
 ### Troubleshooting: Reply went to "Unbekannte Nummer" (unknown number) instead of the contact
 

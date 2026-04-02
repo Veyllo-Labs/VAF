@@ -131,6 +131,8 @@ def is_safe_path(path):
 
 class ListFilesTool(BaseTool):
     name = "list_files"
+    permission_level = "read"
+    side_effect_class = "none"
     description = "Lists files in a directory."
 
     parameters = {
@@ -206,6 +208,8 @@ class ListFilesTool(BaseTool):
 
 class FolderSizeTool(BaseTool):
     name = "folder_size"
+    permission_level = "read"
+    side_effect_class = "none"
     description = "Calculates the total size of a folder (recursive), with optional largest-files preview."
 
     parameters = {
@@ -300,6 +304,8 @@ class FolderSizeTool(BaseTool):
 
 class ReadFileTool(BaseTool):
     name = "read_file"
+    permission_level = "read"
+    side_effect_class = "none"
     description = """Reads the content of a file. Supports text, PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx).
 
 Use this when:
@@ -498,6 +504,8 @@ For detailed analysis of large files, consider using librarian_agent instead."""
 
 class WriteFileTool(BaseTool):
     name = "write_file"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = "Writes content to a file."
 
     parameters = {
@@ -694,6 +702,8 @@ class WriteFileTool(BaseTool):
 
 class MoveFileTool(BaseTool):
     name = "move_file"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = "Moves or renames a file. Use for renaming: src=current_path, dst=same_folder/new_name.ext"
 
     parameters = {
@@ -722,6 +732,8 @@ class MoveFileTool(BaseTool):
 
 class TreeTool(BaseTool):
     name = "tree"
+    permission_level = "read"
+    side_effect_class = "none"
     description = "Generates an ASCII tree view of a directory structure."
 
     parameters = {
@@ -770,6 +782,8 @@ class TreeTool(BaseTool):
 
 class FinderTool(BaseTool):
     name = "find_files"
+    permission_level = "read"
+    side_effect_class = "none"
     description = "Finds files matching a glob pattern (e.g. *.py) recursively."
     
     parameters = {

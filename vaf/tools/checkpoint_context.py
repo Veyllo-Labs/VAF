@@ -17,6 +17,8 @@ class CheckpointContextTool(BaseTool):
     """Reset conversation context after completing a major step."""
 
     name = "checkpoint_context"
+    permission_level = "system"
+    side_effect_class = "reversible"
     description = (
         "Reset the conversation context after completing a major step. "
         "Archives the current history and starts fresh with only the plan "

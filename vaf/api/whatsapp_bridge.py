@@ -22,6 +22,7 @@ import requests
 from vaf.core.config import Config, get_local_admin_scope_id
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.messaging_connections import save_whatsapp_chat_jid
+from vaf.core.platform import Platform
 from vaf.core.task_queue import TaskQueue
 from vaf.core.whatsapp_auth import get_whatsapp_auth_dir, whatsapp_auth_exists
 from vaf.core.whatsapp_reply import set_whatsapp_reply_callback
@@ -57,6 +58,8 @@ _voice_reply_lock = threading.Lock()
 # Send confirmation: req_id -> queue that receives (success, error)
 _pending_sends: Dict[str, queue.Queue] = {}
 _pending_sends_lock = threading.Lock()
+_external_pending_results: Dict[str, Path] = {}
+_external_pending_results_lock = threading.Lock()
 
 # Per-chat inbound debounce (like Telegram 5s rule but 7s for WhatsApp).
 # Key: "username|from_jid" → accumulated state dict.
@@ -64,6 +67,184 @@ _pending_sends_lock = threading.Lock()
 _wa_pending: Dict[str, Dict[str, Any]] = {}
 _wa_pending_lock = threading.Lock()
 WA_DEBOUNCE_SECONDS = 7
+
+
+def _ipc_base_dir() -> Path:
+    return Platform.data_dir() / "whatsapp_bridge_ipc"
+
+
+def _ipc_requests_dir() -> Path:
+    return _ipc_base_dir() / "requests"
+
+
+def _ipc_results_dir() -> Path:
+    return _ipc_base_dir() / "results"
+
+
+def _ipc_state_path() -> Path:
+    return _ipc_base_dir() / "bridge_state.json"
+
+
+def _ensure_ipc_dirs() -> None:
+    _ipc_requests_dir().mkdir(parents=True, exist_ok=True)
+    _ipc_results_dir().mkdir(parents=True, exist_ok=True)
+
+
+def _write_json_atomic(path: Path, data: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _write_bridge_state(running: bool) -> None:
+    try:
+        _ensure_ipc_dirs()
+        with _process_lock:
+            usernames = sorted(_processes.keys())
+        _write_json_atomic(
+            _ipc_state_path(),
+            {
+                "running": bool(running),
+                "usernames": usernames,
+                "updated_at": time.time(),
+            },
+        )
+    except Exception:
+        pass
+
+
+def _read_bridge_state() -> Dict[str, Any]:
+    try:
+        path = _ipc_state_path()
+        if not path.exists():
+            return {"running": False, "usernames": []}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {"running": False, "usernames": []}
+        usernames = data.get("usernames") or []
+        if not isinstance(usernames, list):
+            usernames = []
+        return {
+            "running": bool(data.get("running")),
+            "usernames": [str(u).strip() for u in usernames if str(u).strip()],
+            "updated_at": float(data.get("updated_at") or 0.0),
+        }
+    except Exception:
+        return {"running": False, "usernames": []}
+
+
+def _write_external_send_result(response_path: Optional[Path], success: bool, error: Optional[str] = None) -> None:
+    if response_path is None:
+        return
+    try:
+        _write_json_atomic(
+            response_path,
+            {
+                "success": bool(success),
+                "error": str(error or ""),
+                "updated_at": time.time(),
+            },
+        )
+    except Exception:
+        pass
+
+
+def _register_external_response_path(req_id: Optional[str], response_path: Optional[Path]) -> None:
+    if not req_id or response_path is None:
+        return
+    with _external_pending_results_lock:
+        _external_pending_results[req_id] = response_path
+
+
+def _pop_external_response_path(req_id: Optional[str]) -> Optional[Path]:
+    if not req_id:
+        return None
+    with _external_pending_results_lock:
+        return _external_pending_results.pop(req_id, None)
+
+
+def _complete_send_request(
+    req_id: Optional[str],
+    success: bool,
+    error: Optional[str] = None,
+    *,
+    response_path: Optional[Path] = None,
+) -> None:
+    external_response_path = response_path or _pop_external_response_path(req_id)
+    if req_id:
+        _deliver_send_result(req_id, success, error)
+    _write_external_send_result(external_response_path, success, error)
+
+
+def _dequeue_external_send_request() -> Optional[Tuple[Any, ...]]:
+    try:
+        _ensure_ipc_dirs()
+        for path in sorted(_ipc_requests_dir().glob("*.json")):
+            response_path: Optional[Path] = None
+            req_id: Optional[str] = None
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                path.unlink(missing_ok=True)
+                if not isinstance(data, dict):
+                    continue
+                req_id = str(data.get("req_id") or "").strip() or None
+                response_path_str = str(data.get("response_path") or "").strip()
+                response_path = Path(response_path_str) if response_path_str else None
+                return (
+                    str(data.get("username") or "").strip(),
+                    str(data.get("chat_jid") or "").strip(),
+                    str(data.get("text") or ""),
+                    str(data.get("voice_path") or "").strip() or None,
+                    req_id,
+                    str(data.get("document_path") or "").strip() or None,
+                    response_path,
+                )
+            except Exception as e:
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                _write_external_send_result(response_path, False, f"Invalid IPC request: {e}")
+    except Exception:
+        return None
+    return None
+
+
+def _wait_for_external_send_result(
+    response_path: Path,
+    *,
+    timeout: float,
+    voice_path: Optional[str] = None,
+    document_path: Optional[str] = None,
+) -> str:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if response_path.exists():
+            try:
+                data = json.loads(response_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                try:
+                    response_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return f"WhatsApp could not deliver the message: Invalid IPC result: {e}"
+            try:
+                response_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            if bool(data.get("success")):
+                if document_path:
+                    return "Document sent via WhatsApp."
+                if voice_path:
+                    return "Voice message sent via WhatsApp."
+                return "Message sent via WhatsApp."
+            return f"WhatsApp could not deliver the message: {data.get('error', '')}"
+        time.sleep(0.1)
+    return (
+        "No delivery confirmation from the WhatsApp bridge within the time limit. "
+        "If the message appeared in WhatsApp, it was delivered; otherwise check Settings → Connections → WhatsApp (bridge running, linked)."
+    )
 
 
 def _wa_bridge_path() -> Path:
@@ -380,13 +561,20 @@ def _sender_loop() -> None:
     global _outgoing_queue, _processes
     while True:
         try:
-            item = _outgoing_queue.get(timeout=1.0)
+            try:
+                item = _outgoing_queue.get(timeout=1.0)
+            except queue.Empty:
+                item = _dequeue_external_send_request()
+                if item is None:
+                    continue
             if item is None:
                 break
             req_id = item[4] if len(item) >= 5 else None
             voice_path = item[3] if len(item) >= 4 else None
             document_path = item[5] if len(item) >= 6 else None
+            response_path = item[6] if len(item) >= 7 else None
             username, chat_jid, text = item[0], item[1], (item[2] or "")
+            _register_external_response_path(req_id, response_path)
             if not username or not chat_jid:
                 continue
             if not voice_path and not text and not document_path:
@@ -398,7 +586,12 @@ def _sender_loop() -> None:
             if not proc or proc.poll() is not None:
                 logger.warning("WhatsApp process for %s not running, dropped reply", username)
                 if req_id:
-                    _deliver_send_result(req_id, False, "Process not running (bridge may have restarted)")
+                    _complete_send_request(
+                        req_id,
+                        False,
+                        "Process not running (bridge may have restarted)",
+                        response_path=response_path,
+                    )
                 try:
                     from vaf.core.log_helper import log_whatsapp_reply
                     log_whatsapp_reply(f"DROPPED process_not_running username={username} jid={chat_jid}")
@@ -454,11 +647,11 @@ def _sender_loop() -> None:
                         err = "Voice file not found"
                         logger.warning("WhatsApp voice file not found: %s", voice_path)
                         if req_id:
-                            _deliver_send_result(req_id, False, err)
+                            _complete_send_request(req_id, False, err, response_path=response_path)
                 except Exception as e:
                     logger.warning("WhatsApp voice send failed for %s: %s", username, e)
                     if req_id:
-                        _deliver_send_result(req_id, False, str(e))
+                        _complete_send_request(req_id, False, str(e), response_path=response_path)
             elif document_path:
                 try:
                     from pathlib import Path
@@ -473,11 +666,11 @@ def _sender_loop() -> None:
                         err = "Document file not found"
                         logger.warning("WhatsApp document not found: %s", document_path)
                         if req_id:
-                            _deliver_send_result(req_id, False, err)
+                            _complete_send_request(req_id, False, err, response_path=response_path)
                 except Exception as e:
                     logger.warning("WhatsApp document send failed for %s: %s", username, e)
                     if req_id:
-                        _deliver_send_result(req_id, False, str(e))
+                        _complete_send_request(req_id, False, str(e), response_path=response_path)
             else:
                 # For text messages, also prefer @lid JID when known (same reason as voice).
                 # Some LID-migrated WhatsApp accounts only reliably receive messages via @lid JID.
@@ -520,7 +713,7 @@ def _sender_loop() -> None:
                     except Exception as e:
                         logger.warning("WhatsApp send failed for %s: %s", username, e)
                         if req_id:
-                            _deliver_send_result(req_id, False, str(e))
+                            _complete_send_request(req_id, False, str(e), response_path=response_path)
                         break
             try:
                 from vaf.core.log_helper import log_whatsapp_reply
@@ -544,8 +737,6 @@ def _sender_loop() -> None:
                     _append_chat_activity(chat_id, None, "out")
             except Exception:
                 pass
-        except queue.Empty:
-            continue
         except Exception as e:
             logger.exception("WhatsApp sender error: %s", e)
 
@@ -618,20 +809,53 @@ def send_whatsapp_with_confirmation(
             "WhatsApp: Cannot send – chat/phone number is not in the whitelist. "
             "Add your number in Settings → Connections → WhatsApp."
         )
-    if _outgoing_queue is None:
-        return (
-            "WhatsApp bridge is not running. Start it in Settings → Connections → WhatsApp (click Start)."
-        )
+    use_external_ipc = _outgoing_queue is None
     with _process_lock:
         proc = _processes.get(username)
         if (not proc or proc.poll() is not None) and len(_processes) == 1:
             proc = next(iter(_processes.values()), None)
         if not proc or proc.poll() is not None:
+            use_external_ipc = True
+        else:
+            use_external_ipc = False
+    if use_external_ipc:
+        state = _read_bridge_state()
+        if not state.get("running"):
+            return (
+                "WhatsApp bridge is not running. Start it in Settings → Connections → WhatsApp (click Start)."
+            )
+        usernames = [str(u).strip() for u in (state.get("usernames") or []) if str(u).strip()]
+        uname = (username or "").strip() or "admin"
+        if usernames and uname not in usernames and len(usernames) != 1:
             return (
                 "WhatsApp process for this user is not running. "
                 "Try: Settings → Connections → WhatsApp → Stop, then Start. "
                 "Ensure WhatsApp is linked (QR scanned) and your number is in the whitelist."
             )
+        req_id = str(uuid.uuid4())
+        response_path = _ipc_results_dir() / f"{req_id}.json"
+        request_path = _ipc_requests_dir() / f"{time.time_ns()}_{req_id}.json"
+        try:
+            _write_json_atomic(
+                request_path,
+                {
+                    "req_id": req_id,
+                    "username": uname,
+                    "chat_jid": chat_jid,
+                    "text": text or "",
+                    "voice_path": str(voice_path or ""),
+                    "document_path": str(document_path or ""),
+                    "response_path": str(response_path),
+                },
+            )
+        except Exception as e:
+            return f"Failed to enqueue WhatsApp message for bridge delivery: {e}"
+        return _wait_for_external_send_result(
+            response_path,
+            timeout=timeout,
+            voice_path=voice_path,
+            document_path=document_path,
+        )
     req_id = str(uuid.uuid4())
     result_queue: queue.Queue = queue.Queue()
     with _pending_sends_lock:
@@ -766,7 +990,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
     elif typ == "send_result":
         req_id = obj.get("req_id")
         if req_id:
-            _deliver_send_result(req_id, bool(obj.get("success")), obj.get("error", ""))
+            _complete_send_request(str(req_id), bool(obj.get("success")), obj.get("error", ""))
     elif typ == "qr":
         logger.warning("WhatsApp session expired for %s – bridge needs QR but cannot show it. Stopping bridge and disabling.", username)
         try:
@@ -1194,15 +1418,18 @@ def _run_bridge() -> None:
     users = _get_users_to_run()
     if not users:
         logger.info("WhatsApp bridge: no users with linked auth, exiting")
+        _write_bridge_state(False)
         return
 
     set_whatsapp_reply_callback(_enqueue_reply)
+    _write_bridge_state(True)
 
     for user_scope_id, username, auth_dir in users:
         proc = _run_user_process(username, auth_dir)
         if proc:
             with _process_lock:
                 _processes[username] = proc
+            _write_bridge_state(True)
             threading.Thread(
                 target=_read_user_process,
                 args=(username, user_scope_id, auth_dir, proc),
@@ -1227,6 +1454,7 @@ def _run_bridge() -> None:
                 except Exception:
                     pass
         _processes.clear()
+    _write_bridge_state(False)
 
 
 def start_bridge() -> bool:
@@ -1247,11 +1475,13 @@ def start_bridge() -> bool:
         return True
 
     _bridge_stop.clear()
+    _ensure_ipc_dirs()
     _outgoing_queue = queue.Queue()
     _sender_thread = threading.Thread(target=_sender_loop, daemon=True)
     _sender_thread.start()
     _bridge_thread = threading.Thread(target=_run_bridge, daemon=True)
     _bridge_thread.start()
+    _write_bridge_state(True)
     # Periodic chat list sync (default every 10 min) so bot has latest chats
     try:
         sync_interval = int((whatsapp_config.get("chat_sync_interval_sec") or 600))
@@ -1274,6 +1504,7 @@ def stop_bridge() -> None:
             _outgoing_queue.put(None)
         except Exception:
             pass
+    _write_bridge_state(False)
     logger.info("WhatsApp bridge stop requested")
 
 

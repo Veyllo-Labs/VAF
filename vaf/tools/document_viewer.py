@@ -36,6 +36,8 @@ class DocumentViewerTool(BaseTool):
     """
 
     name = "document_viewer"
+    permission_level = "read"
+    side_effect_class = "none"
     description = """Open a document in the Document Viewer (Anhänge list) so its content is visible in the right panel.
 Use when the user asks to "attach", "add to chat", or "show me the content" of a file in the document list.
 Pass the full file path. The document appears in the right-hand Document Viewer (attachments list)."""
@@ -146,6 +148,8 @@ class DocumentEditorTool(BaseTool):
     """
 
     name = "document_editor"
+    permission_level = "read"
+    side_effect_class = "none"
     description = """Open a document in the Document Editor panel so the user can view and edit it.
 Use when the user asks to "open", "show in editor", or "edit" a document.
 Pass the full file path. The document opens in the right-hand Document Editor (single-file editor)."""
@@ -198,6 +202,8 @@ class ReplaceEditorSelectionTool(BaseTool):
     """
 
     name = "replace_editor_selection"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = """Replace the text at a marked selection in the Document Editor.
 Use when the user has marked a region in the editor (e.g. a placeholder like [NAME] or a sentence) and asked you to fill or edit it.
 selection_index: 0 = first marked region, 1 = second, etc. (order matches the chips shown in the prompt).
@@ -248,6 +254,12 @@ new_text: the exact text to put in place of the marked region."""
         except Exception:
             pass
 
+        if not isinstance(start, int) or not isinstance(end, int) or end < start:
+            return (
+                f"Error: The marked editor selection {selection_index} is not available anymore. "
+                "Please mark the text again and retry."
+            )
+
         try:
             get_web_interface().emit_editor_apply_edit(
                 session_id, selection_index, new_text, start=start, end=end
@@ -256,3 +268,102 @@ new_text: the exact text to put in place of the marked region."""
             return f"Error: Could not send edit to Web UI: {e}"
 
         return "The marked region in the Document Editor has been updated with the new text."
+
+
+class ReplaceEditorTextTool(BaseTool):
+    """
+    Replace an exact text range in the open Document Editor without requiring a marked selection.
+    Use when the user refers to a specific sentence/paragraph in the open document but has not
+    marked it manually in the editor.
+    """
+
+    name = "replace_editor_text"
+    permission_level = "write"
+    side_effect_class = "reversible"
+    description = """Replace an exact text snippet in the open Document Editor without requiring a marked selection.
+Use when the user asks to rewrite or replace a specific sentence/paragraph in the currently open editor document.
+old_text must be an exact snippet from the current editor document. If it appears multiple times, use occurrence_index to choose which match to replace."""
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "old_text": {
+                "type": "string",
+                "description": "Exact text snippet to replace in the open editor document.",
+            },
+            "new_text": {
+                "type": "string",
+                "description": "Replacement text.",
+            },
+            "occurrence_index": {
+                "type": "integer",
+                "description": "Zero-based occurrence index when old_text appears multiple times. Default: 0.",
+            },
+        },
+        "required": ["old_text", "new_text"],
+    }
+
+    def run(self, **kwargs) -> str:
+        old_text = (kwargs.get("old_text") or "").strip()
+        new_text = kwargs.get("new_text") or ""
+        occurrence_index = kwargs.get("occurrence_index", 0)
+
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id
+            from vaf.core.web_interface import get_web_interface
+            from vaf.core.session import SessionManager
+        except ImportError as e:
+            return f"Error: Could not load dependencies: {e}"
+
+        session_id = get_current_session_id()
+        if not session_id:
+            return "Error: No active session (replace in editor is only available in the Web UI with an active chat session)."
+
+        if not old_text:
+            return "Error: old_text is required."
+        if occurrence_index < 0:
+            return "Error: occurrence_index must be >= 0."
+
+        try:
+            session_mgr = SessionManager()
+            session = session_mgr.load(session_id)
+            runtime_state = getattr(session, "runtime_state", None) or {}
+            editor_doc = runtime_state.get("editor_document") or {}
+            editor_content = editor_doc.get("content") or ""
+        except Exception as e:
+            return f"Error: Could not load current editor document: {e}"
+
+        if not editor_content:
+            return "Error: No current Document Editor content is available for this session."
+
+        matches = []
+        search_start = 0
+        while True:
+            index = editor_content.find(old_text, search_start)
+            if index < 0:
+                break
+            matches.append(index)
+            search_start = index + max(len(old_text), 1)
+
+        if not matches:
+            return "Error: old_text was not found in the current editor document."
+
+        if occurrence_index >= len(matches):
+            return f"Error: occurrence_index {occurrence_index} is out of range. Found {len(matches)} matching occurrence(s)."
+
+        start = matches[occurrence_index]
+        end = start + len(old_text)
+
+        try:
+            get_web_interface().emit_editor_apply_edit(
+                session_id,
+                selection_index=-1,
+                new_text=new_text,
+                start=start,
+                end=end,
+            )
+        except Exception as e:
+            return f"Error: Could not send edit to Web UI: {e}"
+
+        preview = old_text if len(old_text) <= 120 else old_text[:117] + "..."
+        return f'The matching text in the Document Editor has been updated: "{preview}"'

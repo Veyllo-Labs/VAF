@@ -10,6 +10,8 @@ from vaf.tools.base import BaseTool
 
 class ListWorkflowsTool(BaseTool):
     name = "list_workflows"
+    permission_level = "read"
+    side_effect_class = "none"
     description = """List all available multi-step workflows.
     
     Use this tool when:

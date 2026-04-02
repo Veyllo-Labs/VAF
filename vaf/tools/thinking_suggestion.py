@@ -22,6 +22,8 @@ class SaveThinkingSuggestionTool(BaseTool):
     """Save a suggestion produced during thinking mode. User can review in settings/suggestions."""
 
     name = "save_thinking_suggestion"
+    permission_level = "system"
+    side_effect_class = "reversible"
     description = """Save a thinking suggestion for the user to review later. Use during thinking mode when you identify something to suggest: new automation, question to ask the user, proactive help idea, or system health note. category: automation | user_knowledge | proactive_help | system_health | todo_note. action_type (optional): e.g. create_automation | ask_user."""
 
     parameters = {

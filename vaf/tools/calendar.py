@@ -28,6 +28,8 @@ def _default_time_bounds(days_ahead: int = 7):
 class ListCalendarEventsTool(BaseTool):
     """List calendar events in a time range. Use when the user asks to see upcoming events, meetings, or schedule."""
     name = "list_calendar_events"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "List calendar events (Google Calendar or Microsoft Outlook) for the user in a given time range. "
         "Use when the user asks: What's on my calendar? Upcoming meetings? My schedule? Termine? "
@@ -129,6 +131,8 @@ class ListCalendarEventsTool(BaseTool):
 class CreateCalendarEventTool(BaseTool):
     """Create a calendar event. Use when the user wants to add a meeting, appointment, or reminder."""
     name = "create_calendar_event"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = (
         "Create a calendar event (Google Calendar or Microsoft Outlook). "
         "Use when the user wants to schedule a meeting, add an appointment, or set a reminder. "
@@ -225,6 +229,8 @@ class CreateCalendarEventTool(BaseTool):
 class UpdateCalendarEventTool(BaseTool):
     """Update an existing calendar event."""
     name = "update_calendar_event"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = (
         "Update an existing calendar event (change title, time, or description). "
         "Requires event_id (from list_calendar_events). Optional: summary, start, end, description, provider, calendar_id."
@@ -292,6 +298,8 @@ class UpdateCalendarEventTool(BaseTool):
 class DeleteCalendarEventTool(BaseTool):
     """Delete a calendar event."""
     name = "delete_calendar_event"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     description = (
         "Delete a calendar event. Requires event_id (from list_calendar_events). "
         "Optional: provider, account_id, calendar_id."

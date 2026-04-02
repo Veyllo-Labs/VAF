@@ -33,6 +33,8 @@ class AutomationTool(BaseTool):
     """Tool for creating and managing automated tasks."""
     
     name = "create_automation"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = """Create a scheduled automation task that runs at specified times.
 Use this when user wants to schedule recurring tasks or a one-time task:
 - Once (einmalig): single run, automatically deleted after execution. Best for one-time reminders or tasks (e.g. 'Remind me tomorrow at 10:00').
@@ -884,6 +886,8 @@ class ListAutomationsTool(BaseTool):
     """Tool for listing automation tasks."""
     
     name = "list_automations"
+    permission_level = "read"
+    side_effect_class = "none"
     description = "List all scheduled automation tasks with their full details including prompts and parameters."
     
     parameters = {
@@ -938,6 +942,8 @@ class ReadAutomationTool(BaseTool):
     """Tool for reading the full content of a specific automation task."""
     
     name = "read_automation"
+    permission_level = "read"
+    side_effect_class = "none"
     description = "Read the full content of a specific automation task including prompt, parameters, schedule, and all details. Use this when user asks about what an automation does or wants to see the full content of an automation."
     
     parameters = {
@@ -958,7 +964,10 @@ class ReadAutomationTool(BaseTool):
             return "Error: No task ID provided. Use `list_automations` to see available task IDs."
         
         try:
-            manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
+            manager, _ = _manager_for_scope(
+                kwargs.get("user_scope_id"),
+                user_role=kwargs.get("user_role"),
+            )
             task = manager.get(task_id)
             
             if not task:
@@ -1000,6 +1009,8 @@ class UpdateAutomationTool(BaseTool):
     """Tool for updating existing automation tasks."""
     
     name = "update_automation"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = """Update an existing automation task by ID. Use this when user wants to modify an existing automation (change time, frequency, prompt, etc.) instead of creating a new one.
     
 **IMPORTANT:** Always check existing automations with `list_automations` first to find the correct ID, then use `read_automation` to see current values before updating.
@@ -1056,7 +1067,10 @@ When changing **time**, the new time must be at least 10 minutes apart from all 
             return "Error: No task ID provided. Use `list_automations` to see available task IDs."
         
         try:
-            manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
+            manager, _ = _manager_for_scope(
+                kwargs.get("user_scope_id"),
+                user_role=kwargs.get("user_role"),
+            )
             task = manager.get(task_id)
             
             if not task:
@@ -1148,6 +1162,8 @@ class DeleteAutomationTool(BaseTool):
     """Tool for deleting automation tasks (moves to trash for recovery)."""
     
     name = "delete_automation"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = """Delete an automation task by ID. The task will be moved to trash and can be restored later.
 Use this when user wants to remove an automation but might want to restore it later."""
     
@@ -1203,6 +1219,8 @@ class RestoreAutomationTool(BaseTool):
     """Tool for restoring automation tasks from trash."""
     
     name = "restore_automation"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = """Restore a deleted automation task from trash by ID.
 Use this when user wants to recover a previously deleted automation."""
     
@@ -1257,6 +1275,8 @@ class ListTrashTool(BaseTool):
     """Tool for listing deleted automation tasks in trash."""
     
     name = "list_trash"
+    permission_level = "read"
+    side_effect_class = "none"
     description = "List all automation tasks in trash (deleted but recoverable)."
     
     parameters = {

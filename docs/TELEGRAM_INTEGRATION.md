@@ -110,6 +110,8 @@ In addition, any Telegram user whose ID is stored in a VAF user's **Contacts** w
 
 The agent can send you messages via Telegram (e.g. "send me the result via Telegram") using the `send_telegram` tool. Resolution uses: (1) persisted chat IDs (from a message you sent), (2) whitelist match (case-insensitive username, normalized scope), or (3) when there is exactly one whitelist entry, that verified account owner is used so they do not need a separate manual whitelist step. The bot recognizes the account that linked Telegram and can reach them without re-adding them to the whitelist.
 
+Proactive delivery now works in both the main VAF process and in background/subprocess runs such as scheduled automations. When the current process has the live Telegram bridge callback, `send_telegram` uses the normal in-process queue. When it does not, the tool falls back to a direct Telegram Bot API send using the configured bot token. This avoids false "sent" reports from background runs and makes delivery errors visible to the caller.
+
 ---
 
 ## Message Handling
@@ -311,7 +313,7 @@ When the user asks for a document (e.g. "Send me the contract") via Telegram, th
 send_telegram(message="Here is your contract", file_path="/path/to/invoice.pdf")
 ```
 
-The Telegram bridge sends the file via `sendDocument` API with the message as caption. Supports PDF, DOCX, and other document types.
+The Telegram bridge sends the file via `sendDocument` API with the message as caption. Supports PDF, DOCX, and other document types. In background/subprocess runs, the same result is achieved through the direct Bot API fallback.
 
 ### Proactive Voice Delivery
 
@@ -321,7 +323,7 @@ When the user asks for a voice message via Telegram (e.g. "send it as voice via 
 send_telegram(message="Here is the summary", voice_lang="de")
 ```
 
-The bridge synthesizes audio via TTS and sends it as a Telegram voice message.
+The bridge synthesizes audio via TTS and sends it as a Telegram voice message. In background/subprocess runs, `send_telegram` can also send the voice message directly through the Bot API path if no in-process bridge callback is available.
 
 **Path resolution:** The `file_path` argument supports:
 - Absolute paths (e.g. `C:\Users\...\Downloads\file.pdf`)
@@ -434,6 +436,17 @@ VAF tracks Telegram activity for session management:
 
 3. **Check user is whitelisted:**
    Verify `telegram_user_id` in whitelist matches your Telegram ID.
+
+### Proactive Send Fails From Automation Or Background Task
+
+1. **Check that Telegram is configured and verified:**
+   `telegram_config.enabled`, `telegram_config.verified`, and `telegram_config.bot_token` must all be set.
+
+2. **Check that the user can be resolved:**
+   `send_telegram` still needs a valid chat target. The user must either have a persisted chat ID from an earlier Telegram message or match a whitelist entry.
+
+3. **Interpret the error literally:**
+   If `send_telegram` returns a failure, delivery did not succeed. Background runs no longer silently treat a missing bridge callback as success.
 
 ### Voice Transcription Fails
 

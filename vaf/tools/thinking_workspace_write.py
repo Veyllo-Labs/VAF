@@ -17,6 +17,8 @@ class ThinkingWorkspaceWriteTool(BaseTool):
     """Create tasks and write files in Thinking Workspace."""
 
     name = "thinking_workspace_write"
+    permission_level = "system"
+    side_effect_class = "reversible"
     description = (
         "Write safe artifacts into per-user Thinking Workspace: create_task or write_file. "
         "No destructive operations."

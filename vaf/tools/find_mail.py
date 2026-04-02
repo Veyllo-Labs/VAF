@@ -26,6 +26,8 @@ class FindMailTool(BaseTool):
     body so you can answer without calling read_mail.
     """
     name = "find_mail"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "Search the user's synced mailbox by subject or sender. "
         "Use when the user asks 'what does the X mail say?' or 'more details about the [sender/subject] email'. "

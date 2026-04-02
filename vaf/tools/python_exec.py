@@ -26,6 +26,9 @@ logger = logging.getLogger("vaf.python_exec")
 
 class PythonExecTool(BaseTool):
     name = "python_exec"
+    permission_level = "dangerous"
+    channel_restrictions = ["channel", "telegram", "whatsapp", "discord"]
+    side_effect_class = "irreversible"
     description = (
         "⚠️ UNSAFE: Run Python code directly on the HOST system (no sandbox). "
         "Only use when you need host filesystem/network access. "

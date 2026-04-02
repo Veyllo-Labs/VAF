@@ -18,6 +18,8 @@ class ThinkingNoteAddTool(BaseTool):
     """Persist a note for your next thinking run (Thinking Mode only)."""
 
     name = "thinking_note_add"
+    permission_level = "system"
+    side_effect_class = "reversible"
     description = (
         "Save a persistent note for your next thinking run. "
         "Use this to remember context, user decisions, or things to avoid asking again. "

@@ -17,6 +17,8 @@ class UpdateUserIdentityTool(BaseTool):
     so you can greet them correctly (e.g. "Hey Mert") and respect their preferences.
     """
     name = "update_user_identity"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = (
         "Update the current user's identity so you know who you're talking to and how they like to be treated. "
         "Use when the user says their name, language, location (city/country), preferences, or do's/don'ts (e.g. 'call me X', 'I prefer German', "

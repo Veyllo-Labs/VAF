@@ -5,6 +5,8 @@ from vaf.tools.base import BaseTool
 
 class ListToolsTool(BaseTool):
     name = "list_tools"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "List all tools available to the model. "
         "Use this when you are not sure which tool can handle the task, "

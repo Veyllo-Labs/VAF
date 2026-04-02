@@ -56,7 +56,7 @@ Key rules:
 
 ### Client → Server
 
-- `chat`: user input (must include `sessionId`). Optional: `sidebarDocuments` (`Array<{ name, data, mimeType? }>`, same format as `set_sidebar_documents`); `editorDocument` (`{ name, content }`, plain text of Document Editor when open); `editorSelections` (`Array<{ start, end, text }>`, marked ranges in the editor for `replace_editor_selection`). If present, the backend stores sidebar docs in `session.runtime_state["sidebar_documents"]`, refreshes the attachment index for that session/scope, editor doc is prepended to the user turn as `--- CURRENT DOCUMENT (Editor): ... ---`, and editor selections in `session.runtime_state["editor_selections"]` for the tool.
+- `chat`: user input (must include `sessionId`). Optional: `sidebarDocuments` (`Array<{ name, data, mimeType? }>`, same format as `set_sidebar_documents`); `editorDocument` (`{ name, content }`, plain text of Document Editor when open); `editorSelections` (`Array<{ start, end, text }>`, marked ranges in the editor for `replace_editor_selection`). If present, the backend stores sidebar docs in `session.runtime_state["sidebar_documents"]`, editor doc in `session.runtime_state["editor_document"]`, refreshes the attachment index for that session/scope, prepends the editor doc to the user turn as `--- CURRENT DOCUMENT (Editor): ... ---`, and stores editor selections in `session.runtime_state["editor_selections"]` for the selection-based tool path. For native DOCX sessions, `editorDocument.content` is flattened from the native DOCX model instead of browser HTML.
 - `set_sidebar_documents`: set documents shown in the Document Viewer (attachments panel) for the current session. Payload: `{ sessionId?, documents: Array<{ name, data (base64/data-URL), mimeType? }> }`. Backend stores extracted text in `session.runtime_state["sidebar_documents"]`, rebuilds the session-scoped attachment index, and injects attachment **top-k snippets** into the next user turn (with an explicit "document context active" header). Send `documents: []` to clear (this also clears session attachment index entries).
 - `get_sessions`, `new_session`, `load_session`, `delete_session`. For `load_session`, the server also enqueues `__CMD__:LOAD_SESSION:{id}` so the headless runner immediately loads that session’s context (history and runtime state); the agent stays in sync when the user only switches sessions without sending a message.
 - `get_config`, `get_models`, `get_tools`, `get_workflows`
@@ -69,7 +69,19 @@ Key rules:
 ### Server → Client
 
 - `sidebar_documents_set`: sent after processing `set_sidebar_documents`. Payload: `{ contents: Array<{ name, content, data?, mimeType?, htmlContent? }>, sessionId?, error? }`. Each entry has `name` and `content` (extracted text for the LLM); `data` (base64) and `mimeType` for display. When Gotenberg is available, Office docs (.docx, .xlsx, .pptx, .odt, .ods, .odp) are converted to PDF on the backend and returned as `mimeType: application/pdf` with `data` (PDF base64), so the frontend uses the PDF viewer for original layout. Without Gotenberg, the backend provides `htmlContent` or the frontend falls back to client-side mammoth.js for DOCX.
-- `editor_apply_edit`: sent when the agent calls `replace_editor_selection`. Payload: `{ sessionId, selectionIndex, newText, start, end }`. The frontend replaces the character range `[start, end]` in the Document Editor with `newText` and removes that selection chip.
+- `editor_apply_edit`: sent when the agent calls `replace_editor_selection` or when `replace_editor_text` resolves an exact text match in the current editor document. Payload: `{ sessionId, selectionIndex, newText, start, end }`. The frontend replaces the character range `[start, end]` in the Document Editor with `newText` and removes that selection chip when `selectionIndex >= 0`. For native DOCX sessions, this is applied to the native document model; for legacy editor sessions it is applied to HTML/text content.
+- `document_ready`: opens the Document Editor for a newly created/generated file. If the file is `.docx`, the frontend uses the native DOCX editor path.
+
+## Native DOCX Editor Endpoints
+
+The native DOCX editor uses dedicated backend endpoints instead of the legacy HTML roundtrip:
+
+- `GET /api/file/docx-model`
+  - Loads `.docx` into VAF's native DOCX model.
+- `POST /api/file/save-docx-native`
+  - Saves the native DOCX model back to `.docx`.
+
+These endpoints are used only for the native DOCX editor path. The legacy HTML editor endpoints remain available for non-DOCX editor flows.
 - `session_list`: available sessions
 - `history_update`: session history (also sets active session). The frontend does not clear document-panel attachment state for that session, so per-session attachment documents persist across repeated switches. Tool messages now include `toolName`, `toolId`, and `toolStatus` (either from `metadata.*` or from top-level keys `name`/`tool_call_id`; status defaults to `"completed"` if content is present). The frontend extracts these fields when parsing server messages to ensure tool cards display correctly after reload.
 - `agent_message_update`: streaming assistant text (full content so far). The frontend shows a **separate** assistant bubble when the last message is a tool card: only the text after the previous assistant content is shown in the new bubble, so tool use and the follow-up answer appear distinctly.

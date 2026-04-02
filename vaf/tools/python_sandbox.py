@@ -60,6 +60,8 @@ class PythonSandboxTool(BaseTool):
     """
     
     name = "python_sandbox"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = (
         "Execute Python code safely in a Docker-isolated sandbox. "
         "Runs code in a secure container with limited resources (512MB RAM, 0.5 CPU). "

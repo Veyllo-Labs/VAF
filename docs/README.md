@@ -12,6 +12,7 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 - **CONTEXT_MANAGEMENT.md**: Dynamic system prompt and token optimization strategies.
 - **GATEWAY.md**: Persistent gateway server and multi-channel access.
 - **WEB_UI.md**: Browser-based dashboard and WebSocket API.
+- **DOCUMENT_EDITOR_NATIVE_DOCX.md**: Native DOCX editor architecture, import/export model, editor split, and Gotenberg's role.
 
 ### Speech & Voice
 - **SPEECH_FEATURES.md**: Complete TTS/STT integration across CLI, Web UI, and Telegram.

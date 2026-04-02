@@ -590,6 +590,18 @@ async def startup_event():
             log("WebServer", f"Thinking mode start error: {e}")
     log("WebServer", "Email auto-sync background task started (every 30 min)")
 
+    # Start the process-wide automation scheduler for existing timed automations.
+    try:
+        from vaf.core.automation import ensure_scheduler_started
+
+        _scheduler_mgr, started_now = ensure_scheduler_started(origin="web_server_startup")
+        if started_now:
+            log("WebServer", "Automation scheduler started")
+        else:
+            log("WebServer", "Automation scheduler already running")
+    except Exception as e:
+        log("WebServer", f"Automation scheduler start error: {e}")
+
     # In Docker mode, the tray app doesn't run, so we must start the headless runner here.
     if Config.is_docker_mode():
         log("WebServer", "Docker mode detected - starting headless agent runner...")
@@ -1098,6 +1110,23 @@ async def get_file_as_html(path: str = Query(..., description="Path to .docx, .x
         raise HTTPException(status_code=500, detail=f"Failed to convert to HTML: {e}")
 
 
+@app.get("/api/file/docx-model")
+async def get_file_as_docx_model(path: str = Query(..., description="Path to .docx to convert to VAF's native DOCX model")):
+    """Convert a DOCX file into the native editor model."""
+    target = _allowed_file_path(path)
+    if target.suffix.lower() != ".docx":
+        raise HTTPException(status_code=400, detail="Only .docx files are supported")
+    try:
+        from vaf.core.docx_import import import_docx_to_native_model
+
+        model = import_docx_to_native_model(target)
+        return model.to_dict()
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=f"DOCX support not installed: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to convert docx to native model: {e}")
+
+
 class FileSaveRequest(BaseModel):
     """Request body for saving a file."""
     path: str
@@ -1108,6 +1137,12 @@ class FileSaveDocxRequest(BaseModel):
     """Request body for saving HTML content back as .docx."""
     path: str
     content: str  # HTML from the editor
+
+
+class FileSaveDocxNativeRequest(BaseModel):
+    """Request body for saving native DOCX model content back as .docx."""
+    path: str
+    document: dict
 
 
 def _strip_html_to_text(html_fragment: str) -> str:
@@ -1177,6 +1212,23 @@ async def save_file_as_docx(request: FileSaveDocxRequest):
         raise HTTPException(status_code=503, detail="Word support not installed. Run: pip install python-docx")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save docx: {e}")
+
+
+@app.post("/api/file/save-docx-native")
+async def save_file_as_docx_native(request: FileSaveDocxNativeRequest):
+    """Save VAF's native DOCX editor model back as a .docx file."""
+    target = _allowed_save_path(request.path, ".docx")
+    try:
+        from vaf.core.docx_export import export_native_docx
+        from vaf.core.docx_native_model import NativeDocxDocument
+
+        document = NativeDocxDocument.from_dict(request.document or {})
+        saved_path = export_native_docx(document, target)
+        return {"status": "ok", "path": str(saved_path)}
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=f"DOCX support not installed: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save native docx: {e}")
 
 
 class FileSaveOfficeRequest(BaseModel):
@@ -2609,6 +2661,28 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             if ed_content:
                                 block = f"--- CURRENT DOCUMENT (Editor): {name} ---\n{ed_content}\n----------------\n\n"
                                 content = (block + content) if content else block
+                            try:
+                                loaded = session_mgr.load(session_id)
+                            except FileNotFoundError:
+                                loaded = Session(
+                                    id=session_id,
+                                    name=f"Session {session_id}",
+                                    runtime_state={"editor_document": editor_doc},
+                                )
+                                session_mgr.save(loaded, sync_state=False)
+                            else:
+                                if not getattr(loaded, "runtime_state", None):
+                                    loaded.runtime_state = {}
+                                loaded.runtime_state["editor_document"] = editor_doc
+                                session_mgr.save(loaded, sync_state=False)
+                        else:
+                            try:
+                                loaded = session_mgr.load(session_id)
+                                if getattr(loaded, "runtime_state", None) and "editor_document" in loaded.runtime_state:
+                                    loaded.runtime_state["editor_document"] = {}
+                                    session_mgr.save(loaded, sync_state=False)
+                            except Exception:
+                                pass
 
                         # Editor selections: store for replace_editor_selection tool (start/end per index)
                         editor_selections = cmd.get("editorSelections")
@@ -2627,6 +2701,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     loaded.runtime_state = {}
                                 loaded.runtime_state["editor_selections"] = editor_selections
                                 session_mgr.save(loaded, sync_state=False)
+                        else:
+                            try:
+                                loaded = session_mgr.load(session_id)
+                                if getattr(loaded, "runtime_state", None) and "editor_selections" in loaded.runtime_state:
+                                    loaded.runtime_state["editor_selections"] = []
+                                    session_mgr.save(loaded, sync_state=False)
+                            except Exception:
+                                pass
 
                         # Ensure sidebar documents are in session before queueing (so headless has context)
                         if sidebar_docs_payload:

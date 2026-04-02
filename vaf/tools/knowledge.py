@@ -9,6 +9,8 @@ class UpdateCodexTool(BaseTool):
     Use this when you learn something important that should be remembered for future tasks.
     """
     name = "update_codex"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     description = "Save a persistent pattern or convention to the project Codex (Long-term memory)."
     
     parameters = {
@@ -48,6 +50,8 @@ class AddMemoryTool(BaseTool):
     Use this for short-term reminders or scratchpad notes for the CURRENT workflow.
     """
     name = "add_memory"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = "Add a note to the session memory (Short-term scratchpad)."
     
     parameters = {

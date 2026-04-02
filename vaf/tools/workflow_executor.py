@@ -12,6 +12,8 @@ from vaf.tools.base import BaseTool
 
 class ExecuteWorkflowTool(BaseTool):
     name = "execute_workflow"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = """Execute a specific workflow by ID.
     
     Use this tool when:

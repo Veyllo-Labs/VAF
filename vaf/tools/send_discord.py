@@ -13,6 +13,8 @@ class SendDiscordTool(BaseTool):
     Use when the user asked you to send them something and they prefer Discord or said "via Discord".
     """
     name = "send_discord"
+    permission_level = "write"
+    side_effect_class = "irreversible"
     description = (
         "Send a message to the user via Discord. "
         "Use when the user asked you to send them something (e.g. 'send me the result via Discord' or when main_messenger is Discord)."

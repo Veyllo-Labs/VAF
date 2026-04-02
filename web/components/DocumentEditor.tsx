@@ -5,6 +5,8 @@ import dynamic from 'next/dynamic';
 import { X, Download, FileText, Save, Loader2, CheckCircle2, Circle, Plus, Trash2, ChevronDown, Bold, Italic, Underline, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, Highlighter, Eraser, Printer } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { CHIP_BG_CLASSES, INSERTION_COLOR_CLASSES } from '@/components/DocumentViewer';
+import NativeDocxEditor from '@/components/NativeDocxEditor';
+import type { NativeDocxDocument } from '@/lib/docxNative';
 
 const PdfWithHighlights = dynamic(() => import('@/components/PdfWithHighlights'), { ssr: false });
 
@@ -53,6 +55,8 @@ export type DocumentEditorProps = {
     initialContent?: string;
     /** Called whenever content changes (typing, load, toolbar). Parent can store per-session to restore on chat switch. */
     onContentChange?: (content: string) => void;
+    initialDocxModel?: NativeDocxDocument | null;
+    onDocxModelChange?: (document: NativeDocxDocument) => void;
     mode?: 'overlay' | 'dock';
     status?: string;
     presence?: 'online' | 'idle' | 'error';
@@ -873,7 +877,31 @@ function injectHighlightsInBody(body: HTMLElement, segments: { start: number; en
     }
 }
 
-export default function DocumentEditor({
+export default function DocumentEditor(props: DocumentEditorProps) {
+    if (isDocxPath(props.filePath || '')) {
+        return (
+            <NativeDocxEditor
+                isOpen={props.isOpen}
+                onClose={props.onClose}
+                canClose={props.canClose}
+                filePath={props.filePath || ''}
+                title={props.title || 'Document Editor'}
+                initialModel={props.initialDocxModel}
+                onModelChange={props.onDocxModelChange}
+                onInsertSelection={
+                    props.onInsertSelection
+                        ? (text, range) => props.onInsertSelection?.(text, range)
+                        : undefined
+                }
+                insertedSelections={props.insertedSelections}
+            />
+        );
+    }
+
+    return <LegacyDocumentEditor {...props} />;
+}
+
+function LegacyDocumentEditor({
     isOpen,
     onClose,
     canClose = true,
@@ -881,6 +909,8 @@ export default function DocumentEditor({
     title = 'Document Editor',
     initialContent = '',
     onContentChange,
+    initialDocxModel,
+    onDocxModelChange,
     mode = 'overlay',
     status = '',
     presence,

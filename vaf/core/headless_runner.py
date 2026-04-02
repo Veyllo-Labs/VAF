@@ -224,13 +224,22 @@ def _format_sidebar_doc(d: dict) -> str:
     return f"{header}\n{content}\n----------------"
 
 
-def _maybe_open_draft_in_editor(session_id: str, user_input: str, response_text: str, source: str) -> None:
+def _maybe_open_draft_in_editor(
+    session_id: str,
+    user_input: str,
+    response_text: str,
+    source: str,
+    *,
+    editor_has_content: bool = False,
+) -> None:
     """
     If the user asked for a text (e.g. "Schreib mir einen Text") and the response is substantial,
     save it to a draft file and open the Document Editor so the user can edit or save.
     Only runs for Web UI (source == 'web').
     """
     if not session_id or (str(source or "").strip().lower() != "web"):
+        return
+    if editor_has_content:
         return
     if not _user_asked_for_text(user_input or ""):
         return
@@ -1088,13 +1097,22 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except FileNotFoundError:
                         pass  # no session yet, use raw input_text
 
-                    # replace_editor_selection only when Document Editor is open with marked selections
+                    # Editor write tools depend on whether an editor document is open and whether selections exist.
+                    editor_has_content = False
                     try:
                         session_for_editor = session_mgr.load(task.session_id)
-                        editor_selections = (getattr(session_for_editor, "runtime_state", None) or {}).get("editor_selections") or []
-                        agent._excluded_tools = set() if editor_selections else {"replace_editor_selection"}
+                        runtime_state = getattr(session_for_editor, "runtime_state", None) or {}
+                        editor_document = runtime_state.get("editor_document") or {}
+                        editor_has_content = bool((editor_document.get("content") or "").strip())
+                        editor_selections = runtime_state.get("editor_selections") or []
+                        excluded_tools = set()
+                        if not editor_has_content:
+                            excluded_tools.update({"replace_editor_selection", "replace_editor_text"})
+                        elif not editor_selections:
+                            excluded_tools.add("replace_editor_selection")
+                        agent._excluded_tools = excluded_tools
                     except Exception:
-                        agent._excluded_tools = {"replace_editor_selection"}
+                        agent._excluded_tools = {"replace_editor_selection", "replace_editor_text"}
 
                     try:
                         if is_debug_logging_enabled():
@@ -1203,6 +1221,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 task.input_text or "",
                                 str(final_text),
                                 getattr(task, "source", "web"),
+                                editor_has_content=editor_has_content,
                             )
                         except Exception:
                             pass

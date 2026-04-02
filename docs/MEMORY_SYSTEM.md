@@ -69,6 +69,8 @@ In chat, retrieval runs in the **input phase** before the LLM is called: the use
 
 **Note:** This Memory System (RAG) is separate from the main agent’s **working memory** (scratchpad: notes, plan, tasks in `.vaf/main/working_memory.json`). Working memory is per-session state with limits and optional timestamps; see [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md) for the persistent layer and working memory behaviour.
 
+**Resume compaction:** Context compression/checkpoints can append a deterministic resume block after the normal compressed summary. This block is rule-based (no LLM call) and exposes operational fields such as current work, pending work, key files, tools used, decisions, and next action. It is controlled by `resume_compaction_enabled` (default `true`) in `config.json`.
+
 ## Requirements
 
 - **Docker** (required for PostgreSQL + pgvector + Redis)
@@ -141,6 +143,7 @@ Additional settings in `~/.vaf/config.json`:
 | `memory_hybrid_lexical_min_score` | `0.05` | Min lexical score required before fusion. Conservative floor to remove zero-overlap lexical noise while preserving recall for RRF fusion. |
 | `memory_compaction_interval` | `15` | Run session compaction every N user turns (cumulative per session). |
 | `memory_compaction_max_tokens` | `4000` | Max tokens for the compaction LLM reply (API, local LLM, and server mode). Allows more `MEMORY:` lines per run. |
+| `resume_compaction_enabled` | `true` | Append a deterministic resume block after context compression and `checkpoint_context` so long sessions resume more predictably. |
 
 ### Attachment Lane Retrieval Tuning (config.json)
 

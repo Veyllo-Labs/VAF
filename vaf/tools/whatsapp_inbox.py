@@ -13,6 +13,8 @@ class WhatsAppInboxTool(BaseTool):
     Call find_whatsapp_messages to search, or read_whatsapp_chat to read a chat.
     """
     name = "whatsapp_inbox"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "List WhatsApp chats (inbox). Bridge list plus all chats that have messages in the store (like mail/Telegram). "
         "Returns chat_id, name, last_ts. Use find_whatsapp_messages to search; read_whatsapp_chat(chat_id=...) to read."

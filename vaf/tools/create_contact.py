@@ -12,6 +12,8 @@ class CreateContactTool(BaseTool):
     If multiple contacts already have the same name, creating another is allowed; use contact_id to disambiguate for update/delete.
     """
     name = "create_contact"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = (
         "Create a contact in the central contact list. Required: name. Optional: email, whatsapp_phone, telegram_username, "
         "preferred_language, how_to_address, birthday, notes, allow_as_assistant_user. "

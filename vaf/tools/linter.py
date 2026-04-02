@@ -18,6 +18,8 @@ from vaf.core.platform import Platform
 
 class LinterTool(BaseTool):
     name = "linter"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "Check code files for syntax errors and linting issues. "
         "Supports Python (ruff), JavaScript (eslint), and other languages. "

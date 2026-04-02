@@ -9,6 +9,7 @@ import {
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, Bell
 } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
+import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
 import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
@@ -52,6 +53,14 @@ type Session = {
     messageCount?: number;
     /** Thinking-mode run shown in chat list with brain icon */
     source?: 'thinking';
+};
+
+type SessionEditorDocumentState = {
+    isOpen: boolean;
+    filePath: string;
+    title: string;
+    content?: string;
+    docxModel?: NativeDocxDocument | null;
 };
 
 /** Replace plain-text range [start, end] in HTML with newText; returns new HTML. */
@@ -947,13 +956,16 @@ function VAFDashboardContent() {
     });
 
     // Document Editor: one state entry per session (like Viewer); includes content so unsaved edits survive chat switch.
-    const [sessionEditorState, setSessionEditorState] = useState<Record<string, { isOpen: boolean; filePath: string; title: string; content?: string }>>({});
-    const defaultEditorState = useMemo(() => ({ isOpen: false as const, filePath: '', title: 'Document' }), []);
+    const [sessionEditorState, setSessionEditorState] = useState<Record<string, SessionEditorDocumentState>>({});
+    const defaultEditorState = useMemo(
+        () => ({ isOpen: false as const, filePath: '', title: 'Document', docxModel: null as NativeDocxDocument | null }),
+        []
+    );
     const documentEditorState = currentSessionId
         ? (sessionEditorState[currentSessionId] ?? defaultEditorState)
         : defaultEditorState;
     const setDocumentEditorState = useCallback((
-        valueOrUpdater: { isOpen: boolean; filePath: string; title: string; content?: string } | ((prev: { isOpen: boolean; filePath: string; title: string; content?: string }) => { isOpen: boolean; filePath: string; title: string; content?: string })
+        valueOrUpdater: SessionEditorDocumentState | ((prev: SessionEditorDocumentState) => SessionEditorDocumentState)
     ) => {
         if (!currentSessionId) return;
         setSessionEditorState(prev => {
@@ -962,7 +974,7 @@ function VAFDashboardContent() {
             return { ...prev, [currentSessionId]: next };
         });
     }, [currentSessionId, defaultEditorState]);
-    const setDocumentEditorStateForSession = useCallback((sessionId: string, valueOrUpdater: { isOpen: boolean; filePath: string; title: string; content?: string } | ((prev: { isOpen: boolean; filePath: string; title: string; content?: string }) => { isOpen: boolean; filePath: string; title: string; content?: string })) => {
+    const setDocumentEditorStateForSession = useCallback((sessionId: string, valueOrUpdater: SessionEditorDocumentState | ((prev: SessionEditorDocumentState) => SessionEditorDocumentState)) => {
         setSessionEditorState(prev => {
             const current = prev[sessionId] ?? defaultEditorState;
             const next = typeof valueOrUpdater === 'function' ? valueOrUpdater(current) : valueOrUpdater;
@@ -1872,6 +1884,7 @@ function VAFDashboardContent() {
                             filePath: data.filePath || '',
                             title: data.title || 'Document',
                             content: undefined, // new document: load from server; clears any previous doc content
+                            docxModel: null,
                         });
                         // Only switch UI if this event is for the currently visible chat
                         if (sid === currentSessionId) {
@@ -1889,7 +1902,19 @@ function VAFDashboardContent() {
                     if (!sid || start === undefined || end === undefined) return;
                     setSessionEditorState(prev => {
                         const cur = prev[sid];
-                        if (!cur?.content) return prev;
+                        if (!cur) return prev;
+                        if (cur.docxModel) {
+                            const nextModel = replaceTextInNativeDocx(cur.docxModel, start, end, newText);
+                            return {
+                                ...prev,
+                                [sid]: {
+                                    ...cur,
+                                    docxModel: nextModel,
+                                    content: flattenNativeDocxText(nextModel),
+                                },
+                            };
+                        }
+                        if (!cur.content) return prev;
                         const nextContent = replaceTextInHtml(cur.content, start, end, newText);
                         return { ...prev, [sid]: { ...cur, content: nextContent } };
                     });
@@ -2693,10 +2718,16 @@ function VAFDashboardContent() {
             ? documentViewerState.documents.filter(d => d.data).map(d => ({ name: d.name, data: d.data, mimeType: d.mimeType || '' }))
             : undefined;
         const editorDoc =
-            documentEditorState.isOpen && documentEditorState.content
+            documentEditorState.isOpen && (documentEditorState.docxModel || documentEditorState.content)
                 ? (() => {
+                    if (documentEditorState.docxModel) {
+                        return {
+                            name: documentEditorState.title || 'Document',
+                            content: flattenNativeDocxText(documentEditorState.docxModel),
+                        };
+                    }
                     const div = document.createElement('div');
-                    div.innerHTML = documentEditorState.content;
+                    div.innerHTML = documentEditorState.content || '';
                     return { name: documentEditorState.title || 'Document', content: (div.textContent || div.innerText || '').trim() };
                 })()
                 : undefined;
@@ -4162,7 +4193,9 @@ function VAFDashboardContent() {
                                     filePath={documentEditorState.filePath}
                                     title={documentEditorState.title}
                                     initialContent={documentEditorState.content ?? ''}
+                                    initialDocxModel={documentEditorState.docxModel ?? null}
                                     onContentChange={(content) => setDocumentEditorState(prev => ({ ...prev, content }))}
+                                    onDocxModelChange={(docxModel) => setDocumentEditorState(prev => ({ ...prev, docxModel }))}
                                     onInsertSelection={(text, range) => setInsertedSelections(prev => [...prev, { text, ...range }])}
                                     insertedSelectionsCount={insertedSelections.length}
                                     insertedSelections={insertedSelections}

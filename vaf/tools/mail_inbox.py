@@ -96,6 +96,8 @@ class MailInboxTool(BaseTool):
     To read a message's content, use read_mail with account_id, message_id, folder, and provider_message_id from the list.
     """
     name = "mail_inbox"
+    permission_level = "read"
+    side_effect_class = "none"
     description = (
         "Show the inbox (list of recent emails). Same mailbox as the Mail dashboard (Settings → Connections → Email). "
         "When the user asks for a specific number (e.g. 'list 15 mails', 'show 20 emails', 'die letzten 50'), you MUST call mail_inbox with max_messages set to that number (e.g. max_messages=15) and then present the tool output to the user as-is. "

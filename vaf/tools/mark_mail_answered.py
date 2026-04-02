@@ -17,6 +17,8 @@ class MarkMailAnsweredTool(BaseTool):
     handled again. Use account_id, folder, message_id from mail_inbox.
     """
     name = "mark_mail_answered"
+    permission_level = "write"
+    side_effect_class = "reversible"
     description = (
         "Mark an email as answered by the agent. Call after you have processed or replied to the message. "
         "Use account_id, folder, message_id from mail_inbox. Avoids double handling and shows 'Benatwortet am ...' in the Mail UI."

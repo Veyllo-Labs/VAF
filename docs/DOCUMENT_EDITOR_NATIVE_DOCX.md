@@ -102,8 +102,64 @@ The native DOCX editor currently supports these concepts directly:
 - headers and footers
 - page breaks
 - section properties at import/export level
+- DIN A4 page layout with fixed dimensions
+- DOM-based pagination with paragraph flow across pages
+- inline paragraph editing (click-to-edit directly in the page preview)
 
 Unsupported or partially supported OOXML content is not silently discarded in the editor model. Instead, it is represented as a warning or an `unsupported` block so the limitation is visible.
+
+## Pagination
+
+The editor renders the document as a sequence of fixed-size A4 pages (210 × 297 mm) with a visible gap between pages, similar to desktop office applications.
+
+### DOM-Based Measurement
+
+Page breaking uses actual DOM measurement rather than character-count heuristics. The `splitBlocksIntoPages` function in `NativeDocxEditor.tsx`:
+
+1. Creates a hidden measurement host element matching the page's content width.
+2. For each paragraph, renders a preview node off-screen and measures its height.
+3. When a paragraph exceeds the remaining space on the current page, a binary-search algorithm (`fitParagraphSliceToHeight`) splits the paragraph text at a word boundary that fits.
+4. Non-paragraph blocks (tables, images, page breaks) use simpler height estimation.
+
+Each rendered block carries metadata (`originalIndex`, `sliceIndex`, `startOffset`, `endOffset`) so the rest of the editor can map between paginated slices and the original document model.
+
+### Page Margins
+
+Section margins from the DOCX model are respected and clamped to sensible A4 defaults (12–35 mm top/bottom, 10–40 mm left/right) to prevent extreme values from breaking the layout.
+
+## Inline Editing
+
+Paragraph editing happens directly inside the page preview. When the user clicks a paragraph block, it becomes a `<textarea>` in place. There is no separate editing panel.
+
+### Draft State Pattern
+
+To keep typing responsive and prevent expensive re-pagination on every keystroke, `DocxBlockPreview` maintains a local `draftText` state:
+
+- **While the textarea is focused** (`isFocusedRef`), external model changes (parent re-renders, agent edits) do **not** overwrite `draftText`. This prevents a ping-pong loop where the user's in-progress typing fights with the model sync effect.
+- **On blur**, `commitDraft` compares `draftText` against the model's run text. If they differ, it calls `onParagraphChange` which updates the document model.
+- **After blur**, the sync effect is free to run again (since `isFocusedRef` is `false`), aligning `draftText` with the committed model text.
+
+### Slice-Aware Editing
+
+When a paragraph is split across pages (multiple slices), the user edits the visible slice. `updateSelectedParagraph` reconstructs the full paragraph text by splicing the edited slice back into the original:
+
+```
+nextText = fullText.slice(0, startOffset) + editedSliceText + fullText.slice(endOffset)
+```
+
+## State Management Between Parent And Child
+
+The editor state flows between `page.tsx` (parent) and `NativeDocxEditor` (child). Two mechanisms prevent feedback loops:
+
+### Echo Suppression (`lastSentModelRef`)
+
+When `NativeDocxEditor` updates its `documentModel` (from user edits or server load), it notifies the parent via `onModelChange`. The parent stores the model and passes it back as `initialModel` on the next render. Without protection this creates a loop.
+
+`lastSentModelRef` tracks the last model reference sent to the parent. When `initialModel` arrives and matches `lastSentModelRef.current`, it is recognized as an echo and ignored. Only genuinely new models (e.g. from agent edits via `replaceTextInNativeDocx`) pass the check and update the editor.
+
+### Focus Guard (`isFocusedRef`)
+
+Inside `DocxBlockPreview`, a `useEffect` syncs `draftText` from `editableRun.text`. While the textarea is focused, this sync is suppressed via `isFocusedRef` so that external re-renders cannot overwrite the user's in-progress typing.
 
 ## Gotenberg's Role
 
@@ -182,6 +238,7 @@ The native DOCX editor is a real architectural step, but not yet a full Word clo
 
 Future expansion areas:
 
+- page position indicator (current page / total pages)
 - footnotes and endnotes
 - fields and placeholders
 - table merges and richer layout semantics

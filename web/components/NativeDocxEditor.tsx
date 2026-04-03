@@ -573,15 +573,7 @@ function splitBlocksIntoPages(
 }
 
 type SelectedBlock =
-  | {
-    kind: 'block';
-    sectionIndex: number;
-    blockIndex: number;
-    renderKey?: string;
-    sliceIndex?: number | null;
-    startOffset?: number | null;
-    endOffset?: number | null;
-  }
+  | { kind: 'block'; sectionIndex: number; blockIndex: number; renderKey?: string; sliceIndex?: number | null }
   | { kind: 'header'; sectionIndex: number; paragraphIndex: number }
   | { kind: 'footer'; sectionIndex: number; paragraphIndex: number }
   | null;
@@ -629,14 +621,22 @@ export default function NativeDocxEditor({
   const previewRef = useRef<HTMLDivElement>(null);
   const onModelChangeRef = useRef(onModelChange);
   const onContentChangeRef = useRef(onContentChange);
+  const lastSentModelRef = useRef<NativeDocxDocument | null>(null);
 
   useEffect(() => { onModelChangeRef.current = onModelChange; }, [onModelChange]);
   useEffect(() => { onContentChangeRef.current = onContentChange; }, [onContentChange]);
+
+  // Accept model from parent ONLY when it is genuinely new (not an echo of our own edit)
   useEffect(() => {
-    if (initialModel && initialModel !== documentModel) setDocumentModel(initialModel);
-  }, [initialModel, documentModel]);
+    if (initialModel && initialModel !== lastSentModelRef.current) {
+      setDocumentModel(initialModel);
+    }
+  }, [initialModel]);
+
+  // Notify parent when our model changes and track the reference so we can ignore the echo
   useEffect(() => {
     if (documentModel) {
+      lastSentModelRef.current = documentModel;
       onModelChangeRef.current?.(documentModel);
       onContentChangeRef.current?.(flattenNativeDocxText(documentModel));
     }
@@ -759,22 +759,10 @@ export default function NativeDocxEditor({
     if (!documentModel || !selectedBlock) return null;
     if (selectedBlock.kind === 'header') return documentModel.sections[selectedBlock.sectionIndex]?.header.paragraphs[selectedBlock.paragraphIndex] ?? null;
     if (selectedBlock.kind === 'footer') return documentModel.sections[selectedBlock.sectionIndex]?.footer.paragraphs[selectedBlock.paragraphIndex] ?? null;
+    if (selectedRenderedBlock?.block.type === 'paragraph') return selectedRenderedBlock.block;
     const b = documentModel.sections[selectedBlock.sectionIndex]?.blocks[selectedBlock.blockIndex];
-    if (b?.type !== 'paragraph') return null;
-    if (typeof selectedBlock.startOffset === 'number' && typeof selectedBlock.endOffset === 'number') {
-      const fullText = flattenParagraphText(b);
-      const start = Math.max(0, Math.min(selectedBlock.startOffset, fullText.length));
-      const end = Math.max(start, Math.min(selectedBlock.endOffset, fullText.length));
-      return createParagraphSlice(
-        b,
-        fullText,
-        start,
-        end,
-        typeof selectedBlock.sliceIndex === 'number' ? selectedBlock.sliceIndex : 0
-      ).paragraph;
-    }
-    return b;
-  }, [documentModel, selectedBlock]);
+    return b?.type === 'paragraph' ? b : null;
+  }, [documentModel, selectedBlock, selectedRenderedBlock]);
 
   const selectedBlockValue = useMemo(() => {
     if (!documentModel || !selectedBlock || selectedBlock.kind !== 'block') return null;
@@ -783,7 +771,6 @@ export default function NativeDocxEditor({
 
   const updateSelectedParagraph = (updater: (p: NativeDocxParagraph) => NativeDocxParagraph) => {
     if (!selectedBlock) return;
-    let nextSelectedRange: { startOffset: number; endOffset: number } | null = null;
     updateDocument((d) => {
       if (selectedBlock.kind === 'header') d.sections[selectedBlock.sectionIndex].header.paragraphs[selectedBlock.paragraphIndex] = updater(ensureParagraphHasRun(d.sections[selectedBlock.sectionIndex].header.paragraphs[selectedBlock.paragraphIndex]));
       else if (selectedBlock.kind === 'footer') d.sections[selectedBlock.sectionIndex].footer.paragraphs[selectedBlock.paragraphIndex] = updater(ensureParagraphHasRun(d.sections[selectedBlock.sectionIndex].footer.paragraphs[selectedBlock.paragraphIndex]));
@@ -791,27 +778,35 @@ export default function NativeDocxEditor({
         const b = d.sections[selectedBlock.sectionIndex].blocks[selectedBlock.blockIndex];
         if (b.type === 'paragraph') {
           if (
-            typeof selectedBlock.startOffset === 'number' &&
-            typeof selectedBlock.endOffset === 'number'
+            selectedRenderedBlock?.block.type === 'paragraph' &&
+            typeof selectedRenderedBlock.startOffset === 'number' &&
+            typeof selectedRenderedBlock.endOffset === 'number'
           ) {
             const fullText = flattenParagraphText(b);
-            const selectedSlice = createParagraphSlice(
-              b,
-              fullText,
-              selectedBlock.startOffset,
-              selectedBlock.endOffset,
-              typeof selectedBlock.sliceIndex === 'number' ? selectedBlock.sliceIndex : 0
-            ).paragraph;
-            const updatedSlice = updater(selectedSlice);
+            const updatedSlice = updater(selectedRenderedBlock.block);
             const replacementText = flattenParagraphText(updatedSlice);
             const nextText =
-              fullText.slice(0, selectedBlock.startOffset) +
+              fullText.slice(0, selectedRenderedBlock.startOffset) +
               replacementText +
-              fullText.slice(selectedBlock.endOffset);
-            d.sections[selectedBlock.sectionIndex].blocks[selectedBlock.blockIndex] = paragraphWithReplacementText(b, nextText);
-            nextSelectedRange = {
-              startOffset: selectedBlock.startOffset,
-              endOffset: selectedBlock.startOffset + replacementText.length,
+              fullText.slice(selectedRenderedBlock.endOffset);
+            const result = paragraphWithReplacementText(b, nextText);
+            const sliceRun = updatedSlice.runs[0];
+            d.sections[selectedBlock.sectionIndex].blocks[selectedBlock.blockIndex] = {
+              ...result,
+              alignment: updatedSlice.alignment,
+              style_name: updatedSlice.style_name,
+              list_kind: updatedSlice.list_kind,
+              runs: sliceRun
+                ? result.runs.map((r, i) => i === 0 ? {
+                    ...r,
+                    bold: sliceRun.bold,
+                    italic: sliceRun.italic,
+                    underline: sliceRun.underline,
+                    font_name: sliceRun.font_name,
+                    font_size_pt: sliceRun.font_size_pt,
+                    color: sliceRun.color,
+                  } : r)
+                : result.runs,
             };
           } else {
             d.sections[selectedBlock.sectionIndex].blocks[selectedBlock.blockIndex] = updater(ensureParagraphHasRun(b));
@@ -820,14 +815,6 @@ export default function NativeDocxEditor({
       }
       return d;
     });
-    if (selectedBlock.kind === 'block' && nextSelectedRange) {
-      const { startOffset, endOffset } = nextSelectedRange;
-      setSelectedBlock((prev) => (
-        prev && prev.kind === 'block'
-          ? { ...prev, startOffset, endOffset }
-          : prev
-      ));
-    }
   };
 
   const addBlock = (type: 'paragraph' | 'table' | 'page_break') => {
@@ -866,6 +853,10 @@ export default function NativeDocxEditor({
       return item.part === 'footer' && item.paragraphIndex === selectedBlock.paragraphIndex;
     });
     if (!range) return;
+    const alreadyMarked = insertedSelections.some(
+      (s) => s.documentId === 'editor' && s.start === range.start && s.end === range.end
+    );
+    if (alreadyMarked) return;
     onInsertSelection(range.text, { start: range.start, end: range.end, documentId: 'editor' });
   };
 
@@ -970,11 +961,11 @@ export default function NativeDocxEditor({
 
                 {/* Body blocks for this page */}
                 <div className="flex-1">
-                  {pageBlocks.map(({ key, block, originalIndex: bi, sliceIndex, startOffset, endOffset }) => {
+                  {pageBlocks.map(({ key, block, originalIndex: bi, sliceIndex }) => {
                     const sel = isBlockSelected('block', si, bi, key);
                     const marks = getMarkIndices('body', si, bi, null);
                     return (
-                      <InlineEditableBlock key={key} selected={sel} markIndices={marks} onSelect={() => setSelectedBlock({ kind: 'block', sectionIndex: si, blockIndex: bi, renderKey: key, sliceIndex, startOffset, endOffset })}>
+                      <InlineEditableBlock key={key} selected={sel} markIndices={marks} onSelect={() => setSelectedBlock({ kind: 'block', sectionIndex: si, blockIndex: bi, renderKey: key, sliceIndex })}>
                         <DocxBlockPreview
                           block={sel && selectedParagraph ? selectedParagraph : block}
                           editableParagraph={sel ? selectedParagraph : null}
@@ -1022,7 +1013,7 @@ export default function NativeDocxEditor({
 
                 {/* Page number */}
                 <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[9px] text-gray-300 select-none">
-                  {globalPageNumber}
+                  {globalPageNumber} / {allPages.length}
                 </div>
               </div>
             );
@@ -1158,9 +1149,12 @@ function DocxBlockPreview({
   const editableSafe = editableParagraph ? ensureParagraphHasRun(editableParagraph) : null;
   const editableRun = editableSafe?.runs[0] ?? null;
   const [draftText, setDraftText] = useState(editableRun?.text ?? '');
+  const isFocusedRef = useRef(false);
 
   useEffect(() => {
-    setDraftText(editableRun?.text ?? '');
+    if (!isFocusedRef.current) {
+      setDraftText(editableRun?.text ?? '');
+    }
   }, [editableSafe?.id, editableRun?.text]);
 
   if (block.type === 'paragraph') {
@@ -1180,8 +1174,9 @@ function DocxBlockPreview({
           data-export-ignore="true"
           value={draftText}
           onClick={(e) => e.stopPropagation()}
+          onFocus={() => { isFocusedRef.current = true; }}
           onChange={(e) => setDraftText(e.target.value)}
-          onBlur={commitDraft}
+          onBlur={() => { isFocusedRef.current = false; commitDraft(); }}
           className="w-full resize-none rounded-lg border border-gray-200 bg-white/90 px-0 py-0 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-0"
           style={{
             textAlign: editableSafe.alignment as any,

@@ -732,14 +732,17 @@ export default function NativeDocxEditor({
     try {
       const html2pdf = (await html2pdfLoader()).default;
       const host = document.createElement('div');
-      host.style.cssText = 'position:fixed;left:0;top:0;z-index:-1;opacity:0.01;pointer-events:none;background:white;';
+      host.style.cssText = 'position:fixed;left:-9999px;top:0;width:210mm;background:white;pointer-events:none;';
       const styles = document.createElement('style');
       styles.textContent = `
         [data-export-ignore="true"] { display: none !important; }
         [data-editor-marker="true"] { display: none !important; }
-        .pdf-page { box-shadow: none !important; margin: 0 !important; }
+        [data-editor-block="true"] { border: none !important; background: none !important; }
+        .pdf-page { box-shadow: none !important; margin: 0 !important; border-radius: 0 !important; }
       `;
       const clone = previewRef.current.cloneNode(true) as HTMLDivElement;
+      clone.style.gap = '0';
+      clone.style.background = 'white';
       host.appendChild(styles);
       host.appendChild(clone);
       document.body.appendChild(host);
@@ -750,6 +753,7 @@ export default function NativeDocxEditor({
           image: { type: 'jpeg', quality: 0.98 },
           html2canvas: { scale: 2, logging: false, backgroundColor: '#ffffff', useCORS: true },
           jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+          pagebreak: { mode: ['css'], before: '.pdf-page' },
         } as any).from(clone).save();
       } finally { document.body.removeChild(host); }
     } finally { setIsExportingPdf(false); }
@@ -1012,7 +1016,7 @@ export default function NativeDocxEditor({
                 )}
 
                 {/* Page number */}
-                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[9px] text-gray-300 select-none">
+                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[10px] text-gray-400 select-none">
                   {globalPageNumber} / {allPages.length}
                 </div>
               </div>

@@ -5,7 +5,12 @@ import json
 import re
 from typing import List, Dict, Any, Optional, Tuple
 from vaf.tools.base import BaseTool
-from vaf.core.automation import AutomationManager, AutomationTask, AutomationClarifier
+from vaf.core.automation import (
+    AutomationClarifier,
+    AutomationManager,
+    AutomationTask,
+    format_daily_calendar_status,
+)
 
 
 def _manager_for_scope(user_scope_id: Optional[str], user_role: Optional[str] = None) -> Tuple[AutomationManager, Optional[str]]:
@@ -80,7 +85,11 @@ Use this when user wants to schedule recurring tasks or a one-time task:
 
 5. **TIME SLOTS (HH:MM, 10-minute rule):**
    - Always use **HH:MM** for the time parameter (e.g. 06:00, 06:15, 18:30).
-   - No two automations may be scheduled within 10 minutes of each other. The system will return an error if the chosen time is too close to an existing automation; then choose a different time (e.g. 06:10 if 06:00 is taken). """
+   - No two automations may be scheduled within 10 minutes of each other. The system will return an error if the chosen time is too close to an existing automation; then choose a different time (e.g. 06:10 if 06:00 is taken).
+
+6. **Same-day status (`list_automations` / `read_automation`):**
+   - Each automation shows **Today (local)**: Done (today), Scheduled (later today), Due (not yet run today), or In progress.
+   - If you create a daily automation whose clock time already passed today, the system normally runs it once immediately—but **not** if another automation in the same family (same name, or both look like "briefing"/"Morgenbriefing") **already ran today**; then catch-up is skipped and the tool message explains why. """
     
     parameters = {
         "type": "object",
@@ -456,6 +465,13 @@ Use this when user wants to schedule recurring tasks or a one-time task:
                     current_minute = now.minute
                     if current_minute >= task_minute:
                         should_run_now = True
+
+            catchup_skipped_note = ""
+            if should_run_now:
+                skip_dup, skip_msg = manager.should_skip_daily_catch_up_run(task)
+                if skip_dup:
+                    should_run_now = False
+                    catchup_skipped_note = skip_msg or ""
             
             # Try to auto-start scheduler if not already running
             scheduler_started = False
@@ -474,6 +490,9 @@ Use this when user wants to schedule recurring tasks or a one-time task:
 **Schedule:** {task.frequency} at {task.time}
 **Next Run:** {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}
 **Output:** {task.output_path}"""
+            
+            if catchup_skipped_note:
+                result += f"\n\n**Same-day catch-up skipped:** {catchup_skipped_note}"
             
             if should_run_now:
                 # Run the task immediately in a new terminal (never block current terminal!)
@@ -888,7 +907,11 @@ class ListAutomationsTool(BaseTool):
     name = "list_automations"
     permission_level = "read"
     side_effect_class = "none"
-    description = "List all scheduled automation tasks with their full details including prompts and parameters."
+    description = (
+        "List all scheduled automation tasks with prompts and parameters. "
+        "Each entry includes a **today** status: Done (today), Scheduled (later today), "
+        "Due (not yet run today), or In progress—so you know if the job already ran today."
+    )
     
     parameters = {
         "type": "object",
@@ -923,9 +946,11 @@ class ListAutomationsTool(BaseTool):
             
             for task in tasks:
                 status = "✅ Active" if task.enabled else "⏸️ Disabled"
+                today_line = format_daily_calendar_status(task)
                 result += f"• **{task.name}** ({task.id}) - {status}\n"
                 result += f"  Schedule: {task.frequency} at {task.time}\n"
                 result += f"  Next: {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}\n"
+                result += f"  Today (local): **{today_line}**\n"
                 result += f"  Status: {status}\n"
                 result += f"  **Prompt:** {task.prompt[:100]}{'...' if len(task.prompt) > 100 else ''}\n"
                 if task.parameters:
@@ -980,6 +1005,8 @@ class ReadAutomationTool(BaseTool):
 **Schedule:** {task.frequency} at {task.time}
 **Next Run:** {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}
 **Last Run:** {task.last_run or 'Never'}
+**Last completed (local date):** {task.last_completed_local_date or '(legacy: infer from Last Run)'}
+**Today (local calendar):** {format_daily_calendar_status(task)}
 **Created:** {task.created_at}
 **Output Path:** {task.output_path or 'Not specified'}
 **Output Format:** {task.output_format}

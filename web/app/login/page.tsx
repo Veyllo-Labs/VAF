@@ -57,17 +57,9 @@ export default function LoginPage() {
     }, []);
 
     useEffect(() => {
-        const apiBase = getApiBase();
-        if (!apiBase) {
-            setCheckingSetup(false);
-            return;
-        }
+        // Empty string = same-origin /api via Next proxy or HTTPS proxy (e.g. https://localhost:8443).
+        const apiPrefix = getApiBase() || '';
         setBackendUnreachable(false);
-        if (typeof window !== 'undefined' && sessionStorage.getItem('vaf_token')) {
-            // Fast path for already authenticated browser sessions
-            router.replace('/');
-            return;
-        }
         const authHeaders: Record<string, string> = {
             'Cache-Control': 'no-cache',
         };
@@ -76,8 +68,8 @@ export default function LoginPage() {
             if (token) authHeaders.Authorization = `Bearer ${token}`;
         }
 
-        // Check if already authenticated
-        fetch(`${apiBase}/api/auth/me`, {
+        // Check if already authenticated (cookie and/or Bearer); do not skip when apiPrefix is ''.
+        fetch(`${apiPrefix}/api/auth/me`, {
             credentials: 'include',
             cache: 'no-store',
             headers: authHeaders,
@@ -91,7 +83,12 @@ export default function LoginPage() {
                         setCheckingSetup(false);
                         return;
                     }
-                    router.replace('/');
+                    // Full navigation so dashboard mounts with the same cookie/Bearer semantics as a refresh (avoids client-only transition loops).
+                    if (typeof window !== 'undefined') {
+                        window.location.replace(`${window.location.origin}/`);
+                    } else {
+                        router.replace('/');
+                    }
                     return; // Stop further checks
                 }
 
@@ -99,7 +96,7 @@ export default function LoginPage() {
                 if (typeof window !== 'undefined') {
                     sessionStorage.removeItem('vaf_token');
                 }
-                fetch(`${apiBase}/api/auth/needs-setup`, { credentials: 'include' })
+                fetch(`${apiPrefix}/api/auth/needs-setup`, { credentials: 'include' })
                     .then((res) => {
                         if (res.status === 404) return null;
                         if (res.ok) return res.json();
@@ -125,9 +122,8 @@ export default function LoginPage() {
     // Load config when entering connections step (for Discord wizard and persistence)
     useEffect(() => {
         if (step !== 'connections') return;
-        const apiBase = getApiBase();
-        if (!apiBase) return;
-        fetch(`${apiBase}/api/config`, { credentials: 'include' })
+        const apiPrefix = getApiBase() || '';
+        fetch(`${apiPrefix}/api/config`, { credentials: 'include' })
             .then((res) => res.ok ? res.json() : {})
             .then((data) => setOnboardingConfig(data))
             .catch(() => setOnboardingConfig({}));

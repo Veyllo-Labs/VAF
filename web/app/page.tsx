@@ -691,8 +691,12 @@ function VAFDashboardContent() {
                     if (typeof window !== 'undefined') {
                         // Avoid split-brain auth state (stale token in storage, invalid on backend)
                         sessionStorage.removeItem('vaf_token');
+                        // Hard navigation: router.replace('/login') can fail to leave the dashboard
+                        // shell when using the integrated HTTPS proxy (e.g. https://localhost:8443).
+                        window.location.replace(`${window.location.origin}/login`);
+                    } else {
+                        router.replace('/login');
                     }
-                    router.replace('/login');
                 }
             })
             .catch((err) => {
@@ -4546,7 +4550,11 @@ function VAFDashboardContent() {
                 onLogout={() => {
                     setSettingsInitialTab(null);
                     setIsSettingsOpen(false);
-                    router.replace('/login');
+                    if (typeof window !== 'undefined') {
+                        window.location.replace(`${window.location.origin}/login`);
+                    } else {
+                        router.replace('/login');
+                    }
                 }}
                 apiBase={getApiBase()}
                 initialTab={settingsInitialTab ?? undefined}

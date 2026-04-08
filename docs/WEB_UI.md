@@ -437,8 +437,9 @@ The Web UI runs alongside the CLI interface:
 ### Security
 
 - **CORS**: Restricted by middleware (localhost and private-LAN origin patterns), not unrestricted `*`.
-- **Authentication**: Implemented. The UI verifies session state via `GET /api/auth/me` and requires a valid auth token/cookie. Unauthenticated clients are redirected to `/login`.
-- **Login UX guard**: `web/proxy.ts` redirects authenticated requests away from `/login` to `/`, so logged-in users do not stay on the login page.
+- **Authentication**: The UI treats `GET /api/auth/me` as the source of truth for a valid session (JWT in `Authorization: Bearer` and/or `vaf_token` cookie, validated server-side). The dashboard redirects to `/login` when that call is not OK.
+- **Next.js edge proxy (`web/proxy.ts`)**: Next.js 16 uses this file as the **Proxy** middleware (replacing the older `middleware.ts` name). It redirects browsers to `/login` only when there is **no** `vaf_token` cookie at all. It does **not** redirect `/login` → `/` based on cookie presence alone: a non-empty cookie can still hold an expired or revoked JWT, which would previously fight the client (401 on `/` but 307 from `/login`) and cause a redirect loop. After a successful `/me` on the login page, the app uses a **full navigation** to `/` so session and assets align with the HTTPS entry point.
+- **`GET /api/auth/me` (backend)**: When both `Authorization: Bearer` and `vaf_token` are present, the server tries the **Bearer token first**, then the cookie, so a stale cookie cannot shadow a valid in-memory token.
 - **Origin scope note**: Auth state can differ between `http://localhost:3000` and `https://localhost:8443` because cookies/storage are origin-scoped.
 
 ## Troubleshooting
@@ -457,6 +458,10 @@ The Web UI runs alongside the CLI interface:
 When the backend is down or unreachable, the Web UI shows a full-screen message: *"Server not reachable. Make sure VAF is running (e.g. \"vaf run\")."* with a **Try again** button. This appears when the initial auth/health check fails (for example VAF not started, proxy/backend not reachable, or TLS endpoint unavailable).
 
 **What to do**: Start VAF (`vaf run` or open Web UI from the system tray). Ensure backend/proxy ports are free, then click **Try again** or refresh the page.
+
+### `Bad Gateway` on `https://…:8443` (including `/login`)
+
+The integrated HTTPS proxy forwards page requests to the Next.js process on `http://127.0.0.1:3000`. If the frontend is still starting or was restarted (tray log: stopping/starting frontend), the proxy returns **502** with body `Bad Gateway`. Wait until the tray reports the frontend ready on port 3000, then reload.
 
 ### WebSocket Connection Failed
 

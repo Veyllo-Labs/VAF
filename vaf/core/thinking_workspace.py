@@ -474,6 +474,7 @@ def sync_automation_status_to_workspace(
             "time": automation_data.get("time"),
             "enabled": automation_data.get("enabled"),
             "last_run": automation_data.get("last_run"),
+            "last_completed_local_date": automation_data.get("last_completed_local_date"),
             "next_run": automation_data.get("next_run"),
             "run_status": run_status or None,
             "summary": (summary or "")[:1000] if summary else None,

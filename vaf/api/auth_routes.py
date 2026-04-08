@@ -406,70 +406,99 @@ def _clear_auth_cookie(response: Response) -> None:
     response.delete_cookie(key=COOKIE_NAME, path="/")
 
 
+def _authorization_bearer(request: Request) -> str:
+    """Return Bearer token from Authorization header, or empty string."""
+    auth = (request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return ""
+
+
+def _access_token_candidates(request: Request) -> list[str]:
+    """Ordered JWT candidates for /me.
+
+    Bearer (e.g. sessionStorage) is tried before the httpOnly cookie so a stale
+    cookie cannot shadow a valid Authorization token — a common SPA redirect loop.
+    """
+    bearer = _authorization_bearer(request)
+    cookie_tok = (request.cookies.get(COOKIE_NAME) or "").strip()
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in (bearer, cookie_tok):
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+
+async def _me_user_from_token(request: Request, response: Response, token: str) -> dict | None:
+    """Resolve current user for one access JWT, or None to try the next candidate."""
+    payload = decode_token(token)
+    if not payload or payload.get("type") != "access":
+        return None
+    user_id_str = payload.get("sub")
+    if not user_id_str:
+        return None
+    try:
+        user_id = uuid_module.UUID(user_id_str)
+    except (ValueError, TypeError) as e:
+        logger.warning("Invalid UUID in token sub: %s", e)
+        return None
+
+    async with get_auth_db() as db:
+        result = await db.execute(
+            select(LocalUser).where(LocalUser.id == user_id, LocalUser.is_active == True)
+        )
+        user = result.scalar_one_or_none()
+        if not user:
+            return None
+
+        token_hash = token_hash_for_db(token)
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        session_result = await db.execute(
+            select(UserSession).where(
+                UserSession.token_hash == token_hash,
+                UserSession.is_active == True,
+                UserSession.expires_at > now_utc,
+            )
+        )
+        session = session_result.scalar_one_or_none()
+        if not session:
+            return None
+
+        require_2fa = Config.get("local_network_require_2fa", True)
+        if require_2fa and not payload.get("is_2fa_verified", False):
+            client_ip = request.client.host if request.client else "unknown"
+            try:
+                from vaf.network.binding import is_localhost
+            except ImportError:
+                is_localhost = lambda ip: ip in ("127.0.0.1", "::1", "localhost")
+
+            if not is_localhost(client_ip) or user.role != "admin":
+                _clear_auth_cookie(response)
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="2FA verification required",
+                )
+
+        return {
+            "id": str(user.id),
+            "username": user.username,
+            "role": user.role,
+            "user_scope_id": str(user.user_scope_id),
+        }
+
+
 @router.get("/me")
 async def me(request: Request, response: Response):
-    """Get current user from JWT (cookie or Bearer). Validates user and session exist in DB."""
+    """Get current user from JWT (Bearer preferred, then cookie). Validates user and session exist in DB."""
     try:
-        token = request.cookies.get(COOKIE_NAME) or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
-        
-        # Check for token first (always preferred)
-        if token:
-            payload = decode_token(token)
-            if payload and payload.get("type") == "access":
-                user_id_str = payload.get("sub")
-                if user_id_str:
-                    try:
-                        user_id = uuid_module.UUID(user_id_str)
-                        async with get_auth_db() as db:
-                            # Validate user exists and is active
-                            result = await db.execute(
-                                select(LocalUser).where(LocalUser.id == user_id, LocalUser.is_active == True)
-                            )
-                            user = result.scalar_one_or_none()
-                            if not user:
-                                _clear_auth_cookie(response)
-                                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-
-                            # Validate session is active
-                            token_hash = token_hash_for_db(token)
-                            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-                            session_result = await db.execute(
-                                select(UserSession).where(
-                                    UserSession.token_hash == token_hash,
-                                    UserSession.is_active == True,
-                                    UserSession.expires_at > now_utc,
-                                )
-                            )
-                            session = session_result.scalar_one_or_none()
-                            if not session:
-                                _clear_auth_cookie(response)
-                                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session invalid or expired")
-
-                            # 2FA Consistency check
-                            require_2fa = Config.get("local_network_require_2fa", True)
-                            if require_2fa and not payload.get("is_2fa_verified", False):
-                                # Check if we can skip 2FA for localhost
-                                client_ip = request.client.host if request.client else "unknown"
-                                try:
-                                    from vaf.network.binding import is_localhost
-                                except ImportError:
-                                    is_localhost = lambda ip: ip in ("127.0.0.1", "::1", "localhost")
-                                
-                                if not is_localhost(client_ip) or user.role != "admin":
-                                    _clear_auth_cookie(response)
-                                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="2FA verification required")
-
-                            return {
-                                "id": str(user.id),
-                                "username": user.username,
-                                "role": user.role,
-                                "user_scope_id": str(user.user_scope_id),
-                            }
-                    except (ValueError, TypeError) as e:
-                        logger.warning("Invalid UUID or token payload: %s", e)
-                        _clear_auth_cookie(response)
-                        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-
+        for token in _access_token_candidates(request):
+            user_dict = await _me_user_from_token(request, response, token)
+            if user_dict:
+                return user_dict
+        _clear_auth_cookie(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     except HTTPException:
         raise

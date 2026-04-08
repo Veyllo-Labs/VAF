@@ -456,4 +456,4 @@ Returns a list of currently connected devices for the Network Topology map.
 | POST | `/api/auth/verify-2fa` | Temp Token | Verify TOTP code, get full token |
 | POST | `/api/auth/refresh` | Refresh Token | Exchange refresh token for new access token |
 | POST | `/api/auth/logout` | No | Clear auth cookie |
-| GET | `/api/auth/me` | Bearer/Cookie | Get current user info |
+| GET | `/api/auth/me` | Bearer/Cookie | Get current user info; if both are sent, **Bearer is tried before** the `vaf_token` cookie so a stale cookie does not invalidate a valid header token. |

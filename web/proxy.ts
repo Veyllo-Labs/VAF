@@ -35,6 +35,7 @@ function applyAuthGuards(request: NextRequest): NextResponse {
     pathname.startsWith('/_next/') ||
     pathname.startsWith('/sounds/') ||
     pathname.startsWith('/favicon') ||
+    pathname === '/logo.png' ||
     pathname === '/robots.txt' ||
     pathname === '/sitemap.xml';
 

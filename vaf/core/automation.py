@@ -16,7 +16,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -58,6 +58,9 @@ class AutomationTask:
     enabled: bool = True
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_run: Optional[str] = None
+    # Local calendar day (YYYY-MM-DD) when the task last completed successfully; persisted in JSON
+    # so "Done (today)" survives app restarts until the calendar advances.
+    last_completed_local_date: Optional[str] = None
     # next_run is now calculated dynamically - no longer stored
     # Kept for backwards compatibility when loading old files
     next_run: Optional[str] = None
@@ -174,6 +177,104 @@ def _min_gap_minutes(t1: str, t2: str) -> int:
     b = _minutes_since_midnight(t2)
     diff = abs(a - b)
     return min(diff, 1440 - diff)
+
+
+def _parse_last_run_local_date(last_run: Optional[str]) -> Optional[date]:
+    """Return the calendar date of last_run in local time, or None if missing/invalid."""
+    if not last_run or not str(last_run).strip():
+        return None
+    s = str(last_run).strip()
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt.date()
+    except (ValueError, TypeError, OSError):
+        return None
+
+
+def _last_effective_completion_local_date(task: AutomationTask) -> Optional[date]:
+    """Prefer persisted local completion date; fall back to parsing last_run for older JSON files."""
+    raw = (task.last_completed_local_date or "").strip()
+    if raw:
+        try:
+            return date.fromisoformat(raw[:10])
+        except ValueError:
+            pass
+    return _parse_last_run_local_date(task.last_run)
+
+
+def _stamp_successful_run(task: AutomationTask) -> None:
+    """Record completion time and local calendar day (survives restarts via _save_task)."""
+    now = datetime.now()
+    task.last_run = now.isoformat()
+    task.last_completed_local_date = now.date().isoformat()
+
+
+def _briefing_family_name(name: str) -> bool:
+    """True if the automation name looks like a morning/briefing job (several languages)."""
+    n = (name or "").lower()
+    return any(
+        k in n
+        for k in (
+            "briefing",
+            "morgenbrief",
+            "morning brief",
+            "morgen ",  # e.g. "guten morgen" style titles
+        )
+    )
+
+
+def _same_automation_family_for_catchup(name_a: str, name_b: str) -> bool:
+    """Whether two tasks count as the same 'job' when avoiding duplicate same-day catch-up runs."""
+    a, b = (name_a or "").strip().lower(), (name_b or "").strip().lower()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return _briefing_family_name(a) and _briefing_family_name(b)
+
+
+def format_daily_calendar_status(task: AutomationTask) -> str:
+    """
+    Agent-readable status: whether today's expected run is done, pending, or in progress.
+    For daily tasks uses local date and scheduled HH:MM; checks automation lock for running state.
+    "Done (today)" uses ``last_completed_local_date`` (and falls back to ``last_run``), both loaded
+    from the task JSON—so the status survives process restarts until the calendar day changes.
+    """
+    try:
+        from vaf.core.lock_manager import LockManager
+
+        if LockManager.is_locked(f"automation_{task.id}"):
+            return "In progress"
+    except Exception:
+        pass
+
+    freq = (task.frequency or "").strip().lower()
+    if freq != "daily":
+        done_d = _last_effective_completion_local_date(task)
+        today_d = datetime.now().date()
+        if done_d == today_d:
+            return "Done (today)"
+        return f"Next: {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}"
+
+    today_d = datetime.now().date()
+    done_d = _last_effective_completion_local_date(task)
+    if done_d == today_d:
+        return "Done (today)"
+
+    try:
+        parts = (task.time or "06:00").split(":")
+        hh, mm = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+        slot_t = datetime.now().replace(hour=hh, minute=mm, second=0, microsecond=0).time()
+    except (ValueError, TypeError, IndexError):
+        return "Due (not yet run today)"
+
+    if datetime.now().time() < slot_t:
+        return "Scheduled (later today)"
+    return "Due (not yet run today)"
 
 
 # Max users that may book the same time slot (same HH:MM + frequency). Enforced globally.
@@ -500,6 +601,7 @@ vaf automation delete <id>   # Delete task
                 "time": task.time,
                 "enabled": task.enabled,
                 "last_run": task.last_run,
+                "last_completed_local_date": task.last_completed_local_date,
                 "next_run": task.next_run_iso,
             }
             sync_automation_status_to_workspace(
@@ -524,6 +626,30 @@ vaf automation delete <id>   # Delete task
             self._schedule_task(task)
         
         return task
+
+    def should_skip_daily_catch_up_run(self, new_task: AutomationTask) -> tuple[bool, str]:
+        """
+        Avoid immediate post-create runs when another automation in the same family
+        already completed today (local date)—e.g. second 'Morgenbriefing' after one ran at 07:00.
+        """
+        if str(new_task.frequency or "").lower() != "daily":
+            return False, ""
+        today = datetime.now().date()
+        for peer in self.list():
+            if peer.id == new_task.id:
+                continue
+            if not peer.enabled:
+                continue
+            if str(peer.frequency or "").lower() != "daily":
+                continue
+            if _last_effective_completion_local_date(peer) != today:
+                continue
+            if _same_automation_family_for_catchup(new_task.name, peer.name):
+                return True, (
+                    f"Another automation '{peer.name}' ({peer.id}) in the same family already "
+                    f"ran today ({peer.last_run}); skipping immediate catch-up for '{new_task.name}'."
+                )
+        return False, ""
     
     def check_can_create_automation(self, new_time: str = None, new_frequency: str = None) -> tuple[bool, Optional[str]]:
         """
@@ -1042,7 +1168,7 @@ vaf automation delete <id>   # Delete task
                 if workflow_saved_file:
                     # Workflow's write_file step already saved the output
                     # Update task and return
-                    task.last_run = datetime.now().isoformat()
+                    _stamp_successful_run(task)
                     # next_run is calculated dynamically - no need to store it
                     self._save_task(task)
                     self._sync_workspace_automation_state(
@@ -1279,8 +1405,8 @@ vaf automation delete <id>   # Delete task
                 
                 UI.success(f"Output saved: {output_file}")
             
-            # Update task
-            task.last_run = datetime.now().isoformat()
+            # Update task (local completion date persists across restarts)
+            _stamp_successful_run(task)
             # next_run is calculated dynamically - no need to store it
             self._save_task(task)
             

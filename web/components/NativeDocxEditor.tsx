@@ -730,9 +730,12 @@ export default function NativeDocxEditor({
     if (!previewRef.current || !documentModel) return;
     setIsExportingPdf(true);
     try {
-      const html2pdf = (await html2pdfLoader()).default;
-      const host = document.createElement('div');
-      host.style.cssText = 'position:fixed;left:-9999px;top:0;width:210mm;background:white;pointer-events:none;';
+      // Page-by-page rendering avoids html2pdf/html2canvas blank-output edge cases
+      // on very tall/complex root containers.
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+      ]);
       const styles = document.createElement('style');
       styles.textContent = `
         [data-export-ignore="true"] { display: none !important; }
@@ -740,22 +743,37 @@ export default function NativeDocxEditor({
         [data-editor-block="true"] { border: none !important; background: none !important; }
         .pdf-page { box-shadow: none !important; margin: 0 !important; border-radius: 0 !important; }
       `;
-      const clone = previewRef.current.cloneNode(true) as HTMLDivElement;
-      clone.style.gap = '0';
-      clone.style.background = 'white';
-      host.appendChild(styles);
-      host.appendChild(clone);
-      document.body.appendChild(host);
+      document.head.appendChild(styles);
+
+      setSelectedBlock(null);
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      );
+
       try {
-        await html2pdf().set({
-          margin: 0,
-          filename: `${(title || 'document').replace(/\.[^.]+$/, '')}.pdf`,
-          image: { type: 'jpeg', quality: 0.98 },
-          html2canvas: { scale: 2, logging: false, backgroundColor: '#ffffff', useCORS: true },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-          pagebreak: { mode: ['css'], before: '.pdf-page' },
-        } as any).from(clone).save();
-      } finally { document.body.removeChild(host); }
+        const pages = Array.from(previewRef.current.querySelectorAll<HTMLElement>('.pdf-page'));
+        if (pages.length === 0) return;
+
+        const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+        const fileName = `${(title || 'document').replace(/\.[^.]+$/, '')}.pdf`;
+
+        for (let i = 0; i < pages.length; i += 1) {
+          const page = pages[i];
+          const canvas = await html2canvas(page, {
+            scale: 2,
+            logging: false,
+            backgroundColor: '#ffffff',
+            useCORS: true,
+            scrollX: 0,
+            scrollY: 0,
+          });
+          const imageData = canvas.toDataURL('image/jpeg', 0.98);
+          if (i > 0) pdf.addPage('a4', 'portrait');
+          pdf.addImage(imageData, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+        }
+
+        pdf.save(fileName);
+      } finally { document.head.removeChild(styles); }
     } finally { setIsExportingPdf(false); }
   };
 

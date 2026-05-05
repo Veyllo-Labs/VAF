@@ -256,6 +256,11 @@ elif [[ "$OS_TYPE" == "linux" ]]; then
             print_info "Installing: $DEPS"
             $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
             ;;
+        zypper)
+            DEPS="portaudio-devel alsa-devel python3-devel gcc git ffmpeg nodejs-default npm-default docker-compose"
+            print_info "Installing: $DEPS"
+            $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
+            ;;
         *)
             print_warning "Please manually install: portaudio, git, ffmpeg, python dev headers"
             ;;
@@ -318,7 +323,7 @@ if [[ "$SKIP_DOCKER" == "false" ]]; then
         print_success "Docker $DOCKER_VERSION installed"
         
         # Check if Docker daemon is running
-        if docker info &> /dev/null; then
+        if /usr/bin/docker info &> /dev/null; then
             DOCKER_RUNNING=true
             print_success "Docker daemon is running"
         else
@@ -331,7 +336,7 @@ if [[ "$SKIP_DOCKER" == "false" ]]; then
         fi
         
         # Check Docker Compose
-        if docker compose version &> /dev/null || docker-compose --version &> /dev/null; then
+        if /usr/bin/docker compose version &> /dev/null || docker-compose --version &> /dev/null; then
             DOCKER_COMPOSE=true
             print_success "Docker Compose available"
         fi
@@ -423,7 +428,7 @@ if [[ "$SKIP_DOCKER" == "false" ]]; then
             
         elif [[ "$PKG_MANAGER" == "pacman" ]]; then
             print_info "Attempting to install Docker via pacman..."
-            
+
             if sudo pacman -S --noconfirm docker docker-compose 2>&1; then
                 DOCKER_INSTALL_SUCCESS=true
                 sudo systemctl start docker 2>/dev/null
@@ -436,6 +441,23 @@ if [[ "$SKIP_DOCKER" == "false" ]]; then
             else
                 print_warning "Automatic installation failed"
                 echo -e "  Install manually: ${CYAN}sudo pacman -S docker docker-compose${NC}"
+            fi
+
+        elif [[ "$PKG_MANAGER" == "zypper" ]]; then
+            print_info "Attempting to install Docker via zypper..."
+
+            if sudo zypper install -y docker docker-compose 2>&1; then
+                DOCKER_INSTALL_SUCCESS=true
+                sudo systemctl enable --now docker 2>/dev/null
+                sudo usermod -aG docker "$USER" 2>/dev/null
+                print_success "Docker installed!"
+                print_warning "Log out and back in (or run 'newgrp docker') for group permissions to take effect"
+                DOCKER_INSTALLED=true
+                DOCKER_RUNNING=true
+                DOCKER_COMPOSE=true
+            else
+                print_warning "Automatic installation failed"
+                echo -e "  Install manually: ${CYAN}sudo zypper install docker docker-compose${NC}"
             fi
         fi
         
@@ -474,6 +496,12 @@ if [[ "$NODE_INSTALLED" == "false" ]]; then
         echo -e "  Install with: ${CYAN}brew install node${NC}"
     elif [[ "$PKG_MANAGER" == "apt" ]]; then
         echo -e "  Install with: ${CYAN}curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs${NC}"
+    elif [[ "$PKG_MANAGER" == "dnf" || "$PKG_MANAGER" == "yum" ]]; then
+        echo -e "  Install with: ${CYAN}sudo dnf install nodejs npm${NC}"
+    elif [[ "$PKG_MANAGER" == "zypper" ]]; then
+        echo -e "  Install with: ${CYAN}sudo zypper install nodejs-default npm-default${NC}"
+    elif [[ "$PKG_MANAGER" == "pacman" ]]; then
+        echo -e "  Install with: ${CYAN}sudo pacman -S nodejs npm${NC}"
     fi
     print_warning "Web UI will not be available without Node.js"
 fi
@@ -486,12 +514,20 @@ print_step "Setting up Python Virtual Environment..."
 cd "$PROJECT_ROOT"
 
 if [[ -d "venv" ]]; then
-    print_success "Virtual environment already exists"
-    read -p "  Recreate virtual environment? (y/N) " response
-    if [[ "$response" == "y" || "$response" == "Y" ]]; then
+    # Detect Windows venv (has Scripts/ instead of bin/)
+    if [[ ! -f "venv/bin/activate" && -f "venv/Scripts/activate" ]]; then
+        print_warning "Windows virtual environment detected – recreating for Linux..."
         rm -rf venv
         $PYTHON_CMD -m venv venv
-        print_success "Virtual environment recreated"
+        print_success "Virtual environment recreated (Linux-compatible)"
+    else
+        print_success "Virtual environment already exists"
+        read -p "  Recreate virtual environment? (y/N) " response
+        if [[ "$response" == "y" || "$response" == "Y" ]]; then
+            rm -rf venv
+            $PYTHON_CMD -m venv venv
+            print_success "Virtual environment recreated"
+        fi
     fi
 else
     $PYTHON_CMD -m venv venv
@@ -574,7 +610,7 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
         # Wait up to 60 seconds for Docker daemon to become ready
         for i in $(seq 1 12); do
             sleep 5
-            if docker info &>/dev/null; then
+            if /usr/bin/docker info &>/dev/null; then
                 DOCKER_RUNNING=true
                 DOCKER_COMPOSE=true
                 print_success "Docker daemon is now running"
@@ -592,10 +628,10 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
     if [[ "$DOCKER_RUNNING" == "true" && "$DOCKER_COMPOSE" == "true" ]]; then
         if [[ -f "$COMPOSE_FILE" ]]; then
             print_info "Running: docker compose up -d (adds new services, updates existing ones)..."
-            docker compose -f "$COMPOSE_FILE" up -d 2>/dev/null || docker-compose -f "$COMPOSE_FILE" up -d
+            /usr/bin/docker compose -f "$COMPOSE_FILE" up -d 2>/dev/null || docker-compose -f "$COMPOSE_FILE" up -d
 
             sleep 2
-            if docker ps | grep -q "vaf-memory-db"; then
+            if /usr/bin/docker ps | grep -q "vaf-memory-db"; then
                 print_success "Docker stack is running"
                 print_info "Database: postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory"
             else

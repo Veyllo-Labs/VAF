@@ -38,13 +38,15 @@ docker ps --filter "name=vaf-"
 
 Expected output:
 ```
-CONTAINER ID   IMAGE                      PORTS                    NAMES
-...            vaf-tts-multilang:latest   0.0.0.0:5002->5000/tcp   vaf-tts
-...            whisper-asr-webservice     0.0.0.0:5003->9000/tcp   vaf-stt
-...            pgvector/pgvector:pg16     0.0.0.0:5432->5432/tcp   vaf-memory-db
-...            redis:7-alpine             0.0.0.0:6379->6379/tcp   vaf-redis
-...            vaf-sandbox                                         vaf-sandbox
+CONTAINER ID   IMAGE                      PORTS                          NAMES
+...            vaf-tts-multilang:latest   127.0.0.1:5002->5000/tcp       vaf-tts
+...            whisper-asr-webservice     127.0.0.1:5003->9000/tcp       vaf-stt
+...            pgvector/pgvector:pg16     127.0.0.1:5432->5432/tcp       vaf-memory-db
+...            redis:7-alpine             127.0.0.1:6379->6379/tcp       vaf-redis
+...            vaf-sandbox                                                vaf-sandbox
 ```
+
+> **Sicherheit:** Alle Ports sind an `127.0.0.1` gebunden — nur lokal erreichbar, nicht im LAN oder Internet. Falls `0.0.0.0` angezeigt wird, sind die Ports auf allen Netzwerk-Interfaces offen. In diesem Fall `docker-compose.memory.yml` prüfen und sicherstellen dass alle Port-Mappings das Format `127.0.0.1:PORT:PORT` verwenden.
 
 ### Stop Services
 

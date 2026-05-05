@@ -34,7 +34,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vaf_dev_secret}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - vaf_pgdata:/var/lib/postgresql/data
       - ./scripts/init-memory-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -61,7 +61,7 @@ services:
     container_name: vaf-redis
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - vaf_redis:/data
     # Enable persistence with AOF (Append Only File)
@@ -124,7 +124,7 @@ services:
     container_name: vaf-tts
     restart: unless-stopped
     ports:
-      - "${TTS_PORT:-5002}:5000"
+      - "127.0.0.1:${TTS_PORT:-5002}:5000"
     environment:
       TTS_PORT: 5000
       TTS_MODELS_DIR: /app/models
@@ -159,7 +159,7 @@ services:
     container_name: vaf-gotenberg
     restart: unless-stopped
     ports:
-      - "${GOTENBERG_PORT:-5005}:3000"
+      - "127.0.0.1:${GOTENBERG_PORT:-5005}:3000"
     command: ["gotenberg", "--api-timeout=60s"]
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/ 2>/dev/null || exit 1"]
@@ -185,7 +185,7 @@ services:
     container_name: vaf-stt
     restart: unless-stopped
     ports:
-      - "${STT_PORT:-5003}:9000"
+      - "127.0.0.1:${STT_PORT:-5003}:9000"
     volumes:
       - vaf_stt_models:/root/.cache/whisper
     healthcheck:

@@ -1003,7 +1003,6 @@ class ResearchAgentTool(BaseTool):
             
             if is_subagent and not in_workflow:
                 # Generate filename
-                from datetime import datetime
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 safe_topic = re.sub(r'[^\w\s-]', '', topic).strip().replace(' ', '_')[:50]
                 filename = f"research_{safe_topic}_{timestamp}.html"

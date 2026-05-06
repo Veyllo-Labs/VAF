@@ -7,7 +7,7 @@ Scoped to the current user in network mode.
 from vaf.core.email_sync_store import init_store, update_message_answered
 from vaf.core.email_transport import get_account
 from vaf.tools.base import BaseTool
-from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_for_user, store_scope_from_kwargs, store_username_from_kwargs
+from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_for_user, store_candidates_for_mail, store_scope_from_kwargs, store_username_from_kwargs
 
 
 class MarkMailAnsweredTool(BaseTool):

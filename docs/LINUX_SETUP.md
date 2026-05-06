@@ -112,17 +112,17 @@ Use `vaf.sh` in the project root:
 
 ---
 
-## Wayland
+## Wayland / Headless Mode
 
-VAF's system tray (`vaf.main tray`) uses `pystray` with an X11 backend and does not work on pure Wayland sessions.
+`vaf.sh start` runs VAF in **headless mode** (`VAF_NATIVE_WRAPPER=1 vaf.main tray`). In this mode `pystray` is never imported, so no X11 display is required. This works on Wayland, pure server sessions, and any environment without a desktop.
 
-**Recommendation for Wayland:** `vaf.sh start` automatically uses `vaf.main run` instead of `tray` — this is the Wayland-compatible mode.
+The backend, agent loop, and frontend manager all start as daemon threads inside the same process — no tray icon is shown.
 
-If XWayland is running and the tray is still desired:
+If you want the X11 tray icon (XWayland required):
 ```bash
 export DISPLAY=:0
 export XAUTHORITY=$(ls /run/user/$(id -u)/xauth_* 2>/dev/null | head -1)
-python -m vaf.main tray
+python -m vaf.main tray   # must NOT set VAF_NATIVE_WRAPPER=1
 ```
 
 ---
@@ -143,9 +143,9 @@ python -m vaf.main install-gpu
 
 ### llama-server crashes on startup (ABRT / Signal 6)
 
-**Cause:** Incompatibility between `--reasoning-format deepseek` and the Jinja chat template of the loaded model.
+**Cause:** The `--jinja` flag (or previously `--reasoning-format deepseek`) causes `common_chat_templates_support_enable_thinking` to throw an exception during server init when the loaded model's Jinja chat template is incompatible.
 
-**Status:** Fixed in `vaf/core/backend.py` — the flag has been removed.
+**Status:** Fixed in `vaf/core/backend.py` — both flags have been removed.
 
 ### Docker permission error
 

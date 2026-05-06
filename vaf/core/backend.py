@@ -616,10 +616,7 @@ class ServerManager:
             # This reduces context VRAM usage by ~50% with minimal quality loss
             "-ctk", "q8_0",
             "-ctv", "q8_0",
-            # Thinking Support: Enable Jinja templates
-            # - --jinja: Activates Jinja2 template processing (auto-loads from GGUF/HuggingFace)
-            # Note: --reasoning-format deepseek removed — crashes with VQ-1 model's Jinja template
-            "--jinja",
+            # Note: --jinja removed — crashes VQ-1 model on init (common_chat_templates_support_enable_thinking throws)
         ]
 
         # Server log verbosity: 2=warning (small logs) or 3=info (detailed logs for debugging)

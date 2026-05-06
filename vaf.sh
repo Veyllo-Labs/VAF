@@ -12,10 +12,12 @@ set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="$DIR/.vaf.pid"
+PID_FILE_WEB="$DIR/.vaf-web.pid"
 LOG_DIR="$DIR/logs"
 PYTHON="$DIR/venv/bin/python3"
 DOCKER="/usr/bin/docker"
 COMPOSE_FILE="$DIR/docker-compose.memory.yml"
+NODE_DIR="$DIR/web"
 
 # Colors
 GREEN='\033[0;32m'
@@ -110,24 +112,39 @@ cmd_start() {
     # Log directory
     mkdir -p "$LOG_DIR"
 
-    # Start VAF in background (Wayland-compatible: 'run' instead of 'tray')
-    info "Starting VAF..."
+    # Start VAF in headless background mode
+    # VAF_NATIVE_WRAPPER=1 triggers run_headless() in tray.py:
+    #   - Starts FastAPI/Uvicorn backend on :8001
+    #   - Starts Next.js frontend via FrontendManager
+    #   - Blocks on signal.pause() (SIGTERM-safe, no terminal needed)
+    info "Starting VAF (headless mode)..."
     export PYTHONPATH="$DIR:$PYTHONPATH"
-    nohup "$PYTHON" -m vaf.main run > "$LOG_DIR/vaf_run.log" 2>&1 &
+    export VAF_NATIVE_WRAPPER=1
+    nohup "$PYTHON" -m vaf.main tray > "$LOG_DIR/vaf_run.log" 2>&1 &
     PID=$!
     echo "$PID" > "$PID_FILE"
 
-    sleep 2
+    # Wait up to 15 seconds for backend to come up on :8001
+    info "Waiting for backend to start..."
+    for i in $(seq 1 15); do
+        sleep 1
+        if ! kill -0 "$PID" 2>/dev/null; then
+            err "VAF process exited unexpectedly"
+            err "Check log: $LOG_DIR/vaf_run.log"
+            rm -f "$PID_FILE"
+            exit 1
+        fi
+        if curl -sf http://127.0.0.1:8001/api/auth/needs-setup >/dev/null 2>&1; then
+            ok "VAF started (PID $PID) — backend on :8001"
+            break
+        fi
+        if [ "$i" -eq 15 ]; then
+            ok "VAF started (PID $PID) — backend still initializing, check logs"
+        fi
+    done
 
-    if kill -0 "$PID" 2>/dev/null; then
-        ok "VAF started (PID $PID)"
-        ok "Log: $LOG_DIR/vaf_run.log"
-    else
-        err "VAF failed to start"
-        err "Check log: $LOG_DIR/vaf_run.log"
-        rm -f "$PID_FILE"
-        exit 1
-    fi
+    ok "Log: $LOG_DIR/vaf_run.log"
+    ok "Open in browser: http://localhost:3000"
     echo ""
 }
 
@@ -166,7 +183,23 @@ cmd_stop() {
         warn "No PID file found — searching for running VAF processes..."
     fi
 
-    # 2. Stop any remaining VAF Python processes
+    # 2. Stop Next.js frontend
+    if [ -f "$PID_FILE_WEB" ]; then
+        WEB_PID=$(cat "$PID_FILE_WEB")
+        if kill -0 "$WEB_PID" 2>/dev/null; then
+            kill -TERM "$WEB_PID" 2>/dev/null || true
+            sleep 2
+            kill -0 "$WEB_PID" 2>/dev/null && kill -KILL "$WEB_PID" 2>/dev/null || true
+            ok "Web UI stopped"
+        fi
+        rm -f "$PID_FILE_WEB"
+    fi
+    NEXT_PIDS=$(pgrep -f "next dev" 2>/dev/null || true)
+    if [ -n "$NEXT_PIDS" ]; then
+        echo "$NEXT_PIDS" | xargs kill -TERM 2>/dev/null || true
+    fi
+
+    # 4. Stop any remaining VAF Python processes
     PIDS=$(pgrep -f "python.*vaf.main" 2>/dev/null || true)
     if [ -n "$PIDS" ]; then
         echo "$PIDS" | xargs kill -TERM 2>/dev/null || true
@@ -178,7 +211,7 @@ cmd_stop() {
         ok "VAF Python processes stopped"
     fi
 
-    # 3. Stop llama-server gracefully
+    # 5. Stop llama-server gracefully
     LLAMA_PIDS=$(pgrep -f "llama-server" 2>/dev/null || true)
     if [ -n "$LLAMA_PIDS" ]; then
         info "Stopping llama-server..."
@@ -191,8 +224,8 @@ cmd_stop() {
         ok "llama-server stopped"
     fi
 
-    # 4. Release VAF ports (8001 = web server, 8080 = llama)
-    for PORT in 8001 8080; do
+    # 6. Release VAF ports (8001 = web server, 8080 = llama, 3000 = Next.js)
+    for PORT in 8001 8080 3000; do
         PID_ON_PORT=$(ss -tlnp 2>/dev/null | grep ":$PORT " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
         if [ -n "$PID_ON_PORT" ]; then
             kill -TERM "$PID_ON_PORT" 2>/dev/null || true

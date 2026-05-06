@@ -16,7 +16,7 @@ import { getApiBase } from '@/lib/utils';
 export default function LoginPage() {
     const router = useRouter();
     // Default to login; only show wizard when API explicitly says needs_setup: true (no admin yet)
-    const [step, setStep] = useState<'login' | '2fa' | 'create_admin' | 'soul_wizard' | 'connections'>('login');
+    const [step, setStep] = useState<'login' | '2fa' | 'create_admin' | 'soul_wizard' | 'connections' | 'setup_2fa'>('login');
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -30,7 +30,8 @@ export default function LoginPage() {
     const [loginError, setLoginError] = useState<string | null>(null);
     const [twoFAError, setTwoFAError] = useState<string | null>(null);
     const [bootstrapError, setBootstrapError] = useState<string | null>(null);
-    const [createAdminSubStep, setCreateAdminSubStep] = useState<'username' | 'password' | '2fa'>('username');
+    const [createAdminSubStep, setCreateAdminSubStep] = useState<'username' | 'password'>('username');
+    const [pendingSoul, setPendingSoul] = useState<string | null>(null);
     const [onboardingConfig, setOnboardingConfig] = useState<Record<string, unknown>>({});
     const [showDiscordWizard, setShowDiscordWizard] = useState(false);
     const [showTelegramWizard, setShowTelegramWizard] = useState(false);
@@ -119,17 +120,9 @@ export default function LoginPage() {
             });
     }, []);
 
-    // Load config when entering connections step (for Discord wizard and persistence)
-    useEffect(() => {
-        if (step !== 'connections') return;
-        const apiPrefix = getApiBase() || '';
-        fetch(`${apiPrefix}/api/config`, { credentials: 'include' })
-            .then((res) => res.ok ? res.json() : {})
-            .then((data) => setOnboardingConfig(data))
-            .catch(() => setOnboardingConfig({}));
-    }, [step]);
+    // During onboarding, onboardingConfig is built up in state (no API call without auth).
 
-    const handleBootstrapPasswordStep = async (e: React.FormEvent) => {
+    const handleBootstrapPasswordStep = (e: React.FormEvent) => {
         e.preventDefault();
         if (!password || password !== confirmPassword) {
             setBootstrapError(password !== confirmPassword ? 'Passwords do not match' : 'Enter password');
@@ -139,51 +132,72 @@ export default function LoginPage() {
             setBootstrapError('Password must be at least 8 characters');
             return;
         }
+        // No API call yet — collect credentials locally and continue to soul setup.
+        setBootstrapError(null);
+        setStep('soul_wizard');
+    };
+
+    // Called from the 2FA step (step 4): bootstrap + setup-2fa + verify, then save pending data.
+    const handleStartSetup2FA = async () => {
         setIsLoading(true);
         setBootstrapError(null);
         try {
-            const res = await fetch(`${getApiBase()}/api/auth/bootstrap`, {
+            // 1. Create the admin account now (first API call of the wizard).
+            const bootstrapRes = await fetch(`${getApiBase()}/api/auth/bootstrap`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
                 body: JSON.stringify({ username: username.trim(), password }),
             });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                setBootstrapError((data?.detail as string) || 'Setup failed');
+            const bootstrapData = await bootstrapRes.json().catch(() => ({}));
+            if (!bootstrapRes.ok) {
+                setBootstrapError((bootstrapData?.detail as string) || 'Account creation failed');
                 setIsLoading(false);
                 return;
             }
-            setTempToken(data.access_token || null);
-            if (data.user?.requires_2fa_setup && data.access_token) {
+            const accessToken: string = bootstrapData.access_token || '';
+            setTempToken(accessToken);
+
+            // 2. Save pending soul content with Bearer token (no cookie needed).
+            if (pendingSoul && accessToken) {
+                await fetch(`${getApiBase()}/api/user/soul`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+                    body: JSON.stringify({ content: pendingSoul }),
+                }).catch(() => {});
+            }
+
+            // 3. Save pending connection configs with Bearer token.
+            if (Object.keys(onboardingConfig).length > 0 && accessToken) {
+                await fetch(`${getApiBase()}/api/config`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+                    body: JSON.stringify(onboardingConfig),
+                }).catch(() => {});
+            }
+
+            // 4. Fetch the 2FA QR code.
+            if (accessToken) {
                 try {
                     const setupRes = await fetch(`${getApiBase()}/api/auth/setup-2fa`, {
                         method: 'POST',
-                        headers: { Authorization: `Bearer ${data.access_token}` },
+                        headers: { Authorization: `Bearer ${accessToken}` },
                         credentials: 'include',
                     });
                     if (setupRes.ok) {
                         const setupData = await setupRes.json();
                         setQrCodeBase64(setupData.qr_code_base64 || null);
                     }
-                } catch {
-                    // optional QR
-                }
-                setCreateAdminSubStep('2fa');
-            } else {
-                setStep('soul_wizard');
-                return;
+                } catch { /* optional QR */ }
             }
         } catch (err) {
             const msg = typeof err === 'object' && err && 'message' in err ? String((err as Error).message) : '';
-            setBootstrapError(
-                `Connection failed. Is the backend at ${getApiBase()} reachable?${msg ? ` (${msg})` : ''}`
-            );
+            setBootstrapError(`Connection failed. Is the backend reachable?${msg ? ` (${msg})` : ''}`);
         }
         setIsLoading(false);
     };
 
-    const handleCreateAdmin2FAComplete = async () => {
+    const handleWizard2FAVerify = async () => {
         if (!tempToken || !twoFACode.trim()) return;
         setIsLoading(true);
         setTwoFAError(null);
@@ -201,10 +215,11 @@ export default function LoginPage() {
                 return;
             }
             if (typeof window !== 'undefined') {
-                sessionStorage.setItem('vaf_onboarding_step', 'soul_wizard');
+                sessionStorage.removeItem('vaf_onboarding');
+                sessionStorage.removeItem('vaf_onboarding_step');
                 if (data.access_token) sessionStorage.setItem('vaf_token', data.access_token);
             }
-            setStep('soul_wizard');
+            window.location.replace(`${window.location.origin}/`);
             return;
         } catch {
             setTwoFAError('Network error');
@@ -304,14 +319,15 @@ export default function LoginPage() {
         { id: 1, label: 'Create Admin' },
         { id: 2, label: 'Soul' },
         { id: 3, label: 'Connections' },
+        { id: 4, label: '2FA' },
     ];
     const onboardingCurrentStep =
-        step === 'create_admin' ? 1 : step === 'soul_wizard' ? 2 : step === 'connections' ? 3 : 0;
+        step === 'create_admin' ? 1 : step === 'soul_wizard' ? 2 : step === 'connections' ? 3 : step === 'setup_2fa' ? 4 : 0;
     const showOnboardingProgress = onboardingCurrentStep >= 1;
 
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
-            {step !== 'connections' && (
+            {step !== 'connections' && step !== 'setup_2fa' && (
                 <div className="mb-8 text-center">
                     <img src="/logo.png" alt="Veyllo Logo" className="w-20 h-20 mx-auto mb-4 object-contain" />
                     <h1 className="text-2xl font-bold text-gray-900">Veyllo Agentic Framework</h1>
@@ -319,7 +335,7 @@ export default function LoginPage() {
                 </div>
             )}
             {showOnboardingProgress && (
-                <div className="w-full max-w-md mb-6 grid grid-cols-[2rem_1fr_2rem_1fr_2rem] gap-y-2 gap-x-0 items-center">
+                <div className="w-full max-w-md mb-6 grid grid-cols-[2rem_1fr_2rem_1fr_2rem_1fr_2rem] gap-y-2 gap-x-0 items-center">
                     {onboardingSteps.map((s, idx) => (
                         <React.Fragment key={s.id}>
                             <div
@@ -349,7 +365,7 @@ export default function LoginPage() {
                             key={`label-${s.id}`}
                             className={cn(
                                 'text-xs text-center',
-                                idx === 0 ? 'col-start-1 col-span-1' : idx === 1 ? 'col-start-3 col-span-1' : 'col-start-5 col-span-1'
+                                idx === 0 ? 'col-start-1 col-span-1' : idx === 1 ? 'col-start-3 col-span-1' : idx === 2 ? 'col-start-5 col-span-1' : 'col-start-7 col-span-1'
                             )}
                         >
                             <span className={idx === onboardingCurrentStep - 1 ? 'text-gray-900 font-medium' : 'text-gray-500'}>
@@ -579,7 +595,7 @@ export default function LoginPage() {
                                                     {isLoading ? (
                                                         <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                                                     ) : (
-                                                        <>Continue to 2FA <ArrowRight size={18} /></>
+                                                        <>Continue <ArrowRight size={18} /></>
                                                     )}
                                                 </button>
                                             </div>
@@ -587,44 +603,6 @@ export default function LoginPage() {
                                     </>
                                 )}
 
-                                {createAdminSubStep === '2fa' && (
-                                    <>
-                                        <h2 className="text-lg font-semibold text-gray-900 mb-1">Two-Factor Authentication</h2>
-                                        <p className="text-sm text-gray-500 mb-6">Scan the QR code with your authenticator app, then enter the code below.</p>
-                                        {qrCodeBase64 && (
-                                            <div className="flex justify-center mb-6">
-                                                <img src={`data:image/png;base64,${qrCodeBase64}`} alt="2FA QR" className="w-40 h-40" />
-                                            </div>
-                                        )}
-                                        <form onSubmit={handleCreateAdmin2FAComplete} className="space-y-5">
-                                            <div className="space-y-1.5">
-                                                <label className="text-sm font-medium text-gray-700 ml-1">Code</label>
-                                                <input
-                                                    type="text"
-                                                    value={twoFACode}
-                                                    onChange={(e) => { setTwoFACode(e.target.value.replace(/\D/g, '').slice(0, 6)); setTwoFAError(null); }}
-                                                    className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-gray-900 font-mono text-center text-lg tracking-widest focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
-                                                    placeholder="000000"
-                                                    maxLength={6}
-                                                />
-                                            </div>
-                                            {twoFAError && (
-                                                <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{twoFAError}</p>
-                                            )}
-                                            <button
-                                                type="submit"
-                                                disabled={twoFACode.length < 6 || isLoading}
-                                                className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                                            >
-                                                {isLoading ? (
-                                                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                                ) : (
-                                                    <>Finish setup <ArrowRight size={18} /></>
-                                                )}
-                                            </button>
-                                        </form>
-                                    </>
-                                )}
                             </div>
                         </div>
                     </motion.div>
@@ -696,13 +674,8 @@ export default function LoginPage() {
                             setStep('connections');
                         }}
                         username={username || 'Admin'}
-                        onComplete={async (content) => {
-                            await fetch(`${getApiBase()}/api/user/soul`, {
-                                method: 'PUT',
-                                headers: { 'Content-Type': 'application/json' },
-                                credentials: 'include',
-                                body: JSON.stringify({ content }),
-                            });
+                        onComplete={(content) => {
+                            setPendingSoul(content);
                             if (typeof window !== 'undefined') sessionStorage.setItem('vaf_onboarding_step', 'connections');
                             setStep('connections');
                         }}
@@ -799,17 +772,90 @@ export default function LoginPage() {
                                     <button
                                         type="button"
                                         onClick={() => {
-                                            if (typeof window !== 'undefined') {
-                                                sessionStorage.removeItem('vaf_onboarding');
-                                                sessionStorage.removeItem('vaf_onboarding_step');
-                                            }
-                                            router.push('/');
+                                            setStep('setup_2fa');
+                                            handleStartSetup2FA();
                                         }}
-                                        className="flex-1 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all"
+                                        className="flex-1 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2"
                                     >
-                                        Go to Dashboard
+                                        Continue to 2FA Setup <ArrowRight size={18} />
                                     </button>
                                 </div>
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+                {!checkingSetup && step === 'setup_2fa' && (
+                    <motion.div
+                        key="setup_2fa"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        className="w-full max-w-md"
+                    >
+                        <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+                            <div className="bg-gray-50 px-8 py-3 flex items-center gap-2 border-b border-gray-100">
+                                <Smartphone size={18} className="text-gray-600" />
+                                <span className="text-sm font-medium text-gray-700">Two-Factor Authentication</span>
+                            </div>
+                            <div className="p-8">
+                                {bootstrapError && (
+                                    <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+                                        {bootstrapError}
+                                    </div>
+                                )}
+                                {isLoading && !qrCodeBase64 && (
+                                    <div className="flex flex-col items-center justify-center py-8">
+                                        <div className="w-10 h-10 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin mb-4" />
+                                        <p className="text-sm text-gray-500">Creating account…</p>
+                                    </div>
+                                )}
+                                {!isLoading && !bootstrapError && (
+                                    <>
+                                        <h2 className="text-lg font-semibold text-gray-900 mb-1">Scan QR Code</h2>
+                                        <p className="text-sm text-gray-500 mb-6">Scan the code with your authenticator app (e.g. Google Authenticator), then enter the 6-digit code below.</p>
+                                        {qrCodeBase64 && (
+                                            <div className="flex justify-center mb-6">
+                                                <img src={`data:image/png;base64,${qrCodeBase64}`} alt="2FA QR" className="w-44 h-44 border border-gray-200 rounded-xl p-2" />
+                                            </div>
+                                        )}
+                                        <div className="space-y-1.5 mb-5">
+                                            <label className="text-sm font-medium text-gray-700 ml-1">Authenticator code</label>
+                                            <input
+                                                type="text"
+                                                value={twoFACode}
+                                                onChange={(e) => { setTwoFACode(e.target.value.replace(/\D/g, '').slice(0, 6)); setTwoFAError(null); }}
+                                                className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-gray-900 font-mono text-center text-lg tracking-widest focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
+                                                placeholder="000000"
+                                                maxLength={6}
+                                                autoFocus
+                                            />
+                                        </div>
+                                        {twoFAError && (
+                                            <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg mb-4">{twoFAError}</p>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={handleWizard2FAVerify}
+                                            disabled={twoFACode.length < 6 || isLoading}
+                                            className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {isLoading ? (
+                                                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                            ) : (
+                                                <><CheckCircle size={18} /> Finish Setup</>
+                                            )}
+                                        </button>
+                                    </>
+                                )}
+                                {!isLoading && bootstrapError && (
+                                    <button
+                                        type="button"
+                                        onClick={() => { setBootstrapError(null); handleStartSetup2FA(); }}
+                                        className="w-full mt-4 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all"
+                                    >
+                                        Retry
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </motion.div>
@@ -819,18 +865,9 @@ export default function LoginPage() {
             <DiscordSetupWizard
                 isOpen={showDiscordWizard}
                 onClose={() => setShowDiscordWizard(false)}
-                onComplete={async (config: DiscordConfig) => {
+                onComplete={(config: DiscordConfig) => {
                     setOnboardingConfig((prev) => ({ ...prev, discord_config: config }));
-                    const base = getApiBase();
-                    await fetch(`${base}/api/config`, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        credentials: 'include',
-                        body: JSON.stringify({ discord_config: config }),
-                    }).catch(() => { });
                     setShowDiscordWizard(false);
-                    await new Promise(r => setTimeout(r, 400));
-                    fetch(`${base}/api/discord/start`, { method: 'POST', credentials: 'include' }).catch(() => { });
                 }}
                 existingConfig={onboardingConfig.discord_config as DiscordConfig | undefined}
             />
@@ -840,12 +877,6 @@ export default function LoginPage() {
                 onClose={() => setShowTelegramWizard(false)}
                 onComplete={(config: TelegramConfig) => {
                     setOnboardingConfig((prev) => ({ ...prev, telegram_config: config }));
-                    fetch(`${getApiBase()}/api/config`, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        credentials: 'include',
-                        body: JSON.stringify({ telegram_config: config }),
-                    }).catch(() => { });
                     setShowTelegramWizard(false);
                 }}
                 existingConfig={onboardingConfig.telegram_config as TelegramConfig | undefined}

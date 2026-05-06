@@ -280,6 +280,10 @@ class FrontendManager:
                 creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
                 self._job_handle = self._create_job_object()
 
+            # On Unix: start_new_session isolates npm in its own process group so
+            # os.killpg() in stop_frontend() doesn't send signals to the VAF parent.
+            new_session = platform.system() != "Windows"
+
             if use_debug_log:
                 out_err = open(log_file, "a")
                 self.process = subprocess.Popen(
@@ -289,7 +293,8 @@ class FrontendManager:
                     stderr=subprocess.STDOUT,
                     creationflags=creationflags,
                     env=frontend_env,
-                    shell=False
+                    shell=False,
+                    start_new_session=new_session,
                 )
             else:
                 self.process = subprocess.Popen(
@@ -299,7 +304,8 @@ class FrontendManager:
                     stderr=subprocess.DEVNULL,
                     creationflags=creationflags,
                     env=frontend_env,
-                    shell=False
+                    shell=False,
+                    start_new_session=new_session,
                 )
 
             # Assign process to Job Object (all children will be tracked)

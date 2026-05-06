@@ -1243,9 +1243,11 @@ if platform.system() == "Darwin":
 # ==========================================
 # Use pystray for ALL platforms (Windows, macOS, Linux)
 # This ensures consistent behavior and avoids rumps app bundle issues
-import pystray
-from PIL import Image, ImageDraw
-logger.info(f"[Tray] Using pystray for tray icon")
+# Skip pystray import in headless mode (VAF_NATIVE_WRAPPER=1) — no display needed
+if os.environ.get("VAF_NATIVE_WRAPPER") != "1":
+    import pystray
+    from PIL import Image, ImageDraw
+    logger.info(f"[Tray] Using pystray for tray icon")
 
 def create_image(color_name):
     """Create PIL Image for pystray icon."""
@@ -1271,6 +1273,7 @@ def run_headless():
     _last_network_config["local_network_port"] = Config.get("local_network_port", 8001)
     _last_network_config["local_network_port_frontend"] = Config.get("local_network_port_frontend", 3000)
     _last_network_config["local_network_tls_enabled"] = Config.get("local_network_tls_enabled", False)
+    _last_network_config["local_network_https_port"] = Config.get("local_network_https_port", 443)
     threading.Thread(target=_config_file_poll_loop, daemon=True).start()
 
     # Singleton Check

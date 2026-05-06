@@ -6,8 +6,11 @@ Works on Windows, macOS, and Linux
 import subprocess
 import os
 import sys
+import logging
 from typing import Dict, Any
 from pathlib import Path
+
+logger = logging.getLogger("vaf.bash")
 
 from vaf.tools.base import BaseTool
 

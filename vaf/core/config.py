@@ -1,5 +1,6 @@
 import os
 import json
+import threading
 from pathlib import Path
 from typing import Optional
 import base64
@@ -595,7 +596,7 @@ class Config:
 
     # Observer Pattern Implementation
     _observers = []
-    _observers_lock = threading.Lock() if 'threading' in globals() else None
+    _observers_lock = threading.Lock()
 
     @classmethod
     def add_observer(cls, callback):
@@ -603,11 +604,6 @@ class Config:
         Add a callback function to be notified of configuration changes.
         Callback signature: callback(key: str, new_value: Any)
         """
-        # Lazy import threading if needed (though it's usually standard)
-        if cls._observers_lock is None:
-            import threading
-            cls._observers_lock = threading.Lock()
-            
         with cls._observers_lock:
             if callback not in cls._observers:
                 cls._observers.append(callback)

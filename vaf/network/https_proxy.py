@@ -73,11 +73,11 @@ BACKEND_ORIGIN = "http://127.0.0.1:8005"
 
 # Shared httpx clients for connection pooling — reuse TCP connections across requests
 # instead of opening a new connection for every single resource (JS chunks, CSS, images, etc.)
-_frontend_client: "httpx.AsyncClient | None" = None
-_backend_client: "httpx.AsyncClient | None" = None
+_frontend_client: "httpx.AsyncClient | None" = None  # noqa: F821
+_backend_client: "httpx.AsyncClient | None" = None  # noqa: F821
 
 
-async def _get_client(target_origin: str) -> "httpx.AsyncClient":
+async def _get_client(target_origin: str) -> "httpx.AsyncClient":  # noqa: F821
     """Return a shared httpx.AsyncClient for the target, with connection pooling."""
     import httpx
     global _frontend_client, _backend_client

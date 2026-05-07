@@ -127,14 +127,15 @@ python -m vaf.main tray   # must NOT set VAF_NATIVE_WRAPPER=1
 
 ---
 
-## GPU Acceleration (optional)
+## GPU Acceleration
 
-VAF detects on first start whether an NVIDIA GPU is available. If CUDA is not installed, it will ask whether to set it up automatically.
+VAF uses **Vulkan** for GPU acceleration on Linux. Vulkan works with NVIDIA, AMD, and Intel GPUs without requiring the CUDA toolkit — only the GPU driver is needed (`libcuda.so` / `libvulkan.so`).
 
-To install manually afterwards:
-```bash
-source venv/bin/activate
-python -m vaf.main install-gpu
+On first start, VAF automatically downloads the `llama-b*-bin-ubuntu-vulkan-x64.tar.gz` binary if a compatible GPU is detected.
+
+To verify GPU is active, check the server output for:
+```
+load_backend: loaded Vulkan backend from .../libggml-vulkan.so
 ```
 
 ---
@@ -143,9 +144,9 @@ python -m vaf.main install-gpu
 
 ### llama-server crashes on startup (ABRT / Signal 6)
 
-**Cause:** The `--jinja` flag (or previously `--reasoning-format deepseek`) causes `common_chat_templates_support_enable_thinking` to throw an exception during server init when the loaded model's Jinja chat template is incompatible.
+**Cause:** llama-server build `b4320` crashed in `common_chat_templates_support_enable_thinking` when processing VQ-1's embedded Jinja chat template with `--jinja` enabled. Jinja was enabled by default in that build even without the flag.
 
-**Status:** Fixed in `vaf/core/backend.py` — both flags have been removed.
+**Status:** Fixed — VAF now downloads `b9058+` (Vulkan binary) which handles the native template correctly. The `--jinja` flag is kept (required for tool calling); `--chat-template chatml` is NOT used so the model's native tool-call format is preserved.
 
 ### Docker permission error
 

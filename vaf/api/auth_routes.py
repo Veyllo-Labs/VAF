@@ -21,6 +21,7 @@ from datetime import datetime, timezone, timedelta
 import pyotp
 import qrcode
 from fastapi import APIRouter, HTTPException, status, Response, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -498,13 +499,18 @@ async def me(request: Request, response: Response):
             user_dict = await _me_user_from_token(request, response, token)
             if user_dict:
                 return user_dict
-        _clear_auth_cookie(response)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        # Return JSONResponse directly so Set-Cookie (clear) is preserved.
+        # HTTPException creates a new response object and drops headers set on `response`.
+        resp = JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+        resp.delete_cookie(key=COOKIE_NAME, path="/")
+        return resp
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Unexpected error in /me: %s", e)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Auth session error")
+        resp = JSONResponse(status_code=401, content={"detail": "Auth session error"})
+        resp.delete_cookie(key=COOKIE_NAME, path="/")
+        return resp
 
 
 @router.post("/logout")

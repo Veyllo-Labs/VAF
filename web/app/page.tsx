@@ -3589,6 +3589,49 @@ function VAFDashboardContent() {
                     )}
                 >
                     <div className="flex-1 flex flex-col relative bg-white overflow-hidden">
+                        {/* ── Prompt Navigator (right rail, DeepSeek-style) ── */}
+                        {(() => {
+                            const userPrompts = messages.filter(m => m.role === 'user' && String(m.content ?? '').trim());
+                            if (userPrompts.length === 0) return null;
+                            const MAX_DASHES = 9;
+                            const displayed = userPrompts.slice(-MAX_DASHES);
+                            return (
+                                // Outer wrapper is the hover target — wide enough to bridge dashes + popup gap
+                                <div className="group/promptnav absolute right-0 top-1/2 -translate-y-1/2 z-20 flex flex-row-reverse items-center">
+                                    {/* Dots — always visible, right edge */}
+                                    <div className="flex flex-col gap-3 items-end px-2 py-3">
+                                        {displayed.map((_, i) => (
+                                            <div
+                                                key={i}
+                                                className="w-[5px] h-[5px] rounded-full bg-gray-300 group-hover/promptnav:bg-gray-500 transition-colors duration-150"
+                                            />
+                                        ))}
+                                    </div>
+                                    {/* Popup — appears on hover; flex-col-reverse keeps scroll anchored to bottom (newest last) */}
+                                    <div className="opacity-0 pointer-events-none group-hover/promptnav:opacity-100 group-hover/promptnav:pointer-events-auto transition-opacity duration-150 mr-2">
+                                        <div className="w-64 max-h-72 overflow-y-auto bg-white border border-gray-200 rounded-2xl shadow-xl flex flex-col-reverse">
+                                            {[...userPrompts].reverse().map((m, i) => {
+                                                const realIdx = userPrompts.length - 1 - i;
+                                                return (
+                                                    <button
+                                                        key={realIdx}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            const nodes = containerRef.current?.querySelectorAll('[data-role="user"]');
+                                                            nodes?.[realIdx]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                                        }}
+                                                        className="text-left px-4 py-3 text-xs text-gray-600 hover:bg-gray-50 hover:text-gray-900 truncate shrink-0 border-t border-gray-100 first:border-0 transition-colors duration-100"
+                                                        title={String(m.content ?? '')}
+                                                    >
+                                                        {String(m.content ?? '')}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })()}
                         <div className="flex-1 overflow-y-auto p-6" ref={containerRef}>
                             <div className={cn(messagesAreaWidthClass, "mx-auto space-y-2 pb-32")}>
                                 {/* Sub-Agent banner removed; reopen via tool cards or system log */}
@@ -3845,7 +3888,7 @@ function VAFDashboardContent() {
                                                     );
 
                                                     return (
-                                                        <div key={`bubble-${trueIndex}`} className={cn("flex gap-4 pt-4", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
+                                                        <div key={`bubble-${trueIndex}`} data-role={msg.role} className={cn("flex gap-4 pt-4", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
                                                             {isBot ? (
                                                                 <div className="w-full max-w-[85%] flex gap-4">
                                                                     <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>

@@ -304,14 +304,13 @@ class ServerManager:
                  main_url, main_name = find_asset([keyword])
 
             elif self.system == "Linux":
-                # Linux: Try GPU-specific, then fallback
-                if gpu_type == "amd":
-                    # AMD - Try Vulkan (ROCm binaries might not be available)
+                # Linux: Use Vulkan for GPU (NVIDIA + AMD both support it, no CUDA toolkit needed).
+                # CUDA binary requires libcudart (CUDA toolkit), which is often not installed even
+                # when the NVIDIA driver is present. Vulkan only needs libvulkan (always available
+                # with any modern NVIDIA/AMD driver).
+                if gpu_type in ("nvidia", "amd", "intel"):
                     main_url, main_name = find_asset(["bin-ubuntu-vulkan", "x64.tar.gz"])
-                elif gpu_type == "nvidia":
-                    # NVIDIA - CUDA (might not be in releases, but try anyway)
-                    main_url, main_name = find_asset(["bin-ubuntu-cuda", "x64.tar.gz"])
-                
+
                 # Fallback to CPU if GPU-specific not found
                 if not main_url:
                     main_url, main_name = find_asset(["bin-ubuntu-x64.tar.gz"])
@@ -356,7 +355,12 @@ class ServerManager:
              return main_url, main_name, None, None
              
         elif self.system == "Linux":
-             main_name = f"llama-{tag}-bin-linux-x64.zip"
+             # Prefer Vulkan for GPU systems; CPU fallback for headless/no-GPU
+             primary_gpu = get_primary_gpu()
+             if primary_gpu and primary_gpu.vendor in ("nvidia", "amd", "intel"):
+                 main_name = f"llama-{tag}-bin-ubuntu-vulkan-x64.tar.gz"
+             else:
+                 main_name = f"llama-{tag}-bin-ubuntu-x64.tar.gz"
              main_url = f"{base_url}/{main_name}"
              return main_url, main_name, None, None
              
@@ -438,7 +442,7 @@ class ServerManager:
             UI.error(f"Backend download failed: {e}")
             return False
 
-    def start_server(self, model_path, n_gpu_layers=99, n_ctx=8192, port=8080):
+    def start_server(self, model_path, n_gpu_layers=99, n_ctx=16384, port=8080):
         """
         Start llama-server only if provider is 'local' and auto-start is enabled.
         
@@ -571,8 +575,9 @@ class ServerManager:
                 mode_msg = "CPU Sequential (1 Slot - RAM Limited)"
 
         # SAFETY: Small VRAM or large model (GB) → always 1 slot
+        # Threshold lowered to 8GB: RTX 3080 (10GB) can handle 2 slots with q4_0 KV cache.
         if gpu and gpu.vram_mb > 0:
-            if gpu.vram_mb < 12000 or est_model_gb > 6.0:
+            if gpu.vram_mb < 8000 or est_model_gb > 6.0:
                 if final_parallel > 1:
                     final_parallel = 1
                     final_total_ctx = n_ctx
@@ -612,11 +617,18 @@ class ServerManager:
             "-kvu",  # disable kv_unified on builds that support it (avoids forced n_parallel=4)
             # Disable integrated web UI to save resources and keep port 8080 clean
             "--no-webui",
-            # VRAM Optimization: Use 8-bit cache for Key/Value memory
-            # This reduces context VRAM usage by ~50% with minimal quality loss
+            # KV-Cache Quantization: q8_0 keys (precision matters more) + q4_0 values.
+            # Values tolerate more compression; this cuts KV-cache VRAM by ~62.5% vs f16
+            # with negligible quality loss — the closest llama.cpp analog to TurboQuant.
             "-ctk", "q8_0",
-            "-ctv", "q8_0",
-            # Note: --jinja removed — crashes VQ-1 model on init (common_chat_templates_support_enable_thinking throws)
+            "-ctv", "q4_0",
+            # Enable jinja so the tools/tool_choice API works.
+            # VQ-1's native template uses <tool_call> XML format which llama-server
+            # parses and converts to OpenAI tool_calls objects automatically.
+            # Do NOT override with --chat-template: the native template has proper
+            # tool-call support and overriding it breaks function calling.
+            # Verified: b9058+ Vulkan binary handles the native template without SIGABRT.
+            "--jinja",
         ]
 
         # Server log verbosity: 2=warning (small logs) or 3=info (detailed logs for debugging)

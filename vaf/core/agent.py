@@ -181,7 +181,7 @@ class Agent:
             self.main_persistence = None
         
         # Determine appropriate context limit
-        context_limit = self.config.get("n_ctx", 8192)
+        context_limit = max(self.config.get("n_ctx", 32768), 32768)  # 32768 minimum
         
         # If running in API mode, use a much larger default context limit
         # (unless user manually set n_ctx to something huge)
@@ -1683,7 +1683,7 @@ class Agent:
                     UI.print("[yellow]You can manually install with: vaf install-gpu[/yellow]")
         
         n_gpu = self.config.get("gpu_layers", 99) # Default to max for server
-        n_ctx = self.config.get("n_ctx", 8192)
+        n_ctx = max(self.config.get("n_ctx", 32768), 32768)  # 32768 minimum: system prompt ~5.5K + tool schemas ~6K + conversation
 
         # API Provider Check (Best Practice: Use API if configured)
         if self.provider != "local":
@@ -1897,11 +1897,11 @@ class Agent:
 
     def init_chat(self):
         # Initialize Prompt Manager
-        n_ctx = self.config.get("n_ctx", 8192)
-        
+        n_ctx = max(self.config.get("n_ctx", 32768), 32768)  # 32768 minimum for local models
+
         # If running in API mode, use a much larger default context limit
         if self.provider != "local":
-             if n_ctx <= 16384:
+             if n_ctx <= 32768:
                  n_ctx = 128000
                  
         self.prompt_manager = SystemPromptManager(list(self.tools.values()), model_name=self.model_display_name, agent_instance=self, max_tokens=n_ctx)
@@ -7330,7 +7330,9 @@ class Agent:
         """Dynamic Tool Schema Generation with Context-Aware Optimization"""
         schema = []
         n_ctx = self.config.get("n_ctx", 8192)
-        is_small_context = n_ctx < 8000
+        # With 100+ tools, even 32K contexts are "small" — truncate descriptions
+        # to keep total tool schema tokens manageable (system prompt ~5.5K + tools budget ~6K).
+        is_small_context = n_ctx < 32000
 
         # Use active tools if available, otherwise all tools
         tools_to_use = self._active_tools if self._active_tools is not None else self.tools.keys()

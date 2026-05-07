@@ -56,11 +56,22 @@ Together, **backend.log** and **startup_trace.txt** show whether the tray starte
 
 ## Context Window Configuration
 
-When using the Local Server (llama-server), the context window size (`n_ctx`) is critical for handling long conversations and RAG contexts.
+When using the Local Server (llama-server), the context window size (`n_ctx`) is critical for tool calling to work correctly.
 
-- **Configuration:** Set `n_ctx` in `config.json` (or via Settings → Advanced).
-- **Startup:** When the server is started via the System Tray or Headless Runner, this value is passed directly to the `llama-server` process via the `-c` argument.
-- **Verification:** You can verify the active context limit by checking `logs/server.log` for the `llama_new_context_with_model` or `limits` entry.
-- **GPU Offloading:** The `gpu_layers` setting is also respected, ensuring optimal VRAM usage alongside the context buffer.
+- **Minimum: 32768** — hardcoded in VAF regardless of config. With 100+ tools, the overhead alone is ~11K tokens (system prompt ~5.5K + tool schemas ~6K), leaving ~20K for conversation. Values below 32K cause the router safety net to trigger on every turn.
+- **Configuration:** Set `n_ctx` in `config.json` (or via Settings → Advanced). Values below 32768 are silently raised to 32768.
+- **KV Cache:** VAF uses `q8_0` for keys and `q4_0` for values — ~62.5% less VRAM than f16 with negligible quality loss.
+- **VRAM estimate (RTX 3080, 10GB):** VQ-1 q4_k_m (~4GB) + 32K KV cache (~0.8GB) = ~4.8GB total, leaving ~5GB free.
 
-**Note:** Increasing `n_ctx` significantly increases VRAM usage. Ensure your hardware can support the target size (e.g., 16k context may require ~10GB+ VRAM depending on the model quantization).
+## Native Chat Template and Tool Calling
+
+VQ-1's embedded Jinja template uses `<tool_call>` XML format for function calls:
+```
+<tool_call>
+{"name": "web_search", "arguments": {"query": "..."}}
+</tool_call>
+```
+
+llama-server (with `--jinja`) parses these tags and converts them to standard OpenAI `tool_calls` objects in the API response. VAF's streaming parser then picks them up and executes the tools.
+
+**Do not override with `--chat-template chatml`** — the generic chatml template does not include `<tool_call>` formatting, which causes the model to describe tool usage in text instead of emitting actual tool calls (hallucination).

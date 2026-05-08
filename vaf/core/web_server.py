@@ -938,6 +938,7 @@ async def get_file(path: str = Query(..., description="Absolute path to local fi
         Platform.documents_dir().resolve(),
         Platform.downloads_dir().resolve(),
         Platform.data_dir().resolve(),
+        Platform.get_vaf_output_dir().resolve(),
     ]
     if not any(target.is_relative_to(root) for root in allowed_roots):
         raise HTTPException(status_code=403, detail="Access denied")
@@ -962,6 +963,7 @@ def _allowed_file_path(path_str: str):
         Platform.documents_dir().resolve(),
         Platform.downloads_dir().resolve(),
         Platform.data_dir().resolve(),
+        Platform.get_vaf_output_dir().resolve(),
     ]
     if not any(target.is_relative_to(root) for root in allowed_roots):
         raise HTTPException(status_code=403, detail="Access denied")
@@ -1166,6 +1168,7 @@ async def save_file_as_docx(request: FileSaveDocxRequest):
         Platform.documents_dir().resolve(),
         Platform.downloads_dir().resolve(),
         Platform.data_dir().resolve(),
+        Platform.get_vaf_output_dir().resolve(),
     ]
     if not any(target.is_relative_to(root) for root in allowed_roots):
         raise HTTPException(status_code=403, detail="Access denied")
@@ -1247,6 +1250,7 @@ def _allowed_save_path(path_str: str, required_suffix: str):
         Platform.documents_dir().resolve(),
         Platform.downloads_dir().resolve(),
         Platform.data_dir().resolve(),
+        Platform.get_vaf_output_dir().resolve(),
     ]
     if not any(target.is_relative_to(root) for root in allowed_roots):
         raise HTTPException(status_code=403, detail="Access denied")
@@ -1363,6 +1367,7 @@ async def save_file(request: FileSaveRequest):
         Platform.documents_dir().resolve(),
         Platform.downloads_dir().resolve(),
         Platform.data_dir().resolve(),
+        Platform.get_vaf_output_dir().resolve(),
     ]
     if not any(target.is_relative_to(root) for root in allowed_roots):
         raise HTTPException(status_code=403, detail="Access denied - file must be in Documents, Downloads, or VAF data directory")
@@ -1395,7 +1400,7 @@ async def get_sound(filename: str):
 
 
 @app.get("/api/download")
-async def download_file(path: str = Query(..., description="Absolute path to local file")):
+async def download_file(request: Request, path: str = Query(..., description="Absolute path to local file")):
     from vaf.core.platform import Platform
     from pathlib import Path
     import mimetypes
@@ -1412,16 +1417,22 @@ async def download_file(path: str = Query(..., description="Absolute path to loc
         Platform.documents_dir().resolve(),
         Platform.downloads_dir().resolve(),
         Platform.data_dir().resolve(),
+        Platform.get_vaf_output_dir().resolve(),
     ]
 
     if not any(target.is_relative_to(root) for root in allowed_roots):
         raise HTTPException(status_code=403, detail="Access denied")
 
     mime_type, _ = mimetypes.guess_type(str(target))
+
+    # Local users (127.0.0.1 / ::1) get inline serving — browser opens HTML, PDF, images directly.
+    # Remote/LAN users get Content-Disposition: attachment so a download dialog appears.
+    client_host = request.client.host if request.client else ""
+    is_local = client_host in ("127.0.0.1", "::1", "localhost", "")
     return FileResponse(
         path=str(target),
         media_type=mime_type or "application/octet-stream",
-        filename=target.name,
+        filename=None if is_local else target.name,
     )
 
 

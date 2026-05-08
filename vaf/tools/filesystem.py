@@ -23,7 +23,16 @@ def _resolve_folder_alias(path_str: str) -> str:
     
     path_lower = path_str.lower()
     home = Path.home()
-    
+
+    # LLMs often hallucinate /home/user/ as the home directory.
+    # Remap it to the actual home so writes don't silently fail.
+    import re as _re
+    path_str = _re.sub(
+        r'^/home/user(?=/|$)',
+        str(home),
+        path_str,
+    )
+
     # Check if path contains folder alias
     folder_aliases = {
         "desktop": home / "Desktop",
@@ -522,9 +531,29 @@ class WriteFileTool(BaseTool):
         content = kwargs.get('content', '')
         safe, res = is_safe_path(path)
         if not safe: return res
-        
+
+        # If the resolved path lives directly inside the home directory in a folder
+        # that does not yet exist, reroute to Documents/VAF/<subfolder> so the agent
+        # does not fail trying to create arbitrary home-level dirs (e.g. ~/my_project/).
+        try:
+            from vaf.core.platform import Platform as _Plat
+            _home = Path.home()
+            _res_path = Path(res)
+            _rel = _res_path.relative_to(_home)          # raises ValueError if not under home
+            _first = _rel.parts[0] if _rel.parts else None
+            _known_home_dirs = {
+                "Documents", "Downloads", "Desktop", "Pictures", "Videos", "Music",
+                "Dokumente", "Bilder", "Musik", "Herunterladen",  # German
+                "VAF", ".vaf", ".config", ".local", ".cache", ".ssh",
+            }
+            if _first and _first not in _known_home_dirs and not (_home / _first).exists():
+                _out = _Plat.get_vaf_output_dir()
+                res = str(_out / _rel)
+        except (ValueError, Exception):
+            pass  # not under home, or any other issue — leave path as-is
+
         import time
-        
+
         # Retry mechanism for file locking issues (especially on Windows)
         max_retries = 3
         retry_delay = 0.1  # 100ms between retries
@@ -632,18 +661,29 @@ class WriteFileTool(BaseTool):
                         except Exception:
                             pass
                     if success:
-                        # When a document file is saved, open it in the Document Editor (same as document_agent/workflow).
+                        # Emit file_created for all written files so Web UI shows a download/open link.
+                        try:
+                            _sid = os.environ.get("VAF_SESSION_ID")
+                            if not _sid:
+                                from vaf.core.subagent_ipc import get_current_session_id
+                                _sid = get_current_session_id()
+                            if _sid:
+                                from vaf.core.web_interface import notify_file_created
+                                notify_file_created(_sid, res, title=os.path.basename(res))
+                        except Exception:
+                            pass
+                        # When a document file is saved, also open it in the Document Editor.
                         _doc_extensions = (".html", ".htm", ".md", ".txt", ".docx")
                         if res.lower().endswith(_doc_extensions):
                             try:
-                                session_id = os.environ.get("VAF_SESSION_ID")
-                                if not session_id:
+                                _sid2 = os.environ.get("VAF_SESSION_ID")
+                                if not _sid2:
                                     from vaf.core.subagent_ipc import get_current_session_id
-                                    session_id = get_current_session_id()
-                                if session_id:
+                                    _sid2 = get_current_session_id()
+                                if _sid2:
                                     from vaf.core.web_interface import notify_document_created
                                     notify_document_created(
-                                        session_id, res,
+                                        _sid2, res,
                                         title=os.path.basename(res)
                                     )
                             except Exception:

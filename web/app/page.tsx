@@ -777,6 +777,7 @@ function VAFDashboardContent() {
     const [loading, setLoading] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
     const [isStoppingGeneration, setIsStoppingGeneration] = useState(false);
+    const [createdFiles, setCreatedFiles] = useState<{ path: string; name: string; sessionId: string }[]>([]);
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
     const [activeToolName, setActiveToolName] = useState(''); // Currently-running tool name for loading bubble
 
@@ -2552,6 +2553,17 @@ function VAFDashboardContent() {
                         clearWorkflow();
                     }
                 }
+                else if (data.type === 'file_created') {
+                    const sid = data.sessionId || currentSessionIdRef.current || '';
+                    const activeSessionId = currentSessionIdRef.current;
+                    if (!data.sessionId || data.sessionId === activeSessionId) {
+                        setCreatedFiles(prev => {
+                            // Avoid duplicates
+                            if (prev.some(f => f.path === data.filePath)) return prev;
+                            return [...prev, { path: data.filePath, name: data.title || data.filePath.split('/').pop() || 'file', sessionId: sid }];
+                        });
+                    }
+                }
                 else if (data.type === 'memory_learning') {
                     // Memory Learning status updates
                     if (data.status === 'started') {
@@ -2702,6 +2714,7 @@ function VAFDashboardContent() {
         }]);
         expectNewAssistantRef.current = true;
         lastUserSendTimeRef.current = Date.now();
+        setCreatedFiles([]);
         setIsStoppingGeneration(false);
         setLoading(true);
         setIsGenerating(true);
@@ -4040,6 +4053,24 @@ function VAFDashboardContent() {
                                             )}
                                             <span className="text-sm font-medium">{memoryLearning.message}</span>
                                         </div>
+                                    </div>
+                                )}
+
+                                {/* Created file chips — blue download/open links shown after agent writes a file */}
+                                {createdFiles.length > 0 && (
+                                    <div className={cn(chatWidthClass, "mx-auto mb-2 flex flex-wrap gap-2")}>
+                                        {createdFiles.map((f, i) => (
+                                            <a
+                                                key={i}
+                                                href={`/api/download?path=${encodeURIComponent(f.path)}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-colors"
+                                            >
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                                {f.name}
+                                            </a>
+                                        ))}
                                     </div>
                                 )}
 

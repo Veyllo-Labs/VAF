@@ -1000,7 +1000,7 @@ vaf automation delete <id>   # Delete task
         if new_terminal:
             # Build command to run automation
             # Use 'vaf automation run <id>' command
-            vaf_cmd = f'vaf automation run {task.id}'
+            vaf_cmd = f'"{sys.executable}" -m vaf.main automation run {task.id}'
             
             # Try to open in new terminal
             title = f"VAF Automation: {task.name}"

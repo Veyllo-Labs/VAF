@@ -448,6 +448,35 @@ def get_web_interface():
     return WebInterfaceManager()
 
 
+def notify_file_created(session_id: Optional[str], file_path, title: Optional[str] = None) -> None:
+    """
+    Notify the Web UI that a file was created so it shows a download/open link.
+    Works from main process (WebSocket) and from subprocess (HTTP POST fallback).
+    Safe when there is no Web session (Telegram, automation): returns immediately.
+    """
+    if not session_id or not file_path:
+        return
+    resolved = Path(file_path).resolve().as_posix()
+    payload = {
+        "type": "file_created",
+        "sessionId": session_id,
+        "filePath": resolved,
+        "title": title or Path(file_path).name,
+    }
+    wi = get_web_interface()
+    if getattr(wi, "_server_loop", None):
+        wi._push_session_update(session_id, payload)
+    else:
+        try:
+            import requests
+            from vaf.core.config import Config
+            tls_on = Config.get("local_network_tls_enabled", False)
+            port = 8005 if tls_on else 8001
+            requests.post(f"http://127.0.0.1:{port}/api/workflow/update", json=payload, timeout=1)
+        except Exception:
+            pass
+
+
 def notify_document_created(session_id: Optional[str], file_path, title: Optional[str] = None) -> None:
     """
     Notify the Web UI that a document was created so the Document Editor opens with it.

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useEffect } from 'react';
 import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -78,6 +78,22 @@ export default function SubAgentWindow({
             : 'bg-gray-400';
     const hasWorkflow = false;
     const codeLines = useMemo(() => (displayCode ? displayCode.split('\n') : []), [displayCode]);
+
+    // Smart auto-scroll: stick to bottom; pause when user scrolls up; resume when near bottom again.
+    const consoleScrollRef = useRef<HTMLDivElement>(null);
+    const userScrolledUpRef = useRef(false);
+
+    useEffect(() => {
+        if (!userScrolledUpRef.current && consoleScrollRef.current) {
+            consoleScrollRef.current.scrollTop = consoleScrollRef.current.scrollHeight;
+        }
+    }, [consoleLines]);
+
+    const handleConsoleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        const el = e.currentTarget;
+        const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        userScrolledUpRef.current = distFromBottom > 48;
+    };
 
     if (!isOpen && mode === 'overlay') return null;
 
@@ -205,7 +221,11 @@ export default function SubAgentWindow({
                                     Console
                                 </div>
                             </div>
-                            <div className="flex-1 overflow-auto bg-white px-4 py-4 font-mono text-xs text-gray-900">
+                            <div
+                                ref={consoleScrollRef}
+                                onScroll={handleConsoleScroll}
+                                className="flex-1 overflow-auto bg-white px-4 py-4 font-mono text-xs text-gray-900"
+                            >
                                 {consoleLines.length > 0 ? (
                                     <div className="space-y-1 whitespace-pre-wrap">
                                         {consoleLines.map((line, index) => (

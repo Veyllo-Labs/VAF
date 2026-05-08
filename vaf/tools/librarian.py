@@ -201,7 +201,7 @@ You have access to this filesystem map for fast navigation:
                 if subagent_provider != "inherit":
                     os.environ["VAF_PROVIDER"] = subagent_provider
             
-            cmd_parts = ['vaf', 'subagent', 'run', 'librarian_agent', '--task', task, '--task-id', task_id]
+            cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'librarian_agent', '--task', task, '--task-id', task_id]
             
             if Platform.is_windows():
                 # Windows: properly escape for cmd /k

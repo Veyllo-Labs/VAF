@@ -1591,16 +1591,28 @@ class CodingAgentTool(BaseTool):
             return os.path.abspath(os.path.expanduser(provided_path))
 
         cwd = os.getcwd()
-        
-        # 2. Check if CWD is a project root
+
+        # Safety: never use the VAF program root or its subdirectories as base_dir.
+        try:
+            from vaf.tools.filesystem import _VAF_PROJECT_ROOT
+            from pathlib import Path as _Path
+            _cwd_path = _Path(cwd).resolve()
+            _is_vaf_root = (_cwd_path == _VAF_PROJECT_ROOT or _cwd_path.is_relative_to(_VAF_PROJECT_ROOT))
+        except Exception:
+            _is_vaf_root = False
+
+        # 2. Check if CWD is a project root (but not the VAF source repo)
         project_markers = [".git", ".vaf", "package.json", "pyproject.toml", "requirements.txt"]
-        is_project_root = any(os.path.exists(os.path.join(cwd, m)) for m in project_markers)
-        
+        is_project_root = (
+            not _is_vaf_root
+            and any(os.path.exists(os.path.join(cwd, m)) for m in project_markers)
+        )
+
         # 3. Detect "Create New" intent
         task_lower = task.lower()
         create_keywords = ["create new", "start new", "new project", "generate new", "scaffold"]
         is_create_intent = any(kw in task_lower for kw in create_keywords)
-        
+
         # DECISION:
         if is_project_root and not is_create_intent:
             # We are in a project and user didn't explicitly ask for a NEW one -> Stay here!
@@ -1918,21 +1930,58 @@ Thumbs.db
             except Exception:
                 pass
 
-        # Server health check
+        # ── Resolve LLM endpoint ─────────────────────────────────────────────
+        # When VAF runs in API mode (DeepSeek, OpenRouter, …) the local
+        # llama-server on :8080 is NOT running.  Detect the active provider
+        # and build the correct base_url / api_key / model so that all three
+        # hardcoded 127.0.0.1:8080 calls below route to the right backend.
+        _provider = (
+            os.environ.get("VAF_PROVIDER", "").strip().lower()
+            or Config.get("provider", "local")
+        )
+        # base_url already contains /v1 (from api_backend.py); store full endpoint URLs
+        # so we never double up the /v1 path segment.
+        _API_PROVIDERS = {
+            "deepseek":   ("https://api.deepseek.com/v1",       "deepseek-chat"),
+            "openai":     ("https://api.openai.com/v1",         "gpt-4o"),
+            "openrouter": ("https://openrouter.ai/api/v1",      "anthropic/claude-3.5-sonnet"),
+            "anthropic":  ("https://api.anthropic.com/v1",      "claude-3-5-sonnet-20241022"),
+            "google":     ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.0-flash"),
+        }
+        _is_api_mode = _provider in _API_PROVIDERS
+        if _is_api_mode:
+            _api_base, _llm_default_model = _API_PROVIDERS[_provider]
+            _llm_api_key = Config.get_api_key(_provider) or ""
+            _llm_model = Config.get(f"api_model_{_provider}", _llm_default_model) or _llm_default_model
+            # Full URLs — base already ends with /v1 so just append the path segment
+            _llm_chat_url = f"{_api_base}/chat/completions"
+            _llm_models_url = f"{_api_base}/models"
+        else:
+            _llm_api_key = ""
+            _llm_model = None  # fetched from /v1/models below
+            _llm_chat_url = "http://127.0.0.1:8080/v1/chat/completions"
+            _llm_models_url = "http://127.0.0.1:8080/v1/models"
+
+        # Server health check (local llama-server only; API providers are always reachable)
         tui.set_action("Checking server...")
         live.update(tui.render())  # Force immediate update
         time.sleep(0.05) # Prevent lock contention
-        try:
-            health = requests.get("http://127.0.0.1:8080/health", timeout=5)
-            if health.status_code != 200:
-                return f"❌ Server Error: VAF Server not ready (Status {health.status_code}). Please start VAF Server on port 8080."
-            tui.set_action("Server ready")
-            live.update(tui.render())  # Force immediate update
+        if not _is_api_mode:
+            try:
+                health = requests.get("http://127.0.0.1:8080/health", timeout=5)
+                if health.status_code != 200:
+                    return f"❌ Server Error: VAF Server not ready (Status {health.status_code}). Please start VAF Server on port 8080."
+                tui.set_action("Server ready")
+                live.update(tui.render())  # Force immediate update
+                time.sleep(0.05)
+            except requests.exceptions.ConnectionError:
+                return "❌ Connection Error: VAF Server unreachable (Port 8080). Please start VAF Server."
+            except Exception as e:
+                return f"❌ Server Check Failed: {e}. Please check if VAF Server is running."
+        else:
+            tui.set_action(f"API mode ({_provider})")
+            live.update(tui.render())
             time.sleep(0.05)
-        except requests.exceptions.ConnectionError:
-            return "❌ Connection Error: VAF Server unreachable (Port 8080). Please start VAF Server."
-        except Exception as e:
-            return f"❌ Server Check Failed: {e}. Please check if VAF Server is running."
         
         # ═══════════════════════════════════════════════════════════════════
         # TOOLS - File tools + TODO management (NOT coding_agent!)
@@ -3252,15 +3301,19 @@ All files must be saved inside this directory.
             # ═══════════════════════════════════════════════════════════════
             
             # Get model name
-            model_name = "user-model"
-            try:
-                m_res = requests.get("http://127.0.0.1:8080/v1/models", timeout=2)
-                if m_res.status_code == 200:
-                    data = m_res.json()
-                    if 'data' in data and len(data['data']) > 0:
-                        model_name = data['data'][0]['id']
-            except:
-                pass
+            if _llm_model:
+                # API mode: model already resolved from config
+                model_name = _llm_model
+            else:
+                model_name = "user-model"
+                try:
+                    m_res = requests.get(_llm_models_url, timeout=2)
+                    if m_res.status_code == 200:
+                        data = m_res.json()
+                        if 'data' in data and len(data['data']) > 0:
+                            model_name = data['data'][0]['id']
+                except:
+                    pass
 
             # Clean history - MUST be properly indented!
             clean_history = []
@@ -3513,8 +3566,12 @@ All files must be saved inside this directory.
                 time.sleep(0.1)  # Give animation thread time to render
                 
                 _trace("Sending LLM request...")
+                _req_headers = {"Content-Type": "application/json"}
+                if _llm_api_key:
+                    _req_headers["Authorization"] = f"Bearer {_llm_api_key}"
                 stream_response = requests.post(
-                    "http://127.0.0.1:8080/v1/chat/completions",
+                    _llm_chat_url,
+                    headers=_req_headers,
                     json={
                         "model": model_name,
                         "messages": clean_history,

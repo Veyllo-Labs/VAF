@@ -502,7 +502,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             setActiveTab(initialTabProp);
             return;
         }
-        // If non-admin lands on an admin-only tab (e.g. default 'general'), redirect to first allowed tab
+        // If non-admin lands on an admin-only tab, redirect to first allowed tab
         const currentCat = CATEGORIES.find(c => c.id === activeTab);
         if (currentCat?.adminOnly && currentUser?.role !== 'admin') {
             const firstAllowed = CATEGORIES.find(c => !c.adminOnly);
@@ -1946,6 +1946,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {activeTab === 'local_network' && currentUser?.role === 'admin' && (
                             <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
                                 <Section title={tLocalNet('networkSettings')}>
+                                    {localConfig.server_mode ? (
+                                        <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-800">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                            <span>LAN access is permanently enabled in server mode and cannot be disabled here.</span>
+                                        </div>
+                                    ) : (
                                     <Switch
                                         label={tLocalNet('enableHosting')}
                                         description={tLocalNet('enableHostingDesc')}
@@ -1959,6 +1965,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             }
                                         }}
                                     />
+                                    )}
                                     {/* With network on, access via integrated HTTPS proxy (same port). */}
                                     {/* Access URL for this device and LAN */}
                                     {(() => {
@@ -2319,6 +2326,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={localConfig.web_ui_enabled ?? true}
                                         onChange={(v: boolean) => handleChange('web_ui_enabled', v)}
                                     />
+                                    {!localConfig.server_mode && (<>
                                     <div className="h-4" />
                                     <Switch
                                         label={tAdvanced('startTrayOnLogin')}
@@ -2326,6 +2334,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={localConfig.tray_autostart ?? false}
                                         onChange={(v: boolean) => handleChange('tray_autostart', v)}
                                     />
+                                    </>)}
                                     <div className="h-4" />
                                     <Switch
                                         label={tAdvanced('serverPersistence')}

@@ -65,6 +65,12 @@ async def patch_config(
 ) -> Dict[str, Any]:
     """Merge provided keys into config and save. Non-admins: global keys ignored; connection toggles (Telegram/WhatsApp/Discord) stored per-user only."""
     current = Config.load()
+
+    # In server_mode: LAN settings are locked — they cannot be disabled via the API.
+    if current.get("server_mode", False):
+        _SERVER_LOCKED = {"local_network_enabled", "local_network_tls_enabled", "server_mode"}
+        body = {k: v for k, v in body.items() if k not in _SERVER_LOCKED}
+
     if _user.get("role") != "admin":
         body_filtered, scope_toggles = Config.extract_connection_toggles_for_scope(body, _user.get("user_scope_id"))
         body = Config.filter_for_non_admin(body_filtered)

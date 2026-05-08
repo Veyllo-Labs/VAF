@@ -103,6 +103,7 @@ class Config:
         "librarian_pdf_max_pages_preview": 50, # Max pages to show in preview (default: 50)
         
         # System Settings
+        "server_mode": False,                  # True = server installation (LAN always on, no desktop UI controls)
         "web_ui_enabled": True,                # Start Web UI automatically
         "server_persistence_enabled": False,   # Keep server running after exit
         "tray_autostart": False,               # Auto-start tray on OS login

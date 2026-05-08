@@ -705,7 +705,125 @@ EOF
 fi
 
 # ============================================================================
-# 11. VERIFICATION
+# 11. SERVER SETUP (Linux only)
+# ============================================================================
+
+SETUP_AUTOSTART=false
+SETUP_LAN=false
+INSTALL_MODE="desktop"
+
+if [[ "$OS_TYPE" == "linux" ]] && [[ -t 0 ]]; then
+    echo ""
+    print_step "Installation Mode..."
+    echo ""
+    echo -e "  ${CYAN}[1] Desktop${NC}  — personal use, local only, system tray (default)"
+    echo -e "  ${CYAN}[2] Server${NC}   — always-on service, LAN accessible via HTTPS, starts at boot"
+    echo ""
+    read -p "  Choose [1/2, default 1]: " _mode_response
+    if [[ "$_mode_response" == "2" ]]; then
+        INSTALL_MODE="server"
+        SETUP_AUTOSTART=true
+        SETUP_LAN=true
+        print_success "Server mode selected"
+    else
+        INSTALL_MODE="desktop"
+        print_success "Desktop mode selected"
+    fi
+fi
+
+# --- Server mode: write config ---
+if [[ "$SETUP_LAN" == "true" ]]; then
+    print_info "Writing server mode config..."
+    mkdir -p "$HOME/.vaf"
+    INSTALL_MODE_VAR="$INSTALL_MODE"
+    "$PROJECT_ROOT/venv/bin/python3" - << PYEOF
+import json, os
+p = os.path.expanduser("~/.vaf/config.json")
+try:
+    cfg = json.loads(open(p).read()) if os.path.exists(p) else {}
+except Exception:
+    cfg = {}
+cfg["server_mode"] = True
+cfg["local_network_enabled"] = True
+cfg["local_network_tls_enabled"] = True
+open(p, "w").write(json.dumps(cfg, indent=2))
+PYEOF
+    print_success "Server mode enabled in config"
+    print_success "LAN access enabled (HTTPS, port 8443)"
+    print_info "A self-signed TLS certificate is auto-generated on first start."
+    print_warning "Browsers will show a certificate warning — expected for local networks."
+fi
+
+# --- Autostart: install systemd user service ---
+if [[ "$SETUP_AUTOSTART" == "true" ]]; then
+    if command -v systemctl &>/dev/null && systemctl --user daemon-reload &>/dev/null 2>&1; then
+        print_info "Installing systemd user service..."
+
+        SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+        mkdir -p "$SYSTEMD_USER_DIR"
+
+        # Write the unit file with current user's paths baked in
+        cat > "$SYSTEMD_USER_DIR/vaf.service" << EOF
+[Unit]
+Description=VAF - Veyllo Agentic Framework
+Documentation=https://github.com/Veyllo-Labs/VAF
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$PROJECT_ROOT
+Environment=PYTHONPATH=$PROJECT_ROOT
+Environment=VAF_NATIVE_WRAPPER=1
+ExecStart=$PROJECT_ROOT/venv/bin/python3 -m vaf.main tray
+ExecStop=/bin/kill -s TERM \$MAINPID
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vaf
+
+[Install]
+WantedBy=default.target
+EOF
+
+        systemctl --user daemon-reload
+        systemctl --user enable vaf
+
+        # Enable linger so the service starts at boot even with no active login session
+        if sudo loginctl enable-linger "$USER" 2>/dev/null; then
+            print_success "Boot autostart enabled (loginctl linger)"
+        else
+            print_warning "Could not enable linger (sudo required)"
+            print_info "To enable boot start: sudo loginctl enable-linger $USER"
+        fi
+
+        # Start the service immediately
+        if systemctl --user start vaf 2>/dev/null; then
+            print_success "VAF service started"
+        else
+            print_warning "Service will start on next boot/login"
+        fi
+
+        print_success "Service installed: $SYSTEMD_USER_DIR/vaf.service"
+        print_info "Manage: systemctl --user {start|stop|restart|status} vaf"
+        print_info "Logs:   journalctl --user -u vaf -f"
+
+    else
+        print_warning "systemd user session not available — skipping autostart"
+        print_info "Manual start: ./vaf.sh start"
+    fi
+fi
+
+# ============================================================================
+# 12. VERIFICATION
 # ============================================================================
 print_step "Verifying Installation..."
 
@@ -742,10 +860,27 @@ echo -e "    ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Then just type: ${CYAN}vaf${NC}"
 echo -e "    ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Or run: ${CYAN}./run_vaf.sh${NC}"
 echo ""
 
+if [[ "$SETUP_AUTOSTART" == "true" ]]; then
+    echo -e "  ${CYAN}Service (autostart enabled):${NC}"
+    echo -e "    - Status:  systemctl --user status vaf"
+    echo -e "    - Logs:    journalctl --user -u vaf -f"
+    echo -e "    - Stop:    systemctl --user stop vaf"
+    echo ""
+fi
+
+if [[ "$SETUP_LAN" == "true" ]]; then
+    _LAN_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || hostname -I 2>/dev/null | awk '{print $1}')
+    echo -e "  ${CYAN}LAN Access (HTTPS):${NC}"
+    echo -e "    - https://${_LAN_IP:-<your-ip>}:8443"
+    echo -e "    - localhost: https://127.0.0.1:8443"
+    echo -e "    - Accept the self-signed certificate warning on first visit."
+    echo ""
+fi
+
 if [[ "$DOCKER_RUNNING" == "true" ]]; then
     echo -e "  ${CYAN}Memory System:${NC}"
-    echo -e "    ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Database: postgresql://localhost:5432/vaf_memory"
-    echo -e "    ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Stop: docker compose -f docker-compose.memory.yml down"
+    echo -e "    - Database: postgresql://localhost:5432/vaf_memory"
+    echo -e "    - Stop: docker compose -f docker-compose.memory.yml down"
     echo ""
 fi
 

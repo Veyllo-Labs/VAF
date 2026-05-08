@@ -2773,6 +2773,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             )
                         except Exception:
                             pass
+                        # If thinking mode sent a question via the Web UI and is waiting for
+                        # this user's reply, deliver the reply to the thinking mode now.
+                        try:
+                            from vaf.core.thinking_mode import get_waiting_for_reply, clear_waiting_for_reply
+                            if get_waiting_for_reply(user_scope_id):
+                                clear_waiting_for_reply(user_scope_id, content)
+                        except Exception:
+                            pass
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)
                         try:
                             if is_debug_logging_enabled():

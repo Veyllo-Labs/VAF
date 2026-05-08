@@ -244,7 +244,12 @@ cmd_restart() {
     echo ""
     echo "=== Restarting VAF ==="
     cmd_stop
-    sleep 1
+    echo ""
+    for i in 5 4 3 2 1; do
+        printf "  ${CYAN}[..]${NC}  Starting in %s...\r" "$i"
+        sleep 1
+    done
+    echo ""
     cmd_start
 }
 

@@ -1192,17 +1192,31 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         # Final response broadcast: always send full content once so UI has complete message.
                         # (Streaming is throttled, so the last chunk(s) may never have been emitted.)
                         raw_final = "".join(response_parts) if response_parts else response_text
-                        
+
                         # SANITIZE: Remove leaked JSON fragments before showing to user
                         final_text = _strip_tool_calls_json(raw_final)
-                        
-                        if not final_text or not str(final_text).strip():
-                            final_text = "[Error] No response was produced. The server may have rejected the request (e.g. context too large). Try closing the Document Editor or starting a new chat."
-                        get_web_interface().emit_agent_message(
-                            role="assistant",
-                            content=str(final_text),
-                            session_id=task.session_id
-                        )
+
+                        # If agent stopped internally (via should_stop check inside chat_step),
+                        # clear the streaming bubble and emit a clean stop notice — same as the
+                        # _StopGenerationRequested path — so no partial text leaks through.
+                        _agent_stopped_internally = "[Generation stopped by user]" in response_text
+                        if _agent_stopped_internally:
+                            partial = final_text.replace("[Generation stopped by user]", "").strip()
+                            get_web_interface().emit_clear_last_assistant(task.session_id)
+                            final_text = (partial + "\n\n*[Generation stopped]*").strip() if partial else "*[Generation stopped]*"
+                            get_web_interface().emit_agent_message(
+                                role="assistant",
+                                content=final_text,
+                                session_id=task.session_id
+                            )
+                        else:
+                            if not final_text or not str(final_text).strip():
+                                final_text = "[Error] No response was produced. The server may have rejected the request (e.g. context too large). Try closing the Document Editor or starting a new chat."
+                            get_web_interface().emit_agent_message(
+                                role="assistant",
+                                content=str(final_text),
+                                session_id=task.session_id
+                            )
 
                     # Emit message_complete event for Auto-TTS (skip speaking for SYSTEM_LOG_ONLY)
                     try:
@@ -1563,19 +1577,27 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         tq.clear_stop(task.session_id)
                     except Exception:
                         pass
+                    # Capture whatever partial content streamed before the stop
+                    _partial = ""
                     try:
                         if "response_parts" in dir():
+                            _partial = "".join(response_parts).strip()
                             response_parts.clear()
                     except Exception:
                         pass
                     try:
+                        # Clear the streaming bubble so no partial text leaks through
+                        # (chunks already queued in the asyncio loop arrive before this,
+                        # then this wipes them, then the final message appears cleanly)
+                        get_web_interface().emit_clear_last_assistant(task.session_id)
+                        final_stop_content = (_partial + "\n\n*[Generation stopped]*").strip() if _partial else "*[Generation stopped]*"
                         get_web_interface().emit_agent_message(
                             role="assistant",
-                            content="[Generation stopped by user]",
+                            content=final_stop_content,
                             session_id=task.session_id,
                         )
                         get_web_interface().emit_message_complete(
-                            content="[Generation stopped by user]",
+                            content=final_stop_content,
                             session_id=task.session_id,
                         )
                     except Exception:

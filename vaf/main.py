@@ -243,7 +243,7 @@ def bootstrap():
 bootstrap()
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, bridge, server, security
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, bridge, server, security, service
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -310,6 +310,11 @@ app.add_typer(workflow.app, name="workflow", help="Run workflows in separate ter
 app.command(name="info")(info.info)
 app.command(name="install-gpu")(info.install_gpu)
 app.command(name="doctor")(security.doctor)
+
+app.command(name="start",   help="Start VAF as a background service")(service.cmd_start)
+app.command(name="stop",    help="Stop the VAF background service")(service.cmd_stop)
+app.command(name="restart", help="Restart the VAF background service")(service.cmd_restart)
+app.command(name="status",  help="Show VAF service status")(service.cmd_status)
 
 @app.command(name="tray")
 def tray_command():

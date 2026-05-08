@@ -474,6 +474,25 @@ def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str) 
                     from vaf.core.discord_send import send_discord_dm
                     if send_discord_dm(bot_token, user_id, nudge, chunk=True):
                         return True
+        # Fallback: no messenger configured — push to the user's latest Web UI session
+        try:
+            from vaf.core.web_interface import get_web_interface
+            from vaf.core.session import SessionManager
+            wi = get_web_interface()
+            sm = SessionManager()
+            all_sessions = sm.list(limit=10, user_scope_id=user_scope_id)
+            web_sessions = [
+                s for s in all_sessions
+                if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
+            ]
+            if wi and web_sessions:
+                sid = web_sessions[0]["id"]
+                wi.emit_agent_message("assistant", nudge, session_id=sid)
+                wi.emit_session_unread(sid)
+                logger.info("Thinking nudge sent via Web UI session %s", sid)
+                return True
+        except Exception as _we:
+            logger.debug("Thinking nudge Web UI fallback failed: %s", _we)
         return False
     except Exception as e:
         logger.warning("Thinking nudge send failed: %s", e)
@@ -954,6 +973,67 @@ Call thinking_done with a brief summary when finished."""
 
 _SENT_TOOLS = {"send_telegram", "send_whatsapp", "send_discord"}
 
+
+def _try_emit_to_web_ui_and_wait(
+    run_history: List[Dict[str, Any]],
+    user_scope_id: Optional[str],
+    username: str,
+    display_name: str,
+) -> bool:
+    """
+    When no messenger is configured, check if the agent produced a text message
+    intended for the user in the last thinking turn (a question or proposal, but
+    without calling a send_* tool).  If so, push it to the user's latest Web UI
+    session and set waiting_for_reply so the thinking loop pauses for a reply.
+
+    Returns True if a message was emitted, False otherwise.
+    """
+    if not run_history:
+        return False
+    # Find the last assistant message that has text content but NO send_* tool call
+    for msg in reversed(run_history):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        tool_calls = msg.get("tool_calls") or []
+        tool_names = {(tc.get("function") or {}).get("name") or tc.get("name") or "" for tc in tool_calls}
+        # Skip if a messenger send tool was already called (handled elsewhere)
+        if tool_names & _SENT_TOOLS:
+            return False
+        # Skip internal-only tools (thinking_done, thinking_note_add, save_thinking_suggestion, …)
+        content = (msg.get("content") or "").strip()
+        if not content:
+            return False
+        # Only emit if the message looks like it's directed at the user
+        # (contains a question mark or is short enough to be a conversational reply)
+        import re as _re
+        has_question = "?" in content
+        is_conversational = len(content) < 600  # skip long internal monologues
+        if not (has_question or is_conversational):
+            return False
+        # Push to latest Web UI session
+        try:
+            from vaf.core.web_interface import get_web_interface
+            from vaf.core.session import SessionManager
+            wi = get_web_interface()
+            sm = SessionManager()
+            all_sessions = sm.list(limit=10, user_scope_id=user_scope_id)
+            web_sessions = [
+                s for s in all_sessions
+                if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
+            ]
+            if not wi or not web_sessions:
+                return False
+            sid = web_sessions[0]["id"]
+            wi.emit_agent_message("assistant", content, session_id=sid)
+            wi.emit_session_unread(sid)
+            set_waiting_for_reply(user_scope_id, username, display_name=display_name, question_text=content)
+            logger.info("Thinking Mode: question emitted to Web UI session %s", sid)
+            return True
+        except Exception as _e:
+            logger.debug("Thinking Mode: Web UI emit failed: %s", _e)
+            return False
+    return False
+
 # Phase-based prompts for thinking mode turns 1+ (turn 0 uses THINKING_PROMPT)
 _PHASE_PROMPTS = {
     # Turn 1: Tool results are in from GATHER. Now analyze + decide.
@@ -1320,6 +1400,24 @@ def _run_thinking_for_user(
                                     logger.info("Thinking Mode question persisted to session: %s", chat_session_id)
                                 except Exception as _save_err:
                                     logger.debug("Could not persist TM question to session: %s", _save_err)
+                    except Exception:
+                        pass
+
+                # Fallback: if no messenger send tool fired but the agent produced text
+                # directed at the user, emit it to the Web UI and wait for a reply there.
+                if not _waiting_already_set:
+                    try:
+                        _uname = getattr(agent, "_current_username", None) or "admin"
+                        _dname = _uname
+                        try:
+                            from vaf.auth.user_workspace import get_user_workspace
+                            _ws = get_user_workspace(_uname)
+                            _ui = _ws.get_user_identity() or {}
+                            _dname = (_ui.get("name") or "").strip() or _uname
+                        except Exception:
+                            pass
+                        if _try_emit_to_web_ui_and_wait(run_history, user_scope_id, _uname, _dname):
+                            _waiting_already_set = True
                     except Exception:
                         pass
 

@@ -1643,7 +1643,7 @@ class Agent:
         
         # Skip model loading if using API backend
         if self.provider != "local":
-            UI.event("System", f"Using API provider: {self.provider}, skipping model load", style="dim")
+            UI.event("Backend", f"Using API provider: {self.provider}, skipping model load", style="dim")
             return
         
         if not skip_download_check:
@@ -2556,10 +2556,13 @@ class Agent:
             # Real total is the maximum of last request or current estimate
             # (Last request might be smaller if we just compressed, but current history is what counts)
             total = max(last_total, current_est)
-            
-            n_ctx = self.config.get("n_ctx", 128000)
-            if n_ctx <= 16384: n_ctx = 128000 # Boost for API
-            
+
+            # Use the model's real context window, not the local n_ctx config value
+            # (n_ctx is enforced at ≥ 32 768 for local models but is meaningless for API).
+            n_ctx = self.api_backend.get_model_context_window(
+                model=self.config.get(f"api_model_{self.provider}", "")
+            )
+
             return total, n_ctx
 
         # Server Mode: Use server /tokenize API for precise count (no local model load).
@@ -5877,7 +5880,7 @@ class Agent:
                         except: arguments = {}
                         summary = arguments.get("summary", "Done.").strip() or "Done."
                         
-                        UI.event("System", "Thinking Mode signal: Done. Breaking loop.", style="success")
+                        UI.event("Debug", "Thinking Mode: done signal received, breaking loop.", style="dim")
                         append_domain_log("backend", f"[LOOP_PROTECTION] thinking_done detected - breaking loop with summary: {summary[:50]}")
                         
                         # Add tool result to history

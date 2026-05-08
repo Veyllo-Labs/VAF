@@ -755,6 +755,7 @@ function VAFDashboardContent() {
     const [modelProvider, setModelProvider] = useState<string | null>(null);
     const [sessions, setSessions] = useState<Session[]>([]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+    const [unreadSessions, setUnreadSessions] = useState<Set<string>>(new Set());
     const currentSessionIdRef = useRef<string | null>(null);
     useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
     const pendingSendRef = useRef<{ text: string } | null>(null);
@@ -765,6 +766,8 @@ function VAFDashboardContent() {
     const lastUserSendTimeRef = useRef(0);
     /** After a tool ended, next agent_message_update must append (tool card may not be in state yet). */
     const expectNewAssistantAfterToolRef = useRef(false);
+    /** Set true when user clicks Stop; cleared by generation_stopped. Gates late agent_message_update events from re-setting isGenerating=true. */
+    const isStoppingGenerationRef = useRef(false);
     const sidebarListRef = useRef<HTMLDivElement>(null);
     const sidebarDocsSyncedForSessionRef = useRef<string | null>(null);
     type DocumentViewerDoc = { id: string; name: string; mimeType?: string; data?: string; content?: string; htmlContent?: string };
@@ -1335,6 +1338,7 @@ function VAFDashboardContent() {
 
         // 3. Optimistic Switch (viewer state is derived from sessionViewerState[id] automatically)
         setCurrentSessionId(id);
+        setUnreadSessions(prev => { const next = new Set(prev); next.delete(id); return next; });
         expectNewAssistantRef.current = false;
         lastUserSendTimeRef.current = 0;
         expectNewAssistantAfterToolRef.current = false;
@@ -1650,7 +1654,8 @@ function VAFDashboardContent() {
                     setLoading(false);
                     // Only mark "generating" when starting a new assistant bubble. Re-applying full text
                     // after stream (or out-of-order vs message_complete) was leaving Stop stuck on.
-                    if (!inPlaceAssistantStream) {
+                    // Also skip if user just clicked Stop — late-queued WS events must not re-arm isGenerating.
+                    if (!inPlaceAssistantStream && !isStoppingGenerationRef.current) {
                         setIsGenerating(true);
                         setStatusMessage('');
                         setActiveToolName('');
@@ -1832,6 +1837,12 @@ function VAFDashboardContent() {
                                 text: data.content
                             }));
                         }
+                    }
+                }
+                else if (data.type === 'session_unread') {
+                    const sid = data.sessionId as string;
+                    if (sid && sid !== currentSessionIdRef.current) {
+                        setUnreadSessions(prev => new Set(prev).add(sid));
                     }
                 }
                 else if (data.type === 'session_list') {
@@ -2532,6 +2543,7 @@ function VAFDashboardContent() {
                     // Only update UI if this is the active session
                     const activeSessionId = currentSessionIdRef.current;
                     if (!data.sessionId || data.sessionId === activeSessionId) {
+                        isStoppingGenerationRef.current = false;
                         setLoading(false);
                         setIsGenerating(false);
                         setIsStoppingGeneration(false);
@@ -2634,28 +2646,23 @@ function VAFDashboardContent() {
     useEffect(() => {
         setSttEnabled(config.stt_enabled === true);
 
-        const isApi = config.provider && config.provider !== 'local';
-        const nCtx = config.n_ctx ?? 8192;
-        const max_tokens = isApi && nCtx <= 16384 ? 128000 : nCtx;
-
-        // Initialize context stats if empty (so bar is always visible)
-        // Use provider-aware max_tokens: API mode (e.g. OpenAI) uses 128k, local uses n_ctx
+        // Initialize context stats placeholder only — the backend sends the real
+        // max_tokens (model-specific context window) via the 'stats' event.
+        // Never override once we have backend stats; that would reset DeepSeek's
+        // 64k / Claude's 200k back to the local n_ctx value.
         if (!contextStats) {
+            const isApi = config.provider && config.provider !== 'local';
+            const nCtx = config.n_ctx ?? 8192;
+            // Reasonable placeholder: API providers are always at least 128k
+            const max_tokens = isApi ? 128000 : nCtx;
             setContextStats({
                 tokens: 0,
                 max_tokens,
                 percent: 0,
                 message_count: 0
             });
-        } else if (contextStats.max_tokens !== max_tokens) {
-            // Provider or n_ctx changed: update max_tokens so display matches backend
-            setContextStats((prev: { tokens: number; max_tokens: number; percent: number; message_count?: number }) => ({
-                ...prev,
-                max_tokens,
-                percent: prev.tokens && max_tokens ? Math.round((prev.tokens / max_tokens) * 1000) / 10 : prev.percent,
-            }));
         }
-    }, [config, contextStats]);
+    }, [config]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ESC: close context modal
     useEffect(() => {
@@ -2671,6 +2678,7 @@ function VAFDashboardContent() {
 
     const stopGeneration = () => {
         if (!ws || !currentSessionId || isStoppingGeneration) return;
+        isStoppingGenerationRef.current = true;
         setIsStoppingGeneration(true);
         ws.send(JSON.stringify({
             type: 'stop_generation',
@@ -3452,6 +3460,11 @@ function VAFDashboardContent() {
                                     {/* Active Indicator (Dot) */}
                                     {currentSessionId === s.id && (
                                         <div className="absolute left-1 my-auto w-1 h-1 bg-black rounded-full" />
+                                    )}
+
+                                    {/* Unread message indicator — shown when agent sent a message while session was not open */}
+                                    {unreadSessions.has(s.id) && currentSessionId !== s.id && (
+                                        <div className="absolute right-2 top-1/2 -translate-y-1/2 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
                                     )}
 
                                     {(s as Session).source === 'thinking' ? (

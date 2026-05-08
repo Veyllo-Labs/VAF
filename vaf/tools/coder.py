@@ -1567,7 +1567,7 @@ class CodingAgentTool(BaseTool):
         "properties": {
             "task": {
                 "type": "string",
-                "description": "The coding task to complete."
+                "description": "The coding task to complete. Use this parameter (not 'prompt' or 'description')."
             },
             "project_path": {
                 "type": "string",
@@ -1724,7 +1724,8 @@ Thumbs.db
             pass
 
     def run(self, **kwargs) -> str:
-        task = kwargs.get('task', '')
+        # Accept 'prompt' as an alias for 'task' (LLMs sometimes use either name)
+        task = kwargs.get('task', '') or kwargs.get('prompt', '')
         if not task:
             return "Error: No task provided."
 

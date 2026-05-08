@@ -333,6 +333,12 @@ class WebInterfaceManager:
             "stats": stats
         })
 
+    def emit_session_unread(self, session_id: str):
+        """Notify all connected clients that a session has a new unread agent message."""
+        if not session_id:
+            return
+        self.push_update({"type": "session_unread", "sessionId": session_id})
+
     def emit_editor_apply_edit(self, session_id: str, selection_index: int, new_text: str, start: int = None, end: int = None):
         """
         Ask the Web UI to replace the text at the given marked selection in the Document Editor.

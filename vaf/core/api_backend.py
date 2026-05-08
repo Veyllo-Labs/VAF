@@ -437,6 +437,99 @@ class APIBackendManager:
         """Streaming chat completion - alias for chat_completion with stream=True."""
         return self.chat_completion(messages, temperature, max_tokens, stream=True, model=model, tools=tools, tool_choice=tool_choice)
 
+    # ── Context window lookup ─────────────────────────────────────────────────
+
+    # Static table: substring patterns (lower-case) → context window in tokens.
+    # Ordered from most-specific to least-specific; first match wins.
+    _CTX_TABLE: list[tuple[str, int]] = [
+        # OpenAI
+        ("gpt-4o",          128_000),
+        ("gpt-4-turbo",     128_000),
+        ("gpt-4-32k",        32_768),
+        ("gpt-4",             8_192),
+        ("gpt-3.5-turbo-16",16_385),
+        ("gpt-3.5",           4_096),
+        ("o1-mini",         128_000),
+        ("o1",              200_000),
+        ("o3",              200_000),
+        ("o4",              200_000),
+        # Anthropic – all current models share 200 K
+        ("claude",          200_000),
+        # Google
+        ("gemini-2.5",    1_048_576),
+        ("gemini-2.0",    1_048_576),
+        ("gemini-1.5-pro",2_097_152),
+        ("gemini-1.5",    1_048_576),
+        ("gemini",        1_048_576),
+        # DeepSeek — deepseek-chat → V4-Flash, deepseek-reasoner → V4-Flash (thinking)
+        # All current models: 1M input context, 384K max output
+        ("deepseek-v4",   1_000_000),
+        ("deepseek-chat", 1_000_000),
+        ("deepseek-reasoner", 1_000_000),
+        ("deepseek-coder",   128_000),
+        ("deepseek",      1_000_000),
+        # Mistral
+        ("mistral-large",   131_072),
+        ("mistral-small",   131_072),
+        ("codestral",       256_000),
+        ("mistral",          32_000),
+        # Meta / Llama
+        ("llama-3.1",       131_072),
+        ("llama-3.2",       131_072),
+        ("llama-3.3",       131_072),
+        ("llama",            32_000),
+        # Qwen
+        ("qwen2.5-72",      131_072),
+        ("qwen2.5",         131_072),
+        ("qwen",             32_000),
+    ]
+
+    # Module-level cache: openrouter model id → context_length
+    _openrouter_ctx_cache: dict[str, int] = {}
+
+    def get_model_context_window(self, model: str | None = None) -> int:
+        """
+        Return the context window (in tokens) for *model* on this provider.
+
+        Lookup order:
+          1. OpenRouter → fetch /v1/models once per process and cache.
+          2. Static table (substring match, longest-specific first).
+          3. Fallback: 128 000.
+        """
+        if not model:
+            model = self.config.get(f"api_model_{self.provider_name}", "") or ""
+
+        model_lc = model.lower()
+
+        # OpenRouter: live API gives exact context_length per model
+        if self.provider_name == "openrouter":
+            if model_lc in APIBackendManager._openrouter_ctx_cache:
+                return APIBackendManager._openrouter_ctx_cache[model_lc]
+            try:
+                import requests as _req
+                resp = _req.get(
+                    "https://openrouter.ai/api/v1/models",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    timeout=5,
+                )
+                if resp.ok:
+                    for m in resp.json().get("data", []):
+                        mid = (m.get("id") or "").lower()
+                        ctx = m.get("context_length") or 0
+                        if mid and ctx:
+                            APIBackendManager._openrouter_ctx_cache[mid] = int(ctx)
+                    if model_lc in APIBackendManager._openrouter_ctx_cache:
+                        return APIBackendManager._openrouter_ctx_cache[model_lc]
+            except Exception:
+                pass  # Fall through to static table
+
+        # Static table — substring match
+        for pattern, ctx in APIBackendManager._CTX_TABLE:
+            if pattern in model_lc:
+                return ctx
+
+        return 128_000  # Safe default
+
     @staticmethod
     def get_available_models(provider: str) -> List[str]:
         """Legacy static list for UI dropdowns (can be extended to use providers)."""

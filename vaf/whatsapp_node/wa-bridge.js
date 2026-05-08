@@ -13,6 +13,8 @@
  *
  * DMs only for Phase 1; groups ignored.
  */
+// v6 stable import. When Baileys v7 ships stable, rename package to "baileys" and run:
+//   npm install baileys@^7.0.0 && npm uninstall @whiskeysockets/baileys
 import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, DisconnectReason, isJidGroup, Browsers, downloadContentFromMessage, toBuffer } from "@whiskeysockets/baileys";
 import fs from "node:fs";
 import os from "node:os";
@@ -423,6 +425,23 @@ async function connect(authDir) {
       try { fs.writeSync(2, `${LOG_PREFIX} LID→E.164 from phoneNumberShare: ${lidJid} → ${e164}\n`); } catch (_) {}
       emitChats();
     }
+  });
+
+  // Baileys v7: new event fires whenever LID↔PN mappings are discovered (replaces / supplements phoneNumberShare)
+  sock.ev.on("lid-mapping.update", (mappings) => {
+    if (!Array.isArray(mappings)) return;
+    let changed = false;
+    for (const entry of mappings) {
+      // entry shape: { lid: string, pn: string } (PN is the phone-number JID like 491234567890@s.whatsapp.net)
+      const lidJid = entry?.lid ? toLidJid(entry.lid) : "";
+      const e164 = entry?.pn ? toE164(entry.pn) : "";
+      if (lidJid && e164 && !lidToE164Map.has(lidJid)) {
+        lidToE164Map.set(lidJid, e164);
+        changed = true;
+        try { fs.writeSync(2, `${LOG_PREFIX} LID→E.164 from lid-mapping.update: ${lidJid} → ${e164}\n`); } catch (_) {}
+      }
+    }
+    if (changed) emitChats();
   });
 
   sock.ev.on("messages.upsert", async ({ messages }) => {

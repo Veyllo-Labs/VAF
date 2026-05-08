@@ -32,28 +32,54 @@ chmod +x install.sh && ./install.sh
 
 The installer sets up a Python venv, installs all dependencies, builds the web UI, and adds the `vaf` command to your shell.
 
+**Installation mode** — the installer asks once:
+```
+[1] Desktop  — personal use, local only, system tray (default)
+[2] Server   — always-on service, LAN accessible via HTTPS, starts at boot
+```
+Choose **[2] Server** for home servers, NAS devices, or any headless machine that should be reachable from other devices. See [docs/SERVER_MODE.md](docs/SERVER_MODE.md) for details.
+
 ---
 
 ## Modes
 
 VAF runs in three modes depending on your use case.
 
-### Desktop / Server (recommended)
+### Desktop (recommended for personal use)
 
 Starts a persistent background service with the web UI accessible at `http://localhost:3000`.
 
 ```bash
+vaf start      # Start in background
+vaf stop       # Stop cleanly
+vaf restart    # Restart
+vaf status     # Show status
+```
+
+Or run in the foreground (e.g., to see logs directly):
+```bash
 vaf tray
 ```
 
-On Linux and headless systems, this runs without a tray icon. The web UI and agent loop start automatically.
-
-**Network access** (other devices on your LAN):
+**LAN access** (other devices on your network):
 ```bash
-vaf server on      # Binds to 0.0.0.0 with HTTPS
+vaf server on      # Bind to 0.0.0.0 with HTTPS
 vaf server off     # Back to localhost only
 vaf server status  # Show active URLs
 ```
+
+### Server (always-on, starts at boot)
+
+Installed via the **[2] Server** option. VAF runs as a systemd user service — use the same commands:
+
+```bash
+vaf start      # systemctl --user start vaf
+vaf stop       # systemctl --user stop vaf
+vaf restart    # systemctl --user restart vaf
+vaf status     # systemctl --user status vaf
+```
+
+LAN access (HTTPS on port 8443) is always enabled and locked in server mode. See [docs/SERVER_MODE.md](docs/SERVER_MODE.md).
 
 ### Terminal (CLI)
 
@@ -91,10 +117,11 @@ VAF works with **local GGUF models** and **cloud APIs**. On first start it downl
 - Minimum context: 32 768 tokens (enforced; required for tool use)
 
 **Cloud APIs:**
-- OpenAI (GPT-4o, o1)
-- Anthropic (Claude 3.5 Sonnet / Claude 4)
-- Google (Gemini 1.5 Pro / Flash)
-- DeepSeek (V3, R1)
+- Veyllo
+- OpenAI
+- Anthropic 
+- Google 
+- DeepSeek 
 - OpenRouter (100+ models)
 
 Switch provider or model at runtime: press `C` in the chat, or use `/model <name>`.
@@ -134,9 +161,14 @@ Switch provider or model at runtime: press `C` in the chat, or use `/model <name
 ## CLI Reference
 
 ```bash
+vaf start            # Start background service (or: systemctl in server mode)
+vaf stop             # Stop background service
+vaf restart          # Restart background service
+vaf status           # Show service status
+
 vaf run              # Interactive chat (TUI)
 vaf prompt "..."     # One-shot prompt
-vaf tray             # Background service + web UI
+vaf tray             # Background service + web UI (foreground)
 vaf server on|off|status
 
 vaf session list|load|delete|export|search

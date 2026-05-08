@@ -3725,15 +3725,19 @@ class Agent:
                         if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language:
                             os.environ["VAF_USER_LANGUAGE"] = self.prompt_manager.user_language
 
-                        # Build command with proper escaping for the platform
+                        # Build command with proper escaping for the platform.
+                        # Use sys.executable so the correct venv Python is used regardless
+                        # of whether 'vaf' is on PATH (it lives in venv/bin which is not
+                        # always on the system PATH when VAF starts as a service).
+                        _py = shlex.quote(sys.executable)
                         if Platform.is_windows():
                             # Windows CMD: escape double quotes with backslash (for subprocess shell=True)
                             # Also escape backslashes that precede quotes
                             escaped_json = variables_json.replace('\\', '\\\\').replace('"', '\\"')
-                            cmd = f'vaf workflow run "{workflow_id}" --variables "{escaped_json}" --task-id {task_id}'
+                            cmd = f'{sys.executable} -m vaf.main workflow run "{workflow_id}" --variables "{escaped_json}" --task-id {task_id}'
                         else:
                             # Unix: use shlex.quote for proper escaping
-                            cmd = f'vaf workflow run "{workflow_id}" --variables {shlex.quote(variables_json)} --task-id {task_id}'
+                            cmd = f'{_py} -m vaf.main workflow run "{workflow_id}" --variables {shlex.quote(variables_json)} --task-id {task_id}'
                         _debug_log(f"STEP 5: Command built: {cmd[:300]}")
 
                         _debug_log("STEP 6: Calling Platform.open_new_terminal...")
@@ -3809,13 +3813,25 @@ class Agent:
                 project_path_hint = ""
                 
                 if coding_agent_used:
-                    # Extract project path from output if available
-                    path_match = re.search(r'`([^`]+)`', final_output)
-                    if path_match:
-                        project_path_hint = path_match.group(1)
-                    
+                    # Extract project path from "Full Path": `...` line (not other backtick expressions)
+                    _full_path_match = re.search(r'\*\*Full Path\*\*[^`]*`([^`]+)`', final_output)
+                    if _full_path_match:
+                        project_path_hint = _full_path_match.group(1).strip()
+                    else:
+                        # Fallback: first standalone absolute path in backticks
+                        for m in re.finditer(r'`([^`]+)`', final_output):
+                            candidate = m.group(1).strip()
+                            if candidate.startswith(('/', 'C:\\', 'D:\\')):
+                                project_path_hint = candidate
+                                break
+
+                    # Only retry if the coder explicitly did NOT signal COMPLETE.
+                    # Strings like "Remaining tasks" also appear in completion hints so
+                    # we must not trigger the retry when the work is actually done.
+                    _coder_complete = "[VAF_CODING_AGENT_STATUS: COMPLETE]" in final_output
+
                     # Check if the output indicates incomplete tasks
-                    if "Task Partially Complete" in final_output or "Tasks: 0/" in final_output or "Remaining tasks" in final_output:
+                    if not _coder_complete and ("Task Partially Complete" in final_output or "Tasks: 0/" in final_output or "Remaining tasks" in final_output):
                         # Tasks are incomplete - the Main Agent should intervene and help the coding agent
                         if project_path_hint:
                             # Don't just suggest - ACTIVELY call coding_agent again

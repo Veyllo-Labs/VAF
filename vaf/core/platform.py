@@ -3,6 +3,7 @@ VAF Platform - Cross-platform utilities
 Handles OS-specific differences for Windows, macOS, and Linux
 """
 import os
+import re
 import sys
 import platform
 import shutil
@@ -82,6 +83,27 @@ class Platform:
         """
         return Path.home() / "Downloads"
     
+    @staticmethod
+    def get_vaf_output_dir() -> Path:
+        """
+        Get the default output directory for agent-created files (cross-platform).
+        Tries Documents/VAF first, then Downloads/VAF, then ~/.vaf/output as last resort.
+        Creates the directory if it doesn't exist.
+        """
+        candidates = [
+            Platform.documents_dir() / "VAF",
+            Platform.downloads_dir() / "VAF",
+            Path.home() / ".vaf" / "output",
+        ]
+        for candidate in candidates:
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                return candidate
+            except (PermissionError, OSError):
+                continue
+        # Absolute fallback: return the path even if mkdir failed
+        return candidates[0]
+
     @staticmethod
     def get_research_dir() -> Path:
         """
@@ -647,11 +669,14 @@ class Platform:
 
                         threading.Thread(target=_pipe_drain, daemon=True).start()
 
+                        # Pre-compile ANSI escape stripper once per stream
+                        _ansi_re = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
                         while True:
                             raw = _line_q.get()
                             if raw is None:
                                 break
-                            clean = raw.rstrip("\r\n")
+                            clean = _ansi_re.sub('', raw).rstrip("\r\n")
                             if not clean:
                                 continue
                             output_lines.append(clean)

@@ -492,7 +492,7 @@ class ResearchAgentTool(BaseTool):
                     os.environ["VAF_PROVIDER"] = subagent_provider
             
             # Pass RAW topic to sub-agent (it will clean it up)
-            cmd_parts = ['vaf', 'subagent', 'run', 'research_agent', '--topic', raw_topic, '--task-id', task_id]
+            cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'research_agent', '--topic', raw_topic, '--task-id', task_id]
             if out_format:
                 cmd_parts.extend(['--format', out_format])
             if max_results:

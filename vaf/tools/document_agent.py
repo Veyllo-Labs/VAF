@@ -12,6 +12,7 @@ Similar architecture to research_agent but for document creation.
 
 import os
 import re
+import sys
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -106,9 +107,9 @@ Handles documents of any size using section-by-section generation (no context ov
             # Windows cmd.exe limit ~8191 chars; pass long tasks via IPC only
             max_task_len = 3000
             if len(task) > max_task_len:
-                cmd_parts = ['vaf', 'subagent', 'run', 'document_agent', '--task-id', task_id]
+                cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'document_agent', '--task-id', task_id]
             else:
-                cmd_parts = ['vaf', 'subagent', 'run', 'document_agent', '--task', task, '--task-id', task_id]
+                cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'document_agent', '--task', task, '--task-id', task_id]
             
             if Platform.is_windows():
                 escaped_parts = []

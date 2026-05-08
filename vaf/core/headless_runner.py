@@ -614,6 +614,15 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
                 append_domain_log("rag", f"[Headless] Task user_scope_id={meta.get('user_scope_id')}, username={meta.get('username')}")
 
+                # Publish current session ID so sub-agent tools (coding_agent, etc.)
+                # can register their child processes under the right session.
+                # Without this, stop_webui_subagent_processes() can't find them.
+                try:
+                    from vaf.core.subagent_ipc import set_current_session_id
+                    set_current_session_id(task.session_id)
+                except Exception:
+                    pass
+
                 # Load Session Context
                 try:
                     agent.load_session_context(task.session_id)

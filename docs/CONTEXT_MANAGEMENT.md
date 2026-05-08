@@ -167,6 +167,8 @@ Unlike local models where VAF uses a local tokenizer, API providers (OpenAI, Dee
 
 The Context Manager dynamically adjusts its behavior based on the configured context limit (`n_ctx`). This ensures that small local models remain stable while large-context APIs can leverage their full potential.
 
+> **Note:** VAF enforces a minimum `n_ctx` of 32 768. The ≤ 8k / ≤ 12k rows below are retained for completeness but are not reachable in normal operation.
+
 | Context Limit (`n_ctx`) | Trigger | Recent Memory | Strategy |
 |-------------------------|---------|---------------|----------|
 | **Very small (≤ 8k)**   | **70%** | **8 messages**| Maximum pruning; core tools only preserved. |
@@ -606,7 +608,7 @@ When `n_ctx` is small (e.g. 4k–12k), fewer messages are kept raw and compressi
 - **Preserved tool results:** Besides `set_todos`, `write_file`, `read_file`, the compressed history preserves truncated results from **GitHub tools** (`github_list_repos`, `github_get_file`, `github_list_issues`, `github_list_pulls`) and **web_search**. So the model can retain that it already accessed e.g. the repo.
 - **Tools used in summary:** For small contexts (≤ 16k), the context summary includes a "Tools used this session" line (last 10 tools). This reduces confusion about connectivity or which tools were already called.
 
-**Recommendation:** Use `n_ctx` ≥ 8k (ideally 12k+) for tool-heavy conversations; the above mitigations help when you must use a lower limit.
+**Recommendation:** VAF enforces a minimum `n_ctx` of **32 768** — values below this are silently raised at startup. With 100+ tools the system prompt alone (~5.5k tokens) plus all tool schemas (~6k tokens) requires at least this much headroom. The small-context mitigations above apply only if you deliberately bypass the minimum.
 
 ### Implementation
 

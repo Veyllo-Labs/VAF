@@ -21,15 +21,17 @@ Standard libraries (`os`, `json`, `re`, `threading`) and `rich` components are i
     *   Maps extensions (`.py`, `.js`) to linter types.
     *   Executes the `linter` tool.
     *   **CRITICAL:** Appends linter results directly to `history` as a `system` message. This ensures the LLM sees errors immediately.
-*   **Context Bloat Fix (post write_file):** After a successful `write_file`, the `content` field in the corresponding assistant tool-call message in history is replaced with `[content omitted — N bytes written to disk]`. This prevents large files (30KB+ HTML) from accumulating in the context window, which would cause 400 "context too large" errors and force the model to re-write the file unnecessarily.
+
+### History Management: Tool-Call Content Stripping
+After a successful `write_file` call, the agent walks backwards through `history` to find the corresponding `assistant` message. The `content` field inside the tool-call's JSON arguments is replaced with `[content omitted — N bytes written to disk]`. The rest of the tool-call (path, id) is preserved. This keeps the history size bounded regardless of file size.
 
 ### `_NoopLive` Class
-Drop-in replacement for `Rich.Live` used when the coding agent runs inside a workflow terminal (`VAF_IN_WORKFLOW_TERMINAL=1`). All method calls (`start`, `stop`, `update`, `refresh`) are no-ops. This ensures code that calls `live.update()` / `live.stop()` doesn't need per-call guards.
+A drop-in replacement for `rich.Live`. All methods (`start`, `stop`, `update`, `refresh`) are no-ops. Used as the `live` object when `CoderTUI` runs in `simple_mode`, so all call sites that reference `live.update()` / `live.stop()` need no per-call guards.
 
 ### `CoderTUI` Class (The Interface)
 Implements a "Mini-IDE" using `rich.live`.
 *   **`__init__(simple_mode=False)`**: Initializes state (`files`, `current_action`), locks (`RLock` for thread safety), and the `AnimatedHeader`.
-    *   **`simple_mode=True`**: Disables the Rich Live display. `append_stream()` prints `[Coder] text` directly to stdout instead of buffering. `update_file()` prints `[Coder] ✅ Written: file` on completion. All other methods remain silent. Used when running inside a workflow terminal to avoid replacing the workflow's output with the full-screen TUI.
+    *   **`simple_mode=True`**: The Rich Live display is not started. `append_stream()` prints `[Coder] text` directly to stdout. `update_file(..., status="done")` prints `[Coder] ✅ Written: filename (N bytes)`. All other methods are silent no-ops. Active when `VAF_IN_WORKFLOW_TERMINAL=1`.
 *   **`render()`**: The main draw loop. Constructs a `Layout` with:
     *   **Header:** Agent status.
     *   **Left Panel:** File tree (Icons show status: 📝 Writing, ✅ Done, ❌ Error).
@@ -43,7 +45,7 @@ Implements a "Mini-IDE" using `rich.live`.
 
 ### `_determine_base_dir(task, provided_path)` (The Smart Switch)
 *   **Logic:** Decides whether to work in the current directory or create a new one.
-    1.  **Explcit:** If `provided_path` is set -> Use it.
+    1.  **Explicit:** If `provided_path` is set -> Use it.
     2.  **Edit Mode:** If CWD is a project root (`.git`, `.vaf`, etc.) AND task is NOT "create new" -> **Use CWD**.
     3.  **Scaffold Mode:** If user intent is "create new", "scaffold" -> Call `_generate_project_directory`.
     4.  **Fallback:** If unsure, default to creating a safe sandbox in `VAF_Projects`.
@@ -84,8 +86,7 @@ This is the massive entry point method.
     *   Proceeds to execute the logic below.
 
 ### B. Initialization (Lines ~1700-2200)
-*   **TUI Start:** Initializes `CoderTUI` and starts the `Live` context.
-    *   **Workflow mode:** If `VAF_IN_WORKFLOW_TERMINAL=1`, `CoderTUI` is created with `simple_mode=True` and `live = _NoopLive()` — no full-screen display, just `[Coder]` print lines.
+*   **TUI Start:** Checks `VAF_IN_WORKFLOW_TERMINAL`. If set, `CoderTUI` is created with `simple_mode=True` and `live = _NoopLive()`. Otherwise, a full `rich.Live` context is started at 12 FPS.
 *   **API Mode Detection (`_is_api_mode`):**
     *   Checks if the active provider is an API backend (OpenAI, Anthropic, DeepSeek, OpenRouter, Google).
     *   **IF API mode:** Templates are **skipped entirely** — capable API models plan and write without scaffolding. The agent still calls `set_todos` itself.
@@ -99,6 +100,10 @@ This is the massive entry point method.
     *   **Crucial Instruction:** "Your FIRST action MUST be to call `set_todos`".
     *   **Hidden Tools:** Explicitly hides `task_done` from the prompt text to force planning.
     *   **Template language:** Framed as **guidance** ("recommended workflow", "good baseline") — not as hard rules. The agent is free to deviate from template structure if the task calls for it.
+    *   **Task planning rules (injected into system prompt):**
+        -   Single-file deliverable → exactly 1 task. Multi-file → one task per output file.
+        -   No planning tasks (e.g. "Design the layout") — every task must produce at least one `write_file` call.
+        -   No meta-files (PLAN.md, STRUCTURE.md, etc.) written to the project directory.
 
 ### C. Hierarchical Context Setup (Lines ~2200-2400)
 *   **`ContextState` Class:** Defined locally to hold `ContextManager`, `history`, `phase`, and `files_created` for a specific scope.
@@ -108,7 +113,7 @@ This is the massive entry point method.
     *   If task state exists -> Resumes it.
     *   If new -> Creates **FRESH** `ContextManager` (8k/16k tokens) via `create_fresh_context_for_task()`.
     *   **Completed-Task Glue:** `_build_completed_info()` summarises previously finished tasks and injects them into the new system prompt (prevents "Context Amnesia" without polluting the window).
-    *   **Existing-Files Injection:** `create_fresh_context_for_task()` scans `base_dir` at context-creation time and injects a "FILES ALREADY IN PROJECT — do NOT recreate" list. This prevents a fresh task context from re-writing files already created by the main context or an earlier task, which would otherwise produce duplicates or `PARTIAL_*` files when the LLM truncates mid-write.
+    *   **Existing-Files Injection:** `create_fresh_context_for_task()` scans `base_dir` and injects a file list into the task system prompt. Infrastructure entries are excluded: hidden files (`.`-prefix), `.git/`, `.vaf/`, `PARTIAL_*` backups, and named infra files (`.gitignore`, `.gitattributes`, `.editorconfig`, `.env.example`). When no code files exist, the note reads: *"The project directory is empty — call `write_file` to create the first file."*
 
 ---
 
@@ -150,20 +155,19 @@ Inside the loop, `current_tools` is generated dynamically based on state:
 ### `write_file` (Lines ~5900)
 *   **Pre-Check:**
     *   **IF** no TODOs set: **BLOCK** ("Call set_todos first").
-*   **Meta-file Guard:** Blocks writing planning documents (`PLAN.md`, `STRUCTURE.md`, `NOTES.md`, `TODO.md`, `read_chunks.py`, etc.) to the project directory. These files pollute the output and are never part of a deliverable.
+*   **Meta-file Guard:** Rejects writes to planning documents by filename (`plan.md`, `structure.md`, `notes.md`, `todo.md`, `design.md`, `layout.md`, `readme.md`, `read_chunks.py`, etc.). Returns a blocked error to the LLM.
 *   **Template Validation (soft guidance only):**
     *   **IF** target file is a template file:
         *   Reads original file.
         *   Checks for presence of key structural tags (`<nav>`, `id="hero"`, `def main`, etc.).
-        *   **IF elements are missing in new content:**
-            *   Logs a **warning** to the TUI stream (e.g. "Note: template sections changed in index.html: Navigation").
-            *   **Write is allowed to proceed.** Templates are guidance, not a constraint — the agent may deviate if the task calls for it.
+        *   **IF elements are missing in new content:** Logs a **warning** to the TUI stream. Write is allowed to proceed.
         *   **IF structure is preserved:** Logs a confirmation note.
-    *   Placeholder check (`{{PLACEHOLDER}}` still present) still **blocks** `task_done` (not `write_file`) to signal incomplete work.
+    *   Placeholder check (`{{PLACEHOLDER}}` still present) **blocks** `task_done`, not `write_file`.
 *   **Diff Generation:**
     *   Calculates diff between old and new content.
     *   Updates TUI Code Preview.
 *   **Execution:** Calls `filesystem.write_file`.
+*   **History Content Strip:** After a successful write, the `content` argument in the matching assistant tool-call history entry is replaced with `[content omitted — N bytes written to disk]`.
 *   **Post-Action Linting:**
     *   Calls `_run_linter_for_files`.
     *   **IF Errors:** Sets `current_state.linter_errors_active = True`.
@@ -177,7 +181,7 @@ Inside the loop, `current_tools` is generated dynamically based on state:
 *   **Gate 2: "Unresolved Placeholders"**
     *   **IF** any written file still contains `{{PLACEHOLDER}}` markers:
     *   **BLOCK:** Task is not truly done — agent must replace all placeholders.
-    *   **Note:** Template *structure* changes no longer block `task_done`. Only unfilled placeholders do.
+    *   Template *structure* changes do not block `task_done`. Only unfilled placeholders do.
 *   **Gate 3: "Linter Errors"**
     *   **IF** `has_recent_linter_errors` is True:
     *   **BLOCK:** `🚨 TASK_DONE BLOCKED - LINTER ERRORS!`
@@ -204,12 +208,7 @@ Inside the loop, `current_tools` is generated dynamically based on state:
 ### `python_sandbox` (Lines ~5850)
 *   **Execution:** Runs code in `vaf.tools.python_sandbox`.
 *   **Context:** Returns output (stdout/result) to the LLM history.
-*   **File-Write Guard:** Before execution, the submitted code is scanned for file-write patterns (`open(..., 'w')`, `.write(...)` on non-stdout handles, direct `base_dir` references). **IF** any are found, the call is **BLOCKED** with a message instructing the model to use `write_file` instead. This prevents the model from using the sandbox as a backdoor to write project files (e.g. creating `read_chunks.py` helper scripts).
-
-### `_existing_note` Injection (in `create_fresh_context_for_task()`)
-*   **Purpose:** Tells the model which files already exist in the project at context-switch time.
-*   **Filter:** Infrastructure files are excluded from the list: hidden files (starting with `.`), `.git/`, `.vaf/`, `PARTIAL_*` backups, and named infra files (`.gitignore`, `.gitattributes`, `.editorconfig`, `.env.example`). Without this filter, the model reads `.gitignore` in a confused loop instead of writing code.
-*   **Empty project branch:** If no code files exist, instead of an empty list the note says: *"The project directory is empty — call `write_file` to create the first file. Do NOT read `.gitignore` or any hidden files."* This gives the model an unambiguous directive to start writing immediately.
+*   **File-Write Guard:** Before execution, the submitted code is scanned for file-write patterns: `open(..., 'w'/'a')`, `.write(...)` on non-stdout/stderr/StringIO handles, and direct references to `base_dir`. If any pattern matches, the call is **BLOCKED** and the LLM is instructed to use `write_file` instead.
 
 ---
 

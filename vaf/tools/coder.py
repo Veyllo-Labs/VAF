@@ -192,6 +192,18 @@ except ImportError:
 # TUI Display - Mini-IDE Style
 # ═══════════════════════════════════════════════════════════════════════════════
 
+class _NoopLive:
+    """Drop-in replacement for Rich's Live when running in workflow/simple mode.
+    All method calls are silently ignored so code that calls live.update() /
+    live.stop() doesn't need to be guarded with 'if live is not None'."""
+    def start(self): pass
+    def stop(self): pass
+    def update(self, *args, **kwargs): pass
+    def refresh(self, *args, **kwargs): pass
+    def __enter__(self): return self
+    def __exit__(self, *args): pass
+
+
 class CoderTUI:
     """
     Terminal UI for the Coder Agent.
@@ -201,7 +213,11 @@ class CoderTUI:
     # Number of lines to show in live stream (scrolling view)
     STREAM_LINES = 10
     
-    def __init__(self, console: Console, task: str, task_mgr=None, animate: bool = True):
+    def __init__(self, console: Console, task: str, task_mgr=None, animate: bool = True, simple_mode: bool = False):
+        # simple_mode=True: no Rich Live display; just print progress lines.
+        # Used when the coding agent runs inside a workflow terminal so the
+        # workflow's display is not replaced by the full-screen coder TUI.
+        self.simple_mode = simple_mode
         self.console = console
         self.task = task
         self.files: Dict[str, Dict] = {}  # filename -> {status, size, preview}
@@ -291,6 +307,10 @@ class CoderTUI:
     
     def update_file(self, filename: str, status: str = None, size: int = None, preview: str = None):
         """Update file info."""
+        if self.simple_mode and status == "done":
+            size_str = f" ({size:,} bytes)" if size else ""
+            print(f"[Coder] ✅ Written: {filename}{size_str}", flush=True)
+            return
         with self._lock:
             self._touch()
             if filename not in self.files:
@@ -331,6 +351,13 @@ class CoderTUI:
     
     def append_stream(self, chunk: str):
         """Append text to the current stream (each chunk is a new line)."""
+        # In simple_mode (workflow terminal), just print directly without buffering
+        if self.simple_mode:
+            chunk = re.sub(r'</?redacted_reasoning>', '', chunk, flags=re.IGNORECASE)
+            chunk = re.sub(r'</?think>', '', chunk, flags=re.IGNORECASE)
+            if chunk.strip():
+                print(f"[Coder] {chunk.strip()}", flush=True)
+            return
         with self._lock:
             # Filter out redacted reasoning tags
             chunk = re.sub(r'</?redacted_reasoning>', '', chunk, flags=re.IGNORECASE)
@@ -1006,6 +1033,11 @@ class TaskManager:
             project_name = os.path.basename(base_dir)
             self.pm.init_project(project_name)
             self.state = self.pm.load_state() # Reload to get clean state
+            # FALLBACK: if disk write failed silently, create in-memory state
+            # so that set_todos() and write_file are never blocked by state=None
+            if not self.state:
+                print(f"[TaskManager] WARNING: PersistenceManager.save_state() failed for {base_dir}; using in-memory ProjectState")
+                self.state = ProjectState(project_name=project_name)
     
     @property
     def todos(self) -> List[Dict]:
@@ -1623,25 +1655,33 @@ class CodingAgentTool(BaseTool):
 
     def _generate_project_directory(self, task: str) -> str:
         """Generate a user-friendly project directory name based on task. OS-independent."""
-        task_lower = task.lower()
-        
+        # Strip embedded file paths before keyword extraction so path components
+        # (e.g. "Webseite Erstelle Professionelle" inside a path string) don't
+        # pollute the project name.
+        task_for_naming = re.sub(r'/[^\s]+', ' ', task)   # Unix paths
+        task_for_naming = re.sub(r'[A-Za-z]:\\[^\s]+', ' ', task_for_naming)  # Windows paths
+        task_for_naming = task_for_naming.strip()
+        task_lower = task_for_naming.lower()
+
         # Detect project type
-        if any(kw in task_lower for kw in ['website', 'webseite', 'homepage', 'landing page', 'seite']):
+        # Note: check 'html' before 'script' so <script>-Tag in HTML tasks doesn't misclassify
+        if any(kw in task_lower for kw in ['website', 'webseite', 'homepage', 'landing page', 'seite', '.html', 'index.html', 'html datei', 'html file']):
             prefix = "Webseite"
         elif any(kw in task_lower for kw in ['webapp', 'web app', 'application', 'anwendung']):
             prefix = "Webapp"
-        elif any(kw in task_lower for kw in ['script', 'skript', 'python script']):
+        elif any(kw in task_lower for kw in ['python script', 'python skript', '.py script', 'bash script', 'shell script']):
+            # Narrow match: only explicit "python/bash script", NOT bare "script" which also appears in <script>-Tag HTML
             prefix = "Script"
         elif any(kw in task_lower for kw in ['project', 'projekt']):
             prefix = "Projekt"
         else:
             prefix = "Projekt"
         
-        # Extract key words from task (remove common words)
-        stop_words = {'the', 'a', 'an', 'for', 'in', 'on', 'at', 'to', 'of', 'and', 'or', 'but', 'mit', 'für', 'in', 'auf', 'zu', 'von', 'und', 'oder', 'aber', 'eine', 'ein', 'der', 'die', 'das'}
-        words = re.findall(r'\b[a-zA-ZäöüÄÖÜß]{3,}\b', task)
+        # Extract key words from task (paths already stripped, remove common words)
+        stop_words = {'the', 'a', 'an', 'for', 'in', 'on', 'at', 'to', 'of', 'and', 'or', 'but', 'mit', 'für', 'in', 'auf', 'zu', 'von', 'und', 'oder', 'aber', 'eine', 'ein', 'der', 'die', 'das', 'read', 'file', 'path', 'return', 'contents', 'full', 'datei', 'pfad', 'inhalt'}
+        words = re.findall(r'\b[a-zA-ZäöüÄÖÜß]{3,}\b', task_for_naming)
         keywords = [w for w in words if w.lower() not in stop_words][:3]  # Max 3 keywords
-        
+
         # Create name
         if keywords:
             name_part = ' '.join(keywords[:2]).title()  # Max 2 keywords
@@ -1649,8 +1689,8 @@ class CodingAgentTool(BaseTool):
             name_part = re.sub(r'[^a-zA-Z0-9\s]', '', name_part)[:25]
             project_name = f"{prefix} {name_part}".strip()
         else:
-            # Fallback: use first meaningful words
-            words = task.split()[:3]
+            # Fallback: use first meaningful words from stripped text
+            words = task_for_naming.split()[:3]
             name_part = ' '.join([w for w in words if len(w) > 3])[:20]
             project_name = f"{prefix} {name_part}".strip() if name_part else f"{prefix} {int(time.time())}"
         
@@ -1740,6 +1780,35 @@ Thumbs.db
         task = kwargs.get('task', '') or kwargs.get('prompt', '')
         if not task:
             return "Error: No task provided."
+
+        # ── Read-task guard ───────────────────────────────────────────────────
+        # coding_agent is a CODE CREATOR, not a file reader.
+        # If the main agent tries to use it purely to read/return file contents,
+        # reject immediately so it falls back to read_file / librarian_agent.
+        # Strip embedded file paths before keyword checks — otherwise words like
+        # "Erstelle" inside a path (e.g. /VAF_Projects/Webseite Erstelle .../index.html)
+        # would falsely trigger the create-intent keywords.
+        _task_stripped_guard = re.sub(r'/[^\s]+', ' ', task)           # Unix paths
+        _task_stripped_guard = re.sub(r'[A-Za-z]:\\[^\s]+', ' ', _task_stripped_guard)  # Windows paths
+        _task_lower_guard = _task_stripped_guard.lower()
+        _read_only_indicators = [
+            "read the file", "read file", "return its full contents",
+            "return the full contents", "return its contents",
+            "output exactly what's in it", "do not summarize, do not analyze",
+            "do not modify", "just read",
+            "datei lesen", "dateiinhalt zurückgeben", "inhalt zurückgeben",
+        ]
+        _has_create_intent = any(kw in _task_lower_guard for kw in [
+            "create", "write", "build", "generate", "make", "fix", "refactor",
+            "erstelle", "schreib", "baue", "generiere", "mach",
+        ])
+        if any(p in _task_lower_guard for p in _read_only_indicators) and not _has_create_intent:
+            return (
+                "ERROR: coding_agent is a code-creation tool and cannot be used to read files. "
+                "Use the `read_file` tool directly to read file contents. "
+                "Example: read_file(path='/path/to/file.html')"
+            )
+        # ── End read-task guard ───────────────────────────────────────────────
 
         # Sub-agent debug logger (only active inside sub-agent terminals)
         try:
@@ -1863,33 +1932,40 @@ Thumbs.db
         
         # Create a fresh console for the Coder to avoid conflicts
         local_console = Console(force_terminal=True)
-        
+
+        # When running inside a workflow terminal, use simple_mode (no full-screen TUI).
+        # This prevents the Rich Live display from replacing the workflow's output.
+        _in_workflow_terminal = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
+
         # Disable animation to prevent terminal spam/flicker
-        tui = CoderTUI(local_console, task, task_mgr, animate=False)
-        
+        tui = CoderTUI(local_console, task, task_mgr, animate=False, simple_mode=_in_workflow_terminal)
+
         # Mark this as the active instance
         with CodingAgentTool._instance_lock:
             CodingAgentTool._active_instance = tui
-        
-        # Use Rich's Live with auto-refresh for animation (12 FPS)
-        live = Live(
-            tui,
-            console=local_console,
-            refresh_per_second=12,
-            transient=False,
-        )
-        
-        # Store Live in TUI so it can be stopped from outside
-        tui._live = live
-        
-        live.start()
-        
+
+        # In simple_mode, skip Rich Live entirely — just print progress lines
+        if _in_workflow_terminal:
+            live = _NoopLive()
+            print(f"[Coder] Starting coding agent for: {task[:80]}...", flush=True)
+        else:
+            # Use Rich's Live with auto-refresh for animation (12 FPS)
+            live = Live(
+                tui,
+                console=local_console,
+                refresh_per_second=12,
+                transient=False,
+            )
+            # Store Live in TUI so it can be stopped from outside
+            tui._live = live
+            live.start()
+
         # CRITICAL: Start animation thread IMMEDIATELY after live.start()
         # This ensures animation continues even during blocking operations (like template selection)
         import threading
         animation_running = threading.Event()
         animation_running.set()
-        
+
         # Store for cleanup
         tui._animation_running = animation_running
         
@@ -2098,8 +2174,11 @@ Thumbs.db
         
         template_type = None
         template_files = []
-        
-        if not skip_template:
+
+        if _is_api_mode:
+            tui.append_stream("[INFO] API provider detected — skipping template (not needed for capable models)")
+
+        if not skip_template and not _is_api_mode:
             tui.set_action("Analyzing task for template...")
             # CRITICAL: Force immediate update BEFORE blocking operation
             tui.append_stream("[INFO] Starting template selection...")
@@ -2142,10 +2221,10 @@ Thumbs.db
             if not template_type:
                 task_lower = task.lower()
                 # Check for clear template indicators
-                if any(kw in task_lower for kw in ['website', 'webseite', 'webpage', 'homepage', 'web page', 'landing page']):
+                if any(kw in task_lower for kw in ['website', 'webseite', 'webpage', 'homepage', 'web page', 'landing page', '.html', 'index.html', 'html datei', 'html file']):
                     template_type = "website"
                     decision_info += "\n\n[FALLBACK] Keyword detection overrode LLM decision"
-                    decision_info += "\nDetected keywords: website/webseite → Forcing 'website' template"
+                    decision_info += "\nDetected keywords: website/html → Forcing 'website' template"
                     tui.append_stream("[FALLBACK] Keyword match detected → Forcing 'website' template")
                 elif any(kw in task_lower for kw in ['python script', 'python skript', '.py script']):
                     template_type = "python_script"
@@ -2372,30 +2451,25 @@ The following files were created as a starting point:
 4. **REPLACE PLACEHOLDERS**: Replace any `{{...}}` placeholders with real code/values.
 """
             else:
-                # STRICT RULES for websites/servers (preserve structure)
+                # SOFT GUIDANCE for websites/servers (template as starting point)
                 existing_files_info = f"""
-## ⚠️ CRITICAL: TEMPLATE FILES EXIST - DO NOT REPLACE THEM!
+## 📋 TEMPLATE FILES AVAILABLE AS REFERENCE
 
-The following files were already created from a template:
+The following template files exist as a starting point:
 {chr(10).join(['- ' + os.path.basename(f) for f in template_files])}
 
-### 🚨 MANDATORY TEMPLATE WORKFLOW (Templates are REQUIRED structure!):
+### 💡 RECOMMENDED WORKFLOW:
 
-**STEP 1: READ FIRST** - `read_file(path="{base_dir}/index.html")` for EVERY template file BEFORE modifying
-**STEP 2: PRESERVE ALL** - Keep EVERY section (nav, hero, services, about, contact, footer), class, ID
-**STEP 3: ONLY REPLACE** - Replace `{{PLACEHOLDER}}` text with real content - nothing else
-**STEP 4: WRITE BACK** - Write modified version (not complete rewrite)
+**STEP 1: READ FIRST** - `read_file(path="...")` for each template file to understand the structure
+**STEP 2: CUSTOMIZE** - Replace `{{PLACEHOLDER}}` text with real content for the task
+**STEP 3: ADAPT AS NEEDED** - You are free to add, remove, or restructure sections as the task requires
+**STEP 4: WRITE FILES** - Write the final files with `write_file`
 
-### ❌ FORBIDDEN:
-- DO NOT rewrite from scratch
-- DO NOT remove sections (nav, hero, services, about, contact, footer)
-- DO NOT remove classes or IDs
-- DO NOT ignore template structure
-
-### ✅ CORRECT:
-Template: `<nav class="nav"><div class="logo">{{BUSINESS_NAME}}</div></nav>`
-✅ Correct: `<nav class="nav"><div class="logo">Testler Handwerksmeister</div></nav>` (only replaced placeholder)
-❌ Wrong: `<header><h1>Testler Handwerksmeister</h1></header>` (removed nav - will be BLOCKED!)
+### 📌 GUIDANCE (not strict rules):
+- The template provides a good baseline structure (nav, hero, services, about, contact, footer)
+- Feel free to modify the structure if the task calls for it
+- Replace all `{{PLACEHOLDER}}` markers with actual content
+- The template is a starting point, not a constraint
 """
         
         system_prompt = f"""You are a Senior software developer Sub-agent. Your task is to complete coding tasks autonomously and efficiently.
@@ -2436,6 +2510,12 @@ Complete this task: "{task}"
 - DO NOT call `task_done` without first calling `write_file` for the current task.
 - Work on ONE task at a time, complete it fully, then move to the next.
 - **REMEMBER YOUR TASK**: You are working on: "{task}" - keep this in mind with every action!
+
+## 🚨 TASK PLANNING RULES (set_todos):
+- **Single-file output → 1 task only**: If the final deliverable is ONE file (e.g. a single HTML with inline CSS+JS), create EXACTLY ONE task like "Create complete index.html with all sections, inline CSS, and inline JS". DO NOT split into sub-tasks like "Add CSS", "Add JavaScript", "Verify" — these WILL FAIL because each task runs in an isolated context that cannot effectively modify an already-written file.
+- **Multi-file output → one task per output file**: e.g. Task 1: index.html, Task 2: styles.css, Task 3: app.js.
+- **NO planning tasks**: NEVER create tasks like "Plan the structure", "Design the layout", or "Review". Every task MUST result in at least one `write_file` call. Planning is mental — do it before calling `set_todos`.
+- **NO meta-files**: NEVER write planning documents (PLAN.md, STRUCTURE.md, NOTES.md, TODO.md, etc.) to the project directory. These pollute the deliverable. Plan mentally, then write code files only.
 """
         # ═══════════════════════════════════════════════════════════════════
         # GUIDED TEMPLATE MODE - Auto-Generate TODOs
@@ -2753,6 +2833,43 @@ The following files were already created from a template:
                 if memory_content:
                     persistent_context += f"\n## SESSION MEMORY (Recent Learnings)\n{memory_content}\n"
 
+                # Scan project dir for already-created CODE files (exclude infrastructure files
+                # like .gitignore, .vaf/, .git/ — the model must never be told about these
+                # because it will read them in a confused loop instead of writing code)
+                _INFRA_FILES = {'.gitignore', '.gitattributes', '.editorconfig', '.env.example'}
+                _existing_project_files = []
+                try:
+                    if os.path.isdir(base_dir):
+                        for _fname in sorted(os.listdir(base_dir)):
+                            _fpath = os.path.join(base_dir, _fname)
+                            # Skip hidden dirs (.git, .vaf), hidden files, infra files, PARTIAL_ backups
+                            if _fname.startswith('.') or _fname.startswith('PARTIAL_'):
+                                continue
+                            if _fname in _INFRA_FILES:
+                                continue
+                            if os.path.isfile(_fpath):
+                                _existing_project_files.append(_fname)
+                except Exception:
+                    pass
+                _existing_note = ""
+                if _existing_project_files:
+                    _existing_note = (
+                        "\n## FILES ALREADY IN PROJECT\n"
+                        "The following code files already exist — these are your deliverables:\n"
+                        + "\n".join(f"- `{f}`" for f in _existing_project_files)
+                        + "\n\n**RULES:**\n"
+                        "- To ADD content to an existing file: use `read_file` first, then `write_file` with the COMPLETE updated content.\n"
+                        "- If the file already contains everything your task requires: call `task_done` immediately.\n"
+                        "- NEVER use `python_sandbox` for project file I/O — use `read_file` / `write_file` only.\n"
+                    )
+                else:
+                    # Empty project — be very direct: write NOW, don't read infra files
+                    _existing_note = (
+                        "\n## PROJECT STATE\n"
+                        "The project directory is **empty** — no code files exist yet.\n"
+                        "**Your immediate action: call `write_file` to create the first file. Do NOT read .gitignore or any hidden files.**\n"
+                    )
+
                 # Rebuild system prompt with current state
                 # IMPORTANT: Keep task-context prompts SMALL to avoid n_ctx overflow.
                 # The agent may have more tools available locally, but task execution should
@@ -2763,6 +2880,7 @@ The following files were already created from a template:
 `{base_dir}`
 All files must be saved inside this directory.
 {completed_section}
+{_existing_note}
 {fresh_existing_files_info}
 {persistent_context}
 
@@ -2933,7 +3051,10 @@ All files must be saved inside this directory.
                                 "REQUIRED FIRST ACTION: Set your TODO list for this task. "
                                 "**ONLY available in planning phase.** "
                                 "Call this FIRST with a list of specific subtasks. "
-                                "Once TODOs are set, this tool is no longer available in task execution context."
+                                "Once TODOs are set, this tool is no longer available in task execution context. "
+                                "RULE: If the result is a single file (e.g. one HTML with inline CSS+JS), use EXACTLY ONE task. "
+                                "NEVER create planning tasks (Plan structure, Design layout, Verify) — every task must write at least one file. "
+                                "NEVER create meta-files like PLAN.md or STRUCTURE.md."
                             ),
                             "parameters": {
                                 "type": "object",
@@ -2941,7 +3062,7 @@ All files must be saved inside this directory.
                                     "tasks": {
                                         "type": "array",
                                         "items": {"type": "string"},
-                                        "description": "List of specific tasks to complete, e.g. ['Create index.html', 'Add CSS styling', 'Test output']"
+                                        "description": "List of file-creation tasks. Single-file projects: exactly 1 task. Multi-file: one task per output file. e.g. ['Create complete index.html with all sections, inline CSS and inline JS']"
                                     }
                                 },
                                 "required": ["tasks"]
@@ -2986,13 +3107,18 @@ All files must be saved inside this directory.
                         "type": "function",
                         "function": {
                             "name": "python_sandbox",
-                            "description": "Execute Python code safely in a sandboxed environment. Use for mathematical calculations, data processing, algorithms, and scientific computations.",
+                            "description": (
+                                "Execute Python code safely for calculations, data processing, or algorithms. "
+                                "⛔ FORBIDDEN: Do NOT use this to read or write project files — use read_file / write_file instead. "
+                                "⛔ FORBIDDEN: Do NOT write helper scripts (read_chunks.py, etc.) to the project directory. "
+                                "✅ USE FOR: math, string processing, JSON parsing, algorithm testing, non-file computations."
+                            ),
                             "parameters": {
                                 "type": "object",
                                 "properties": {
                                     "code": {
                                         "type": "string",
-                                        "description": "Python code to execute (e.g., 'result = 2 + 2 * 3' or 'import math; print(math.sqrt(16))')"
+                                        "description": "Python code for computation only. No open(), write(), or file I/O on project files."
                                     }
                                 },
                                 "required": ["code"]
@@ -3736,30 +3862,45 @@ All files must be saved inside this directory.
                             # This prevents the "infinite loop of starting over"
                             if 'write_file' in collected_content or (collected_tool_calls and collected_tool_calls[-1]['function']['name'] == 'write_file'):
                                 tui.append_stream("[INFO] Attempting to save partial content...")
-                                
+
                                 # Try to find filename from args
                                 partial_filename = "PARTIAL_CONTENT.txt"
                                 partial_content = ""
-                                
+                                _args_json_complete = False  # True if JSON parsed OK (write_file will run normally)
+
                                 # Extract content from collected tool calls if available
                                 if collected_tool_calls:
                                     last_tc = collected_tool_calls[-1]
                                     if last_tc['function']['name'] == 'write_file':
                                         args_str = last_tc['function']['arguments']
+
+                                        # Check if the JSON args are actually complete (common when finish_reason='length'
+                                        # fires at the end of a large but complete response)
+                                        try:
+                                            _parsed_test = json.loads(args_str)
+                                            if 'path' in _parsed_test and 'content' in _parsed_test:
+                                                _args_json_complete = True  # write_file will execute normally
+                                        except Exception:
+                                            pass  # JSON truncated — partial save is needed
+
                                         # Simple regex to get path and content
                                         p_match = re.search(r'"path"\s*:\s*"([^"]+)"', args_str)
                                         if p_match:
                                             partial_filename = f"PARTIAL_{os.path.basename(p_match.group(1))}"
-                                        
-                                        # Get content (even if truncated)
-                                        c_match = re.search(r'"content"\s*:\s*"(.*)', args_str, re.DOTALL)
-                                        if c_match:
-                                            partial_content = c_match.group(1)
-                                            # Clean up
-                                            partial_content = partial_content.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
-                                
-                                if partial_content and len(partial_content) > 50:
-                                    # Save partial file using tool directly
+
+                                        if not _args_json_complete:
+                                            # Get content (even if truncated)
+                                            c_match = re.search(r'"content"\s*:\s*"(.*)', args_str, re.DOTALL)
+                                            if c_match:
+                                                partial_content = c_match.group(1)
+                                                # Clean up
+                                                partial_content = partial_content.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+
+                                if _args_json_complete:
+                                    # JSON is complete — write_file will dispatch normally, no partial needed
+                                    tui.append_stream(f"[INFO] JSON complete despite finish_reason=length; write_file will run normally (no PARTIAL_ saved)")
+                                elif partial_content and len(partial_content) > 50:
+                                    # Actually truncated — save partial so agent can resume from it
                                     try:
                                         with open(os.path.join(base_dir, partial_filename), 'w', encoding='utf-8') as f:
                                             f.write(partial_content)
@@ -4409,8 +4550,10 @@ All files must be saved inside this directory.
                 # VQ-1 and smaller models might give short answers like "Okay, I'll do it."
                 clean_content = response_text.strip()
                 is_effectively_empty = len(clean_content) < 5
-                
-                if is_effectively_empty:
+
+                # IMPORTANT: A response with tool calls is NEVER truly empty — the model is
+                # doing real work. Suppress all empty-response handling when tool_calls exist.
+                if is_effectively_empty and not tool_calls:
                     tui.append_stream("[WARN] Empty response detected. Applying snapshot and retry...")
                     # Increment context-specific empty counter
                     if is_main_context:
@@ -4524,7 +4667,8 @@ All files must be saved inside this directory.
                 # Check if agent mentioned a tool name (but didn't actually call it yet)
                 # This prevents the agent from getting stuck when it mentions a tool but doesn't call it
                 # For tool-intent detection, use is_effectively_empty (checked BEFORE cleaning)
-                if is_effectively_empty:
+                # Skip when tool_calls is set — the model IS calling tools, no need to nudge.
+                if is_effectively_empty and not tool_calls:
                     # Get available tool names dynamically
                     available_tool_names = []
                     # Check if we have access to tools (coding_agent has its own tools)
@@ -4628,7 +4772,7 @@ All files must be saved inside this directory.
                         # Continue the loop - if it fails again, this system message will be removed with the reset
                         continue
                 
-                if is_effectively_empty:
+                if is_effectively_empty and not tool_calls:
                     # Empty Response Handler: Remove responses without final answer and restart from last tool call or user message
                     # NO RETRY LIMITS - will loop until we get a response
                     
@@ -4901,7 +5045,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
             only_reading = False
             
             # FIRST: No TODOs set yet? Auto-generate or nudge
-            if not task_mgr.todos and loop.loop_count >= 1:
+            # IMPORTANT: Skip if the model IS calling a tool (e.g. set_todos) — dispatching
+            # the tool will set the todos; jumping to continue here would skip that dispatch.
+            if not task_mgr.todos and loop.loop_count >= 1 and not tool_calls:
                 # After 5 loops: AUTO-GENERATE TODOs from task description
                 # Increased from 3 to 5 to give agent more time to plan
                 if loop.loop_count >= 5:
@@ -5108,14 +5254,17 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
             
             # Premature completion (said DONE but TODOs not finished)
             # CRITICAL: This check MUST run even if completion_signals is False, to catch any completion attempts
-            if task_mgr.todos and not task_mgr.is_all_done():
+            # IMPORTANT: Skip if the model IS calling a tool — it's doing real work, not claiming completion.
+            #            Words like "complete", "ready", "finished" are common in coding context
+            #            ("create a complete CSS file") and must NOT intercept actual tool calls.
+            if task_mgr.todos and not task_mgr.is_all_done() and not tool_calls:
                 # Check if model is trying to complete (either via signal or by not working on tasks)
                 is_trying_to_complete = completion_signals or (
-                    not tool_calls and 
-                    msg_content and 
+                    not tool_calls and
+                    msg_content and
                     len(msg_content.strip()) < 100  # Short messages might be completion attempts
                 ) or (
-                    msg_content and 
+                    msg_content and
                     any(phrase in msg_content.lower() for phrase in [
                         "i'm done", "i am done", "i'm finished", "i am finished",
                         "task is complete", "tasks are complete", "all done",
@@ -5124,7 +5273,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         "completed", "finished", "done with", "fertig mit"
                     ])
                 )
-                
+
                 if is_trying_to_complete:
                     remaining = [t["task"] for t in task_mgr.todos if t["status"] != "completed"]
                     completed_count = len([t for t in task_mgr.todos if t["status"] == "completed"])
@@ -5151,7 +5300,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
             
             # Additional check: If agent claims completion in response but didn't call task_done
             # This catches cases where the agent says "done" but hasn't actually completed tasks
-            if msg_content and task_mgr.todos and not task_mgr.is_all_done():
+            # IMPORTANT: Skip if model IS calling a tool — phrase matches like "complete"/"ready"
+            #            are common in coding context and must NOT intercept real tool calls.
+            if msg_content and task_mgr.todos and not task_mgr.is_all_done() and not tool_calls:
                 # Check for completion phrases in the response
                 completion_phrases = [
                     "all tasks completed", "all done", "finished", "complete",
@@ -6146,32 +6297,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                             pass
                             
                             if not template_structure_preserved:
-                                # Find template file path for the error message
-                                template_path_hint = ""
-                                if template_files and recent_files:
-                                    for tf in template_files:
-                                        if any(os.path.basename(tf) == os.path.basename(f) for f in recent_files):
-                                            template_path_hint = tf
-                                            break
-                                
-                                result = (
-                                    f"🚨 TASK NOT COMPLETE!\n\n"
-                                    f"Task: {current}\n\n"
-                                    f"**Problem:** Template structure was destroyed!\n"
-                                    f"You removed essential elements from the template:\n\n" +
-                                    "\n".join(f"- {elem}" for elem in missing_template_elements) +
-                                    f"\n\n**Action required:**\n"
-                                    f"1. Read the original template file: `read_file(path=\"{template_path_hint}\")`\n"
-                                    f"2. Restore ALL template sections (nav, hero, services, about, contact, footer)\n"
-                                    f"3. Only replace {{PLACEHOLDER}} text with real content\n"
-                                    f"4. Keep ALL classes, IDs, and structural elements\n"
-                                    f"5. Write back the corrected file\n"
-                                    f"6. THEN call task_done again\n\n"
-                                    f"DO NOT call task_done until template structure is fully preserved!"
-                                )
-                                tui.append_stream(f"{current[:40]} - template structure destroyed!")
-                                tui.set_action(f"{task_mgr.get_progress()} - Fix template!")
-                            elif placeholder_check['has_placeholders']:
+                                # Just log a warning but allow task_done to proceed
+                                _missing_str = ", ".join(missing_template_elements)
+                                tui.append_stream(f"Note: template structure changed ({_missing_str})")
+
+                            if placeholder_check['has_placeholders']:
                                 # Task not really done - placeholders still present
                                 placeholder_details = []
                                 files_list = []
@@ -6605,6 +6735,21 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 except Exception:
                                     pass  # Don't fail if render is blocked
                             
+                            # GUARD: Block writing of meta/planning files that pollute the project
+                            _path_arg = fn_args.get("path", "")
+                            _basename_lower = os.path.basename(_path_arg).lower()
+                            _META_FILE_PATTERNS = {"plan.md", "structure.md", "structure_plan.md", "notes.md", "todo.md", "design.md", "layout.md", "readme.md", "read_chunks.py"}
+                            if _basename_lower in _META_FILE_PATTERNS:
+                                result = (
+                                    f"⛔ BLOCKED: Writing '{os.path.basename(_path_arg)}' is not allowed.\n\n"
+                                    "Meta files (PLAN.md, STRUCTURE.md, NOTES.md, read_chunks.py, etc.) must NOT be written to the project directory.\n"
+                                    "Planning is mental — do it in your head. Only write actual deliverable files (index.html, styles.css, app.py, etc.).\n\n"
+                                    "Call write_file with an actual output file instead."
+                                )
+                                tui.append_stream(f"[GUARD] write_file blocked: {_basename_lower} is a meta file")
+                                history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": result})
+                                continue
+
                             # CRITICAL: Must set TODOs before writing files!
                             if not task_mgr.todos:
                                 result = (
@@ -6716,43 +6861,18 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                         missing_elements.append("Footer")
                                     
                                     if missing_elements:
-                                        # BLOCK the write - template structure not preserved
-                                        result = (
-                                            f"🚨 BLOCKED: Template structure destroyed!\n\n"
-                                            f"You tried to overwrite template file {fname}, but removed essential elements:\n" +
-                                            "\n".join(f"- {elem}" for elem in missing_elements) +
-                                            f"\n\n**MANDATORY:**\n"
-                                            f"1. Read template FIRST: `read_file(path=\"{path}\")`\n"
-                                            f"2. Keep ALL sections (nav, hero, services, about, contact, footer)\n"
-                                            f"3. Only replace {{PLACEHOLDER}} text with real content\n"
-                                            f"4. Do NOT remove sections, classes, or IDs\n\n"
-                                            f"**Example:** Template has `<nav class=\"nav\">` → Keep it! Only replace {{BUSINESS_NAME}}.\n\n"
-                                            f"DO NOT rewrite from scratch - work WITH the template!"
-                                        )
-                                        tui.append_stream(f"BLOCKED: Template structure destroyed in {fname}")
-                                        tui.set_action(f"⚠️ Fix template preservation!")
-                                        history.append({
-                                            "role": "system",
-                                            "content": result
-                                        })
-                                        # Add as tool result so agent gets feedback
-                                        history.append({
-                                            "role": "tool",
-                                            "tool_call_id": tc['id'],
-                                            "name": fn_name,
-                                            "content": result
-                                        })
-                                        continue  # Skip this write_file call
+                                        # Log info but allow the write (template is guidance, not a rule)
+                                        _miss_str = ", ".join(missing_elements)
+                                        tui.append_stream(f"Note: template sections changed in {fname}: {_miss_str}")
                                     else:
-                                        # Structure preserved - allow write but warn
+                                        # Structure matches template - note it
                                         tui.append_stream(f"Template structure preserved in {fname}")
                             except Exception as e:
                                 # If validation fails, still warn but allow (graceful degradation)
                                 tui.append_stream(f"Could not validate template: {e}")
                             
-                            # Warn if template file is being overwritten
-                            tui.append_stream(f"Overwriting template file {fname}")
-                            tui.append_stream("   Make sure you read it first and preserve the structure!")
+                            # Note that template file is being overwritten
+                            tui.append_stream(f"Updating template file {fname}")
                             live.update(tui.render())
                         
                         tui.add_file(fname, 0, "writing")
@@ -6788,6 +6908,32 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         live.update(tui.render())
                     
                     try:
+                        # GUARD: Block python_sandbox from reading/writing project files.
+                        # This prevents the model from using sandbox as a backdoor to modify
+                        # project files instead of using write_file / read_file.
+                        # Only triggers on actual file-write patterns — not stdout.write() or in-memory ops.
+                        if fn_name == "python_sandbox":
+                            code = fn_args.get("code", "")
+                            _sandbox_writes_files = (
+                                # open() in write/append mode
+                                (bool(re.search(r'\bopen\s*\(', code)) and ("'w'" in code or '"w"' in code or "'a'" in code or '"a"' in code))
+                                # .write( on a file handle variable (not stdout/stderr/StringIO)
+                                or bool(re.search(r'\b(?!stdout|stderr|StringIO)\w+\.write\s*\(', code))
+                                # Direct reference to the project base_dir path
+                                or base_dir in code
+                            )
+                            if _sandbox_writes_files:
+                                result = (
+                                    "⛔ BLOCKED: python_sandbox cannot write to project files.\n\n"
+                                    "Use write_file(path='...', content='...') instead to write or update project files.\n"
+                                    "Use read_file(path='...') to read project files.\n"
+                                    "python_sandbox is only for pure computation (math, algorithms, string processing)."
+                                )
+                                history.append({"role": "tool", "tool_call_id": tc['id'], "content": result})
+                                _log_to_file(f"[GUARD] python_sandbox blocked (project file I/O detected)")
+                                tui.append_stream("[GUARD] python_sandbox blocked — use write_file/read_file for project files")
+                                continue
+
                         # Structured per-subagent debug logging (action + reaction)
                         t0 = time.time()
                         try:
@@ -6875,6 +7021,17 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                     task_file_map[current_task_idx] = []
                                 task_file_map[current_task_idx].append(path)
 
+                                # Persist file into task's files_created list so tasks.json reflects it
+                                if task_mgr.state and current_task_idx < len(task_mgr.state.tasks):
+                                    _t = task_mgr.state.tasks[current_task_idx]
+                                    if path not in _t.files_created:
+                                        _t.files_created.append(path)
+                                    if task_mgr.pm:
+                                        try:
+                                            task_mgr.pm.save_state(task_mgr.state)
+                                        except Exception:
+                                            pass
+
                                 # Track write_file calls in session
                                 write_file_calls_in_session += 1
                                 recent_loop_write_files.append(True)  # Track this loop had write_file
@@ -6911,7 +7068,29 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                         tui.append_stream("  ...")
                                 
                                 result = f"✓ Created {path} ({size} bytes)"
-                                
+
+                                # CONTEXT BLOAT FIX: Strip 'content' from this tool call in history.
+                                # write_file arguments can be 30KB+. After 3-4 writes the history
+                                # blows past the API context limit (400 errors). Replace the content
+                                # field with a short placeholder so the model still knows what was
+                                # written but doesn't re-read 34KB of HTML on every loop.
+                                _tc_id = tc.get('id', '')
+                                for _hmsg in reversed(history):
+                                    if _hmsg.get('role') == 'assistant' and _hmsg.get('tool_calls'):
+                                        for _htc in _hmsg['tool_calls']:
+                                            if _htc.get('id') == _tc_id:
+                                                try:
+                                                    _raw_args = _htc.get('function', {}).get('arguments', '{}')
+                                                    _parsed = json.loads(_raw_args)
+                                                    if 'content' in _parsed:
+                                                        _orig_len = len(_parsed['content'])
+                                                        _parsed['content'] = f'[content omitted — {_orig_len} bytes written to disk]'
+                                                        _htc['function']['arguments'] = json.dumps(_parsed, ensure_ascii=False)
+                                                except Exception:
+                                                    pass
+                                                break
+                                        break
+
                                 # CRITICAL: Stronger nudge after write
                                 history.append({
                                     "role": "system",

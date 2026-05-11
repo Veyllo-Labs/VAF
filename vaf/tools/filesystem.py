@@ -673,7 +673,8 @@ class WriteFileTool(BaseTool):
                         except Exception:
                             pass
                         # When a document file is saved, also open it in the Document Editor.
-                        _doc_extensions = (".html", ".htm", ".md", ".txt", ".docx")
+                        # HTML files are NOT opened in the doc editor — they get the blue download chip instead.
+                        _doc_extensions = (".md", ".txt", ".docx")
                         if res.lower().endswith(_doc_extensions):
                             try:
                                 _sid2 = os.environ.get("VAF_SESSION_ID")

@@ -45,6 +45,8 @@ type Message = {
     workflowId?: string;
     workflowName?: string;
     initialSteps?: number;
+    /** Files created by a coding agent — shown as blue download chips inside this bubble */
+    downloadFiles?: { path: string; name: string }[];
 };
 
 type Session = {
@@ -1218,8 +1220,11 @@ function VAFDashboardContent() {
 
     const appendSubAgentLine = (line: string) => {
         if (!line) return;
-        if (subAgentLogSetRef.current.has(line)) return;
-        subAgentLogSetRef.current.add(line);
+        // Dedup by content only (strip leading [HH:MM:SS] timestamp) so the same
+        // message from repeated Rich TUI re-renders doesn't appear multiple times.
+        const contentKey = line.replace(/^\[\d{2}:\d{2}:\d{2}\] /, '');
+        if (subAgentLogSetRef.current.has(contentKey)) return;
+        subAgentLogSetRef.current.add(contentKey);
         const lineLower = line.toLowerCase();
         const isFailure = lineLower.includes('failed') || lineLower.includes('timeout') || lineLower.includes('error');
         setSubAgentState(prev => ({
@@ -1818,6 +1823,19 @@ function VAFDashboardContent() {
                     if (!data.sessionId || data.sessionId === activeSessionId) {
                         setIsGenerating(false);
                         setIsStoppingGeneration(false);
+                        // Attach any pending file_created chips to the last assistant message bubble
+                        setCreatedFiles(pending => {
+                            if (pending.length > 0) {
+                                setMessages(prev => {
+                                    const lastAssistantIdx = prev.map((m, i) => ({ m, i })).filter(({ m }) => m.role === 'assistant').pop()?.i;
+                                    if (lastAssistantIdx === undefined) return prev;
+                                    const newMsgs = [...prev];
+                                    newMsgs[lastAssistantIdx] = { ...newMsgs[lastAssistantIdx], downloadFiles: pending.map(f => ({ path: f.path, name: f.name })) };
+                                    return newMsgs;
+                                });
+                            }
+                            return []; // Clear floating chips
+                        });
                     }
                     // Completion sound: play when model has finished (Web UI only)
                     // Use same-origin relative URL so it works through HTTPS proxy (no mixed content)
@@ -3910,6 +3928,23 @@ function VAFDashboardContent() {
                                                             {loading && isBot && i === filteredMessages.length - 1 && statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && (
                                                                 <span className="text-[10px] text-gray-400 mt-1 ml-1 animate-in fade-in">{statusMessage}</span>
                                                             )}
+                                                            {/* Download chips for files created by coding agent — embedded in the assistant bubble */}
+                                                            {isBot && msg.downloadFiles && msg.downloadFiles.length > 0 && (
+                                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                                    {msg.downloadFiles.map((f, fi) => (
+                                                                        <a
+                                                                            key={fi}
+                                                                            href={`/api/download?path=${encodeURIComponent(f.path)}`}
+                                                                            target="_blank"
+                                                                            rel="noopener noreferrer"
+                                                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-colors"
+                                                                        >
+                                                                            <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                                                            {f.name}
+                                                                        </a>
+                                                                    ))}
+                                                                </div>
+                                                            )}
                                                         </>
                                                     );
 
@@ -4056,23 +4091,7 @@ function VAFDashboardContent() {
                                     </div>
                                 )}
 
-                                {/* Created file chips — blue download/open links shown after agent writes a file */}
-                                {createdFiles.length > 0 && (
-                                    <div className={cn(chatWidthClass, "mx-auto mb-2 flex flex-wrap gap-2")}>
-                                        {createdFiles.map((f, i) => (
-                                            <a
-                                                key={i}
-                                                href={`/api/download?path=${encodeURIComponent(f.path)}`}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-colors"
-                                            >
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                                                {f.name}
-                                            </a>
-                                        ))}
-                                    </div>
-                                )}
+                                {/* File chips are now rendered inside the assistant message bubble (see msg.downloadFiles above) */}
 
                                 {/* Model download progress (visible when downloading, e.g. after closing Settings) */}
                                 {downloadModelStatus?.status === 'downloading' && (

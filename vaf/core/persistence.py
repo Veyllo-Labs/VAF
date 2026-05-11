@@ -76,8 +76,8 @@ class PersistenceManager:
         if not os.path.exists(self.vaf_path):
             try:
                 os.makedirs(self.vaf_path, exist_ok=True)
-            except Exception:
-                pass # Might fail on read-only, handle later
+            except Exception as e:
+                print(f"[PersistenceManager] WARNING: Could not create .vaf dir at {self.vaf_path}: {e}")
 
     def init_project(self, project_name: str):
         """Initialize a new project state if not exists."""
@@ -108,10 +108,12 @@ class PersistenceManager:
     def save_state(self, state: ProjectState):
         """Save the project state to tasks.json."""
         try:
+            # Ensure .vaf dir exists in case it was missing at init time
+            os.makedirs(self.vaf_path, exist_ok=True)
             with open(self.tasks_path, 'w', encoding='utf-8') as f:
                 json.dump(state.to_dict(), f, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"Error saving state: {e}")
+            print(f"[PersistenceManager] ERROR saving state to {self.tasks_path}: {e}")
 
     def get_codex(self) -> str:
         """Read the Codex (Long-term memory)."""

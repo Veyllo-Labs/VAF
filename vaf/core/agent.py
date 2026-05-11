@@ -1258,6 +1258,12 @@ class Agent:
         # Fast path: clear success indicators – avoid LLM false negatives
         result_lower = result.lower()
 
+        # Coding agent with explicit COMPLETE signal → always accept immediately.
+        # Do NOT run LLM validation: the local model often outputs </false> for
+        # perfectly valid coding results, triggering a silent retry loop.
+        if agent_type == "coding_agent" and "[vaf_coding_agent_status: complete]" in result_lower:
+            return True, None
+
         # Research/document agents: report saved + opened in editor → always accept
         if agent_type in ("research_agent", "document_agent"):
             if any(x in result_lower for x in ["task complete", "report has been saved", "saved successfully", "open in the document editor"]):

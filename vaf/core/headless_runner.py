@@ -1236,6 +1236,80 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception:
                         pass
 
+                    # ── Hallucination guard ────────────────────────────────────────────
+                    # If the agent DESCRIBED calling a sub-agent tool (coding_agent,
+                    # librarian_agent …) but the response has no [ASYNC_ACK] marker,
+                    # no IPC task was actually registered — it hallucinated.
+                    # Inject a correction and re-run chat_step once to force the real call.
+                    # Tool names are language-agnostic; natural-language phrases cover DE + EN.
+                    _hallucination_phrases = [
+                        # Tool names (always the same regardless of language)
+                        "coding_agent", "librarian_agent", "research_agent",
+                        # English – agent described as running
+                        "coding agent", "sub-agent", "subagent",
+                        "is now working", "working on it", "has been started",
+                        "is currently working", "is running", "has started",
+                        "is being created", "agent is working",
+                        # German – agent described as running
+                        "arbeitet gerade", "wird erstellt", "wird bearbeitet",
+                        "ist gestartet", "startet gerade", "läuft gerade",
+                        "ist bereits am laufen", "ist am arbeiten",
+                        "der coding", "der sub-agent", "der subagent",
+                    ]
+                    _is_async = response_text.startswith("[ASYNC_ACK]")
+                    _is_sys   = response_text.startswith("[SYSTEM_LOG_ONLY]")
+                    if (
+                        not _is_async and not _is_sys
+                        and any(p in final_text.lower() for p in _hallucination_phrases)
+                    ):
+                        try:
+                            from vaf.core.subagent_ipc import get_ipc as _get_ipc
+                            _ipc = _get_ipc()
+                            _active = _ipc.get_active_tasks(session_id=task.session_id)
+                            _pending = _ipc.get_pending_results(session_id=task.session_id)
+                            if not _active and not _pending:
+                                # No actual sub-agent registered → hallucination detected
+                                get_web_interface().log(
+                                    "Hallucination detected: agent claimed sub-agent is running "
+                                    "but no IPC task found. Injecting correction.",
+                                    level="warning", source="System", session_id=task.session_id
+                                )
+                                _correction = (
+                                    "[SYSTEM CORRECTION] You just wrote that a sub-agent or the "
+                                    "coding agent is working, but you never actually called the "
+                                    "tool. Calling a tool means using a tool call — not writing "
+                                    "text about it. You MUST now call the appropriate tool "
+                                    "(e.g. coding_agent, librarian_agent) to actually start the "
+                                    "task. Do NOT write another text response — call the tool."
+                                )
+                                agent.history.append({"role": "user", "content": _correction})
+                                _corr_parts = []
+                                def _corr_stream(text):
+                                    _corr_parts.append(text)
+                                    _t = "".join(_corr_parts)
+                                    if _t.strip():
+                                        get_web_interface().emit_agent_message(
+                                            "assistant", _t, session_id=task.session_id
+                                        )
+                                agent.chat_step(
+                                    user_input=_correction,
+                                    stream_callback=_corr_stream,
+                                    skip_input=True,   # already added above
+                                    disable_workflows=True,
+                                    disable_tools=False,
+                                )
+                                if _corr_parts:
+                                    _corr_final = "".join(_corr_parts)
+                                    get_web_interface().emit_agent_message(
+                                        "assistant", _corr_final, session_id=task.session_id
+                                    )
+                                    get_web_interface().emit_message_complete(
+                                        content=_corr_final, session_id=task.session_id
+                                    )
+                        except Exception as _hg_err:
+                            print(f"[Headless] Hallucination guard error: {_hg_err}")
+                    # ── End hallucination guard ───────────────────────────────────────
+
                     # When user asked for a text (e.g. "Schreib mir einen Text"), open it in Document Editor
                     if not response_text.startswith("[ASYNC_ACK]") and not response_text.startswith("[SYSTEM_LOG_ONLY]"):
                         try:
@@ -1894,6 +1968,42 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     disable_tools=False
                                 )
 
+                                # POST-CHAT: Emit final message + save session
+                                # (mirrors main chat path – ensures browser sees the response even
+                                # if WebSocket dropped during streaming, and persists it for reload)
+                                _result_sid = getattr(agent, "current_session_id", None)
+                                _final_result_text = "".join(response_parts)
+                                _clean_result = re.sub(r"<think>.*?</think>", "", _final_result_text, flags=re.DOTALL)
+                                _clean_result = _strip_tool_calls_json(_clean_result)
+                                _clean_result = re.sub(r"\n{3,}", "\n\n", _clean_result).strip()
+
+                                if _clean_result:
+                                    # 1. Final emit – guarantees browser has complete message
+                                    try:
+                                        get_web_interface().emit_agent_message(
+                                            "assistant",
+                                            _clean_result,
+                                            session_id=_result_sid
+                                        )
+                                    except Exception:
+                                        pass
+                                    # 2. message_complete – closes streaming bubble, triggers TTS
+                                    try:
+                                        get_web_interface().emit_message_complete(
+                                            content=_clean_result,
+                                            session_id=_result_sid
+                                        )
+                                    except Exception:
+                                        pass
+                                    # 3. Save to session so browser reload / reconnect shows the response
+                                    try:
+                                        if _result_sid:
+                                            _saved_sess = session_mgr.load(_result_sid)
+                                            _saved_sess.add_message(role="assistant", content=_clean_result)
+                                            session_mgr.save(_saved_sess)
+                                    except Exception:
+                                        pass
+
                                 # Send subagent summary to Telegram/Discord if this session originated from there
                                 try:
                                     sid = getattr(agent, "current_session_id", None)
@@ -1930,7 +2040,16 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         "Failed to send subagent summary to Telegram/Discord: %s", e
                                     )
                     except Exception as e:
+                        import traceback as _tb
                         print(f"[Headless] Sub-agent result processing error: {e}")
+                        # Emit a fallback notification so the browser is not left waiting
+                        try:
+                            _fb_sid = getattr(agent, "current_session_id", None)
+                            _fb_msg = f"Sub-Agent completed — summary could not be generated ({type(e).__name__})."
+                            get_web_interface().emit_agent_message("assistant", _fb_msg, session_id=_fb_sid)
+                            get_web_interface().emit_message_complete(content=_fb_msg, session_id=_fb_sid)
+                        except Exception:
+                            pass
 
                 # Periodically update Sub-Agent window state for WebUI
                 if now - last_subagent_ui_update >= 1.0:

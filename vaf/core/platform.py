@@ -669,8 +669,15 @@ class Platform:
 
                         threading.Thread(target=_pipe_drain, daemon=True).start()
 
-                        # Pre-compile ANSI escape stripper once per stream
+                        # Pre-compile patterns once per stream
                         _ansi_re = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                        # Rich TUI box borders  (╭─, ╰─, ├─, │ alone, etc.)
+                        _box_border_re = re.compile(r'^[╭╰├└┤╞╡╔╗╚╝║╠╣╦╩╬─═╪╫]+')
+                        # Rich TUI panel side lines:  │   42  content   │
+                        _box_panel_re = re.compile(r'^[│]\s*\d*\s*(.*?)\s*[│]?\s*$')
+                        # "... (N lines above)" scroll indicator (not useful in browser)
+                        _scroll_ind_re = re.compile(r'^\.\.\.\s*\(\d+ lines above\)\s*$')
+                        _seen_lines: set = set()  # content-level dedup within this stream
 
                         while True:
                             raw = _line_q.get()
@@ -679,12 +686,32 @@ class Platform:
                             clean = _ansi_re.sub('', raw).rstrip("\r\n")
                             if not clean:
                                 continue
+
+                            # Always keep the raw line for output_lines (used for error context)
                             output_lines.append(clean)
+
+                            # --- Filter / extract for browser display ---
+                            # Skip box border lines (╭───, ╰───, ├───, etc.)
+                            if _box_border_re.match(clean):
+                                continue
+                            # Extract inner text from TUI panel side lines (│ N content │)
+                            m = _box_panel_re.match(clean)
+                            send_line = m.group(1) if m else clean
+                            if not send_line:
+                                continue
+                            # Skip scroll position indicators ("... (42 lines above)")
+                            if _scroll_ind_re.match(send_line):
+                                continue
+                            # Content-level dedup: same message repeated across TUI re-renders
+                            if send_line in _seen_lines:
+                                continue
+                            _seen_lines.add(send_line)
+
                             _send_web_update({
                                 "type": "subagent_output_stream",
                                 "taskId": task_id or None,
                                 "agentType": agent_type or None,
-                                "line": clean
+                                "line": send_line
                             })
 
                         try:

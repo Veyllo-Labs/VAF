@@ -1030,10 +1030,11 @@ class Agent:
                             continue
                         
                         # Tools intentionally NOT exposed to the Main Agent.
-                        # Rationale: keep the Main Agent high-level; delegate OS/filesystem analysis to sub-agents
-                        # (e.g., librarian_agent) to avoid prompt/tool confusion and to keep behavior consistent.
+                        # read_file and list_files are intentionally INCLUDED — the main agent
+                        # needs them to verify work, answer user questions about files, etc.
+                        # librarian_agent is for heavy analysis tasks, not simple file reads.
                         MAIN_AGENT_EXCLUDED_TOOLS = [
-                            "write_file", "read_file", "list_files", "move_file",  # Filesystem
+                            "write_file", "move_file",   # Write operations (delegate to sub-agents)
                             "folder_size",   # Deterministic sizing (prefer via librarian_agent)
                             "bash",           # Shell commands (for build/test)
                             "codesearch",     # Code navigation
@@ -1262,6 +1263,17 @@ class Agent:
         # Do NOT run LLM validation: the local model often outputs </false> for
         # perfectly valid coding results, triggering a silent retry loop.
         if agent_type == "coding_agent" and "[vaf_coding_agent_status: complete]" in result_lower:
+            return True, None
+
+        # Workflow agents always produce a complete deliverable — skip LLM validation.
+        # The workflow result only says "completed, saved to /path" without HTML content,
+        # so the validator would incorrectly return </false> and trigger a retry loop
+        # that spawns a redundant coding_agent run.
+        if agent_type.startswith("workflow:"):
+            return True, None
+
+        # Coding agent (any result): skip validation to avoid false retry loops.
+        if agent_type == "coding_agent":
             return True, None
 
         # Research/document agents: report saved + opened in editor → always accept
@@ -1507,8 +1519,40 @@ class Agent:
                         f"the editor shows the full report and offer edits if they want."
                     )
                 })
+            elif task.agent_type == "coding_agent" or task.agent_type.startswith("workflow:"):
+                # Coding agent / workflow: the deliverable is already on disk.
+                # Do NOT tell the main agent to "fulfill the original intent" — that
+                # causes it to call coding_agent again, creating a duplicate run and
+                # a second terminal window.
+                file_paths = re.findall(
+                    r'(?:Saved to|Output|File|Path|Ausgabe|Datei|saved to):\s*([^\n]+\.(?:html?|pdf|docx?|txt|md|json|csv|xlsx?|py|js|ts))',
+                    task.result,
+                    re.IGNORECASE
+                )
+                file_hint = ""
+                if file_paths:
+                    cleaned_paths = [re.sub(r'\x1b\[[0-9;]*m', '', fp).strip() for fp in file_paths]
+                    file_hint = f"\n\n📁 **Created files:**\n" + "\n".join(f"- `{fp}`" for fp in cleaned_paths[:5])
+
+                self.history.append({
+                    "role": "system",
+                    "content": (
+                        f"✅ **Task Complete — {task.agent_type} finished**\n"
+                        f"(Task ID: {task.task_id[:8]})\n\n"
+                        f"{task_result_msg}"
+                        f"{file_hint}\n\n"
+                        f"--- END OF TASK OUTPUT ---\n\n"
+                        f"**INSTRUCTION:** The task output above is the authoritative result. "
+                        f"Do NOT call coding_agent again. "
+                        f"Your FIRST action must be to reply to the user in their language — tell them "
+                        f"where the project is, what the main file is called, and how to open/use it. "
+                        f"Only AFTER sending that reply may you optionally call list_files or read_file "
+                        f"once if you need a specific detail to answer a follow-up. "
+                        f"Do NOT call tools before replying to the user."
+                    )
+                })
             else:
-                # Extract file paths from result (for non-research agents)
+                # Extract file paths from result (for other agents)
                 file_paths = re.findall(
                     r'(?:Saved to|Output|File|Path|Ausgabe|Datei):\s*([^\n]+\.(?:html?|pdf|docx?|txt|md|json|csv|xlsx?))',
                     task.result,
@@ -5645,7 +5689,11 @@ class Agent:
                         # Proceed without blocking
                     else:
                         UI.event("System", f"False promise detected (attempt {self._false_promise_retries}) - forcing retry...", style="warning")
-                        # Remove faulty assistant message in Web UI so only retry response is shown (same as empty-response retry)
+                        # Only clear the UI bubble when the response is short/empty.
+                        # If the model generated a substantial response (>200 chars) that the
+                        # false-promise heuristic flagged, do NOT nuke it — the user is actively
+                        # reading it. The retry will append a corrected follow-up instead.
+                        _response_is_substantial = len(full_content.strip()) > 200
                         if _emit_to_web_ui():
                             try:
                                 from vaf.core.web_interface import get_web_interface
@@ -5657,7 +5705,8 @@ class Agent:
                                     source="System",
                                     session_id=session_id,
                                 )
-                                get_web_interface().emit_clear_last_assistant(session_id)
+                                if not _response_is_substantial:
+                                    get_web_interface().emit_clear_last_assistant(session_id)
                             except Exception:
                                 pass
                         # Clear stream buffer so the retry sends only new content (no old + new)

@@ -1644,7 +1644,17 @@ def maybe_start_thinking_for_user(user_scope_id: Optional[str]) -> bool:
     if should_skip_for_automation(user_scope_id, buffer_min):
         logger.debug("Thinking skipped for user: next automation within %d min", buffer_min)
         return False
-    
+
+    # Do not think while any sub-agent task is actively running.
+    try:
+        from vaf.core.subagent_ipc import get_ipc
+        _active_tasks = get_ipc().get_active_tasks()
+        if _active_tasks:
+            logger.debug("Thinking skipped: %d active sub-agent task(s) running", len(_active_tasks))
+            return False
+    except Exception:
+        pass
+
     # Acquire internal lock
     run_id = acquire_lock(user_scope_id, max_duration_minutes=max_duration)
     if run_id is None:

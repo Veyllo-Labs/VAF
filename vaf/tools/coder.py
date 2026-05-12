@@ -2126,9 +2126,32 @@ Thumbs.db
             base_dir = tempfile.mkdtemp(prefix="vaf_content_")
             tui.append_stream("Content-only mode: Using temporary directory")
         else:
-            # Normal mode: Determine base directory intelligently
-            base_dir = self._determine_base_dir(task)
-            
+            # Normal mode: first try to extract an explicit absolute path from the task text,
+            # then fall back to keyword-based directory generation.
+            _explicit_path = None
+            try:
+                import re as _re_pb
+                # Match "im Verzeichnis /path", "in directory /path", "in folder /path", etc.
+                _m = _re_pb.search(
+                    r'(?:im\s+Verzeichnis|in\s+directory|in\s+folder|path\s*[:=])\s*([/\\][^\s\n"\'.,)]+)',
+                    task, _re_pb.IGNORECASE
+                )
+                if not _m:
+                    # Bare absolute path (Unix home/tmp/mnt or Windows C:\)
+                    _m = _re_pb.search(r'(/(?:home|tmp|mnt|root)/\S+|C:\\[^\s\n"\'.,)]+)', task)
+                if _m:
+                    _explicit_path = os.path.abspath(
+                        os.path.expanduser(_m.group(1).rstrip('.,)/\\'))
+                    )
+            except Exception:
+                pass
+
+            if _explicit_path:
+                base_dir = _explicit_path
+                tui.append_stream(f"Using path from task: {base_dir}")
+            else:
+                base_dir = self._determine_base_dir(task)
+
             os.makedirs(base_dir, exist_ok=True)
             tui.append_stream(f"Project directory: {os.path.basename(base_dir)}")
         
@@ -2837,6 +2860,13 @@ The following files were already created from a template:
                 # like .gitignore, .vaf/, .git/ — the model must never be told about these
                 # because it will read them in a confused loop instead of writing code)
                 _INFRA_FILES = {'.gitignore', '.gitattributes', '.editorconfig', '.env.example'}
+
+                # Detect "create from scratch" intent so we don't confuse the model with old files.
+                _is_create_task = bool(re.search(
+                    r'\b(erstell|create|new|from\s+scratch|von\s+grund|neu\s+erstell)\b',
+                    task, re.IGNORECASE
+                ))
+
                 _existing_project_files = []
                 try:
                     if os.path.isdir(base_dir):
@@ -2848,7 +2878,18 @@ The following files were already created from a template:
                             if _fname in _INFRA_FILES:
                                 continue
                             if os.path.isfile(_fpath):
-                                _existing_project_files.append(_fname)
+                                # On "create" tasks, delete old HTML/CSS/JS output files so
+                                # the model doesn't read and wrap the previous content.
+                                if _is_create_task and os.path.splitext(_fname)[1].lower() in (
+                                    '.html', '.htm', '.css', '.js'
+                                ):
+                                    try:
+                                        os.remove(_fpath)
+                                        tui.append_stream(f"[Coder] Removed old file (create mode): {_fname}")
+                                    except Exception:
+                                        _existing_project_files.append(_fname)
+                                else:
+                                    _existing_project_files.append(_fname)
                 except Exception:
                     pass
                 _existing_note = ""
@@ -3751,15 +3792,17 @@ All files must be saved inside this directory.
                             
                             # Compression Strategy based on severity
                             if loop.consecutive_400 == 1:
-                                # Level 1: Keep System + Last User + Last 2 Messages
+                                # Level 1: Keep System + Last User + Last 3 Messages.
+                                # Use -3 (not -2) so the assistant message with tool_calls is
+                                # included whenever the last messages are [assistant, tool, system].
+                                # Without it the tool result is orphaned → immediate Level 2 400.
                                 user_msgs = [m for m in history if m.get("role") == "user"]
                                 if user_msgs:
                                     new_history.append(user_msgs[-1])
-                                if len(history) > 2:
-                                    # Filter out tool outputs that might be huge
-                                    recent = history[-2:]
+                                if len(history) > 3:
+                                    recent = history[-3:]
                                     for msg in recent:
-                                        if len(str(msg.get('content', ''))) < 2000: # Only keep small messages
+                                        if len(str(msg.get('content', ''))) < 2000:
                                             new_history.append(msg)
                             elif loop.consecutive_400 == 2:
                                 # Level 2: Keep ONLY System + Last User (Summary)
@@ -5243,8 +5286,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     
                     continue # Skip to next loop with new task
             
-            # If model claims completion without TODOs, force it to set them first
-            if completion_signals and not task_mgr.todos:
+            # If model claims completion without TODOs, force it to set them first.
+            # IMPORTANT: Skip if model IS calling a tool (e.g. set_todos) — words like
+            # "complete" are common in coding context ("write a complete HTML file") and
+            # must NOT intercept an actual tool call.
+            if completion_signals and not task_mgr.todos and not tool_calls:
                 tui.set_action("set_todos first")
                 history.append({
                     "role": "system",
@@ -7074,22 +7120,61 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 # blows past the API context limit (400 errors). Replace the content
                                 # field with a short placeholder so the model still knows what was
                                 # written but doesn't re-read 34KB of HTML on every loop.
+                                # NOTE: When the LLM args contain HTML special chars, json.loads()
+                                # of the raw arguments string fails.  In that case we fall back to
+                                # fn_args (already extracted via regex) to know the content length.
                                 _tc_id = tc.get('id', '')
+                                _strip_orig_len = len(fn_args.get('content', '')) if fn_args else 0
                                 for _hmsg in reversed(history):
                                     if _hmsg.get('role') == 'assistant' and _hmsg.get('tool_calls'):
                                         for _htc in _hmsg['tool_calls']:
                                             if _htc.get('id') == _tc_id:
                                                 try:
                                                     _raw_args = _htc.get('function', {}).get('arguments', '{}')
-                                                    _parsed = json.loads(_raw_args)
-                                                    if 'content' in _parsed:
-                                                        _orig_len = len(_parsed['content'])
-                                                        _parsed['content'] = f'[content omitted — {_orig_len} bytes written to disk]'
-                                                        _htc['function']['arguments'] = json.dumps(_parsed, ensure_ascii=False)
+                                                    try:
+                                                        _parsed = json.loads(_raw_args)
+                                                        if 'content' in _parsed:
+                                                            _strip_orig_len = len(_parsed['content'])
+                                                            _parsed['content'] = f'[content omitted — {_strip_orig_len} bytes written to disk]'
+                                                            _htc['function']['arguments'] = json.dumps(_parsed, ensure_ascii=False)
+                                                    except json.JSONDecodeError:
+                                                        # Raw args are malformed (unescaped chars in HTML content).
+                                                        # Replace the entire arguments string with a clean placeholder.
+                                                        _placeholder = {
+                                                            'path': fn_args.get('path', ''),
+                                                            'content': f'[content omitted — {_strip_orig_len} bytes written to disk]'
+                                                        }
+                                                        _htc['function']['arguments'] = json.dumps(_placeholder, ensure_ascii=False)
                                                 except Exception:
                                                     pass
                                                 break
                                         break
+
+                                # PARTIAL CLEANUP: Remove PARTIAL_{basename} if a full file was written.
+                                # The PARTIAL_ file is a temporary save from a truncated stream
+                                # response. Once the real file exists it's just confusing clutter.
+                                _partial_path = os.path.join(
+                                    os.path.dirname(path),
+                                    f"PARTIAL_{os.path.basename(path)}"
+                                )
+                                if os.path.exists(_partial_path):
+                                    try:
+                                        os.remove(_partial_path)
+                                        tui.append_stream(f"[Coder] Removed stale {os.path.basename(_partial_path)}")
+                                    except Exception:
+                                        pass
+
+                                # Notify Web UI so it shows a blue download chip.
+                                try:
+                                    _fc_sid = os.environ.get("VAF_SESSION_ID")
+                                    if not _fc_sid:
+                                        from vaf.core.subagent_ipc import get_current_session_id
+                                        _fc_sid = get_current_session_id()
+                                    if _fc_sid:
+                                        from vaf.core.web_interface import notify_file_created
+                                        notify_file_created(_fc_sid, path, title=os.path.basename(path))
+                                except Exception:
+                                    pass
 
                                 # CRITICAL: Stronger nudge after write
                                 history.append({
@@ -7252,7 +7337,26 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
         # ═══════════════════════════════════════════════════════════════════
         # LOOP ENDED (timeout or max empty)
         # ═══════════════════════════════════════════════════════════════════
-        
+
+        # End-of-run PARTIAL cleanup: remove any PARTIAL_{name} files that
+        # have a corresponding real file (these are leftover from streaming
+        # truncation events that happened after the last write_file success).
+        try:
+            if base_dir and os.path.isdir(base_dir):
+                for _fname in os.listdir(base_dir):
+                    if _fname.startswith("PARTIAL_"):
+                        _real_name = _fname[len("PARTIAL_"):]
+                        _partial_fp = os.path.join(base_dir, _fname)
+                        _real_fp = os.path.join(base_dir, _real_name)
+                        if os.path.exists(_real_fp):
+                            try:
+                                os.remove(_partial_fp)
+                                tui.append_stream(f"[Coder] End-of-run: removed stale {_fname}")
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+
         if files_created:
             # ═══════════════════════════════════════════════════════════════
             # CONTENT_ONLY MODE: Return actual file content instead of summary

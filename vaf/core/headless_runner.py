@@ -1797,9 +1797,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 if agent._process_subagent_result(result_task):
                                     any_needs_retry = True
                                 
-                                # Ensure WebUI opens the Sub-Agent window even if no active task was seen
+                                # Ensure WebUI opens the Sub-Agent window even if no active task was seen.
+                                # workflow:* tasks belong to the WorkflowRuntime panel — skip ONLY the
+                                # SubAgentWindow update, but still allow found_results_text to be populated.
+                                _is_workflow_task = str(getattr(result_task, 'agent_type', '') or '').startswith('workflow:')
                                 sid = session_id
-                                if sid:
+                                if sid and not _is_workflow_task:
                                     status_label = "Completed"
                                     if is_user_cancelled:
                                         status_label = "Stopped/Cancelled"
@@ -1912,7 +1915,13 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         break
 
                                 native_lang = agent.LANGUAGE_NAMES_NATIVE.get(user_lang, user_lang)
-                                combined_results = "\n\n---\n\n".join(r[:1000] for r in found_results_text) if found_results_text else ""
+                                # Coding/workflow results can be ~2000 chars — keep them whole so path+files survive.
+                                _is_coding_result = any(
+                                    str(getattr(_pt, 'agent_type', '') or '').startswith(('coding_agent', 'workflow:'))
+                                    for _pt in pending_results
+                                )
+                                _per_limit = 4000 if _is_coding_result else 1000
+                                combined_results = "\n\n---\n\n".join(r[:_per_limit] for r in found_results_text) if found_results_text else ""
 
                                 if any_needs_retry:
                                     if user_lang == "de":
@@ -1926,6 +1935,30 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                             "The sub-agent result did NOT fulfill the user's request.\n"
                                             "You MUST retry immediately by calling the sub-agent again with the exact task specified in the Background Intelligence above.\n"
                                             "Do NOT summarize. Call the tool now."
+                                        )
+                                elif _is_coding_result:
+                                    # Coding/workflow task: agent MUST relay file info before anything else.
+                                    if user_lang == "de":
+                                        instruction_prompt = (
+                                            f"Der Coding Agent / Workflow hat folgendes Ergebnis geliefert:\n\n"
+                                            f"{combined_results}\n\n"
+                                            f"**Antworte dem User JETZT auf DEUTSCH** — in dieser Reihenfolge:\n"
+                                            f"1. Wo die Datei(en) liegen (vollständiger Pfad)\n"
+                                            f"2. Dateiname(n) und Größe\n"
+                                            f"3. Wie er/sie es öffnet oder nutzt\n"
+                                            f"Erst DANACH darfst du kurz auf Qualitätsprobleme hinweisen — aber nur wenn wirklich nötig.\n"
+                                            f"Rufe KEINE Tools auf bevor du geantwortet hast. ANTWORTE AUSSCHLIESSLICH AUF DEUTSCH."
+                                        )
+                                    else:
+                                        instruction_prompt = (
+                                            f"The coding agent / workflow delivered the following result:\n\n"
+                                            f"{combined_results}\n\n"
+                                            f"**Reply to the user NOW in {native_lang}** — in this exact order:\n"
+                                            f"1. Where the file(s) are located (full path)\n"
+                                            f"2. File name(s) and size\n"
+                                            f"3. How to open or use it\n"
+                                            f"Only AFTER that may you briefly mention quality issues — and only if truly necessary.\n"
+                                            f"Do NOT call any tools before replying. RESPOND EXCLUSIVELY IN {native_lang.upper()}."
                                         )
                                 elif user_lang == "de":
                                     instruction_prompt = (
@@ -2058,6 +2091,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         from vaf.core.subagent_ipc import get_ipc, get_current_session_id
                         ipc = get_ipc()
                         active_tasks = ipc.get_active_tasks()
+                        # Skip workflow:* tasks — they are already displayed in the
+                        # VAFWorkflowRuntime panel and must not open the SubAgentWindow.
+                        active_tasks = [t for t in active_tasks if not str(getattr(t, 'agent_type', '') or '').startswith('workflow:')]
                         if active_tasks:
                             tasks_by_session = {}
                             for task in active_tasks:

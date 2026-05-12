@@ -57,6 +57,10 @@ bin/
 # OS
 .DS_Store
 Thumbs.db
+.directory
+
+# Runtime
+.vaf.pid
 # Windows reserved device names (nul, con, prn, aux, com1–9, lpt1–9)
 nul
 con

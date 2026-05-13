@@ -2535,8 +2535,9 @@ Complete this task: "{task}"
 - **REMEMBER YOUR TASK**: You are working on: "{task}" - keep this in mind with every action!
 
 ## 🚨 TASK PLANNING RULES (set_todos):
-- **Single-file output → 1 task only**: If the final deliverable is ONE file (e.g. a single HTML with inline CSS+JS), create EXACTLY ONE task like "Create complete index.html with all sections, inline CSS, and inline JS". DO NOT split into sub-tasks like "Add CSS", "Add JavaScript", "Verify" — these WILL FAIL because each task runs in an isolated context that cannot effectively modify an already-written file.
-- **Multi-file output → one task per output file**: e.g. Task 1: index.html, Task 2: styles.css, Task 3: app.js.
+- **Website / HTML tasks → ALWAYS use separate files**: For any website or HTML project, write CSS in a separate `styles.css` file and reference it from `index.html` via `<link>`. NEVER put large blocks of CSS inline in HTML — this causes output truncation. Each file = one task.
+- **Single-file output → 1 task only**: Only for non-website single-file deliverables (e.g. a Python script, a config file). Do NOT split into sub-tasks like "Add CSS", "Add JavaScript", "Verify".
+- **Multi-file output → one task per output file**: Create exactly one task per file you need to write (e.g. styles.css, index.html, app.js). Execute them in whatever order makes sense. Write ONLY the file named in the current task — do not rewrite files from previous tasks.
 - **NO planning tasks**: NEVER create tasks like "Plan the structure", "Design the layout", or "Review". Every task MUST result in at least one `write_file` call. Planning is mental — do it before calling `set_todos`.
 - **NO meta-files**: NEVER write planning documents (PLAN.md, STRUCTURE.md, NOTES.md, TODO.md, etc.) to the project directory. These pollute the deliverable. Plan mentally, then write code files only.
 """
@@ -2880,7 +2881,9 @@ The following files were already created from a template:
                             if os.path.isfile(_fpath):
                                 # On "create" tasks, delete old HTML/CSS/JS output files so
                                 # the model doesn't read and wrap the previous content.
-                                if _is_create_task and os.path.splitext(_fname)[1].lower() in (
+                                # IMPORTANT: Only delete on task_idx == 0 (first task) to avoid
+                                # deleting files that were just created by a previous task in this run.
+                                if _is_create_task and task_idx == 0 and os.path.splitext(_fname)[1].lower() in (
                                     '.html', '.htm', '.css', '.js'
                                 ):
                                     try:
@@ -2938,7 +2941,8 @@ All files must be saved inside this directory.
 **{current_task}**
 
 ## RULES
-- Focus ONLY on the current task
+- Focus ONLY on the current task — write ONLY the file(s) named in it, nothing else
+- Do NOT rewrite files from previous tasks (they are already done)
 - Use `write_file` to actually create/modify files (do not just describe code)
 - **CRITICAL**: After `web_search`, immediately use the results to call `write_file` - DO NOT just think or plan
 - When finished, call `task_done(summary="...")`
@@ -3742,7 +3746,7 @@ All files must be saved inside this directory.
                     json={
                         "model": model_name,
                         "messages": clean_history,
-                        "max_tokens": 8192,
+                        "max_tokens": 16384,
                         "temperature": current_temp,
                         "tools": tools_schema,
                         "tool_choice": tool_choice,  # Dynamic: forced for set_todos, auto after
@@ -7161,6 +7165,54 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                     try:
                                         os.remove(_partial_path)
                                         tui.append_stream(f"[Coder] Removed stale {os.path.basename(_partial_path)}")
+                                    except Exception:
+                                        pass
+
+                                # TRUNCATION DETECTION: Check if HTML/CSS/JS ends with proper closing tag.
+                                # When max_tokens is hit mid-content the model stops streaming and the
+                                # written file is structurally incomplete (e.g. only CSS, no body).
+                                _trunc_ext = os.path.splitext(path)[1].lower()
+                                if _trunc_ext in ('.html', '.htm', '.css', '.js'):
+                                    try:
+                                        _fsize = os.path.getsize(path)
+                                        with open(path, 'rb') as _tf:
+                                            _tf.seek(max(0, _fsize - 300))
+                                            _tail = _tf.read().decode('utf-8', errors='ignore').strip()
+                                        _is_trunc = False
+                                        if _trunc_ext in ('.html', '.htm'):
+                                            _is_trunc = '</html>' not in _tail.lower()
+                                        elif _trunc_ext == '.css':
+                                            _is_trunc = not _tail.endswith('}')
+                                        elif _trunc_ext == '.js':
+                                            _is_trunc = not (_tail.endswith('}') or _tail.endswith(';'))
+                                        if _is_trunc:
+                                            _fname_trunc = os.path.basename(path)
+                                            _ext_trunc = _trunc_ext
+                                            tui.append_stream(f"⚠️ [Coder] Truncated file detected: {_fname_trunc} — forcing completion")
+                                            if _ext_trunc in ('.html', '.htm'):
+                                                _trunc_fix = (
+                                                    f"The HTML file is cut off — you MUST finish it: write the missing body sections "
+                                                    f"and close with `</body></html>`. Do NOT rewrite other files."
+                                                )
+                                            elif _ext_trunc == '.css':
+                                                _trunc_fix = (
+                                                    f"The CSS file is cut off — you MUST finish it: write the remaining rules and "
+                                                    f"close all unclosed `{{}}` blocks. Do NOT write any other file."
+                                                )
+                                            else:
+                                                _trunc_fix = (
+                                                    f"The JS file is cut off — you MUST finish it: complete all unclosed functions "
+                                                    f"and add the final `}}` or `;`. Do NOT write any other file."
+                                                )
+                                            history.append({
+                                                "role": "system",
+                                                "content": (
+                                                    f"⚠️ CRITICAL: `{_fname_trunc}` is TRUNCATED (output was cut off). "
+                                                    f"Current task: complete THIS file only.\n\n"
+                                                    f"{_trunc_fix}\n\n"
+                                                    f"Use `read_file` to see where it ends, then `write_file` with the full corrected content."
+                                                )
+                                            })
                                     except Exception:
                                         pass
 

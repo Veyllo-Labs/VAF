@@ -1106,6 +1106,35 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except FileNotFoundError:
                         pass  # no session yet, use raw input_text
 
+                    # Code viewer: inject current open file with numbered lines into this turn only.
+                    # Content is stored in runtime_state by web_server.py and cleared here after use.
+                    try:
+                        session_for_cv = session_mgr.load(task.session_id)
+                        cv_file = (getattr(session_for_cv, "runtime_state", None) or {}).get("code_viewer_file") or {}
+                        cv_content = (cv_file.get("content") or "").strip()
+                        if cv_content:
+                            cv_name = cv_file.get("name") or "File"
+                            cv_path = cv_file.get("path") or ""
+                            cv_lines = cv_content.splitlines()
+                            width = len(str(len(cv_lines)))
+                            numbered = "\n".join(
+                                f"{i + 1:>{width}}: {line}" for i, line in enumerate(cv_lines)
+                            )
+                            cv_ext = cv_path.rsplit(".", 1)[-1] if "." in cv_path else ""
+                            cv_block = (
+                                f"--- CURRENTLY OPEN IN CODE VIEWER: {cv_name}"
+                                + (f" ({cv_path})" if cv_path else "")
+                                + f" ({len(cv_lines)} lines) ---\n"
+                                + f"```{cv_ext}\n{numbered}\n```\n"
+                                + "---\n\n"
+                            )
+                            effective_input = cv_block + effective_input
+                            # Clear after injection — frontend will resend next turn if viewer still open
+                            session_for_cv.runtime_state.pop("code_viewer_file", None)
+                            session_mgr.save(session_for_cv, sync_state=False)
+                    except Exception:
+                        pass
+
                     # Editor write tools depend on whether an editor document is open and whether selections exist.
                     editor_has_content = False
                     try:

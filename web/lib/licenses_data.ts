@@ -23,7 +23,40 @@ export const thirdPartyLicenses = [
   { name: 'PyPDF2', license: 'BSD-3-Clause', url: 'https://github.com/py-pdf/PyPDF2' },
   { name: 'Piper TTS', license: 'MIT', url: 'https://github.com/rhasspy/piper' },
   { name: 'Faster-Whisper', license: 'MIT', url: 'https://github.com/SYSTRAN/faster-whisper' },
-  { name: 'Framer Motion', license: 'MIT', url: 'https://github.com/framer/motion' }
+  { name: 'Framer Motion', license: 'MIT', url: 'https://github.com/framer/motion' },
+  { name: 'Monaco Editor (React)', license: 'MIT', url: 'https://github.com/suren-atoyan/monaco-react' },
+  // AI provider SDKs
+  { name: 'Anthropic SDK', license: 'MIT', url: 'https://github.com/anthropics/anthropic-sdk-python' },
+  { name: 'OpenAI SDK', license: 'MIT', url: 'https://github.com/openai/openai-python' },
+  { name: 'Google Generative AI', license: 'Apache-2.0', url: 'https://github.com/google-gemini/generative-ai-python' },
+  // Document processing
+  { name: 'python-docx', license: 'MIT', url: 'https://github.com/python-openxml/python-docx' },
+  { name: 'python-pptx', license: 'MIT', url: 'https://github.com/scanny/python-pptx' },
+  { name: 'openpyxl', license: 'MIT', url: 'https://github.com/theorchard/openpyxl' },
+  { name: 'mammoth', license: 'BSD-2-Clause', url: 'https://github.com/mwilliamson/mammoth.js' },
+  { name: 'html2text', license: 'GPL-3.0', url: 'https://github.com/Alir3z4/html2text' },
+  { name: 'html2pdf.js', license: 'MIT', url: 'https://github.com/eKoopmans/html2pdf.js' },
+  // Frontend rendering
+  { name: 'react-markdown', license: 'MIT', url: 'https://github.com/remarkjs/react-markdown' },
+  { name: 'react-pdf', license: 'Apache-2.0', url: 'https://github.com/wojtekmaj/react-pdf' },
+  { name: 'next-intl', license: 'MIT', url: 'https://github.com/amannn/next-intl' },
+  // ML / embeddings
+  { name: 'Hugging Face Hub', license: 'Apache-2.0', url: 'https://github.com/huggingface/huggingface_hub' },
+  { name: 'ONNX Runtime', license: 'MIT', url: 'https://github.com/microsoft/onnxruntime' },
+  { name: 'NumPy', license: 'BSD-3-Clause', url: 'https://github.com/numpy/numpy' },
+  // Integrations & tools
+  { name: 'PyGithub', license: 'LGPL-3.0', url: 'https://github.com/PyGithub/PyGithub' },
+  { name: 'DuckDuckGo Search (ddgs)', license: 'MIT', url: 'https://github.com/deedy5/duckduckgo_search' },
+  { name: 'pytesseract', license: 'Apache-2.0', url: 'https://github.com/madmaze/pytesseract' },
+  { name: 'pdf2image', license: 'MIT', url: 'https://github.com/Belval/pdf2image' },
+  { name: 'Pillow', license: 'HPND', url: 'https://github.com/python-pillow/Pillow' },
+  // Auth & security
+  { name: 'cryptography', license: 'Apache-2.0', url: 'https://github.com/pyca/cryptography' },
+  { name: 'PyJWT', license: 'MIT', url: 'https://github.com/jpadilla/pyjwt' },
+  { name: 'pyotp', license: 'MIT', url: 'https://github.com/pyauth/pyotp' },
+  { name: 'argon2-cffi', license: 'MIT', url: 'https://github.com/hynek/argon2-cffi' },
+  // Networking
+  { name: 'websockets', license: 'BSD-3-Clause', url: 'https://github.com/python-websockets/websockets' }
 ];
 
 export const vafLicenseText = `MIT License

@@ -1823,9 +1823,6 @@ function VAFDashboardContent() {
                     if (!data.sessionId || data.sessionId === activeSessionId) {
                         setIsGenerating(false);
                         setIsStoppingGeneration(false);
-                        // Ensure the next task's streaming opens a new bubble instead of
-                        // in-place updating the now-finalized message
-                        expectNewAssistantRef.current = true;
                         // Attach any pending file_created chips to the last assistant message bubble
                         setCreatedFiles(pending => {
                             if (pending.length > 0) {

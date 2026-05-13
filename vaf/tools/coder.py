@@ -2862,12 +2862,6 @@ The following files were already created from a template:
                 # because it will read them in a confused loop instead of writing code)
                 _INFRA_FILES = {'.gitignore', '.gitattributes', '.editorconfig', '.env.example'}
 
-                # Detect "create from scratch" intent so we don't confuse the model with old files.
-                _is_create_task = bool(re.search(
-                    r'\b(erstell|create|new|from\s+scratch|von\s+grund|neu\s+erstell)\b',
-                    task, re.IGNORECASE
-                ))
-
                 _existing_project_files = []
                 try:
                     if os.path.isdir(base_dir):
@@ -2879,20 +2873,7 @@ The following files were already created from a template:
                             if _fname in _INFRA_FILES:
                                 continue
                             if os.path.isfile(_fpath):
-                                # On "create" tasks, delete old HTML/CSS/JS output files so
-                                # the model doesn't read and wrap the previous content.
-                                # IMPORTANT: Only delete on task_idx == 0 (first task) to avoid
-                                # deleting files that were just created by a previous task in this run.
-                                if _is_create_task and task_idx == 0 and os.path.splitext(_fname)[1].lower() in (
-                                    '.html', '.htm', '.css', '.js'
-                                ):
-                                    try:
-                                        os.remove(_fpath)
-                                        tui.append_stream(f"[Coder] Removed old file (create mode): {_fname}")
-                                    except Exception:
-                                        _existing_project_files.append(_fname)
-                                else:
-                                    _existing_project_files.append(_fname)
+                                _existing_project_files.append(_fname)
                 except Exception:
                     pass
                 _existing_note = ""
@@ -3746,7 +3727,7 @@ All files must be saved inside this directory.
                     json={
                         "model": model_name,
                         "messages": clean_history,
-                        "max_tokens": 16384,
+                        "max_tokens": 32768,
                         "temperature": current_temp,
                         "tools": tools_schema,
                         "tool_choice": tool_choice,  # Dynamic: forced for set_todos, auto after

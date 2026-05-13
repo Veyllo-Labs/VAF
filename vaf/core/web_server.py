@@ -2695,6 +2695,28 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             except Exception:
                                 pass
 
+                        # Code viewer file: store in runtime_state so headless_runner injects it per-turn.
+                        # Do NOT prepend to content — that would store the full file in message history.
+                        code_viewer_file = cmd.get("codeViewerFile")
+                        if code_viewer_file and isinstance(code_viewer_file, dict) and code_viewer_file.get("content"):
+                            try:
+                                loaded = session_mgr.load(session_id)
+                            except FileNotFoundError:
+                                loaded = Session(id=session_id, name=f"Session {session_id}", runtime_state={})
+                                session_mgr.save(loaded, sync_state=False)
+                            if not getattr(loaded, "runtime_state", None):
+                                loaded.runtime_state = {}
+                            loaded.runtime_state["code_viewer_file"] = code_viewer_file
+                            session_mgr.save(loaded, sync_state=False)
+                        else:
+                            try:
+                                loaded = session_mgr.load(session_id)
+                                if getattr(loaded, "runtime_state", None) and "code_viewer_file" in loaded.runtime_state:
+                                    del loaded.runtime_state["code_viewer_file"]
+                                    session_mgr.save(loaded, sync_state=False)
+                            except Exception:
+                                pass
+
                         # Editor selections: store for replace_editor_selection tool (start/end per index)
                         editor_selections = cmd.get("editorSelections")
                         if isinstance(editor_selections, list) and editor_selections:

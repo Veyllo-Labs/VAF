@@ -128,7 +128,17 @@ Planner data is loaded with `get_automation_notes` and `get_automation_todos` wh
 
 **Notifications popup:** Clicking **Notifications** in the sidebar opens a modal the same size as the Automation window. It shows a unified list of background activity: **thinking mode** run results, **automation** run results (success/error and summary), **thinking workspace handoff decisions** (approve/reject including optional automation-action outcome), and **channel replies** (when the agent sent a message via Telegram, Discord, or WhatsApp). Each entry shows status (Success/Skipped/Error), title, relative time, and a compact one-line summary directly in the list. For handoff items, compact badges show action (`approve`/`reject`), optional automation operation (`create`/`update`), and result (`ok`/`failed`). Click the row or the expand control to show the full summary/details. The list is loaded from `GET /api/notifications` when the popup opens; new items are pushed live via WebSocket (`notification`). Data is stored per user and trimmed to the last 100 items or 7 days.
 
-### 7. Document Editor
+### 7. Code Viewer
+
+The Code Viewer is a Monaco-based (VS Code engine) code editor in the right panel. It opens automatically when the agent creates a code file (`.py`, `.js`, `.ts`, `.html`, `.css`, etc.) or when you drag a code file into the chat.
+
+**Features:** Syntax highlighting for 40+ languages, live refresh every 2 s while the agent is generating (shown by a pulsing **LIVE** badge), in-browser editing, and save back to disk via `POST /api/file/save` (Ctrl+S supported). The header shows the detected language, filename, save state, and last-updated time. The footer shows the full file path and unsaved-changes indicator.
+
+**Agent context:** While the Code Viewer is open, the full file content (up to 30 000 chars) is sent with every chat message via `codeViewerFile`. The backend stores it in `session.runtime_state["code_viewer_file"]` and the headless runner injects it into `effective_input` as a numbered-line block (`--- CURRENTLY OPEN IN CODE VIEWER: <name> ---`) before calling the agent. This means the file content is never stored in the message history (avoiding raw-text bleed into the chat UI on reload). Content comes from the already-loaded viewer state, so it works for both server-path files and browser-dragged files. A small chip (filename + line count) appears on the sent user message to indicate which file was attached.
+
+**File routing:** `isCodeFile(path)` checks the extension to decide whether a file opens in Code Viewer (code files) or Document Editor (documents). The file-picker `accept` list includes all code extensions so dragging or selecting `.py`, `.ts`, etc. works out of the box.
+
+### 8. Document Editor
 
 The Document Editor is a rich-text editor in the right panel (dock or overlay). It supports opening files (HTML, DOCX, etc.), editing, and exporting.
 
@@ -182,7 +192,7 @@ The local LLM runs as a single HTTP backend on `127.0.0.1:8080`. When a prompt a
 }
 ```
 
-- `sessionId` is required. Optional: `sidebarDocuments` (Document Viewer attachments), `editorDocument` (when Document Editor is open; plain text only, derived from the current editor state; for native DOCX sessions this is flattened from the native model), `editorSelections` (marked ranges in the editor for `replace_editor_selection`).
+- `sessionId` is required. Optional: `sidebarDocuments` (Document Viewer attachments), `editorDocument` (when Document Editor is open; plain text only, derived from the current editor state; for native DOCX sessions this is flattened from the native model), `editorSelections` (marked ranges in the editor for `replace_editor_selection`), `codeViewerFile` (when Code Viewer is open; `{ name, path, content }` of the currently displayed file — sent automatically on every message so the agent can answer line-specific questions).
 
 ```json
 {

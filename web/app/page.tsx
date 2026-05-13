@@ -18,6 +18,7 @@ import NotificationsModal, { type NotificationItem } from '@/components/Notifica
 import SubAgentWindow from '@/components/SubAgentWindow';
 import DocumentEditor from '@/components/DocumentEditor';
 import DocumentViewer, { CHIP_BG_CLASSES, type InsertedSelectionRange } from '@/components/DocumentViewer';
+import CodeViewer, { isCodeFile } from '@/components/CodeViewer';
 import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
 import { useWorkflowStore } from '@/components/workflows/stores/workflowStore';
@@ -47,6 +48,8 @@ type Message = {
     initialSteps?: number;
     /** Files created by a coding agent — shown as blue download chips inside this bubble */
     downloadFiles?: { path: string; name: string }[];
+    /** Code Viewer was open when sent — shown as chip; content is NOT stored here */
+    codeViewerFile?: { name: string; path: string; ext: string; lineCount: number };
 };
 
 type Session = {
@@ -1016,6 +1019,11 @@ function VAFDashboardContent() {
         });
     }, [defaultViewerState]);
 
+    // Code Viewer state (VS Code-like editor panel for .py/.js/.html etc.)
+    const [codeViewerState, setCodeViewerState] = useState<{ isOpen: boolean; filePath: string; title?: string; initialContent?: string; liveRefresh?: boolean; loadedContent?: string }>({
+        isOpen: false, filePath: '',
+    });
+
     // Suggestion State
     const [suggestionList, setSuggestionList] = useState<any[]>([]);
     const [suggestionType, setSuggestionType] = useState<'tool' | 'workflow' | null>(null);
@@ -1913,20 +1921,30 @@ function VAFDashboardContent() {
                     appendWorkflowLine(line);
                 }
                 else if (data.type === 'document_ready') {
-                    // Store editor state for the session that received the document (per-session like Viewer).
                     const sid = data.sessionId || currentSessionId;
+                    const fp = data.filePath || '';
                     if (sid) {
-                        setDocumentEditorStateForSession(sid, {
-                            isOpen: true,
-                            filePath: data.filePath || '',
-                            title: data.title || 'Document',
-                            content: undefined, // new document: load from server; clears any previous doc content
-                            docxModel: null,
-                        });
-                        // Only switch UI if this event is for the currently visible chat
-                        if (sid === currentSessionId) {
-                            setShowSubAgentPanel(true);
-                            setDocumentViewerStateForSession(sid, (prev) => ({ ...prev, isOpen: false }));
+                        if (isCodeFile(fp)) {
+                            // Code files → CodeViewer (not DocumentEditor)
+                            if (sid === currentSessionId) {
+                                setCodeViewerState({ isOpen: true, filePath: fp, title: data.title || fp.split('/').pop() || 'Code' });
+                                setShowSubAgentPanel(true);
+                                setDocumentViewerStateForSession(sid, (prev) => ({ ...prev, isOpen: false }));
+                                setDocumentEditorStateForSession(sid, (prev) => ({ ...prev, isOpen: false }));
+                            }
+                        } else {
+                            // Document files → DocumentEditor as before
+                            setDocumentEditorStateForSession(sid, {
+                                isOpen: true,
+                                filePath: fp,
+                                title: data.title || 'Document',
+                                content: undefined,
+                                docxModel: null,
+                            });
+                            if (sid === currentSessionId) {
+                                setShowSubAgentPanel(true);
+                                setDocumentViewerStateForSession(sid, (prev) => ({ ...prev, isOpen: false }));
+                            }
                         }
                     }
                 }
@@ -2737,6 +2755,14 @@ function VAFDashboardContent() {
         const textToSend = overrideText ?? combined;
         if (!textToSend.trim() || !ws) return;
 
+        // Compute code viewer chip metadata upfront (no content stored in message state)
+        const _cvChip = codeViewerState.isOpen && codeViewerState.loadedContent ? {
+            name: codeViewerState.filePath.split('/').pop() || codeViewerState.title || 'File',
+            path: codeViewerState.filePath,
+            ext: (codeViewerState.filePath.split('.').pop() || '').toLowerCase(),
+            lineCount: codeViewerState.loadedContent.split('\n').length,
+        } : undefined;
+
         setMessages(prev => [...prev, {
             role: 'user',
             content: textToSend,
@@ -2744,6 +2770,7 @@ function VAFDashboardContent() {
             sidebarDocs: documentViewerState.documents.length > 0
                 ? documentViewerState.documents.map(d => d.name)
                 : undefined,
+            codeViewerFile: _cvChip,
         }]);
         expectNewAssistantRef.current = true;
         lastUserSendTimeRef.current = Date.now();
@@ -2793,6 +2820,12 @@ function VAFDashboardContent() {
             insertedSelections
                 .filter((s) => s.documentId === 'editor')
                 .map((s) => ({ start: s.start, end: s.end, text: s.text }));
+        // Pass code viewer file to backend (stored in runtime_state, injected per-turn, NOT stored in message history)
+        const codeViewerFile = _cvChip && codeViewerState.loadedContent ? {
+            name: _cvChip.name,
+            path: _cvChip.path,
+            content: codeViewerState.loadedContent.slice(0, 30000),
+        } : undefined;
         ws.send(JSON.stringify({
             type: 'chat',
             content: textToSend,
@@ -2800,6 +2833,7 @@ function VAFDashboardContent() {
             ...(sidebarPayload && sidebarPayload.length > 0 ? { sidebarDocuments: sidebarPayload } : {}),
             ...(editorDoc && editorDoc.content !== '' ? { editorDocument: editorDoc } : {}),
             ...(editorSelectionsPayload.length > 0 ? { editorSelections: editorSelectionsPayload } : {}),
+            ...(codeViewerFile ? { codeViewerFile } : {}),
         }));
         setInput('');
         setSuggestion('');
@@ -2814,7 +2848,7 @@ function VAFDashboardContent() {
         });
     };
 
-    const ACCEPT_ATTACHMENTS = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv';
+    const ACCEPT_ATTACHMENTS = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv,.py,.js,.ts,.tsx,.jsx,.html,.htm,.css,.scss,.yaml,.yml,.sh,.sql,.xml,.go,.rs,.java,.cpp,.c,.rb,.php';
     const acceptedExtensions = useMemo(() => new Set(ACCEPT_ATTACHMENTS.split(',').map(ext => ext.trim().toLowerCase())), []);
 
     const addFilesAsAttachments = useCallback(async (newFiles: File[]) => {
@@ -2823,26 +2857,43 @@ function VAFDashboardContent() {
             return acceptedExtensions.has(ext);
         });
         if (filtered.length === 0) return;
-        const base64List = await Promise.all(filtered.map(f => fileToBase64(f)));
-        const newDocs = filtered.map((f, i) => ({
-            id: crypto.randomUUID(),
-            name: f.name,
-            mimeType: f.type,
-            data: base64List[i],
-        }));
-        setDocumentViewerState(prev => {
-            const newList = [...prev.documents, ...newDocs];
-            if (ws && currentSessionId) {
-                ws.send(JSON.stringify({
-                    type: 'set_sidebar_documents',
-                    sessionId: currentSessionId,
-                    documents: newList.map(d => ({ name: d.name, data: d.data, mimeType: d.mimeType })),
-                }));
-                sidebarDocsSyncedForSessionRef.current = currentSessionId;
-            }
-            return { ...prev, documents: newList, isOpen: true };
-        });
-        setShowSubAgentPanel(true);
+
+        // Split into code files and document files
+        const codeFiles = filtered.filter(f => isCodeFile(f.name));
+        const docFiles = filtered.filter(f => !isCodeFile(f.name));
+
+        // Code files → open in CodeViewer (read the content from the File object)
+        if (codeFiles.length > 0) {
+            const first = codeFiles[0]; // show the first one; user can attach more one at a time
+            const text = await first.text();
+            setCodeViewerState({ isOpen: true, filePath: first.name, title: first.name, initialContent: text } as typeof codeViewerState);
+            setShowSubAgentPanel(true);
+            // Also send as context attachment if there's content (so the agent can see the code)
+        }
+
+        // Document files → existing DocumentViewer logic
+        if (docFiles.length > 0) {
+            const base64List = await Promise.all(docFiles.map(f => fileToBase64(f)));
+            const newDocs = docFiles.map((f, i) => ({
+                id: crypto.randomUUID(),
+                name: f.name,
+                mimeType: f.type,
+                data: base64List[i],
+            }));
+            setDocumentViewerState(prev => {
+                const newList = [...prev.documents, ...newDocs];
+                if (ws && currentSessionId) {
+                    ws.send(JSON.stringify({
+                        type: 'set_sidebar_documents',
+                        sessionId: currentSessionId,
+                        documents: newList.map(d => ({ name: d.name, data: d.data, mimeType: d.mimeType })),
+                    }));
+                    sidebarDocsSyncedForSessionRef.current = currentSessionId;
+                }
+                return { ...prev, documents: newList, isOpen: true };
+            });
+            setShowSubAgentPanel(true);
+        }
     }, [ws, currentSessionId, acceptedExtensions]);
 
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3644,7 +3695,7 @@ function VAFDashboardContent() {
                 <div
                     className={cn(
                         "flex-1 flex overflow-hidden pr-4 transition-all duration-300 ease-out",
-                        subAgentState.isOpen ? "gap-4" : "gap-0"
+                        (subAgentState.isOpen || codeViewerState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen) ? "gap-4" : "gap-0"
                     )}
                 >
                     <div className="flex-1 flex flex-col relative bg-white overflow-hidden">
@@ -3912,6 +3963,21 @@ function VAFDashboardContent() {
                                                                             ))}
                                                                         </div>
                                                                     )}
+                                                                    {/* Code Viewer chip — shown on user messages where a file was open */}
+                                                                    {!isBot && msg.codeViewerFile && (
+                                                                        <div className="flex justify-end mt-1">
+                                                                            <button
+                                                                                onClick={() => { setCodeViewerState(prev => ({ ...prev, isOpen: true, filePath: msg.codeViewerFile!.path, title: msg.codeViewerFile!.name })); setShowSubAgentPanel(true); }}
+                                                                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-50 border border-violet-200 text-violet-700 text-[11px] font-medium hover:bg-violet-100 transition-colors"
+                                                                                title={msg.codeViewerFile.path}
+                                                                            >
+                                                                                <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                                                                                <span className="font-mono">{msg.codeViewerFile.name}</span>
+                                                                                <span className="text-violet-400 font-normal">.{msg.codeViewerFile.ext} · {msg.codeViewerFile.lineCount}L</span>
+                                                                            </button>
+                                                                        </div>
+                                                                    )}
+
                                                                     {/* User message: indicator that Document Viewer had attachments when this was sent (only when viewer is closed) */}
                                                                     {!isBot && !documentViewerState.isOpen && msg.sidebarDocs && msg.sidebarDocs.length > 0 && (
                                                                         <div className="flex gap-1.5 flex-wrap mt-1 justify-end items-center">
@@ -3943,20 +4009,31 @@ function VAFDashboardContent() {
                                                             {loading && isBot && i === filteredMessages.length - 1 && statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && (
                                                                 <span className="text-[10px] text-gray-400 mt-1 ml-1 animate-in fade-in">{statusMessage}</span>
                                                             )}
-                                                            {/* Download chips for files created by coding agent — embedded in the assistant bubble */}
+                                                            {/* File chips: code files → CodeViewer, others → download */}
                                                             {isBot && msg.downloadFiles && msg.downloadFiles.length > 0 && (
                                                                 <div className="mt-2 flex flex-wrap gap-2">
                                                                     {msg.downloadFiles.map((f, fi) => (
-                                                                        <a
-                                                                            key={fi}
-                                                                            href={`/api/download?path=${encodeURIComponent(f.path)}`}
-                                                                            target="_blank"
-                                                                            rel="noopener noreferrer"
-                                                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-colors"
-                                                                        >
-                                                                            <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                                                                            {f.name}
-                                                                        </a>
+                                                                        isCodeFile(f.path) ? (
+                                                                            <button
+                                                                                key={fi}
+                                                                                onClick={() => { setCodeViewerState({ isOpen: true, filePath: f.path, title: f.name }); setShowSubAgentPanel(true); }}
+                                                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-violet-200 bg-violet-50 text-violet-700 text-xs font-medium hover:bg-violet-100 transition-colors"
+                                                                            >
+                                                                                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                                                                                {f.name}
+                                                                            </button>
+                                                                        ) : (
+                                                                            <a
+                                                                                key={fi}
+                                                                                href={`/api/download?path=${encodeURIComponent(f.path)}`}
+                                                                                target="_blank"
+                                                                                rel="noopener noreferrer"
+                                                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-colors"
+                                                                            >
+                                                                                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                                                                {f.name}
+                                                                            </a>
+                                                                        )
                                                                     ))}
                                                                 </div>
                                                             )}
@@ -4286,18 +4363,28 @@ function VAFDashboardContent() {
                             </div>
                         </div>
                     </div>
-                    {/* Right Panel: DocumentViewer, DocumentEditor, or SubAgentWindow (dock mode) */}
+                    {/* Right Panel: CodeViewer, DocumentViewer, DocumentEditor, or SubAgentWindow (dock mode) */}
                     {showSubAgentPanel && (
                         <div
                             className={cn(
                                 "hidden lg:flex h-full items-stretch overflow-hidden transition-all duration-300 ease-out",
-                                (subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen)
+                                (subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen || codeViewerState.isOpen)
                                     ? "w-[58%] min-w-[704px] max-w-[1000px] opacity-100"
                                     : "w-0 min-w-0 max-w-0 opacity-0 pointer-events-none"
                             )}
-                            aria-hidden={!subAgentState.isOpen && !documentEditorState.isOpen && !documentViewerState.isOpen}
+                            aria-hidden={!subAgentState.isOpen && !documentEditorState.isOpen && !documentViewerState.isOpen && !codeViewerState.isOpen}
                         >
-                            {documentViewerState.isOpen ? (
+                            {codeViewerState.isOpen ? (
+                                <CodeViewer
+                                    isOpen={codeViewerState.isOpen}
+                                    filePath={codeViewerState.filePath}
+                                    title={codeViewerState.title}
+                                    initialContent={codeViewerState.initialContent}
+                                    liveRefresh={codeViewerState.liveRefresh ?? isGenerating}
+                                    onClose={() => setCodeViewerState(prev => ({ ...prev, isOpen: false }))}
+                                    onContentLoad={(content) => setCodeViewerState(prev => ({ ...prev, loadedContent: content }))}
+                                />
+                            ) : documentViewerState.isOpen ? (
                                 <DocumentViewer
                                     isOpen={documentViewerState.isOpen}
                                     onClose={handleDocumentViewerClose}

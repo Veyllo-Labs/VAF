@@ -1833,7 +1833,10 @@ function VAFDashboardContent() {
                                     const lastAssistantIdx = prev.map((m, i) => ({ m, i })).filter(({ m }) => m.role === 'assistant').pop()?.i;
                                     if (lastAssistantIdx === undefined) return prev;
                                     const newMsgs = [...prev];
-                                    newMsgs[lastAssistantIdx] = { ...newMsgs[lastAssistantIdx], downloadFiles: pending.map(f => ({ path: f.path, name: f.name })) };
+                                    const existing = newMsgs[lastAssistantIdx].downloadFiles || [];
+                                    const toAdd = pending.filter(f => !existing.some(e => e.path === f.path)).map(f => ({ path: f.path, name: f.name }));
+                                    if (toAdd.length === 0) return prev;
+                                    newMsgs[lastAssistantIdx] = { ...newMsgs[lastAssistantIdx], downloadFiles: [...existing, ...toAdd] };
                                     return newMsgs;
                                 });
                             }
@@ -2578,10 +2581,22 @@ function VAFDashboardContent() {
                     const sid = data.sessionId || currentSessionIdRef.current || '';
                     const activeSessionId = currentSessionIdRef.current;
                     if (!data.sessionId || data.sessionId === activeSessionId) {
+                        const newChip = { path: data.filePath, name: data.title || data.filePath.split('/').pop() || 'file', sessionId: sid };
                         setCreatedFiles(prev => {
                             // Avoid duplicates
                             if (prev.some(f => f.path === data.filePath)) return prev;
-                            return [...prev, { path: data.filePath, name: data.title || data.filePath.split('/').pop() || 'file', sessionId: sid }];
+                            return [...prev, newChip];
+                        });
+                        // Also attach immediately to the last assistant message to avoid race
+                        // with message_complete clearing the pending list before this chip arrives.
+                        setMessages(prev => {
+                            const lastAssistantIdx = prev.map((m, i) => ({ m, i })).filter(({ m }) => m.role === 'assistant').pop()?.i;
+                            if (lastAssistantIdx === undefined) return prev;
+                            const existing = prev[lastAssistantIdx].downloadFiles || [];
+                            if (existing.some(f => f.path === data.filePath)) return prev;
+                            const updated = [...prev];
+                            updated[lastAssistantIdx] = { ...updated[lastAssistantIdx], downloadFiles: [...existing, { path: data.filePath, name: newChip.name }] };
+                            return updated;
                         });
                     }
                 }

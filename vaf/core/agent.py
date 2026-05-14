@@ -5726,10 +5726,20 @@ class Agent:
             # Check if model claimed to use a tool but didn't emit a tool call
             # Only check if we have content and NO tools
             if not streaming_tools and not tool_calls_detected and full_content.strip():
-                if self._detect_false_tool_promise(full_content, tool_calls_detected):
+                _response_len = len(full_content.strip())
+                # False promises are always short (1-2 sentences like "Let me search...").
+                # A long analytical/conversational response is never a false promise —
+                # skip detection entirely to avoid trapping the agent in a retry loop.
+                _skip_fp_detection = _response_len > 800
+                if not _skip_fp_detection and self._detect_false_tool_promise(full_content, tool_calls_detected):
                     self._false_promise_retries += 1
-                    
-                    if self._false_promise_retries > self._max_false_promise_retries:
+                    _is_substantial = _response_len > 200
+                    # For substantial responses, cap at 2 retries: the validator is
+                    # likely misclassifying analytical text, and more retries only
+                    # deepen the loop (each CORRECTION prompt produces more analysis).
+                    _effective_max = 2 if _is_substantial else self._max_false_promise_retries
+
+                    if self._false_promise_retries > _effective_max:
                         UI.event("System", "Max false promise retries reached - skipping validation", style="error")
                         self._false_promise_retries = 0
                         # Proceed without blocking
@@ -5739,7 +5749,6 @@ class Agent:
                         # If the model generated a substantial response (>200 chars) that the
                         # false-promise heuristic flagged, do NOT nuke it — the user is actively
                         # reading it. The retry will append a corrected follow-up instead.
-                        _response_is_substantial = len(full_content.strip()) > 200
                         if _emit_to_web_ui():
                             try:
                                 from vaf.core.web_interface import get_web_interface
@@ -5751,7 +5760,7 @@ class Agent:
                                     source="System",
                                     session_id=session_id,
                                 )
-                                if not _response_is_substantial:
+                                if not _is_substantial:
                                     get_web_interface().emit_clear_last_assistant(session_id)
                             except Exception:
                                 pass
@@ -7358,12 +7367,12 @@ class Agent:
         try:
             # Construct a fast validation prompt
             validator_prompt = (
-                f"Analyze this AI response. Did the AI CLAIM to use a tool right now, but didn't execute it?\n"
-                f"Response: \"{text}\"\n"
+                f"Analyze this AI response. Did the AI CLAIM to use a tool RIGHT NOW (future/present), but didn't execute it?\n"
+                f"Response: \"{text[:600]}\"\n"
                 f"Tools Executed: None\n\n"
                 f"Rules:\n"
-                f"- FALSE_PROMISE: \"I am using `read_file`...\", \"Let me search...\", \"I'll execute this...\"\n"
-                f"- SAFE: \"You can use `read_file`\", \"I recommend `web_search`\", \"The tool is for...\"\n\n"
+                f"- FALSE_PROMISE (forward-looking, not yet done): \"I am using `read_file`...\", \"Let me search...\", \"I'll execute this now...\"\n"
+                f"- SAFE (past analysis, recommendation, or explanation): \"I called `read_file` three times\", \"Ich hab den librarian_agent aufgerufen\", \"You can use `web_search`\", \"The tool had no write access\", analytical summaries of what already happened\n\n"
                 f"Answer ONLY 'FALSE_PROMISE' or 'SAFE'."
             )
             

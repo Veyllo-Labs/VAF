@@ -3389,7 +3389,11 @@ class Agent:
                 f"- User: 'Create a website' -> `create_website`\n"
                 f"- User: 'Research AI trends and write a report' -> `research_and_document`\n"
                 f"- User: 'What is the weather?' -> `none` (Too simple)\n"
-                f"- User: 'Who is Elon Musk?' -> `none` (Too simple)\n\n"
+                f"- User: 'Who is Elon Musk?' -> `none` (Too simple)\n"
+                f"- User: 'Die Webseite ist buggy, schau dir das an' -> `none` (Fix/debug request, not creation)\n"
+                f"- User: 'Fix the layout issue on the site' -> `none` (Fix/debug request)\n"
+                f"- User: 'Analyze this website for errors' -> `none` (Analysis request, not creation)\n"
+                f"- User: 'The website has an error, please fix it' -> `none` (Fix/debug request)\n\n"
                 f"USER REQUEST: \"{user_input}\"\n\n"
                 f"Think step-by-step. Does this complex task fit a workflow?\n"
                 f"Output ONLY the workflow_id or 'none'."
@@ -3465,6 +3469,11 @@ class Agent:
         # use replace_editor_selection / document_editor tools instead.
         if "CURRENT DOCUMENT (Editor)" in (user_input or ""):
             return None
+
+        # Note: Intent-based keyword guards (fix/debug vs create) have been removed.
+        # The router now surfaces matched workflows as [WORKFLOW SUGGESTION] hints so
+        # the main agent — which has full conversation context and [SESSION WORKSPACE] —
+        # decides whether to execute, edit an existing project, or do something else.
             
         # Determine language for UI messages
         lang = "auto"
@@ -3660,8 +3669,25 @@ class Agent:
                 # For now, fall back to LLM if variables are missing
                 # Future: Could prompt user for missing values
                 return None
-            
-            # Build workflow steps from template
+
+            # ═══════════════════════════════════════════════════════════════
+            # RECOMMENDATION MODE (non-explicit requests)
+            # ═══════════════════════════════════════════════════════════════
+            # If the user did NOT explicitly choose a workflow (@workflow_id),
+            # do NOT auto-execute. Instead store the detected workflow as a
+            # hint so the main agent — which has full conversation context,
+            # [SESSION WORKSPACE], and history — can decide whether to start
+            # it, edit an existing project, or do something else entirely.
+            if not explicit_workflow_id:
+                self._pending_workflow_hint = {
+                    "workflow_id": result.template_id or workflow_id,
+                    "name": template.get("name", workflow_id),
+                    "variables": result.variables or {},
+                }
+                UI.event("Workflow", f"Suggested: {template.get('name', workflow_id)} (agent will decide)", style="dim")
+                return None  # Agent runs with [WORKFLOW SUGGESTION] injected
+
+            # Build workflow steps from template (explicit @workflow_id path only)
             from vaf.workflows.engine import create_workflow as build_steps
             steps = build_steps(template)
             
@@ -4643,10 +4669,30 @@ class Agent:
             # Try workflow matching BEFORE adding to history
             workflow_result = self._try_workflow(user_input, stream_callback)
             if workflow_result:
-                # Workflow executed successfully - return result
+                # Workflow executed successfully (explicit @workflow_id path) - return result
                 return workflow_result
-            # No workflow match or workflow failed - continue with LLM agent
-        
+            # No workflow match or workflow set hint - continue with LLM agent
+
+            # If router found a relevant workflow, inject it as a suggestion so the
+            # agent can decide whether to use it based on full conversation context.
+            _wf_hint = getattr(self, "_pending_workflow_hint", None)
+            if _wf_hint:
+                self._pending_workflow_hint = None  # one-shot — clear immediately
+                _vars_repr = ", ".join(
+                    f'{k}="{v}"' for k, v in (_wf_hint.get("variables") or {}).items()
+                ) or "no variables pre-extracted"
+                _wf_note = (
+                    f"[WORKFLOW SUGGESTION] The workflow \"{_wf_hint['name']}\" "
+                    f"({_wf_hint['workflow_id']}) looks relevant to this request.\n"
+                    f"Pre-extracted variables: {_vars_repr}\n"
+                    f"To start it call: execute_workflow(workflow_id=\"{_wf_hint['workflow_id']}\", "
+                    f"variables={{...}})\n"
+                    f"IMPORTANT: If the user is asking to edit or modify an existing project "
+                    f"(see [SESSION WORKSPACE] above), use coding_agent with project_path instead "
+                    f"— do NOT start a creation workflow.\n\n"
+                )
+                user_input = _wf_note + user_input
+
         # Always add user input if provided, even if skip_input=True (which skips analysis/overhead)
         if user_input:
             self.history.append({"role": "user", "content": user_input})
@@ -7344,6 +7390,35 @@ class Agent:
 
     def _prepare_messages(self, messages: List[Dict]) -> List[Dict]:
         """Prepare messages for specific model quirks (e.g. Gemma)."""
+        # --- Universal: strip dangling tool_calls --------------------------
+        # After context compression the recent_messages slice may contain an
+        # assistant message with tool_calls whose corresponding tool response
+        # was in the discarded middle section.  APIs (e.g. DeepSeek) reject
+        # this with HTTP 400 "insufficient tool messages following tool_calls".
+        # Strip tool_calls entries that have no matching tool response.
+        responded_ids: set = set()
+        for msg in messages:
+            if msg.get("role") == "tool" and msg.get("tool_call_id"):
+                responded_ids.add(msg["tool_call_id"])
+        cleaned: List[Dict] = []
+        for msg in messages:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                live_calls = [
+                    tc for tc in msg["tool_calls"]
+                    if tc.get("id") in responded_ids
+                ]
+                if len(live_calls) != len(msg["tool_calls"]):
+                    # Some calls have no response — rebuild the message
+                    msg = dict(msg)
+                    if live_calls:
+                        msg["tool_calls"] = live_calls
+                    else:
+                        # All calls are dangling — drop tool_calls entirely
+                        msg = {k: v for k, v in msg.items() if k != "tool_calls"}
+            cleaned.append(msg)
+        messages = cleaned
+        # -------------------------------------------------------------------
+
         is_gemma = "gemma" in self.filename.lower()
         if not is_gemma:
             return messages

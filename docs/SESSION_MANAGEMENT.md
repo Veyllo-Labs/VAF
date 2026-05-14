@@ -215,12 +215,35 @@ Sessions are stored as JSON in `~/.vaf/sessions/<session_id>.json`:
     "created_at": "2026-01-27T05:30:00.000Z",
     "updated_at": "2026-01-27T05:45:00.000Z",
     "model": "gpt-4o",
+    "project_path": "/home/mert/Documents/VAF_Projects/Webseite Portfolio",
     "messages": [
         {"role": "user", "content": "Hey", "timestamp": "..."},
         {"role": "assistant", "content": "Hello!", "timestamp": "..."}
     ],
-    "runtime_state": {}
+    "runtime_state": {
+        "last_project_path": "/home/mert/Documents/VAF_Projects/Webseite Portfolio"
+    }
 }
+```
+
+### Session Workspace (`project_path`)
+
+`project_path` is the **stable workspace root** for a chat session. It is set automatically on the first `file_created` event for that session (in `vaf/core/web_server.py`) and never overwritten afterward. This gives the session a permanent home directory even if the user creates multiple projects within the same chat.
+
+Rules:
+- Only set for paths inside `~/Documents/VAF_Projects/` — temporary files and one-off outputs are excluded.
+- For authenticated users the path includes a user-scope prefix (e.g. `VAF_Projects/<uid[:8]>/Webseite Portfolio`).
+- `runtime_state["last_project_path"]` continues to track the **most recently created or edited** project and is updated on every `file_created` event.
+
+At the start of each agent turn, `vaf/core/headless_runner.py` injects both values into the effective input:
+
+```
+[SESSION WORKSPACE] All files for this chat are stored in: /home/mert/Documents/VAF_Projects/Webseite Portfolio
+[ACTIVE PROJECT] Most recently created/edited: /home/mert/Documents/VAF_Projects/Webseite Portfolio
+To edit or modify: coding_agent(task="...", project_path="...")
+```
+
+Sessions created before this feature was introduced have `project_path = ""` and fall back to the older `[PROJECT CONTEXT]` injection format so backward compatibility is maintained.
 ```
 
 ---

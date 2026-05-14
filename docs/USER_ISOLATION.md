@@ -254,6 +254,31 @@ Each user also has a username-based directory tree. This is the legacy layout, p
 
 A one-time migration script (`scripts/migrate_users_to_scopes.py`) copies data from `users/<username>/` to `scopes/<user_scope_id>/`. The old directories are preserved for verification and can be removed manually.
 
+### Generated projects (`vaf/tools/coder.py`)
+
+When the Coding Agent creates a new project (website, script, document, etc.), it writes to a user-prefixed subdirectory inside the `VAF_Projects` root:
+
+```
+~/Documents/VAF_Projects/
+├── <user_scope_id[:8]>/         # per-user subdirectory (authenticated users)
+│   ├── Webseite Portfolio/      # project created by this user
+│   └── Script Data Analysis/
+└── Webseite Demo/               # legacy path (local/admin, no user_scope_id)
+```
+
+- **Authenticated users** (`user_scope_id` present in session metadata): projects are placed under `VAF_Projects/<first-8-chars-of-uuid>/`.
+- **Local/admin mode** (no `user_scope_id`): projects go directly into `VAF_Projects/` as before (backward-compatible).
+
+The prefix is derived from `session.metadata["user_scope_id"]` at project creation time. Existing projects are never moved; only newly created directories use the prefix.
+
+### Session workspace (`vaf/core/session.py`, `vaf/core/web_server.py`)
+
+Each chat session has a **stable workspace root** stored in `Session.project_path`. This field is set once (on the first `file_created` event for that session) and never overwritten, giving the session a permanent home directory regardless of how many sub-projects are created later.
+
+- `session.project_path` is only set for paths inside `VAF_Projects/` (temp dirs and one-off outputs are excluded).
+- `runtime_state["last_project_path"]` continues to track the most recently created or edited project within the session.
+- The agent receives both values as `[SESSION WORKSPACE]` and `[ACTIVE PROJECT]` context lines at the start of each turn (injected by `vaf/core/headless_runner.py`).
+
 ### Automations (`vaf/core/automation.py`)
 
 Each `AutomationManager` instance can be created with a `user_scope_id`; tasks are stored in `automations/` (global) or `automations/<user_scope_id>/` (per-user). Tasks carry `user_scope_id` so that when an automation runs (prompt-based or workflow-based), the agent and workflow engine use that scope: RAG/memory, calendar, messaging, contacts, mail, and automation notes/todos all run with the owner's credentials and data. The agent injects `user_scope_id` into automation tools (`create_automation`, `list_automations`, etc.) so new tasks are stored in the correct user directory. The CLI/scheduler uses an aggregated manager that loads from all scope dirs and saves/deletes/restores via the task's scope path.
@@ -327,6 +352,8 @@ The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local
 | Redis cache | Scope-prefixed cache keys | Caching |
 | PostgreSQL | Row-Level Security policy | Database |
 | Filesystem | Scope-based paths (`~/.vaf/scopes/<user_scope_id>/`) preferred; legacy `~/.vaf/users/<username>/` as fallback | OS |
+| Generated projects (VAF_Projects) | `~/Documents/VAF_Projects/<uid[:8]>/` when `user_scope_id` is present; legacy flat root otherwise | OS |
+| Session workspace | `Session.project_path` anchored to first `VAF_Projects` creation; `[SESSION WORKSPACE]` injected per turn | Application |
 | Sandbox | Per-user working directory in Docker | Container |
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |

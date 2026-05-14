@@ -59,8 +59,9 @@ Implements a "Mini-IDE" using `rich.live`.
         -   **"App"**, **"Tool"**, **"API"** etc. for other common types.
     2.  Extracts semantic keywords (removing stop words like "the", "create").
     3.  Sanitizes the name using Regex to be OS-safe (removes `/ \ : * ?`).
-    4.  Constructs path: `~/Documents/VAF_Projects/{Prefix}_{Name}`.
-    5.  **Duplicate Check:** If folder exists, appends timestamp `_{HHMMSS}`.
+    4.  **User isolation:** Reads `user_scope_id` from the current session (via `get_current_session_id()` + `SessionManager.load()`). If a scope ID is found, the project root becomes `~/Documents/VAF_Projects/{uid[:8]}/`. Without a scope ID (local/admin mode) the root is `~/Documents/VAF_Projects/` as before.
+    5.  Constructs path: `{projects_root}/{Prefix} {Name}`.
+    6.  **Duplicate Check:** If folder exists, appends timestamp `_{HHMMSS}`.
 
 ### `_ensure_git_repo(base_dir)`
 *   **Logic:**

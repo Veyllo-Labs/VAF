@@ -1135,6 +1135,38 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception:
                         pass
 
+                    # Session workspace + active project: inject so agent knows where to edit files.
+                    # [SESSION WORKSPACE] = stable workspace root set on first file creation (session.project_path).
+                    # [ACTIVE PROJECT]    = most recently created/edited project (runtime_state["last_project_path"]).
+                    # Old sessions without session.project_path fall back to [PROJECT CONTEXT] for compatibility.
+                    try:
+                        session_for_proj = session_mgr.load(task.session_id)
+                        _workspace = getattr(session_for_proj, "project_path", "") or ""
+                        _last_proj = (getattr(session_for_proj, "runtime_state", None) or {}).get("last_project_path") or ""
+
+                        if _workspace and os.path.isdir(_workspace):
+                            _edit_path = (
+                                _last_proj
+                                if (_last_proj and _last_proj != _workspace and os.path.isdir(_last_proj))
+                                else _workspace
+                            )
+                            proj_note = (
+                                f"[SESSION WORKSPACE] All files for this chat are stored in: {_workspace}\n"
+                                f"[ACTIVE PROJECT] Most recently created/edited: {_edit_path}\n"
+                                f'To edit or modify: coding_agent(task="<your task>", project_path="{_edit_path}")\n\n'
+                            )
+                            effective_input = proj_note + effective_input
+                        elif _last_proj and os.path.isdir(_last_proj):
+                            # Fallback for sessions predating session.project_path support
+                            proj_note = (
+                                f"[PROJECT CONTEXT] The most recently created project is at: {_last_proj}\n"
+                                f'To edit, update, or modify files from this project call: '
+                                f'coding_agent(task="<your edit task>", project_path="{_last_proj}")\n\n'
+                            )
+                            effective_input = proj_note + effective_input
+                    except Exception:
+                        pass
+
                     # Editor write tools depend on whether an editor document is open and whether selections exist.
                     editor_has_content = False
                     try:

@@ -319,6 +319,31 @@ when you know many more steps remain.
 - Comparing or batch-processing multiple items
 - Any task where you'd need to remember intermediate results
 """,
+
+            "workflow": """
+## Workflows
+
+Workflows are multi-step automation pipelines for complex tasks: website creation, research + document generation, legal contracts, scheduled tasks, and more.
+
+### When you see `[WORKFLOW SUGGESTION]` in your context:
+The router pre-detected a potentially relevant workflow. **You decide** whether to use it.
+
+1. **Check `[SESSION WORKSPACE]` and conversation history** — is the user asking to **create something new** or to **edit/fix something that already exists**?
+   - **Create new** → call `execute_workflow(workflow_id="...", variables={...})`
+   - **Edit/modify existing** → call `coding_agent(task="...", project_path="<workspace path>")` instead
+
+2. **Never start a creation workflow** (e.g. `create_website`) when `[SESSION WORKSPACE]` is present and the user is asking to change, update, improve, or fix existing content. That would discard their work and create a duplicate project.
+
+3. You can adjust the pre-extracted variables before calling `execute_workflow` — the hint is a starting point, not a constraint.
+
+### Discovering workflows
+If no suggestion is shown but you think a workflow would help: call `list_workflows` to see all available options.
+
+### Example decisions
+- User: "Erstelle eine neue Website für ein Restaurant" + no workspace → `execute_workflow(workflow_id="create_website", variables={...})`
+- User: "Mach die Farben der Seite dunkler" + `[SESSION WORKSPACE]` exists → `coding_agent(task="...", project_path="<workspace>")`
+- User: "Kannst du den Titel ändern?" + workspace exists → `coding_agent` — do NOT use `create_website`
+""",
         }
         
         #
@@ -403,6 +428,13 @@ when you know many more steps remain.
                 "codebase", "quellcode", "architektur", "projekt verstehen",
                 "review", "analyse", "analysis", "analyze", "analysiere", "recherchiere umfassend",
                 "vorgehen", "strategie", "ausarbeiten"
+            ],
+            "workflow": [
+                "workflow", "execute_workflow", "list_workflows",
+                "erstell", "create", "generate", "build",
+                "website", "webseite", "document", "research",
+                "automation", "[workflow suggestion]",
+                "new project", "neues projekt", "neue webseite", "neue website",
             ],
         }
     

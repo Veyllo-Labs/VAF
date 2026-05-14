@@ -162,6 +162,12 @@ Ergebnis: Deutlich weniger Nachrichten, stark reduzierte Token-Zahl bei erhalten
 
 Historische Hinweise auf einen `new_prompt`-`NameError` bei Kompression ohne User-Input sind in aktuellen Builds nicht mehr der relevante Hauptfehlerpfad. Falls hier neue Bugs auftreten, bitte anhand aktueller `agent.py`-Logs/Code prüfen statt ältere Bugbeschreibungen zu übernehmen.
 
+### Dangling `tool_calls` nach Kompression
+
+`compress()` behält die letzten N Nachrichten als `recent_messages` und verwirft die mittlere Section. Liegt in dieser mittleren Section ein `{role: "tool", tool_call_id: "X"}` Response, während die zugehörige `{role: "assistant", tool_calls: [{id: "X"}]}` Nachricht in den `recent_messages` landet, entsteht ein "dangling tool_call" — das API (z. B. DeepSeek) lehnt diesen Stand mit HTTP 400 ab.
+
+**Fix (seit 2026-05-14):** `_prepare_messages()` in `agent.py` führt vor jedem API-Call einen Cleanup-Pass durch: alle `tool_call_id`s in `{role: "tool"}` Nachrichten werden gesammelt; `tool_calls`-Einträge in `assistant`-Nachrichten ohne passende Antwort werden entfernt. Falls alle Calls einer Nachricht dangling sind, wird `tool_calls` vollständig entfernt.
+
 ---
 
 ## 9. Where user-related info appears (system prompt vs. separate message)

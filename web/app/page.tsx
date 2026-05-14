@@ -1722,8 +1722,18 @@ function VAFDashboardContent() {
                     const activeSessionId = currentSessionIdRef.current;
                     if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
                     setMessages(prev => {
-                        const lastAssistantIdx = prev.map((m, i) => ({ m, i })).filter(({ m }) => m.role === 'assistant').pop()?.i;
-                        if (lastAssistantIdx === undefined) return prev;
+                        const lastAssistantEntry = prev.map((m, i) => ({ m, i })).filter(({ m }) => m.role === 'assistant').pop();
+                        if (!lastAssistantEntry) return prev;
+                        const { m: lastAssMsg, i: lastAssistantIdx } = lastAssistantEntry;
+                        // Guard: do NOT clear a completed response from a previous turn.
+                        // If the agent fails before streaming any text in the current turn,
+                        // there is no streaming bubble to clear — without this guard, repeated
+                        // retries would erase previous-turn assistant messages one by one.
+                        // lastUserSendTimeRef is non-zero only while waiting for the first
+                        // streaming chunk (reset to 0 once streaming starts, so mid-stream
+                        // retries are always allowed through).
+                        const lastSendTime = lastUserSendTimeRef.current;
+                        if (lastSendTime && (lastAssMsg.timestamp ?? 0) < lastSendTime - 500) return prev;
                         return prev.slice(0, lastAssistantIdx).concat(prev.slice(lastAssistantIdx + 1));
                     });
                 }
@@ -2185,7 +2195,12 @@ function VAFDashboardContent() {
                     // stale cached fragments (e.g. partial thinking chunks) from reordering UI.
                     if (!isActive && !hadLocalGenerating) {
                         const finalServerMsgs = serverMsgs.map(({ _order, ...msg }) => msg) as Message[];
-                        setMessages(finalServerMsgs);
+                        // Guard: don't wipe existing messages if server sends an empty history.
+                        // This prevents chat from temporarily disappearing during reconnect
+                        // when history_update arrives before the session is fully restored.
+                        if (finalServerMsgs.length > 0 || messagesRef.current.length === 0) {
+                            setMessages(finalServerMsgs);
+                        }
 
                         // If a chat was queued before we had a session, send it now.
                         if (pendingSendRef.current && data.sessionId) {
@@ -3744,6 +3759,13 @@ function VAFDashboardContent() {
                         })()}
                         <div className="flex-1 overflow-y-auto p-6" ref={containerRef}>
                             <div className={cn(messagesAreaWidthClass, "mx-auto space-y-2 pb-32")}>
+                                {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
+                                {!isConnected && messages.length > 0 && (
+                                    <div className="sticky top-0 z-10 flex items-center justify-center gap-2 py-2 px-4 mb-2 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-sm">
+                                        <svg className="animate-spin h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                                        <span>Verbindung wird wiederhergestellt…</span>
+                                    </div>
+                                )}
                                 {/* Sub-Agent banner removed; reopen via tool cards or system log */}
                                 {/* Empty state welcome is shown in the centered input block below */}
                                 {(() => {

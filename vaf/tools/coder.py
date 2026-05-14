@@ -1024,13 +1024,25 @@ class TaskManager:
     def initialize(self, base_dir: str):
         """Initialize persistence with the project directory."""
         self.pm = PersistenceManager(base_dir)
+        project_name = os.path.basename(base_dir)
         # Load existing state or create new
         loaded_state = self.pm.load_state()
         if loaded_state:
+            # If ALL tasks were already completed, this is a NEW invocation (not a
+            # crash-resume).  Discard the stale state so the agent plans fresh.
+            all_done = (
+                bool(loaded_state.tasks)
+                and all(t.status == "completed" for t in loaded_state.tasks)
+            )
+            if all_done:
+                # init_project() only creates the file if it doesn't exist, so we
+                # must explicitly overwrite the stale state with a fresh ProjectState.
+                fresh = ProjectState(project_name=project_name)
+                self.pm.save_state(fresh)
+                loaded_state = self.pm.load_state()
             self.state = loaded_state
         else:
             # Create fresh state (project name from dir name)
-            project_name = os.path.basename(base_dir)
             self.pm.init_project(project_name)
             self.state = self.pm.load_state() # Reload to get clean state
             # FALLBACK: if disk write failed silently, create in-memory state
@@ -1653,6 +1665,45 @@ class CodingAgentTool(BaseTool):
         # Fallback: Create new project folder
         return self._generate_project_directory(task)
 
+    def _get_session_project_path(self, task: str) -> str:
+        """Return last_project_path from session runtime_state if task looks like editing existing code.
+
+        Avoids creating a new directory when the user says 'fix the UI', 'update the website', etc.
+        Returns empty string if task is clearly a new-project request or if no session path exists.
+        """
+        task_l = task.lower()
+        # Explicit new-project keywords → always create fresh
+        _new_kw = [
+            "create new", "new project", "start new", "scaffold",
+            "neue webseite", "neues projekt", "new website",
+            "erstelle eine neue", "erstelle mir eine neue",
+        ]
+        if any(k in task_l for k in _new_kw):
+            return ""
+        # Must contain at least one edit signal
+        _edit_kw = [
+            "fix", "edit", "update", "modify", "change", "improve", "adjust", "correct", "repair",
+            "bug", "error", "issue", "the ui", "die ui", "the website", "die webseite",
+            "fehler", "aktualisier", "bearbeit", "verbessert", "korrigier", "anpass",
+            "schau", "prüf", "ändert", "überarbeit",
+        ]
+        if not any(k in task_l for k in _edit_kw):
+            return ""
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id
+            _sid = get_current_session_id()
+            if not _sid:
+                return ""
+            from vaf.core.session import SessionManager as _SM
+            _sm = _SM()
+            _sess = _sm.load(_sid)
+            _last = (getattr(_sess, "runtime_state", None) or {}).get("last_project_path", "")
+            if _last and os.path.isdir(_last):
+                return _last
+        except Exception:
+            pass
+        return ""
+
     def _generate_project_directory(self, task: str) -> str:
         """Generate a user-friendly project directory name based on task. OS-independent."""
         # Strip embedded file paths before keyword extraction so path components
@@ -1704,8 +1755,26 @@ class CodingAgentTool(BaseTool):
         # Get base directory - OS-independent using Platform class
         from vaf.core.platform import Platform
         docs_dir = Platform.documents_dir()
-        
-        projects_root = os.path.join(docs_dir, "VAF_Projects")
+
+        # Per-user isolation: put projects under VAF_Projects/{user_scope_id[:8]}/ when
+        # running in a multi-user context. Falls back to VAF_Projects/ for local/admin.
+        _user_prefix = ""
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id as _get_sid
+            _sid = _get_sid()
+            if _sid:
+                from vaf.core.session import SessionManager as _SM2
+                _s = _SM2().load(_sid)
+                _uid = (_s.metadata or {}).get("user_scope_id", "")
+                if _uid:
+                    _user_prefix = _uid[:8]
+        except Exception:
+            pass
+
+        if _user_prefix:
+            projects_root = os.path.join(docs_dir, "VAF_Projects", _user_prefix)
+        else:
+            projects_root = os.path.join(docs_dir, "VAF_Projects")
         os.makedirs(projects_root, exist_ok=True)
         
         base_dir = os.path.join(projects_root, project_name)
@@ -2150,7 +2219,13 @@ Thumbs.db
                 base_dir = _explicit_path
                 tui.append_stream(f"Using path from task: {base_dir}")
             else:
-                base_dir = self._determine_base_dir(task)
+                # Check session's last project path before generating a new directory
+                _session_proj = self._get_session_project_path(task)
+                if _session_proj:
+                    base_dir = _session_proj
+                    tui.append_stream(f"Continuing existing project: {os.path.basename(_session_proj)}")
+                else:
+                    base_dir = self._determine_base_dir(task)
 
             os.makedirs(base_dir, exist_ok=True)
             tui.append_stream(f"Project directory: {os.path.basename(base_dir)}")

@@ -829,8 +829,6 @@ async def healthcheck():
 async def receive_workflow_update(update: WorkflowUpdate):
     """Receive workflow updates from external processes (like separate terminals)."""
     data = update.dict(exclude_none=True)
-    # We're in an async handler, so we can directly await without checking the loop
-    # The server loop check was causing silent failures when _server_loop wasn't set
     try:
         if update.sessionId:
             await manager.broadcast_to_session(update.sessionId, data)
@@ -838,6 +836,29 @@ async def receive_workflow_update(update: WorkflowUpdate):
             await manager.broadcast(data)
     except Exception as e:
         append_domain_log("webui", f"[ERROR] broadcast failed in /api/workflow/update: {e}")
+    # When a file is created, store its project directory so the agent can edit it later
+    if data.get("type") == "file_created" and data.get("filePath") and data.get("sessionId"):
+        try:
+            from pathlib import Path as _Path
+            project_dir = str(_Path(data["filePath"]).parent.resolve())
+            loaded = session_mgr.load(data["sessionId"])
+            if not getattr(loaded, "runtime_state", None):
+                loaded.runtime_state = {}
+            loaded.runtime_state["last_project_path"] = project_dir
+            # Anchor session workspace on first "real" project creation (VAF_Projects paths only).
+            # session.project_path is stable — set once, never overwritten — giving the chat
+            # a persistent workspace root independent of which sub-project was last touched.
+            if not getattr(loaded, "project_path", ""):
+                try:
+                    from vaf.core.platform import Platform as _Plat
+                    _vaf_root = str(_Plat.documents_dir())
+                    if "VAF_Projects" in project_dir and project_dir.startswith(_vaf_root):
+                        loaded.project_path = project_dir
+                except Exception:
+                    pass
+            session_mgr.save(loaded, sync_state=False)
+        except Exception:
+            pass
     return {"status": "ok"}
 
 

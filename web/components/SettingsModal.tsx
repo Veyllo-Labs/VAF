@@ -214,7 +214,7 @@ const CATEGORIES = [
 const PROVIDERS = [
     { id: 'openai', label: 'OpenAI', defaultModel: 'gpt-4o' },
     { id: 'anthropic', label: 'Anthropic', defaultModel: 'claude-3-5-sonnet-20241022' },
-    { id: 'deepseek', label: 'DeepSeek', defaultModel: 'deepseek-chat' },
+    { id: 'deepseek', label: 'DeepSeek', defaultModel: 'deepseek-v4-flash', staticModels: ['deepseek-v4-flash'] },
     { id: 'google', label: 'Google', defaultModel: 'gemini-1.5-flash-latest' },
     { id: 'openrouter', label: 'OpenRouter', defaultModel: 'anthropic/claude-3.5-sonnet' },
 ];
@@ -1694,10 +1694,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         label={`${p.label} Model`}
                                                         value={localConfig[`api_model_${p.id}`] || p.defaultModel}
                                                         onChange={(v: string) => handleChange(`api_model_${p.id}`, v)}
-                                                        options={[
-                                                            { value: p.defaultModel, label: `${p.defaultModel} (Default)` },
-                                                            ...(apiModels[p.id] ? apiModels[p.id].map(m => ({ value: m, label: m })) : [])
-                                                        ]}
+                                                        options={(() => {
+                                                            const fetched = apiModels[p.id];
+                                                            const list = fetched && fetched.length > 0
+                                                                ? fetched
+                                                                : (p.staticModels || []);
+                                                            const seen = new Set<string>();
+                                                            return [
+                                                                { value: p.defaultModel, label: `${p.defaultModel} (Default)` },
+                                                                ...list
+                                                                    .filter(m => { if (m === p.defaultModel || seen.has(m)) return false; seen.add(m); return true; })
+                                                                    .map(m => ({ value: m, label: m }))
+                                                            ];
+                                                        })()}
                                                     />
                                                 </div>
                                                 <button

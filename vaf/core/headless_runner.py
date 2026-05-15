@@ -1203,6 +1203,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     source_channel = str(task_source).strip().lower()
                     prev_webui_active = os.environ.get("VAF_WEBUI_ACTIVE")
                     force_webui_active = origin_channel == "web" or source_channel == "web"
+                    _task_images = task_meta_for_env.get("images") or None
                     try:
                         if force_webui_active:
                             os.environ["VAF_WEBUI_ACTIVE"] = "1"
@@ -1212,6 +1213,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             skip_input=False,
                             disable_workflows=disable_workflows,
                             memory_context=memory_context or None,
+                            images=_task_images,
                         )
                         if tq.should_stop(task.session_id):
                             raise _StopGenerationRequested("Stop requested by user")

@@ -2655,14 +2655,32 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # Learn from user input
                         if content:
                             get_autosuggest().learn(content)
-                        
-                        # Process files if attached
-                        if files:
-                            print(f"[WebUI] Processing {len(files)} attached file(s)...")
-                            file_contents = await process_uploaded_files(files)
+
+                        # Separate image files from document/text files
+                        image_files = [f for f in files if (f.get("mimeType") or "").startswith("image/")]
+                        text_files  = [f for f in files if not (f.get("mimeType") or "").startswith("image/")]
+
+                        # Process text/document files (extract content as before)
+                        if text_files:
+                            print(f"[WebUI] Processing {len(text_files)} attached file(s)...")
+                            file_contents = await process_uploaded_files(text_files)
                             if file_contents:
-                                # Append file contents to message (like CLI @filename behavior)
                                 content = content + "\n\n" + file_contents if content else file_contents
+
+                        # Build raw image list for vision providers (base64, no data-URI prefix)
+                        attached_images = []
+                        if image_files:
+                            import base64 as _b64
+                            print(f"[WebUI] Passing {len(image_files)} image(s) to vision pipeline...")
+                            for img_f in image_files:
+                                raw = img_f.get("data", "")
+                                if raw.startswith("data:"):
+                                    raw = raw.split(",", 1)[1] if "," in raw else raw
+                                attached_images.append({
+                                    "data": raw,
+                                    "mime_type": img_f.get("mimeType", "image/jpeg"),
+                                    "name": img_f.get("name", "image"),
+                                })
                         
                         # Get session ID: prefer explicit message field, then safe connection session, then fallback.
                         requested_session_id = cmd.get("sessionId")
@@ -2835,6 +2853,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 clear_waiting_for_reply(user_scope_id, content)
                         except Exception:
                             pass
+                        if attached_images:
+                            metadata["images"] = attached_images
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)
                         try:
                             if is_debug_logging_enabled():

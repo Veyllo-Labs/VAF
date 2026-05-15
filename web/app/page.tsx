@@ -33,6 +33,8 @@ type Message = {
     timestamp: number;
     /** Attachments shown on user messages (name + mimeType only; data not stored) */
     files?: { name: string; mimeType: string }[];
+    /** Inline images attached to user message — stored as data URIs for display */
+    images?: { url: string; name: string }[];
     /** Document Viewer was open when this message was sent; list of document names (for indicator under bubble) */
     sidebarDocs?: string[];
     // Extra fields for tools
@@ -880,6 +882,8 @@ function VAFDashboardContent() {
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [isDragOver, setIsDragOver] = useState(false);
+    /** Images staged in the input bar, cleared after send */
+    const [attachedImages, setAttachedImages] = useState<{ id: string; url: string; name: string }[]>([]);
 
     // Stats state
     type TokenStats = {
@@ -2151,6 +2155,7 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'history_update') {
+                    const prevSessionId = currentSessionIdRef.current;
                     setCurrentSessionId(data.sessionId);
                     // Do not clear Document Viewer documents here – they are kept per session in sessionViewerState and would be lost on second switch-back
                     sidebarDocsSyncedForSessionRef.current = null;
@@ -2195,11 +2200,14 @@ function VAFDashboardContent() {
                     // stale cached fragments (e.g. partial thinking chunks) from reordering UI.
                     if (!isActive && !hadLocalGenerating) {
                         const finalServerMsgs = serverMsgs.map(({ _order, ...msg }) => msg) as Message[];
-                        // Guard: don't wipe existing messages if server sends an empty history.
-                        // This prevents chat from temporarily disappearing during reconnect
-                        // when history_update arrives before the session is fully restored.
-                        if (finalServerMsgs.length > 0 || messagesRef.current.length === 0) {
+                        // Guard: don't wipe existing messages if server sends an empty history
+                        // during reconnect for the SAME session (transient backend restore).
+                        // But always apply when switching to a different session (e.g. new_session
+                        // sends messages:[] intentionally to clear the chat).
+                        const sessionSwitched = data.sessionId !== prevSessionId;
+                        if (sessionSwitched || finalServerMsgs.length > 0 || messagesRef.current.length === 0) {
                             setMessages(finalServerMsgs);
+                            if (sessionSwitched) setAttachedImages([]);
                         }
 
                         // If a chat was queued before we had a session, send it now.
@@ -2768,6 +2776,7 @@ function VAFDashboardContent() {
         e?.preventDefault();
         const combined = [input, ...insertedSelections.map((s) => s.text)].filter(Boolean).join('\n\n');
         const textToSend = overrideText ?? combined;
+        const imagesToSend = [...attachedImages];
         if (!textToSend.trim() || !ws) return;
 
         // Compute code viewer chip metadata upfront (no content stored in message state)
@@ -2786,6 +2795,7 @@ function VAFDashboardContent() {
                 ? documentViewerState.documents.map(d => d.name)
                 : undefined,
             codeViewerFile: _cvChip,
+            images: imagesToSend.length > 0 ? imagesToSend.map(({ url, name }) => ({ url, name })) : undefined,
         }]);
         expectNewAssistantRef.current = true;
         lastUserSendTimeRef.current = Date.now();
@@ -2849,7 +2859,16 @@ function VAFDashboardContent() {
             ...(editorDoc && editorDoc.content !== '' ? { editorDocument: editorDoc } : {}),
             ...(editorSelectionsPayload.length > 0 ? { editorSelections: editorSelectionsPayload } : {}),
             ...(codeViewerFile ? { codeViewerFile } : {}),
+            // Vision: send images as file objects so web_server can route them to the vision pipeline
+            ...(imagesToSend.length > 0 ? {
+                files: imagesToSend.map(img => ({
+                    name: img.name,
+                    data: img.url,  // data URI — web_server strips the prefix
+                    mimeType: img.url.split(';')[0].replace('data:', '') || 'image/jpeg',
+                }))
+            } : {}),
         }));
+        setAttachedImages([]);
         setInput('');
         setSuggestion('');
     };
@@ -2863,11 +2882,28 @@ function VAFDashboardContent() {
         });
     };
 
-    const ACCEPT_ATTACHMENTS = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv,.py,.js,.ts,.tsx,.jsx,.html,.htm,.css,.scss,.yaml,.yml,.sh,.sql,.xml,.go,.rs,.java,.cpp,.c,.rb,.php';
+    const ACCEPT_ATTACHMENTS = 'image/*,.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv,.py,.js,.ts,.tsx,.jsx,.html,.htm,.css,.scss,.yaml,.yml,.sh,.sql,.xml,.go,.rs,.java,.cpp,.c,.rb,.php';
     const acceptedExtensions = useMemo(() => new Set(ACCEPT_ATTACHMENTS.split(',').map(ext => ext.trim().toLowerCase())), []);
 
+    /** Stage image files as previews in the input bar (sent alongside next message). */
+    const addImagesAsAttachments = useCallback(async (newFiles: File[]) => {
+        const imgFiles = newFiles.filter(f => f.type.startsWith('image/'));
+        if (imgFiles.length === 0) return;
+        const entries = await Promise.all(imgFiles.map(async (f) => ({
+            id: crypto.randomUUID(),
+            url: await fileToBase64(f),  // data URI – used both for preview and sending
+            name: f.name,
+        })));
+        setAttachedImages(prev => [...prev, ...entries]);
+    }, []);
+
     const addFilesAsAttachments = useCallback(async (newFiles: File[]) => {
-        const filtered = newFiles.filter(f => {
+        // Route image files to the vision pipeline instead of document viewer
+        const imageFiles = newFiles.filter(f => f.type.startsWith('image/'));
+        if (imageFiles.length > 0) addImagesAsAttachments(imageFiles);
+
+        const nonImageFiles = newFiles.filter(f => !f.type.startsWith('image/'));
+        const filtered = nonImageFiles.filter(f => {
             const ext = '.' + (f.name.split('.').pop() ?? '').toLowerCase();
             return acceptedExtensions.has(ext);
         });
@@ -3974,6 +4010,21 @@ function VAFDashboardContent() {
                                                                             )}
                                                                         </div>
                                                                     )}
+                                                                    {/* User message: inline image thumbnails */}
+                                                                    {!isBot && msg.images && msg.images.length > 0 && (
+                                                                        <div className="flex gap-2 flex-wrap mt-1 justify-end">
+                                                                            {msg.images.map((img, idx) => (
+                                                                                // eslint-disable-next-line @next/next/no-img-element
+                                                                                <img
+                                                                                    key={idx}
+                                                                                    src={img.url}
+                                                                                    alt={img.name}
+                                                                                    className="h-24 max-w-[180px] object-cover rounded-xl border border-gray-200 shadow-sm"
+                                                                                    title={img.name}
+                                                                                />
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
                                                                     {/* User message: show attachment chips below the bubble (from msg.files or parsed from content after reload) */}
                                                                     {!isBot && displayFiles && displayFiles.length > 0 && (
                                                                         <div className="flex gap-2 flex-wrap mt-1 justify-end">
@@ -4313,13 +4364,33 @@ function VAFDashboardContent() {
                                             onClick={() => fileInputRef.current?.click()}
                                             className={cn(
                                                 "p-4 transition-colors",
-                                                documentViewerState.isOpen ? "text-blue-600" : "text-gray-400 hover:text-gray-900"
+                                                attachedImages.length > 0 ? "text-violet-600" : documentViewerState.isOpen ? "text-blue-600" : "text-gray-400 hover:text-gray-900"
                                             )}
                                             title={tMain('attachmentsDocumentViewer')}
                                         >
                                             <Paperclip size={20} />
                                         </button>
                                         <div className="flex-1 relative flex flex-col min-w-0">
+                                            {attachedImages.length > 0 && (
+                                                <div className="flex flex-wrap gap-2 px-2 pt-2 pb-1 border-b border-gray-100">
+                                                    {attachedImages.map((img) => (
+                                                        <div key={img.id} className="relative group shrink-0">
+                                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                            <img
+                                                                src={img.url}
+                                                                alt={img.name}
+                                                                className="h-16 w-16 object-cover rounded-lg border border-gray-200"
+                                                                title={img.name}
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setAttachedImages(prev => prev.filter(i => i.id !== img.id))}
+                                                                className="absolute -top-1.5 -right-1.5 bg-gray-800 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                                                            >✕</button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                             {insertedSelections.length > 0 && (
                                                 <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2 pb-1 border-b border-gray-100">
                                                     {insertedSelections.map((s, i) => (

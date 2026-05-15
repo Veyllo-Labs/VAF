@@ -148,8 +148,14 @@ class OpenAIProvider(BaseAIProvider):
                     self.last_request_usage["output_tokens"] = response.usage.completion_tokens
                     
         except Exception as e:
-            UI.error(f"{self.provider_name.upper()} Provider Error: {e}")
-            yield ""
+            err_str = str(e)
+            UI.error(f"{self.provider_name.upper()} Provider Error: {err_str}")
+            try:
+                from vaf.core.domain_log import append_domain_log
+                append_domain_log("backend", f"{self.provider_name}_api_error: {err_str}")
+            except Exception:
+                pass
+            yield f"[API Error from {self.provider_name}: {err_str}]"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ANTHROPIC PROVIDER
@@ -157,7 +163,7 @@ class OpenAIProvider(BaseAIProvider):
 
 class AnthropicProvider(BaseAIProvider):
     """Provider for Anthropic Claude models."""
-    
+
     def __init__(self, api_key: str):
         super().__init__("anthropic", api_key)
         try:
@@ -167,19 +173,44 @@ class AnthropicProvider(BaseAIProvider):
             self.client = None
             logger.error("Anthropic SDK not installed. Please run: pip install anthropic")
 
+    @staticmethod
+    def _convert_content(content) -> Any:
+        """Convert OpenAI multimodal content list to Anthropic format.
+
+        OpenAI image block: {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
+        Anthropic image block: {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "..."}}
+        """
+        if isinstance(content, str):
+            return content
+        result = []
+        for block in content:
+            if block.get("type") == "text":
+                result.append({"type": "text", "text": block["text"]})
+            elif block.get("type") == "image_url":
+                url = block["image_url"]["url"]
+                if url.startswith("data:"):
+                    header, b64_data = url.split(",", 1)
+                    mime_type = header.split(":")[1].split(";")[0]
+                    result.append({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": mime_type, "data": b64_data},
+                    })
+        return result
+
     def chat_completion(self, messages, temperature, max_tokens, stream, model, tools, tool_choice=None):
         if not self.client:
             yield "[Error] Anthropic SDK missing."
             return
 
-        # Convert format: extract system message
+        # Convert format: extract system message, convert multimodal content blocks
         system_msg = ""
         filtered_messages = []
         for m in messages:
             if m["role"] == "system":
-                system_msg = m["content"]
+                system_msg = m["content"] if isinstance(m["content"], str) else ""
             else:
-                filtered_messages.append(m)
+                converted_content = self._convert_content(m["content"])
+                filtered_messages.append({**m, "content": converted_content})
 
         try:
             kwargs = {
@@ -234,8 +265,14 @@ class AnthropicProvider(BaseAIProvider):
                 self.last_request_usage["output_tokens"] = response.usage.output_tokens
                 
         except Exception as e:
-            UI.error(f"Anthropic Provider Error: {e}")
-            yield ""
+            err_str = str(e)
+            UI.error(f"Anthropic Provider Error: {err_str}")
+            try:
+                from vaf.core.domain_log import append_domain_log
+                append_domain_log("backend", f"anthropic_api_error: {err_str}")
+            except Exception:
+                pass
+            yield f"[API Error from anthropic: {err_str}]"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # GOOGLE GEMINI PROVIDER
@@ -260,15 +297,36 @@ class GoogleProvider(BaseAIProvider):
             return
 
         try:
+            import base64 as _b64
             # Convert messages to Gemini format
             contents = []
             system_instruction = None
             for m in messages:
                 if m["role"] == "system":
-                    system_instruction = m["content"]
+                    system_instruction = m["content"] if isinstance(m["content"], str) else ""
                 else:
                     role = "user" if m["role"] == "user" else "model"
-                    contents.append({"role": role, "parts": [m["content"]]})
+                    content = m["content"]
+                    if isinstance(content, list):
+                        # Multimodal: convert OpenAI image_url blocks to Gemini inline_data
+                        parts = []
+                        for block in content:
+                            if block.get("type") == "text":
+                                parts.append(block["text"])
+                            elif block.get("type") == "image_url":
+                                url = block["image_url"]["url"]
+                                if url.startswith("data:"):
+                                    header, b64_data = url.split(",", 1)
+                                    mime_type = header.split(":")[1].split(";")[0]
+                                    parts.append({
+                                        "inline_data": {
+                                            "mime_type": mime_type,
+                                            "data": _b64.b64decode(b64_data),
+                                        }
+                                    })
+                        contents.append({"role": role, "parts": parts})
+                    else:
+                        contents.append({"role": role, "parts": [content]})
 
             # Configure tools
             google_tools = None
@@ -341,8 +399,14 @@ class GoogleProvider(BaseAIProvider):
                 self.last_request_usage["output_tokens"] = usage.candidates_token_count
                 
         except Exception as e:
-            UI.error(f"Google Provider Error: {e}")
-            yield ""
+            err_str = str(e)
+            UI.error(f"Google Provider Error: {err_str}")
+            try:
+                from vaf.core.domain_log import append_domain_log
+                append_domain_log("backend", f"google_api_error: {err_str}")
+            except Exception:
+                pass
+            yield f"[API Error from google: {err_str}]"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FACTORY & MANAGER
@@ -393,13 +457,15 @@ class APIBackendManager:
         default_models = {
             "openai": "gpt-4o",
             "anthropic": "claude-3-5-sonnet-20241022",
-            "deepseek": "deepseek-chat",
+            "deepseek": "deepseek-v4-flash",
             "google": "gemini-1.5-flash",
             "openrouter": "anthropic/claude-3.5-sonnet",
             "local": "llama3",
         }
         if not model:
-            model = self.config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, "gpt-4o"))
+            # Read fresh from disk so mid-session model changes (via Settings) take effect immediately
+            live_config = Config.load()
+            model = live_config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, "gpt-4o"))
         # Guardrail: when using API providers, a stale local GGUF model value can be passed
         # (e.g. "Veyllo/VQ-1_Instruct-q4_k_m"), which causes provider errors and long retry loops.
         # In that case, force provider-specific model from config/default.
@@ -461,12 +527,8 @@ class APIBackendManager:
         ("gemini-1.5-pro",2_097_152),
         ("gemini-1.5",    1_048_576),
         ("gemini",        1_048_576),
-        # DeepSeek — deepseek-chat → V4-Flash, deepseek-reasoner → V4-Flash (thinking)
-        # All current models: 1M input context, 384K max output
+        # DeepSeek — all V4 models: 1M input context, 64K max output
         ("deepseek-v4",   1_000_000),
-        ("deepseek-chat", 1_000_000),
-        ("deepseek-reasoner", 1_000_000),
-        ("deepseek-coder",   128_000),
         ("deepseek",      1_000_000),
         # Mistral
         ("mistral-large",   131_072),
@@ -536,7 +598,7 @@ class APIBackendManager:
         models = {
             "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
             "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
-            "deepseek": ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
+            "deepseek": ["deepseek-v4-flash"],
             "google": ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"],
             "openrouter": ["anthropic/claude-3.5-sonnet", "openai/gpt-4o"],
             "local": ["llama3", "mistral", "codellama"]

@@ -52,7 +52,7 @@ class Config:
         # API Model Selection per Provider
         "api_model_openai": "gpt-4o",
         "api_model_anthropic": "claude-3-5-sonnet-20241022",
-        "api_model_deepseek": "deepseek-chat",
+        "api_model_deepseek": "deepseek-v4-flash",  # deepseek-chat deprecated 2026-07-24
         "api_model_google": "gemini-1.5-flash",  # Free tier, fast & capable
         "api_model_openrouter": "anthropic/claude-3.5-sonnet",
         

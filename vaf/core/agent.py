@@ -204,7 +204,7 @@ class Agent:
                 api_defaults = {
                     "openai": "gpt-4o",
                     "anthropic": "claude-3-5-sonnet-20241022",
-                    "deepseek": "deepseek-chat",
+                    "deepseek": "deepseek-v4-flash",
                     "google": "gemini-1.5-flash",
                     "openrouter": "anthropic/claude-3.5-sonnet",
                 }
@@ -4505,6 +4505,7 @@ class Agent:
         disable_tools=False,
         memory_context=None,
         thinking_mode: bool = False,
+        images: Optional[List[Dict]] = None,
     ):
         from vaf.cli.ui import UI
         # Turn-local flag: avoids cross-thread leakage from process-wide env vars.
@@ -4695,7 +4696,10 @@ class Agent:
 
         # Always add user input if provided, even if skip_input=True (which skips analysis/overhead)
         if user_input:
-            self.history.append({"role": "user", "content": user_input})
+            _user_msg: Dict = {"role": "user", "content": user_input}
+            if images:
+                _user_msg["images"] = images  # [{data: str, mime_type: str}] — converted to multimodal in _prepare_messages
+            self.history.append(_user_msg)
             self._orchestrator_heavy_calls_this_turn = 0  # New turn: reset heavy-tool budget for orchestrator gate
             
             # ═══════════════════════════════════════════════════════════════════════
@@ -7426,6 +7430,102 @@ class Agent:
                         msg = {k: v for k, v in msg.items() if k != "tool_calls"}
             cleaned.append(msg)
         messages = cleaned
+        # --- Vision capability check -----------------------------------------
+        # Determine whether the active provider+model supports multimodal input.
+        # Models that silently return empty responses (e.g. deepseek-chat) must
+        # receive a text-only fallback instead of an image_url block.
+        _provider = getattr(self, "provider", "local")
+        # Read model fresh from config so mid-session model changes (via Settings) are picked up immediately.
+        if _provider != "local":
+            _model = (self.config.get(f"api_model_{_provider}") or getattr(self, "model_display_name", "")).lower()
+            # Re-read from disk in case user changed model in Settings during this session
+            try:
+                from vaf.core.config import Config as _Cfg
+                _live_model = _Cfg.load().get(f"api_model_{_provider}", "")
+                if _live_model:
+                    _model = _live_model.lower()
+            except Exception:
+                pass
+        else:
+            _model = getattr(self, "model_display_name", "").lower()
+
+        def _model_supports_vision(provider: str, model: str) -> bool:
+            if provider == "anthropic":
+                return True  # All Claude 3+ support vision
+            if provider == "google":
+                return True  # All Gemini models support vision
+            if provider == "openai":
+                return any(k in model for k in ("gpt-4o", "gpt-4-turbo", "gpt-4-vision", "o1", "o3"))
+            if provider == "deepseek":
+                # DeepSeek's commercial API (api.deepseek.com/v1) does not support image_url
+                # content blocks — the API schema only accepts type: text. No vision support.
+                return False
+            if provider == "openrouter":
+                # Many openrouter models support vision; heuristic on common vision model names
+                return any(k in model for k in ("gpt-4o", "claude-3", "gemini", "vision", "vl", "llava", "pixtral"))
+            # local / unknown: pass through and let the model decide
+            return True
+
+        _vision_ok = _model_supports_vision(_provider, _model)
+
+        # --- Convert inline images to OpenAI multimodal content blocks ------
+        # History entries may carry an "images" key: [{data: base64, mime_type: str}].
+        # If vision is supported: convert to OpenAI list-content format (Anthropic/Google
+        # providers convert further in their own chat_completion methods).
+        # If NOT supported: strip images, append human-readable text placeholder instead.
+        multimodal_messages: List[Dict] = []
+        for msg in messages:
+            if msg.get("role") == "user" and msg.get("images"):
+                imgs = msg["images"]
+                text = msg.get("content", "")
+                msg = {k: v for k, v in msg.items() if k != "images"}
+                if _vision_ok:
+                    blocks: List[Dict] = []
+                    if text:
+                        blocks.append({"type": "text", "text": text})
+                    for img in imgs:
+                        raw = img.get("data", "")
+                        mime = img.get("mime_type", "image/jpeg")
+                        if raw.startswith("data:"):
+                            raw = raw.split(",", 1)[1] if "," in raw else raw
+                        blocks.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime};base64,{raw}"},
+                        })
+                    msg["content"] = blocks
+                else:
+                    # Non-vision model: degrade gracefully.
+                    # Inject a SYSTEM NOTE the agent will read and relay to the user,
+                    # so they know why the image isn't visible and which model to use.
+                    names = [img.get("name", "image") for img in imgs]
+                    img_list = ", ".join(f"`{n}`" for n in names)
+                    _vision_models = {
+                        "deepseek": "a different provider — DeepSeek's API does not support image input. Switch to Anthropic (`claude-3-5-sonnet-20241022`) or OpenAI (`gpt-4o`)",
+                        "openai":   "`gpt-4o` or `gpt-4-turbo`",
+                        "anthropic": "`claude-3-5-sonnet-20241022` or newer",
+                        "google":   "`gemini-1.5-pro` or `gemini-2.0-flash`",
+                        "openrouter": "a vision model such as `openai/gpt-4o`",
+                    }
+                    _vision_hint = _vision_models.get(_provider, "a vision-capable model")
+                    system_note = (
+                        f"[SYSTEM NOTE: The user attached {len(imgs)} image(s) ({img_list}) "
+                        f"but the current model ({_model or _provider}) does not support vision. "
+                        f"The image data has been stripped and cannot be recovered. "
+                        f"Please tell the user: this model cannot see images. "
+                        f"To use vision, go to Settings → Model and switch to {_vision_hint}. "
+                        f"Do NOT attempt to guess the image content or use list_files/find_files tools.]"
+                    )
+                    msg["content"] = (system_note + "\n\n" + text).strip() if text else system_note
+                    try:
+                        from vaf.cli.ui import UI as _UI
+                        _UI.warning(
+                            f"Vision not supported by {_model or _provider}. "
+                            f"Image stripped — switch to a vision model (deepseek-v4-pro, gpt-4o, claude-3, gemini)."
+                        )
+                    except Exception:
+                        pass
+            multimodal_messages.append(msg)
+        messages = multimodal_messages
         # -------------------------------------------------------------------
 
         is_gemma = "gemma" in self.filename.lower()
@@ -7435,10 +7535,17 @@ class Agent:
         # Gemma Logic: Merge System into first User, Ensure Alternation
         new_messages = []
         pending_system = ""
-        
+
         for msg in messages:
             role = msg.get("role")
-            content = str(msg.get("content", ""))
+            raw_content = msg.get("content", "")
+            # Flatten multimodal list to text for Gemma (vision not supported)
+            if isinstance(raw_content, list):
+                content = " ".join(
+                    b.get("text", "") for b in raw_content if b.get("type") == "text"
+                )
+            else:
+                content = str(raw_content)
             
             if role == "system":
                 pending_system += f"{content}\n\n"

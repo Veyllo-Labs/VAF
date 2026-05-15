@@ -1615,7 +1615,7 @@ class CodingAgentTool(BaseTool):
             },
             "project_path": {
                 "type": "string",
-                "description": "Optional: Path to existing project directory to continue working on. If provided, agent will work in this directory instead of creating a new one."
+                "description": "Optional: Absolute path to an EXISTING project directory to continue working on. ONLY provide this when editing/fixing an existing project whose path you already know (e.g. from [SESSION WORKSPACE]). Do NOT invent or guess paths. For new projects, omit this entirely — the agent will create the project directory automatically in the correct location."
             }
         },
         "required": ["task"]
@@ -2087,7 +2087,7 @@ Thumbs.db
         # base_url already contains /v1 (from api_backend.py); store full endpoint URLs
         # so we never double up the /v1 path segment.
         _API_PROVIDERS = {
-            "deepseek":   ("https://api.deepseek.com/v1",       "deepseek-chat"),
+            "deepseek":   ("https://api.deepseek.com/v1",       "deepseek-v4-flash"),
             "openai":     ("https://api.openai.com/v1",         "gpt-4o"),
             "openrouter": ("https://openrouter.ai/api/v1",      "anthropic/claude-3.5-sonnet"),
             "anthropic":  ("https://api.anthropic.com/v1",      "claude-3-5-sonnet-20241022"),

@@ -7,7 +7,7 @@ VAF now supports multiple AI providers through API integration, allowing you to 
 - **Local** - llama-server (default, runs locally)
 - **OpenAI** - GPT-4, GPT-4o, GPT-3.5-turbo
 - **Anthropic** - Claude 3.5 Sonnet, Claude 3 Opus/Sonnet/Haiku
-- **DeepSeek** - DeepSeek Chat, DeepSeek Coder
+- **DeepSeek** - DeepSeek V4 Flash, DeepSeek V4 Pro
 - **Google AI Studio** - Gemini 1.5 Pro/Flash, Gemini 1.0 Pro
 - **OpenRouter** - Multi-provider access (Claude, GPT-4, Llama, etc.)
 
@@ -67,7 +67,7 @@ Each provider has default models, but you can customize:
   "provider": "openai",
   "api_model_openai": "gpt-4o",
   "api_model_anthropic": "claude-3-5-sonnet-20241022",
-  "api_model_deepseek": "deepseek-chat",
+  "api_model_deepseek": "deepseek-v4-flash",
   "api_model_google": "gemini-1.5-pro",
   "api_model_openrouter": "anthropic/claude-3.5-sonnet"
 }
@@ -169,6 +169,33 @@ All API providers support **streaming responses** for real-time output.
 - ⚠️ **DeepSeek** - Limited support
 - ⚠️ **Google** - Limited support
 
+### Vision / Image Input
+
+Providers that support multimodal (image) input:
+
+- ✅ **OpenAI** (`gpt-4o`, `gpt-4-turbo`, `gpt-4o-mini`) — `image_url` with data URIs
+- ✅ **Anthropic** (`claude-3*`, `claude-sonnet-4*`) — converted to `source.base64` format
+- ✅ **Google** (`gemini-1.5-pro`, `gemini-2.0-flash`, etc.) — converted to `inline_data` parts
+- ✅ **OpenRouter** — provider-dependent (model must support vision)
+- ❌ **DeepSeek** — the commercial API (`api.deepseek.com/v1`) does **not** support image input. The API schema only accepts `type: text` content blocks and returns a 400 error if image data is sent. Use Anthropic or OpenAI for vision tasks.
+- ⚠️ **Local (Ollama)** — only if the loaded model supports vision (e.g. `llava`)
+
+**How it works internally:**
+
+1. The UI encodes images as base64 data URIs and sends them in the `files` array of the WebSocket `chat` message (`mimeType` starts with `image/`).
+2. `web_server.py` separates image files from document/text files. Images are stored as `{data, mime_type, name}` in `task.metadata["images"]`; text files continue through the existing Librarian extraction path.
+3. `headless_runner.py` extracts images from `task.metadata` and passes them to `agent.chat_step(images=...)`.
+4. `agent.chat_step` stores images in the history dict entry alongside the text content.
+5. `_prepare_messages()` converts the history entry to OpenAI multimodal list-content format: `[{"type":"text","text":"..."}, {"type":"image_url","image_url":{"url":"data:image/jpeg;base64,..."}}]`.
+6. Each provider class converts this intermediate format to its own wire format:
+   - `OpenAIProvider` (also DeepSeek, OpenRouter, local): passes list content as-is.
+   - `AnthropicProvider._convert_content()`: converts `image_url` → `{"type":"image","source":{"type":"base64","media_type":"...","data":"..."}}`.
+   - `GoogleProvider`: converts `image_url` → `{"inline_data":{"mime_type":"...","data":bytes}}`.
+
+**Limitation:** Images are held in memory for the duration of the session. They are not persisted to `session.json` (only the text content is saved), so image thumbnails will not appear in the chat after a page reload.
+
+**Non-vision model degradation:** `_prepare_messages()` checks `provider + model_name` against a known-vision list before building multimodal content blocks. If the active model does not support vision (e.g. any DeepSeek model), images are silently stripped and replaced with `[Image attached: filename]` text so the agent still runs without hanging. A `⚠️ Vision not supported` warning is emitted to the WebUI. The check lives in `vaf/core/agent.py` → `_model_supports_vision()`.
+
 ### Multi-Tool Wrapper Compatibility
 
 Some models emit a wrapper call named `multi_tool_use.parallel` with a `tool_uses` array.
@@ -186,7 +213,7 @@ Provider context limits are respected:
 - **GPT-4o**: ~128K tokens
 - **Claude 3.5 Sonnet**: ~200K tokens
 - **Gemini 1.5 Pro**: ~2M tokens
-- **DeepSeek**: ~32K tokens
+- **DeepSeek V4**: ~1M tokens
 
 ## Error Handling
 
@@ -263,13 +290,14 @@ chmod 600 ~/.vaf/config.json
 ### DeepSeek
 
 **Models:**
-- `deepseek-chat` - General purpose, supports function calling
-- `deepseek-coder` - Code-specialized
-- `deepseek-reasoner` - Chain-of-thought reasoning (outputs in `reasoning_content`); **no function calling**
+- `deepseek-v4-flash` - General purpose, fast, supports function calling (default)
+- `deepseek-v4-pro` - More capable, supports function calling
+- `deepseek-chat` - Legacy alias for V3; deprecated 2026-07-24
+- `deepseek-reasoner` - Legacy R1 alias; deprecated 2026-07-24; no function calling
 
 **Get API Key:** https://platform.deepseek.com/
 
-**Note:** `deepseek-reasoner` puts answers primarily in `reasoning_content`. VAF treats substantial reasoning as a valid response when `content` is empty.
+**Note:** The commercial API (`api.deepseek.com/v1`) is text-only — image input is not supported for any model. Use Anthropic or OpenAI for vision tasks.
 
 ### Google AI Studio
 

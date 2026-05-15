@@ -723,7 +723,23 @@ Then use the results to answer. Do NOT guess from your training data!
             time_str = f"Today is {day_name}, {now.strftime(combined_fmt)}."
         parts.append(f"\n## Current Time\n{time_str}\n")
 
-        # 
+        # 2a-env. ENVIRONMENT (OS + filesystem)
+        try:
+            import sys as _sys
+            _home = str(Path.home())
+            _docs = str(Platform.documents_dir())
+            _os_name = _sys.platform  # e.g. "linux", "darwin", "win32"
+            parts.append(
+                f"\n## Environment\n"
+                f"OS: {_os_name} | Home: {_home} | "
+                f"New projects are created in: {_docs}/VAF_Projects/\n"
+                f"IMPORTANT: Never invent or guess file paths. Only use paths you have confirmed exist "
+                f"(from tool output, [SESSION WORKSPACE], or explicit user instruction).\n"
+            )
+        except Exception:
+            pass
+
+        #
         # 2b. LAST INTERACTION & CURRENT CHANNEL (optional)
         # 
         if current_source or last_interaction:

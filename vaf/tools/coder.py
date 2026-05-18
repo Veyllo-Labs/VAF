@@ -3544,12 +3544,61 @@ All files must be saved inside this directory.
 
             # Clean history - MUST be properly indented!
             clean_history = []
+            _think_re = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+            # Build two index sets from raw history:
+            # 1. _valid_tool_call_ids: tool_call_ids present in assistant messages (used to drop
+            #    orphaned role='tool' responses that have no matching tool_call).
+            # 2. _responded_ids: tool_call_ids that actually have a role='tool' response
+            #    (used to strip dangling tool_calls from assistant messages — an assistant
+            #    message whose tool_call has no response causes "insufficient tool messages" 400).
+            _valid_tool_call_ids: set = set()
+            _responded_ids: set = set()
+            for msg in history:
+                for _tc in (msg.get("tool_calls") or []):
+                    _tcid = _tc.get("id") if isinstance(_tc, dict) else None
+                    if _tcid:
+                        _valid_tool_call_ids.add(_tcid)
+                if msg.get("role") == "tool" and msg.get("tool_call_id"):
+                    _responded_ids.add(msg["tool_call_id"])
             for msg in history:
                 clean_msg = {k: v for k, v in msg.items() if k in ['role', 'content', 'tool_calls', 'tool_call_id', 'name']}
+                # Drop orphaned tool messages — a tool result with no matching assistant tool_call
+                # causes a 400 from strict providers (DeepSeek, OpenAI).
+                if clean_msg.get("role") == "tool":
+                    _tcid = clean_msg.get("tool_call_id")
+                    if _tcid and _tcid not in _valid_tool_call_ids:
+                        continue  # Skip — orphaned
+                # Strip dangling tool_calls from assistant messages — a tool_call with no
+                # matching role='tool' response causes "insufficient tool messages" 400.
+                # This can happen after context compression discards old tool results.
+                if clean_msg.get("role") == "assistant" and clean_msg.get("tool_calls"):
+                    _live_calls = [
+                        _tc for _tc in clean_msg["tool_calls"]
+                        if ((_tc.get("id") if isinstance(_tc, dict) else None) in _responded_ids)
+                    ]
+                    if len(_live_calls) != len(clean_msg["tool_calls"]):
+                        clean_msg = dict(clean_msg)
+                        if _live_calls:
+                            clean_msg["tool_calls"] = _live_calls
+                        else:
+                            # All tool_calls are dangling — remove the key entirely
+                            clean_msg = {k: v for k, v in clean_msg.items() if k != "tool_calls"}
+                # Handle <think>...</think> in assistant history messages.
+                # DeepSeek requires reasoning_content as a separate field in the message.
+                # Other providers (OpenAI, Anthropic, Google) just need it stripped from content.
+                if clean_msg.get("role") == "assistant" and isinstance(clean_msg.get("content"), str):
+                    if "<think>" in clean_msg["content"]:
+                        if _provider == "deepseek":
+                            _tc_match = re.search(r"<think>(.*?)</think>", clean_msg["content"], re.DOTALL)
+                            if _tc_match:
+                                clean_msg["reasoning_content"] = _tc_match.group(1).strip()
+                        clean_msg["content"] = _think_re.sub("", clean_msg["content"]).strip() or ""
                 if clean_msg.get('content') is None:
                     clean_msg['content'] = ""
-                # Skip empty messages with no content and no tool calls
-                if not clean_msg.get('content') and not clean_msg.get('tool_calls'):
+                # Skip empty messages with no content, no tool calls, and no reasoning_content.
+                # Must NOT skip messages that have reasoning_content (DeepSeek requires them
+                # to be sent back even when content="" — dropping them causes 400 errors).
+                if not clean_msg.get('content') and not clean_msg.get('tool_calls') and not clean_msg.get('reasoning_content'):
                     continue
                 clean_history.append(clean_msg)
 
@@ -3796,19 +3845,39 @@ All files must be saved inside this directory.
                 _req_headers = {"Content-Type": "application/json"}
                 if _llm_api_key:
                     _req_headers["Authorization"] = f"Bearer {_llm_api_key}"
+                # DeepSeek API does not support tool_choice="required" or specific function
+                # forcing — only "auto" and "none". Both deepseek-v4-flash and deepseek-v4-pro
+                # are internally reasoning models and reject "required" with a 400 error.
+                # Workaround: when we would normally force a tool call (no TODOs yet), inject
+                # an explicit system instruction instead so the model still calls set_todos first.
+                _messages_for_request = list(clean_history)
+                _effective_tool_choice = tool_choice
+                if _provider == "deepseek" and tool_choice == "required":
+                    _effective_tool_choice = "auto"
+                    # Inject a strong imperative so the model acts as if tool_choice=required
+                    _messages_for_request.append({
+                        "role": "user",
+                        "content": (
+                            "[SYSTEM INSTRUCTION] You have not yet called set_todos. "
+                            "You MUST call the set_todos tool RIGHT NOW as your very next action. "
+                            "Do NOT write any text. Do NOT explain anything. "
+                            "Call set_todos immediately with a full task breakdown."
+                        ),
+                    })
+                _req_body = {
+                    "model": model_name,
+                    "messages": _messages_for_request,
+                    "max_tokens": 32768,
+                    "temperature": current_temp,
+                    "stream": True,
+                }
+                _req_body["tools"] = tools_schema
+                _req_body["tool_choice"] = _effective_tool_choice
                 stream_response = requests.post(
                     _llm_chat_url,
                     headers=_req_headers,
-                    json={
-                        "model": model_name,
-                        "messages": clean_history,
-                        "max_tokens": 32768,
-                        "temperature": current_temp,
-                        "tools": tools_schema,
-                        "tool_choice": tool_choice,  # Dynamic: forced for set_todos, auto after
-                        "stream": True  # STREAMING enabled!
-                    },
-                    timeout=300, # Increased timeout for large contexts
+                    json=_req_body,
+                    timeout=300,
                     stream=True
                 )
                 
@@ -3832,8 +3901,8 @@ All files must be saved inside this directory.
                         error_data = stream_response.json()
                         error_msg = str(error_data) # Convert full JSON to string to search
                         
-                        # Aggressive check for ANY 400 error that looks like context issues
-                        if "context" in error_msg.lower() or "length" in error_msg.lower() or "token" in error_msg.lower() or True: # Force retry on 400
+                        # Only compress for actual context-size errors, not other 400s
+                        if "context" in error_msg.lower() or "length" in error_msg.lower() or "token" in error_msg.lower() or "maximum" in error_msg.lower():
                             # Track consecutive 400 errors
                             if not hasattr(loop, 'consecutive_400'):
                                 loop.consecutive_400 = 0
@@ -3918,6 +3987,7 @@ All files must be saved inside this directory.
                 collected_content = ""
                 collected_tool_calls = []
                 current_line = ""  # Buffer for current line
+                _in_reasoning_phase = False  # Track DeepSeek reasoning phase for <think> wrapping
                 update_counter = 0  # Throttle updates for performance
                 
                 for line in stream_response.iter_lines():
@@ -4040,33 +4110,43 @@ All files must be saved inside this directory.
                             # We don't break here, we let the loop handle the next request
                         
                         delta = choices[0].get('delta', {})
-                        
-                        # Stream content (agent's thoughts) - LIVE!
-                        # Support both standard 'content' and 'reasoning_content' (DeepSeek/R1)
-                        text_chunk = delta.get('content', '') or delta.get('reasoning_content', '') or delta.get('thought', '')
-                        
+
+                        # Handle reasoning_content (DeepSeek native field) and regular content
+                        # separately. Reasoning is wrapped in <think>...</think> in collected_content
+                        # so clean_history can later extract it as reasoning_content for DeepSeek
+                        # passback. Without this, mixing reasoning into content causes a 400 error.
+                        _reasoning_chunk = delta.get('reasoning_content', '') or delta.get('thought', '') or ''
+                        _content_chunk = delta.get('content', '') or ''
+
+                        if _reasoning_chunk:
+                            if not _in_reasoning_phase:
+                                _in_reasoning_phase = True
+                                collected_content += "<think>"
+                            _reasoning_chunk = re.sub(r'</?redacted_reasoning>', '', _reasoning_chunk, flags=re.IGNORECASE)
+                            _reasoning_chunk = re.sub(r'</?think>', '', _reasoning_chunk, flags=re.IGNORECASE)
+                            collected_content += _reasoning_chunk
+                            text_chunk = _reasoning_chunk
+                            is_reasoning = True
+                        elif _content_chunk:
+                            if _in_reasoning_phase:
+                                _in_reasoning_phase = False
+                                collected_content += "</think>"
+                            _content_chunk = re.sub(r'</?redacted_reasoning>', '', _content_chunk, flags=re.IGNORECASE)
+                            _content_chunk = re.sub(r'</?think>', '', _content_chunk, flags=re.IGNORECASE)
+                            collected_content += _content_chunk
+                            text_chunk = _content_chunk
+                            is_reasoning = False
+                        else:
+                            text_chunk = ''
+                            is_reasoning = False
+
                         if text_chunk:
-                            # If it's reasoning, maybe add a hint
-                            is_reasoning = 'reasoning_content' in delta or 'thought' in delta
-                            
-                            # Filter out redacted reasoning tags immediately
-                            text_chunk = re.sub(r'</?redacted_reasoning>', '', text_chunk, flags=re.IGNORECASE)
-                            text_chunk = re.sub(r'</?think>', '', text_chunk, flags=re.IGNORECASE)
-                            
-                            if is_reasoning:
-                                # Show reasoning in dim style if it's the first chunk of reasoning
-                                if not collected_content.startswith("<think>"):
-                                    # We don't want to add tags to collected_content itself to avoid confusing the parser,
-                                    # but we want to show it in the TUI.
-                                    pass
-                            
-                            collected_content += text_chunk
                             current_line += text_chunk
-                            
+
                             # Update TUI's current line buffer for live display
                             with tui._lock:
                                 tui.current_line_buffer = current_line
-                            
+
                             # If we have a newline, flush the complete line to buffer
                             if '\n' in current_line:
                                 parts = current_line.split('\n', 1)
@@ -4074,13 +4154,13 @@ All files must be saved inside this directory.
                                 # Add complete line to stream buffer - ALWAYS add
                                 tui.append_stream(line_to_add)
                                 current_line = parts[1] if len(parts) > 1 else ""
-                                
+
                                 # Update current line buffer after flushing
                                 with tui._lock:
                                     tui.current_line_buffer = current_line
                             # NOTE: If no newline yet, content stays in current_line_buffer
                             # and is displayed via render() - it will be flushed at stream end
-                            
+
                             # Update immediately for live feel (shows current_line_buffer)
                             # This ensures content is visible even without newlines
                             live.update(tui.render())
@@ -4173,6 +4253,11 @@ All files must be saved inside this directory.
                             pass
                         continue
                 
+                # Close any open <think> block before building the message
+                if _in_reasoning_phase:
+                    collected_content += "</think>"
+                    _in_reasoning_phase = False
+
                 # Flush any remaining line after stream ends
                 # CRITICAL: ALWAYS add current_line to buffer if it has content
                 # This ensures content that didn't have a newline is still visible
@@ -5040,10 +5125,32 @@ All files must be saved inside this directory.
                         live.update(tui.render())
             
             # ═══════════════════════════════════════════════════════════════
+            # TODO FEEDBACK: If agent had a chance to set TODOs but didn't, tell it
+            # ═══════════════════════════════════════════════════════════════
+            # After the first loop, TODOs must be set. If they're still empty, inject
+            # explicit feedback into the history so the model knows what it missed.
+            if not task_mgr.todos and loop.loop_count >= 2:
+                called_set_todos = any(
+                    tc.get("function", {}).get("name") == "set_todos"
+                    for tc in (tool_calls or [])
+                )
+                if not called_set_todos:
+                    tui.append_stream("[FEEDBACK] Agent did not call set_todos — injecting reminder...")
+                    history.append({
+                        "role": "user",
+                        "content": (
+                            "⚠️ You have not called set_todos yet.\n"
+                            "Before writing any code, you MUST call set_todos with a list of tasks.\n"
+                            "This is required — do it NOW as your very next action."
+                        ),
+                    })
+                    current_state.history = history
+
+            # ═══════════════════════════════════════════════════════════════
             # CRITICAL CHECKS - RUN REGARDLESS OF msg_content
             # These checks ensure the agent doesn't skip work!
             # ═══════════════════════════════════════════════════════════════
-            
+
             # ═══════════════════════════════════════════════════════════════
             # ACTION-REQUIRED MODE: Idle Detection with Task-Context Preservation
             # ═══════════════════════════════════════════════════════════════
@@ -5800,7 +5907,16 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
             for tc in tool_calls:
                 fn_name = tc['function']['name'].strip()
                 fn_args_str = tc['function']['arguments']
-                
+
+                # CRITICAL: Save history reference NOW, before tool execution.
+                # Some tools (set_todos) trigger a context switch via sync_legacy_vars(),
+                # which reassigns `history` to the NEW context. The tool result must go
+                # into the history that was active when this tool was called, otherwise
+                # we get an orphaned role='tool' message in the fresh task context,
+                # causing a 400: "Messages with role 'tool' must be a response to a
+                # preceding message with 'tool_calls'".
+                _history_at_dispatch = history
+
                 # DEBUG: Trace execution flow
                 msg = f"[DEBUG-X] EXEC START: Processing '{fn_name}'"
                 tui.append_stream(msg)
@@ -7433,9 +7549,13 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         result_str = result
                         tui.append_stream("Blocked bash echo of error - fix the issue instead")
                 
-                # Add result to history
+                # Add result to the history that was active WHEN this tool was called.
+                # Using _history_at_dispatch (saved before execution) ensures the result
+                # lands in the correct context even if a context switch happened during
+                # execution (e.g. set_todos triggers switch_to_task_context which
+                # reassigns the `history` variable via sync_legacy_vars).
                 _log_to_file(f"[DEBUG-X] Adding tool result to history: fn_name={fn_name}, result_len={len(result_str)}")
-                history.append({
+                _history_at_dispatch.append({
                     "role": "tool",
                     "tool_call_id": tc['id'],
                     "name": fn_name,

@@ -2606,7 +2606,12 @@ function VAFDashboardContent() {
                     // Only update UI if this is the active session
                     const activeSessionId = currentSessionIdRef.current;
                     if (!data.sessionId || data.sessionId === activeSessionId) {
-                        isStoppingGenerationRef.current = false;
+                        // Keep isStoppingGenerationRef true for 3s after stop is acknowledged.
+                        // The backend confirms stop immediately but the agent loop may still
+                        // be running and send late agent_message_update events that would
+                        // re-arm isGenerating and bring the stop button back.
+                        // The ref guards those late events (line: !isStoppingGenerationRef.current).
+                        setTimeout(() => { isStoppingGenerationRef.current = false; }, 3000);
                         setLoading(false);
                         setIsGenerating(false);
                         setIsStoppingGeneration(false);
@@ -2763,7 +2768,7 @@ function VAFDashboardContent() {
     }, [isContextModalOpen]);
 
     const stopGeneration = () => {
-        if (!ws || !currentSessionId || isStoppingGeneration) return;
+        if (!ws || !currentSessionId || isStoppingGenerationRef.current) return;
         isStoppingGenerationRef.current = true;
         setIsStoppingGeneration(true);
         ws.send(JSON.stringify({

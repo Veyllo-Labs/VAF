@@ -7528,6 +7528,29 @@ class Agent:
         messages = multimodal_messages
         # -------------------------------------------------------------------
 
+        # DeepSeek: restore reasoning_content as a separate field in assistant history messages.
+        # When DeepSeek returns reasoning_content we store it inline as <think>...</think> in content.
+        # On the next API call, DeepSeek 400s with "reasoning_content in thinking mode must be
+        # passed back" unless we include it as a separate "reasoning_content" field in the message.
+        if _provider == "deepseek":
+            import re as _re
+            _think_re = _re.compile(r"<think>(.*?)</think>", _re.DOTALL)
+            fixed = []
+            for msg in messages:
+                if msg.get("role") == "assistant":
+                    content = msg.get("content") or ""
+                    if isinstance(content, str) and "<think>" in content:
+                        match = _think_re.search(content)
+                        if match:
+                            reasoning = match.group(1).strip()
+                            remaining = _think_re.sub("", content).strip()
+                            msg = dict(msg)
+                            msg["reasoning_content"] = reasoning
+                            # content must be a non-null string; use empty string if nothing left
+                            msg["content"] = remaining or ""
+                fixed.append(msg)
+            messages = fixed
+
         is_gemma = "gemma" in self.filename.lower()
         if not is_gemma:
             return messages

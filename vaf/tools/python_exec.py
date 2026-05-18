@@ -32,7 +32,9 @@ class PythonExecTool(BaseTool):
     description = (
         "⚠️ UNSAFE: Run Python code directly on the HOST system (no sandbox). "
         "Only use when you need host filesystem/network access. "
-        "Requires explicit user approval. Prefer 'python_sandbox' for safe execution."
+        "Requires explicit user approval. Prefer 'python_sandbox' for safe execution. "
+        "NEVER use this to write files — use write_file/document_writer instead. "
+        "Large strings (HTML, code) will cause 'EOF when reading a line' errors via -c."
     )
 
     parameters = {

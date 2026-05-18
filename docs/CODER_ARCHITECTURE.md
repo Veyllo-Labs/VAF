@@ -116,6 +116,16 @@ This is the massive entry point method.
     *   **Completed-Task Glue:** `_build_completed_info()` summarises previously finished tasks and injects them into the new system prompt (prevents "Context Amnesia" without polluting the window).
     *   **Existing-Files Injection:** `create_fresh_context_for_task()` scans `base_dir` and injects a file list into the task system prompt. Infrastructure entries are excluded: hidden files (`.`-prefix), `.git/`, `.vaf/`, `PARTIAL_*` backups, and named infra files (`.gitignore`, `.gitattributes`, `.editorconfig`, `.env.example`). When no code files exist, the note reads: *"The project directory is empty — call `write_file` to create the first file."*
 
+### ⚠️ Critical: Context Switch + Tool Result Ordering
+
+`switch_to_task_context()` calls `sync_legacy_vars()` which **reassigns the local `history` variable** to the new task context's history. This means any code that runs *after* the context switch and appends to `history` will write into the **new** task context, not the one where the tool was called.
+
+**The bug this caused:** `set_todos` triggers a context switch to `task_0` (fresh history: `[system, user]`). The tool result for `set_todos` was then appended to the now-switched `history` → task_0 got an orphaned `role: tool` message with no preceding `assistant+tool_calls` → DeepSeek 400 on Loop 2.
+
+**The fix:** At the start of the `for tc in tool_calls:` loop, `_history_at_dispatch = history` captures the reference *before* execution. The tool result is always appended to `_history_at_dispatch`, not `history`. This ensures the result lands in the context where the tool was invoked, regardless of any context switches during execution.
+
+**Safety net:** `clean_history` building pre-computes `_valid_tool_call_ids` (all IDs present in `assistant.tool_calls` entries) and silently drops any `role: tool` message whose `tool_call_id` is not in that set. This prevents any residual orphaned messages from reaching the API.
+
 ---
 
 ## 4. The Agentic Loop (`while True`) (Lines ~2600+)

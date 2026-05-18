@@ -1304,27 +1304,43 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # librarian_agent …) but the response has no [ASYNC_ACK] marker,
                     # no IPC task was actually registered — it hallucinated.
                     # Inject a correction and re-run chat_step once to force the real call.
-                    # Tool names are language-agnostic; natural-language phrases cover DE + EN.
-                    _hallucination_phrases = [
-                        # Tool names (always the same regardless of language)
+                    #
+                    # IMPORTANT: We require BOTH an agent-name reference AND an active-running
+                    # indicator to be present. This prevents false positives when the agent is
+                    # merely reporting a failure ("Der Coding Agent ist gecrasht") or telling
+                    # the user it will wait.
+                    _agent_name_phrases = [
+                        # Exact tool names (underscore form)
                         "coding_agent", "librarian_agent", "research_agent",
-                        # English – agent described as running
+                        # Natural-language aliases (EN + DE)
                         "coding agent", "sub-agent", "subagent",
+                        "der sub-agent", "der subagent",
+                    ]
+                    _running_indicator_phrases = [
+                        # English – agent described as actively running/started
                         "is now working", "working on it", "has been started",
                         "is currently working", "is running", "has started",
                         "is being created", "agent is working",
-                        # German – agent described as running
+                        # German – agent described as actively running/started
                         "arbeitet gerade", "wird erstellt", "wird bearbeitet",
                         "ist gestartet", "startet gerade", "läuft gerade",
                         "ist bereits am laufen", "ist am arbeiten",
-                        "der coding", "der sub-agent", "der subagent",
                     ]
+                    # Exemption: agent explicitly said it would wait → not a hallucination
+                    _wait_phrases = [
+                        "warten", "warte", "ich warte", "sobald", "wait", "waiting",
+                        "bereit für", "ready for",
+                    ]
+                    _final_lower = final_text.lower()
                     _is_async = response_text.startswith("[ASYNC_ACK]")
                     _is_sys   = response_text.startswith("[SYSTEM_LOG_ONLY]")
-                    if (
+                    _hallucination_detected = (
                         not _is_async and not _is_sys
-                        and any(p in final_text.lower() for p in _hallucination_phrases)
-                    ):
+                        and any(p in _final_lower for p in _agent_name_phrases)
+                        and any(p in _final_lower for p in _running_indicator_phrases)
+                        and not any(p in _final_lower for p in _wait_phrases)
+                    )
+                    if _hallucination_detected:
                         try:
                             from vaf.core.subagent_ipc import get_ipc as _get_ipc
                             _ipc = _get_ipc()
@@ -1345,30 +1361,40 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     "(e.g. coding_agent, librarian_agent) to actually start the "
                                     "task. Do NOT write another text response — call the tool."
                                 )
-                                agent.history.append({"role": "user", "content": _correction})
-                                _corr_parts = []
-                                def _corr_stream(text):
-                                    _corr_parts.append(text)
-                                    _t = "".join(_corr_parts)
-                                    if _t.strip():
-                                        get_web_interface().emit_agent_message(
-                                            "assistant", _t, session_id=task.session_id
-                                        )
-                                agent.chat_step(
-                                    user_input=_correction,
-                                    stream_callback=_corr_stream,
-                                    skip_input=True,   # already added above
-                                    disable_workflows=True,
-                                    disable_tools=False,
-                                )
-                                if _corr_parts:
-                                    _corr_final = "".join(_corr_parts)
-                                    get_web_interface().emit_agent_message(
-                                        "assistant", _corr_final, session_id=task.session_id
+                                # Skip correction if user already pressed stop
+                                if tq.should_stop(task.session_id):
+                                    tq.clear_stop(task.session_id)
+                                    get_web_interface().log(
+                                        "Hallucination correction skipped — user requested stop.",
+                                        level="info", source="System", session_id=task.session_id
                                     )
-                                    get_web_interface().emit_message_complete(
-                                        content=_corr_final, session_id=task.session_id
-                                    )
+                                else:
+                                  agent.history.append({"role": "user", "content": _correction})
+                                  _corr_parts = []
+                                  def _corr_stream(text):
+                                      if tq.should_stop(task.session_id):
+                                          raise _StopGenerationRequested("Stop during hallucination correction")
+                                      _corr_parts.append(text)
+                                      _t = "".join(_corr_parts)
+                                      if _t.strip():
+                                          get_web_interface().emit_agent_message(
+                                              "assistant", _t, session_id=task.session_id
+                                          )
+                                  agent.chat_step(
+                                      user_input=_correction,
+                                      stream_callback=_corr_stream,
+                                      skip_input=True,   # already added above
+                                      disable_workflows=True,
+                                      disable_tools=False,
+                                  )
+                                  if _corr_parts:
+                                      _corr_final = "".join(_corr_parts)
+                                      get_web_interface().emit_agent_message(
+                                          "assistant", _corr_final, session_id=task.session_id
+                                      )
+                                      get_web_interface().emit_message_complete(
+                                          content=_corr_final, session_id=task.session_id
+                                      )
                         except Exception as _hg_err:
                             print(f"[Headless] Hallucination guard error: {_hg_err}")
                     # ── End hallucination guard ───────────────────────────────────────

@@ -269,6 +269,30 @@ class Config:
             for key in ("speech_tts_docker_url", "speech_tts_docker_url_de", "speech_tts_docker_url_en", "speech_tts_docker_url_fr", "speech_stt_docker_url"):
                 if key in cls.DEFAULTS and not (result.get(key) or "").strip():
                     result[key] = cls.DEFAULTS[key]
+            # Migrate deprecated DeepSeek model names to current equivalents.
+            # Old names (deepseek-chat, deepseek-coder, deepseek-reasoner) were valid
+            # before 2025 but are now replaced by deepseek-v4-flash / deepseek-v4-pro.
+            # deepseek-reasoner also causes 400 errors because it doesn't support tool_choice.
+            _DS_MIGRATIONS = {
+                "deepseek-chat":     "deepseek-v4-flash",
+                "deepseek-coder":    "deepseek-v4-flash",
+                "deepseek-reasoner": "deepseek-v4-flash",
+                "deepseek-r1":       "deepseek-v4-flash",
+            }
+            _ds_saved = result.get("api_model_deepseek", "")
+            if _ds_saved in _DS_MIGRATIONS:
+                result["api_model_deepseek"] = _DS_MIGRATIONS[_ds_saved]
+                # Persist the fix so the stale value never comes back
+                try:
+                    import json as _json
+                    with open(cls.CONFIG_FILE, "r") as _f:
+                        _raw = _json.load(_f)
+                    if _raw.get("api_model_deepseek") == _ds_saved:
+                        _raw["api_model_deepseek"] = _DS_MIGRATIONS[_ds_saved]
+                        with open(cls.CONFIG_FILE, "w") as _f:
+                            _json.dump(_raw, _f, indent=4)
+                except Exception:
+                    pass
             # Hard lock for hosting mode (server appliance deployments):
             # when enabled, Local Network Hosting cannot be disabled via UI/API saves.
             if bool(result.get("local_network_force_enabled", False)):

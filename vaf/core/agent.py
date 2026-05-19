@@ -5997,6 +5997,12 @@ class Agent:
                 
                 self.history.append(msg)
 
+                # Defer system/user messages that tool handlers want to append until
+                # AFTER all tool results are in history. A sys message between two
+                # consecutive role:tool messages (for the same TC batch) causes
+                # DeepSeek 400 "insufficient tool messages following tool_calls".
+                _post_tc_messages: list = []
+
                 for tc in tool_calls_detected:
                     function_name = tc['function']['name']
                     
@@ -6167,7 +6173,7 @@ class Agent:
                                 "name": function_name,
                                 "content": processed_result
                             })
-                            self.history.append({
+                            _post_tc_messages.append({
                                 "role": "system",
                                 "content": "[INFO] The document creation failed because the task was too vague. Ask the user for more details about the document they want to create (e.g., what sections, what content should be included, what is the purpose of the document)."
                             })
@@ -6289,9 +6295,11 @@ class Agent:
                     )
                     
                     if result and is_tool_error:
-                        # Add a system message to ensure the model responds to the error
-                        # CRITICAL: Prevent retrying the same tool
-                        self.history.append({
+                        # Defer this system message until after ALL tool results are appended.
+                        # Injecting a sys msg between two consecutive role:tool messages (when the
+                        # agent called multiple tools in one response) causes DeepSeek 400
+                        # "insufficient tool messages following tool_calls".
+                        _post_tc_messages.append({
                             "role": "system",
                             "content": (
                                 f"[!] CRITICAL: The tool '{function_name}' FAILED with error: {result}\n\n"
@@ -6304,7 +6312,12 @@ class Agent:
                     # Tool responses can be large (e.g., web_search results, file contents)
                     # Compress if we're approaching the limit
                     self.manage_context()
-                
+
+                # Flush deferred messages (error nudges, doc-agent hints) now that ALL
+                # tool results are in history — safe to insert non-tool messages here.
+                for _ptm in _post_tc_messages:
+                    self.history.append(_ptm)
+
                 # ═══════════════════════════════════════════════════════════════
                 # LOOP PROTECTION: Turn limit check
                 # ═══════════════════════════════════════════════════════════════
@@ -7408,17 +7421,29 @@ class Agent:
         # assistant message with tool_calls whose corresponding tool response
         # was in the discarded middle section.  APIs (e.g. DeepSeek) reject
         # this with HTTP 400 "insufficient tool messages following tool_calls".
-        # Strip tool_calls entries that have no matching tool response.
-        responded_ids: set = set()
-        for msg in messages:
-            if msg.get("role") == "tool" and msg.get("tool_call_id"):
-                responded_ids.add(msg["tool_call_id"])
+        #
+        # POSITION-AWARE: context compression may inject preserved critical
+        # role:tool results (from the middle section) BEFORE recent_messages,
+        # which can make a role:tool appear at an earlier index than its
+        # assistant+tool_calls message. A naive set-membership check would
+        # incorrectly consider such a TC "responded to", leaving the API with
+        # a TC message that has no following tool response → 400.
+        # Fix: only count a role:tool as a valid response if it appears at an
+        # index AFTER the assistant+tool_calls message that issued the call.
+        _tc_response_idx: dict = {}  # tool_call_id → index of first role:tool
+        for _i, _m in enumerate(messages):
+            if _m.get("role") == "tool" and _m.get("tool_call_id"):
+                _tcid = _m["tool_call_id"]
+                if _tcid not in _tc_response_idx:
+                    _tc_response_idx[_tcid] = _i
+
         cleaned: List[Dict] = []
-        for msg in messages:
+        for _i, msg in enumerate(messages):
             if msg.get("role") == "assistant" and msg.get("tool_calls"):
                 live_calls = [
                     tc for tc in msg["tool_calls"]
-                    if tc.get("id") in responded_ids
+                    if tc.get("id") in _tc_response_idx
+                    and _tc_response_idx[tc.get("id")] > _i  # response must follow the TC
                 ]
                 if len(live_calls) != len(msg["tool_calls"]):
                     # Some calls have no response — rebuild the message
@@ -7429,7 +7454,20 @@ class Agent:
                         # All calls are dangling — drop tool_calls entirely
                         msg = {k: v for k, v in msg.items() if k != "tool_calls"}
             cleaned.append(msg)
-        messages = cleaned
+
+        # Also remove orphaned role:tool messages — whose assistant+tool_calls
+        # was stripped by the loop above or removed by compression. Leaving them
+        # can cause API errors about unexpected role:tool placement.
+        _live_tc_ids: set = set()
+        for _m in cleaned:
+            if _m.get("role") == "assistant" and _m.get("tool_calls"):
+                for _tc in _m["tool_calls"]:
+                    if _tc.get("id"):
+                        _live_tc_ids.add(_tc["id"])
+        messages = [
+            _m for _m in cleaned
+            if not (_m.get("role") == "tool" and _m.get("tool_call_id") not in _live_tc_ids)
+        ]
         # --- Vision capability check -----------------------------------------
         # Determine whether the active provider+model supports multimodal input.
         # Models that silently return empty responses (e.g. deepseek-chat) must

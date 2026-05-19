@@ -78,14 +78,35 @@ Together, **backend.log** and **startup_trace.txt** show whether the tray starte
 
 **Error:** `"An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'. (insufficient tool messages following tool_calls message)"`
 
-**Root cause:** After context compression (`ContextManager.compress()`), the middle section of history is summarized. Critical **tool results** are preserved but their corresponding **assistant+tool_calls** messages may be discarded. After compression the `clean_history` in `coder.py` sees an assistant message with `tool_calls` whose matching `role: tool` response is gone → 400 on the next API request.
+### Cause 1: Context compression (compression-induced orphans)
 
-**Fix (`clean_history` in `coder.py`):** Before building `clean_history`, two index sets are computed from raw history:
+After `ContextManager.compress()`, the middle section of history is summarized. Critical **tool results** are preserved but their corresponding **assistant+tool_calls** messages may be discarded → dangling `assistant+tool_calls` messages (or out-of-order role:tool messages) cause 400 on the next API request.
 
+**Sub-case 1a — coder.py:** `clean_history` computes two index sets:
 - `_valid_tool_call_ids`: IDs present in any `assistant.tool_calls` → used to drop orphaned `role: tool` responses
 - `_responded_ids`: IDs that have a matching `role: tool` response → used to **strip dangling tool_calls from assistant messages**
 
-For each assistant message, any `tool_calls` entry whose ID is not in `_responded_ids` is removed. If all tool_calls are dangling, the `tool_calls` key is removed entirely. This is the same logic `_prepare_messages()` in `agent.py` applies.
+**Sub-case 1b — agent.py `_prepare_messages()` (position-aware):** `ContextManager.compress()` inserts preserved critical `role:tool` results from the middle section **before** `recent_messages`. This means a `role:tool` can appear at an *earlier index* than its `assistant+tool_calls` message. A naive set-membership check would incorrectly consider such a TC "responded to", but the API finds no tool result *following* the TC → 400.
+
+**Fix (`_prepare_messages()` in `agent.py`):** Uses a position-aware dict `_tc_response_idx: {id → index}`. A tool_call is only counted as "responded" if its `role:tool` appears at a **later** index than the `assistant+tool_calls` message. Also removes orphaned `role:tool` messages (whose TC was stripped).
+
+### Cause 2: System messages injected between tool results in the same TC batch
+
+When the agent calls **multiple tools** in a single response, all `role:tool` results for that batch must appear consecutively — no system/user messages between them. An error handler injecting a system message between two consecutive role:tool results causes the API to stop reading tool results early → "insufficient tool messages".
+
+**Instances fixed:**
+
+- **`coder.py` — write_file handler:** Nudge/linter messages were appended to `history` before the tool result. Fix: `_post_tool_messages` list — deferred until after the tool result.
+- **`coder.py` — set_todos reminder:** No `and not tool_calls` guard → user message injected between TC and tool result. Fix: added `and not tool_calls`.
+- **`agent.py` — `is_tool_error` system message & `document_agent` failure message:** Both were appended to `self.history` inside `for tc in tool_calls_detected:`, after the current tool's result but before results of subsequent tools in the same batch. Fix: `_post_tc_messages` list initialized before the `for tc` loop; both messages deferred to it; flushed to `self.history` after the loop ends.
+
+### Cause 3: reasoning_content stripped from tool-calling messages (DeepSeek-specific)
+
+DeepSeek requires `reasoning_content` to be passed back for **every** assistant message that had reasoning — including tool-calling ones. There is no restriction on sending RC for multiple tool-calling messages.
+
+**Misdiagnosis history:** An early fix stripped RC from ALL tool-calling assistant messages, assuming it caused "insufficient tool messages" errors. This was wrong — that error was caused by Cause 2 (user/system message injection between TC and tool result). Stripping RC from TC messages caused a new "reasoning_content must be passed back" 400 error.
+
+**Fix (`clean_history` in `coder.py`):** `reasoning_content` is extracted and passed back for ALL assistant messages (with or without `tool_calls`) that contain `<think>...</think>` in their content. The `<think>` tags are stripped from `content` in all cases. Other providers (OpenAI, Anthropic, Google) just have the tags stripped without adding `reasoning_content`.
 
 ---
 

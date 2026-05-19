@@ -3069,10 +3069,14 @@ All files must be saved inside this directory.
                         "type": "function",
                         "function": {
                             "name": "read_file",
-                            "description": "Read a file to see its content.",
+                            "description": "Read a file. Use start_line/end_line to read large files in sections (e.g. start_line=1 end_line=100, then start_line=101 end_line=200). Returns '[Lines X-Y of N total]' header so you know the total line count.",
                             "parameters": {
                                 "type": "object",
-                                "properties": {"path": {"type": "string"}},
+                                "properties": {
+                                    "path": {"type": "string"},
+                                    "start_line": {"type": "integer", "description": "First line (1-indexed). Omit to read from beginning."},
+                                    "end_line": {"type": "integer", "description": "Last line (inclusive). Omit to read to end of file."},
+                                },
                                 "required": ["path"]
                             }
                         }
@@ -3118,10 +3122,14 @@ All files must be saved inside this directory.
                     "type": "function",
                     "function": {
                         "name": "read_file",
-                        "description": "Read a file.",
+                        "description": "Read a file. Use start_line/end_line to read large files in sections. Returns '[Lines X-Y of N total]' header so you know the total line count.",
                         "parameters": {
                             "type": "object",
-                            "properties": {"path": {"type": "string"}},
+                            "properties": {
+                                "path": {"type": "string"},
+                                "start_line": {"type": "integer", "description": "First line (1-indexed). Omit to read from beginning."},
+                                "end_line": {"type": "integer", "description": "Last line (inclusive). Omit to read to end of file."},
+                            },
                             "required": ["path"]
                         }
                     }
@@ -3584,7 +3592,9 @@ All files must be saved inside this directory.
                             # All tool_calls are dangling — remove the key entirely
                             clean_msg = {k: v for k, v in clean_msg.items() if k != "tool_calls"}
                 # Handle <think>...</think> in assistant history messages.
-                # DeepSeek requires reasoning_content as a separate field in the message.
+                # DeepSeek requires reasoning_content as a separate field — for ALL assistant
+                # messages that had reasoning, including tool-calling ones. Every turn's
+                # reasoning_content must be passed back exactly.
                 # Other providers (OpenAI, Anthropic, Google) just need it stripped from content.
                 if clean_msg.get("role") == "assistant" and isinstance(clean_msg.get("content"), str):
                     if "<think>" in clean_msg["content"]:
@@ -3873,6 +3883,26 @@ All files must be saved inside this directory.
                 }
                 _req_body["tools"] = tools_schema
                 _req_body["tool_choice"] = _effective_tool_choice
+                # Debug: Log message structure (roles + field names) for each loop ≥ 2
+                # This captures what's actually sent to the API without flooding the log.
+                if loop.loop_count >= 2:
+                    try:
+                        if lg:
+                            _msg_summary = []
+                            for _m in _messages_for_request:
+                                _fields = [_m.get("role", "?")]
+                                if _m.get("tool_calls"):
+                                    _fields.append(f"tc={[_t['function']['name'] for _t in _m['tool_calls']]}")
+                                if _m.get("reasoning_content"):
+                                    _fields.append(f"RC={len(_m['reasoning_content'])}chars")
+                                if _m.get("tool_call_id"):
+                                    _fields.append(f"tcid={_m['tool_call_id'][:8]}")
+                                _content_val = _m.get("content") or ""
+                                _fields.append(f"content={len(_content_val)}chars")
+                                _msg_summary.append(" ".join(_fields))
+                            lg.event("request_msg_structure", loop=loop.loop_count, messages=_msg_summary)
+                    except Exception:
+                        pass
                 stream_response = requests.post(
                     _llm_chat_url,
                     headers=_req_headers,
@@ -3975,6 +4005,9 @@ All files must be saved inside this directory.
                 if stream_response.status_code == 200:
                     if hasattr(loop, 'consecutive_400'):
                         loop.consecutive_400 = 0
+                    # Reset stream-retry counter on any successful connection
+                    if hasattr(loop, '_stream_retries'):
+                        loop._stream_retries = 0
                 
                 if stream_response.status_code != 200:
                     error_text = stream_response.text[:200] if stream_response.text else "No error details"
@@ -4140,7 +4173,11 @@ All files must be saved inside this directory.
                             text_chunk = ''
                             is_reasoning = False
 
-                        if text_chunk:
+                        # Reasoning chunks are accumulated in collected_content for
+                        # DeepSeek RC passback but must NOT be shown in the TUI —
+                        # the <think> content would flood the terminal with internal
+                        # reasoning and cause apparent text duplication.
+                        if text_chunk and not is_reasoning:
                             current_line += text_chunk
 
                             # Update TUI's current line buffer for live display
@@ -4667,7 +4704,32 @@ All files must be saved inside this directory.
                         lg.event("llm_stream_error", error=str(e), traceback=str(e))
                 except Exception:
                     pass
-                tui.end_stream()  # Mark stream as finished even on error
+                tui.end_stream()
+
+                # Retry transient network errors (ConnectionResetError, ChunkedEncodingError).
+                # These typically happen when the DeepSeek API drops a long-running stream
+                # (large files take 2-5+ minutes to generate). History is intact at this
+                # point — no assistant message or tool results were added yet — so continuing
+                # the outer while-True loop safely resends the same request.
+                _e_str = str(e)
+                _is_transient = (
+                    isinstance(e, (ConnectionResetError,
+                                   requests.exceptions.ChunkedEncodingError))
+                    or "Connection reset" in _e_str
+                    or "ConnectionResetError" in _e_str
+                    or "ChunkedEncodingError" in _e_str
+                    or "RemoteDisconnected" in _e_str
+                )
+                _stream_retries = getattr(loop, "_stream_retries", 0)
+                if _is_transient and _stream_retries < 3:
+                    loop._stream_retries = _stream_retries + 1
+                    tui.append_stream(
+                        f"[WARN] Stream connection lost ({loop._stream_retries}/3). "
+                        f"Retrying in 5s..."
+                    )
+                    time.sleep(5)
+                    continue  # restart the while-True loop with the same history
+
                 return f"Error: Stream failed - {e}"
                 
             # ═══════════════════════════════════════════════════════════════
@@ -5129,7 +5191,12 @@ All files must be saved inside this directory.
             # ═══════════════════════════════════════════════════════════════
             # After the first loop, TODOs must be set. If they're still empty, inject
             # explicit feedback into the history so the model knows what it missed.
-            if not task_mgr.todos and loop.loop_count >= 2:
+            # IMPORTANT: Skip this check when tool_calls is set — the tool result must
+            # immediately follow the assistant+tool_calls message. Injecting a user
+            # message between them causes "insufficient tool messages" 400 errors.
+            # If tool_calls is non-empty, the write_file handler already rejects writes
+            # when todos are missing and returns the error as the tool result.
+            if not task_mgr.todos and loop.loop_count >= 2 and not tool_calls:
                 called_set_todos = any(
                     tc.get("function", {}).get("name") == "set_todos"
                     for tc in (tool_calls or [])
@@ -5917,6 +5984,14 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 # preceding message with 'tool_calls'".
                 _history_at_dispatch = history
 
+                # Messages that tool handlers want to append to history (nudges, linter
+                # output, truncation warnings, etc.) MUST be added AFTER the tool result,
+                # not before. Adding them before the tool result creates an invalid sequence:
+                #   assistant+tool_calls → system(nudge) → role:tool
+                # which causes "insufficient tool messages" 400 errors on strict APIs.
+                # Handlers must use _post_tool_messages.append(...) instead of history.append.
+                _post_tool_messages: list = []
+
                 # DEBUG: Trace execution flow
                 msg = f"[DEBUG-X] EXEC START: Processing '{fn_name}'"
                 tui.append_stream(msg)
@@ -6534,10 +6609,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 task_context = ""
                                 
                                 # Detect task type
+                                task_words = task_lower.split()
                                 if any(kw in task_lower for kw in ["website", "webseite", "webpage", "landing"]):
                                     task_type = "website"
                                     # Extract business type for websites
-                                    task_words = task_lower.split()
                                     for i, word in enumerate(task_words):
                                         if word in ["für", "for"] and i + 1 < len(task_words):
                                             task_context = task_words[i + 1]
@@ -7376,7 +7451,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                                     f"The JS file is cut off — you MUST finish it: complete all unclosed functions "
                                                     f"and add the final `}}` or `;`. Do NOT write any other file."
                                                 )
-                                            history.append({
+                                            _post_tool_messages.append({
                                                 "role": "system",
                                                 "content": (
                                                     f"⚠️ CRITICAL: `{_fname_trunc}` is TRUNCATED (output was cut off). "
@@ -7400,8 +7475,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 except Exception:
                                     pass
 
-                                # CRITICAL: Stronger nudge after write
-                                history.append({
+                                # Nudge after write — queued to go AFTER the tool result
+                                # so the sequence is: assistant+TC → tool_result → system(nudge).
+                                _post_tool_messages.append({
                                     "role": "system",
                                     "content": (
                                         f"✅ File `{os.path.basename(path)}` successfully written.\n\n"
@@ -7443,13 +7519,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                                 f"3. Do NOT call task_done until linter passes\n\n"
                                                 f"🚨 Files with linter errors will cause issues!"
                                             )
-                                            history.append({
+                                            _post_tool_messages.append({
                                                 "role": "system",
                                                 "content": lint_msg
                                             })
-                                            # Update context state
-                                            current_state.history = history
-                                            context_states[current_state.phase] = current_state
                                             tui.append_stream(f"❌ LINTER FAIL: {os.path.basename(path)} has errors!")
                                         else:
                                             # ✅ PASS: No linter errors
@@ -7458,13 +7531,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                                 f"File: {os.path.basename(path)}\n"
                                                 f"Status: PASS - No linter errors\n"
                                             )
-                                            history.append({
+                                            _post_tool_messages.append({
                                                 "role": "system",
                                                 "content": lint_msg
                                             })
-                                            # Update context state
-                                            current_state.history = history
-                                            context_states[current_state.phase] = current_state
                                             tui.append_stream(f"✅ LINTER PASS: {os.path.basename(path)}")
                                 except Exception as lint_error:
                                     # Don't fail the write_file if linter fails
@@ -7555,12 +7625,23 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 # execution (e.g. set_todos triggers switch_to_task_context which
                 # reassigns the `history` variable via sync_legacy_vars).
                 _log_to_file(f"[DEBUG-X] Adding tool result to history: fn_name={fn_name}, result_len={len(result_str)}")
+                # read_file can return large files; give it more room so the agent
+                # can verify file contents without hitting the truncation limit.
+                _result_char_limit = 8000 if fn_name == "read_file" else 3000
                 _history_at_dispatch.append({
                     "role": "tool",
                     "tool_call_id": tc['id'],
                     "name": fn_name,
-                    "content": result_str[:3000]
+                    "content": result_str[:_result_char_limit]
                 })
+
+                # Flush deferred post-tool messages (nudges, linter output, truncation
+                # warnings) AFTER the tool result so the API sees the valid sequence:
+                #   assistant+tool_calls → role:tool → system(nudge) [valid]
+                # rather than:
+                #   assistant+tool_calls → system(nudge) → role:tool [INVALID — 400]
+                for _ptm in _post_tool_messages:
+                    _history_at_dispatch.append(_ptm)
 
         # ═══════════════════════════════════════════════════════════════════
         # LOOP ENDED (timeout or max empty)

@@ -185,6 +185,25 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
           Save
         </button>
 
+        {/* Download button */}
+        <button
+          onClick={() => {
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
+          disabled={!content}
+          className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-[#3e3e3e] hover:bg-[#4e4e4e] disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+          title="Download file"
+        >
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download
+        </button>
+
         {/* Refresh button */}
         <button
           onClick={() => fetchContent()}

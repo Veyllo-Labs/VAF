@@ -329,12 +329,18 @@ For detailed analysis of large files, consider using librarian_agent instead."""
 
     parameters = {
         "type": "object",
-        "properties": {"path": {"type": "string"}},
+        "properties": {
+            "path": {"type": "string"},
+            "start_line": {"type": "integer", "description": "First line to return (1-indexed). Use to read a file in sections."},
+            "end_line": {"type": "integer", "description": "Last line to return (inclusive). Omit to read to end of file."},
+        },
         "required": ["path"]
     }
 
     def run(self, **kwargs) -> str:
         path = kwargs.get('path', '')
+        start_line = kwargs.get('start_line')
+        end_line = kwargs.get('end_line')
         safe, res = is_safe_path(path)
         if not safe: return res
         try:
@@ -506,7 +512,15 @@ For detailed analysis of large files, consider using librarian_agent instead."""
             # ═══════════════════════════════════════════════════════════
             else:
                 with open(res, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
+                    lines = f.readlines()
+                total_lines = len(lines)
+                if start_line is not None or end_line is not None:
+                    s = max(1, int(start_line or 1)) - 1  # convert to 0-indexed
+                    e = int(end_line) if end_line is not None else total_lines
+                    selected = lines[s:e]
+                    header = f"[Lines {s+1}–{min(e, total_lines)} of {total_lines} total]\n"
+                    return header + "".join(selected)
+                content = "".join(lines)
                 return content
                 
         except Exception as e: return str(e)

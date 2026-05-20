@@ -175,8 +175,31 @@ Last user Mert interaction: vor 10 Min. via Telegram. (About: Kannst du den Depl
 
 ---
 
+## 3d. Thinking-mode reply context injection
+
+When the agent reaches out to the user during a background **Thinking Mode** pass (e.g. "Hey Mert, bist du da?") and waits for a reply, the question text is stored via `set_waiting_for_reply(question_text=...)` in `vaf/core/thinking_mode.py`.
+
+When the user replies, `chat_step()` reads this stored question and stashes it on `self._thinking_reply_context`. Then `_prepare_messages()` injects it as a `role:system` message **directly before the final user message** in the list sent to the LLM — so the model knows what it originally asked.
+
+**Why not modify `user_input` directly?**  
+Earlier versions prepended `[Context: ...]` to `user_input` itself. This caused the prefix to be stored in `self.history` and to appear in WebUI chat bubbles on page reload. The current approach keeps `self.history` clean: the user's message is stored as typed, and the context only lives in the ephemeral messages list passed to the LLM for that single turn.
+
+**Scope:** works across all channels (WebUI, Telegram, WhatsApp, Discord) — the state is keyed by `user_scope_id`, not by channel or session.
+
+**Code locations:**
+
+| Responsibility | File | Notes |
+|---|---|---|
+| Store outbound question | `vaf/core/thinking_mode.py` | `set_waiting_for_reply(question_text=...)` |
+| Read + stash on reply | `vaf/core/agent.py` | `chat_step()` — sets `self._thinking_reply_context` |
+| Inject into LLM messages | `vaf/core/agent.py` | `_prepare_messages()` — system msg before last user msg; clears after use |
+| Clear waiting state | `vaf/core/thinking_mode.py` | `clear_waiting_for_reply()` called in `chat_step()` after stash |
+
+---
+
 ## Summary
 
 - **Last interaction** = the previous user turn (timestamp, channel, short preview), read from `last_interaction.json` and shown in the system prompt.
 - **Current channel** = where this request came from (WebUI / Telegram / CLI), set on the agent before `chat_step` and passed into `build_prompt`.
-- The block is optional: it appears only when at least one of current channel or last interaction is available, and it is kept to one or two short sentences so the model gets clear, minimal context without extra noise.
+- **Thinking-mode reply context** = when the agent sent a proactive question during a background pass, the question text is injected as a system message in `_prepare_messages()` so the LLM understands vague replies like "yes" or "I'm here". History stays clean.
+- The session context block is optional: it appears only when at least one of current channel or last interaction is available, and it is kept to one or two short sentences so the model gets clear, minimal context without extra noise.

@@ -4524,17 +4524,23 @@ class Agent:
                 from vaf.core.thinking_mode import clear_waiting_for_reply, get_waiting_for_reply
                 _scope = getattr(self, "_current_user_scope_id", None)
                 
-                # If we were waiting for a reply, inject the original question as context
-                # so the Main Agent understands vague replies (e.g. "Yes, why?")
+                # If we were waiting for a reply, store the original question as context
+                # so the Main Agent understands vague replies (e.g. "Yes, why?").
+                # We do NOT modify user_input here — that would embed [Context: ...] into
+                # self.history and make it visible in the WebUI chat bubbles on reload.
+                # Instead we stash it on the instance; _prepare_messages() will inject it
+                # as a system message that the LLM sees but history never stores.
                 waiting = get_waiting_for_reply(_scope)
                 if waiting and (waiting.get("question_text") or "").strip():
                     q_text = waiting["question_text"].strip()
-                    user_input = (
-                        f"[Context: You asked the user in a background thinking pass: \"{q_text}\" — "
-                        f"the following is their reply.]\n\n"
-                        + user_input
+                    self._thinking_reply_context = (
+                        f"[Context: You reached out to the user during a background thinking pass "
+                        f"with the following message: \"{q_text}\" — "
+                        f"the user's reply follows immediately after this system note.]"
                     )
-                
+                else:
+                    self._thinking_reply_context = None
+
                 # If we're interacting, we're definitely not waiting anymore
                 # Pass the input text so it gets saved for the NEXT thinking run summary
                 clear_waiting_for_reply(_scope, user_reply_text=user_input)
@@ -7468,6 +7474,29 @@ class Agent:
             _m for _m in cleaned
             if not (_m.get("role") == "tool" and _m.get("tool_call_id") not in _live_tc_ids)
         ]
+
+        # --- Thinking-mode reply context injection ----------------------------
+        # When the agent reached out to the user during a background thinking
+        # pass and the user is now replying, inject a system note just before
+        # the final user message so the LLM understands the reply context.
+        # This is done here (not on user_input) so self.history stays clean and
+        # the [Context: ...] text never appears in WebUI chat bubbles.
+        _thinking_ctx = getattr(self, "_thinking_reply_context", None)
+        if _thinking_ctx:
+            self._thinking_reply_context = None  # consume once
+            # Find index of the last user message
+            _last_user_idx = None
+            for _i in range(len(messages) - 1, -1, -1):
+                if messages[_i].get("role") == "user":
+                    _last_user_idx = _i
+                    break
+            if _last_user_idx is not None:
+                messages = (
+                    messages[:_last_user_idx]
+                    + [{"role": "system", "content": _thinking_ctx}]
+                    + messages[_last_user_idx:]
+                )
+
         # --- Vision capability check -----------------------------------------
         # Determine whether the active provider+model supports multimodal input.
         # Models that silently return empty responses (e.g. deepseek-chat) must

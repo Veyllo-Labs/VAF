@@ -6,6 +6,7 @@ Runs as a daemon thread every gc_interval_hours (default 12).
   whose date in the filename is older than gc_max_age_hours (default 48).
 - Temp files: deletes by mtime (older than gc_max_age_hours).
 - Cache dir: deletes by mtime. Thinking sessions: deleted by thinking_gc_hours.
+- Thinking run logs (thinking_mode_logs/**/*.json): deleted by mtime (gc_max_age_hours).
 Controlled via config: gc_enabled, gc_interval_hours, gc_max_age_hours, thinking_gc_hours.
 """
 
@@ -144,6 +145,7 @@ class GarbageCollector:
         self._clean_temp_files(cutoff, stats)
         self._clean_cache_dir(cutoff, stats)
         self._clean_old_thinking_sessions(stats)
+        self._clean_old_thinking_run_logs(cutoff, stats)
 
         return stats
 
@@ -188,6 +190,24 @@ class GarbageCollector:
                     logger.debug("[GC] Deleted old thinking session %s", sid)
             except Exception as exc:
                 logger.debug("[GC] Skip session %s: %s", sid, exc)
+
+    # -- Thinking-mode run log JSONs (Platform.vaf_dir/thinking_mode_logs/**/*.json) --
+
+    def _clean_old_thinking_run_logs(self, cutoff: datetime, stats: Dict[str, int]) -> None:
+        """Delete thinking-mode run log JSONs older than gc_max_age_hours (by mtime)."""
+        try:
+            from vaf.core.platform import Platform
+            log_dir = Platform.vaf_dir() / "thinking_mode_logs"
+        except Exception:
+            return
+        if not log_dir.exists():
+            return
+        try:
+            for entry in log_dir.rglob("*.json"):
+                if entry.is_file():
+                    self._delete_if_old(entry, cutoff, stats)
+        except PermissionError:
+            stats["errors"] += 1
 
     # -- Log files (dated names: basename_YYYY-MM-DD.log / .txt) -------------
 

@@ -13,7 +13,7 @@ Thinking mode runs the main agent in the background while the user is idle. It a
 - **Safety Abort:** If the user becomes active on any channel during a run, the thinking process is immediately aborted to prevent dual-agent responses.
 - **Locking:** Uses a global file-based lock system with PID verification to prevent parallel runs. See [Singleton Task Locking in PROCESS_MANAGEMENT.md](PROCESS_MANAGEMENT.md#singleton-task-locking).
 - **Context:** The agent loads the user's full chat session — it has the same context as the normal agent.
-- **Output:** Runs are logged to `logs/vaf_think.log` (human-readable) and to JSON run logs. Messages sent to the user are also mirrored in the Web UI / main chat history.
+- **Output:** Runs are logged to `logs/vaf_think_YYYY-MM-DD.log` (human-readable) and to JSON run logs. Messages sent to the user are also mirrored in the Web UI / main chat history.
 - **Workspace (MVP):** Runs can persist artifacts to a per-user Thinking Workspace (`Platform.data_dir()/workspaces/<scope_key>/`). Externally visible actions should be prepared as **handoffs** for approval first.
 - **Working memory bridge:** `update_working_memory` is still the fast scratchpad. In Thinking Mode, updates are mirrored to workspace snapshots (`working_memory/latest.json` + timestamped history) for auditability.
 
@@ -159,10 +159,10 @@ Thinking mode output is **not shown in the Web UI chat list**. It is logged to:
 
 | Location | Format | Purpose |
 |----------|--------|---------|
-| `logs/vaf_think.log` | Human-readable text blocks | Debugging — readable with any text editor |
-| `~/.vaf/thinking_mode_logs/<scope_key>/<run_id>_<ts>.json` | JSON | Internal — used by `_get_last_thinking_summary()` for context injection |
+| `logs/vaf_think_YYYY-MM-DD.log` | Human-readable text blocks | Debugging — readable with any text editor. Cleaned by GC after `gc_max_age_hours`. |
+| `~/.vaf/thinking_mode_logs/<scope_key>/<run_id>_<ts>.json` | JSON | Internal — used by `_get_last_thinking_summary()` for context injection. Cleaned by GC after `gc_max_age_hours`. |
 
-**`vaf_think.log` format:**
+**`vaf_think_YYYY-MM-DD.log` format:**
 ```
 ================================================================================
 [THINKING RUN] 2026-02-20T14:30:45.123
@@ -206,7 +206,7 @@ Thinking mode output is **not shown in the Web UI chat list**. It is logged to:
 | `last_interaction.json` | Last activity per user; used for idle detection |
 
 Run logs: `Platform.vaf_dir() / "thinking_mode_logs" / <scope_key> / <run_id>_<ts>.json`
-Debug log: `logs/vaf_think.log` (human-readable, all users in one file)
+Debug log: `logs/vaf_think_YYYY-MM-DD.log` (human-readable, all users in one file)
 
 ---
 

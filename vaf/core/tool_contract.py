@@ -183,6 +183,11 @@ def evaluate_tool_policy(
             effective_sources.add(source)
         if blocked_sources & effective_sources:
             label = source if source else "channel-origin"
+            # Log divergence vs. the legacy gate (which didn't know about channel restrictions).
+            old_requires_confirmation = should_gate_tool(tool_name)
+            old_label = _decision_label(blocked=False, requires_confirmation=old_requires_confirmation)
+            if old_label != "block":
+                logger.info("POLICY_DIVERGENCE tool=%s old=%s new=block", tool_name, old_label)
             logger.info("POLICY_BLOCK tool=%s reason=channel source=%s", tool_name, label)
             return ToolPolicyDecision(
                 blocked=True,

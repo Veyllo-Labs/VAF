@@ -260,7 +260,13 @@ You have access to this filesystem map for fast navigation:
         # ═══════════════════════════════════════════════════════════════════════
         # SLOW PATH: Complex task - use LLM reasoning
         # ═══════════════════════════════════════════════════════════════════════
-        
+
+        # Attach any hint produced by the fast-path read check (path not found)
+        hint = getattr(self, "_read_hint_for_llm", None)
+        if hint:
+            task = task + hint
+            self._read_hint_for_llm = None
+
         # LLM path has its own animation
         return self._execute_with_llm(task)
     
@@ -560,20 +566,34 @@ Remove duplicates and ensure smooth flow.
         # PATTERN: Read file ("read file", "show content", "cat")
         # ─────────────────────────────────────────────────────────────────────
         read_patterns = [
-            r"read (file|content)",
-            r"show (content|file content)",
+            r"read (file|content|the file)",
+            r"show (content|file content|me the file)",
             r"cat ",
-            r"lies ",
-            r"zeige inhalt",
+            r"lies (mir |die |den |das |mir die |mir den )?",
+            r"zeige (inhalt|mir die datei|mir den inhalt)",
+            r"gib mir (den )?(inhalt|content)",
+            r"datei(inhalt)? (lesen|anzeigen|ausgeben|öffnen)",
+            r"open (the )?file",
+            r"öffne (die )?datei",
+            r"inhalt (von|der|des|aus)",
+            r"content of",
         ]
-        
+
         file_path = self._extract_file_path(task)
-        
-        for pattern in read_patterns:
-            if re.search(pattern, task_lower) and file_path:
-                # Check if chunking is requested
-                enable_chunking = 'chunk' in task_lower or 'preview' in task_lower or 'vorschau' in task_lower
+
+        read_pattern_hit = any(re.search(p, task_lower) for p in read_patterns)
+        if read_pattern_hit:
+            if file_path:
                 return self._read_file(file_path, enable_chunking=True)
+            # Pattern matched but no path could be extracted — inject hint for LLM path
+            self._read_hint_for_llm = (
+                f"\n\n[LIBRARIAN_HINT: The task appears to be a file-read request but no "
+                f"file path could be extracted. Home dir: {self.home}. "
+                f"Use list_files to find the file, or check if the path contains spaces or "
+                f"non-ASCII characters. Then call read_file with the correct absolute path.]"
+            )
+        else:
+            self._read_hint_for_llm = None
         
         # ─────────────────────────────────────────────────────────────────────
         # PATTERN: Write file ("write file", "create file", "save to file")
@@ -829,22 +849,48 @@ Remove duplicates and ensure smooth flow.
         return None
     
     def _extract_file_path(self, task: str) -> Optional[Path]:
-        """Extract specific file path from task."""
-        # Windows path
-        win_match = re.search(r'([A-Za-z]:\\[^\s"\']+\.\w+)', task)
-        if win_match:
-            return Path(win_match.group(1))
-        
-        # Unix path
-        unix_match = re.search(r'((?:/[\w.-]+)+\.\w+)', task)
-        if unix_match:
-            return Path(unix_match.group(1))
-        
-        # Relative path
-        rel_match = re.search(r'([\w./\\-]+\.\w+)', task)
-        if rel_match:
-            return Path(rel_match.group(1))
-        
+        """Extract specific file path from task.
+        Handles quoted paths, spaces, Unicode, no-extension paths, Windows and Unix.
+        """
+        # 1. Quoted paths — most reliable, handles spaces cleanly
+        #    Supports "path", 'path', `path`
+        for quote in ('"', "'", '`'):
+            m = re.search(rf'{re.escape(quote)}([^{re.escape(quote)}\n]+){re.escape(quote)}', task)
+            if m:
+                candidate = m.group(1).strip()
+                # Must look like an absolute or home-relative path
+                if re.match(r'^([A-Za-z]:[/\\]|/|~/)', candidate):
+                    return Path(candidate).expanduser()
+
+        # 2. Windows absolute path — C:\... or D:\... (with or without spaces/extension)
+        win_m = re.search(r'([A-Za-z]:[/\\][^\n"\'`]{1,300})', task)
+        if win_m:
+            candidate = win_m.group(1).rstrip(' .,;:!?\'"')
+            # Stop before common sentence connectors to avoid grabbing trailing words
+            candidate = re.split(r'\s+(?:und|oder|and|or|to|from|nach|von|aus|mit|with)\b', candidate)[0].rstrip()
+            return Path(candidate)
+
+        # 3. Tilde path — ~/...
+        tilde_m = re.search(r'(~/[^\s"\'`\n]*)', task)
+        if tilde_m:
+            return Path(tilde_m.group(1).rstrip(' .,;:!?')).expanduser()
+
+        # 4. Unix absolute path — /something/...
+        #    Character class covers ASCII word chars + spaces + common European Unicode
+        _pc = r'[\w\-. äöüÄÖÜéèêàâîïôùûçßæœ]'
+        unix_m = re.search(rf'(/(?:{_pc}+/)* {_pc}+(?:\.\w+)?)', task)
+        if not unix_m:
+            # Simpler fallback without spaces (original behaviour)
+            unix_m = re.search(r'((?:/[\w.-]+)+(?:\.\w+)?)', task)
+        if unix_m:
+            return Path(unix_m.group(1).rstrip(' .,;:!?'))
+
+        # 5. Known-extension relative path (conservative — avoids grabbing random words)
+        _EXTS = r'pdf|docx?|xlsx?|pptx?|txt|md|json|xml|csv|log|py|js|ts|sh|yaml|yml|ini|cfg|toml|env'
+        rel_m = re.search(rf'\b([\w./\\-]+\.(?:{_EXTS}))\b', task, re.IGNORECASE)
+        if rel_m:
+            return Path(rel_m.group(1))
+
         return None
 
     def _extract_rename_full_paths(self, task: str) -> Tuple[Optional[Path], Optional[Path]]:
@@ -1120,10 +1166,35 @@ Remove duplicates and ensure smooth flow.
         UI.event("Librarian", f"Reading {file_path}...", style="dim")
 
         if not file_path.exists():
-            return f"[ERROR] File does not exist: {file_path}"
-        
+            parent = file_path.parent
+            nearby = ""
+            try:
+                if parent.exists():
+                    entries = [e.name for e in parent.iterdir() if e.is_file()][:8]
+                    if entries:
+                        nearby = f"\nFiles in {parent}:\n" + "\n".join(f"  - {e}" for e in entries)
+            except Exception:
+                pass
+            return (
+                f"[LIBRARIAN_ERROR type=file_not_found]\n"
+                f"Path: {file_path}\n"
+                f"Home: {self.home}\n"
+                f"{nearby}\n"
+                f"Suggestions for Main Agent:\n"
+                f"- Verify the exact filename and extension\n"
+                f"- The path may contain spaces — pass it in quotes\n"
+                f"- Use librarian_agent(task='list files in {parent}') to see what is there\n"
+                f"- On Windows paths use backslash: C:\\Users\\...\\file.txt"
+            )
+
         if not file_path.is_file():
-            return f"[ERROR] Not a file: {file_path}"
+            return (
+                f"[LIBRARIAN_ERROR type=not_a_file]\n"
+                f"Path: {file_path}\n"
+                f"This path exists but is a directory, not a file.\n"
+                f"Suggestions for Main Agent:\n"
+                f"- Use librarian_agent(task='list files in {file_path}') to list its contents"
+            )
         
         try:
             # Get file extension
@@ -1364,9 +1435,27 @@ Remove duplicates and ensure smooth flow.
             
             return f"### File: {file_path.name}\n\n```\n{content}\n```"
             
+        except PermissionError:
+            return (
+                f"[LIBRARIAN_ERROR type=permission_denied]\n"
+                f"Path: {file_path}\n"
+                f"The file exists but cannot be read (permission denied).\n"
+                f"Suggestions for Main Agent:\n"
+                f"- This file is protected by the OS and cannot be opened\n"
+                f"- Try a different file or ask the user to check permissions"
+            )
         except Exception as e:
-            return f"[ERROR] Error reading file: {e}"
-    
+            error_type = type(e).__name__
+            return (
+                f"[LIBRARIAN_ERROR type=read_failed error={error_type}]\n"
+                f"Path: {file_path}\n"
+                f"Error: {e}\n"
+                f"Suggestions for Main Agent:\n"
+                f"- The file format may not be supported or the file may be corrupted\n"
+                f"- Supported formats: PDF, DOCX, XLSX, PPTX, TXT, MD, JSON, XML, CSV and most text files\n"
+                f"- Try: librarian_agent(task='list files in {file_path.parent}') to verify the file exists"
+            )
+
     def _read_file_chunked(self, file_path: Path, ext: str) -> str:
         """Read large files in chunks and provide summary.
         

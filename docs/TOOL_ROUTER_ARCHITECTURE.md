@@ -213,9 +213,7 @@ ToolBridgeServer (random port, daemon)  ←── vaf_tools.call("web_search", �
 
 | OS | Bridge address |
 |---|---|
-| Windows | `host.docker.internal` (Docker Desktop DNS) |
-| macOS | `host.docker.internal` (Docker Desktop DNS) |
-| Linux | `172.17.0.1` (Docker bridge gateway — LAN IP is NOT reachable from inside container) |
+| All | `host.docker.internal` (Docker Desktop on Mac/Win; `extra_hosts: host-gateway` injection on Linux via `docker-compose.memory.yml`) |
 
 ---
 

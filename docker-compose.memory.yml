@@ -86,6 +86,9 @@ services:
 
   # ==========================================================================
   # Python Sandbox (Persistent, always-ready)
+  # Isolated on vaf-sandbox-network — cannot reach postgres/redis/other VAF
+  # services by hostname. Only the host gateway (Tool Bridge) and outbound
+  # internet (pip install) are reachable.
   # ==========================================================================
   sandbox:
     image: python:3.11-slim
@@ -95,13 +98,22 @@ services:
     working_dir: /workspace
     volumes:
       - vaf_sandbox:/workspace
+    extra_hosts:
+      # Makes host.docker.internal resolve to the host machine IP on Linux
+      # (Docker Desktop does this automatically on Mac/Windows).
+      # Required for the Tool Bridge back-channel (with_vaf_tools=True).
+      - "host.docker.internal:host-gateway"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "python3", "--version"]
       interval: 30s
       timeout: 5s
       retries: 3
     networks:
-      - vaf-network
+      - vaf-sandbox-network
     deploy:
       resources:
         limits:
@@ -227,4 +239,9 @@ volumes:
 networks:
   vaf-network:
     name: vaf-network
+    driver: bridge
+  # Isolated network for the Python sandbox.
+  # The sandbox is NOT on vaf-network, so it cannot reach postgres/redis by hostname.
+  vaf-sandbox-network:
+    name: vaf-sandbox-network
     driver: bridge

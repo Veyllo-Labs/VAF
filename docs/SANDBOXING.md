@@ -15,6 +15,22 @@ Security is paramount when allowing an AI to execute code. VAF uses **Docker Con
 
 File tools (e.g. `librarian_agent`, `read_file`) block access to the VAF installation directory; the agent is instructed not to request operations on that path.
 
+### Isolation model: Docker-level, not Python-level
+
+VAF's sandbox isolation is enforced entirely at the **Docker container level**. There is no Python-level module blocklist — standard-library modules like `subprocess`, `socket`, and `os` are importable inside the container. What prevents abuse is:
+
+- **Process namespace isolation** — processes cannot escape the container
+- **Filesystem isolation** — host filesystem is not mounted (code runs in `/tmp/vaf_*` per execution)
+- **Resource limits** — 512 MB memory, 0.5 CPU cores (hard limits via Docker)
+- **No host privilege escalation** — default Docker unprivileged mode
+
+**What is NOT blocked at Python level:**
+- `import subprocess` — works, spawns processes inside the container only
+- `import socket` — works; sandbox has outbound network access (needed for pip and Tool Bridge)
+- `import os` — works; filesystem access is limited to what Docker mounts, not by Python
+
+See [`SANDBOX_MODULES.md`](SANDBOX_MODULES.md) for the full module reference and security details.
+
 ---
 
 ## 🚀 Smart Auto-Start
@@ -52,15 +68,17 @@ VAF uses a **persistent sandbox container** for fast code execution:
 docker compose -f docker-compose.memory.yml up -d
 ```
 
-| Resource | Limit |
-|----------|-------|
+| Resource | Detail |
+|----------|--------|
 | **Image** | python:3.11-slim |
 | **Container** | vaf-sandbox (persistent) |
 | **Memory** | 512MB |
 | **CPU** | 0.5 Cores |
-| **Network** | Enabled (for pip install + Tool Bridge) |
-| **Filesystem** | Isolated (no host access) |
-| **Workspace** | Per-execution temp dir under `/tmp/vaf_*` (auto-cleaned) |
+| **Network** | `vaf-sandbox-network` (isolated bridge). Cannot reach postgres/redis/gotenberg/tts/stt by hostname. Outbound internet (pip install) and Tool Bridge back-channel (`host.docker.internal`) still work. |
+| **Filesystem** | Isolated (no host access). Packages installed via `pip` persist in the container between executions (by design, for performance). |
+| **Workspace** | Per-execution temp dir under `/tmp/vaf_*` (unique UUID per run, auto-deleted after). Container `working_dir` is `/workspace` (persistent volume), but code always executes in the per-run `/tmp/vaf_*` dir. |
+| **Capabilities** | `cap_drop: ALL`, `no-new-privileges: true` — container has no Linux capabilities beyond default isolation. |
+| **Module blocking** | None at Python level — `subprocess`, `socket`, `os` are importable. Constraints are enforced by Docker process/filesystem isolation, network isolation, and resource limits, not by a Python import blocklist. |
 
 ### Performance
 
@@ -150,19 +168,19 @@ ToolBridgeServer (random port, daemon) ←── vaf_tools.call("web_search", �
 | Property | Detail |
 |---|---|
 | Token | `secrets.token_hex(16)` per execution — mismatches rejected (HTTP 403) |
-| Binding | `0.0.0.0` on host, random free port — not externally exposed |
+| Binding | `0.0.0.0` on host, random ephemeral port. Accessible from any interface on the host; relies on the per-execution token for authentication. |
 | Trust gates | All calls go through `agent.execute_tool()` — full VAF gate pipeline applies |
 | Cleanup | `bridge.stop()` in `finally` block — no port leak on crash |
 
 ### Host gateway by OS
 
-The sandbox container connects back to the host via:
+The sandbox container connects back to the host via `host.docker.internal` on all platforms:
 
-| OS | Address |
+| OS | How it resolves |
 |---|---|
-| Windows | `host.docker.internal` (Docker Desktop DNS alias) |
-| macOS | `host.docker.internal` (Docker Desktop DNS alias) |
-| Linux | `172.17.0.1` (Docker bridge gateway — the host LAN IP is NOT reachable from inside the container) |
+| Windows | Docker Desktop DNS alias — automatic |
+| macOS | Docker Desktop DNS alias — automatic |
+| Linux | `extra_hosts: ["host.docker.internal:host-gateway"]` in `docker-compose.memory.yml` injects the host IP (Docker 20.10+) |
 
 ---
 
@@ -183,10 +201,11 @@ The sandbox container connects back to the host via:
 - Manual pull: `docker pull python:3.11-slim`
 
 **Error: "vaf_tools: bridge unreachable"** (when using `with_vaf_tools=True`)
-- The sandbox container cannot reach the host bridge address
-- On Linux, ensure Docker is using the default bridge network (`172.17.0.1`)
-- Check that no firewall rule blocks the host port: `sudo ufw allow 32768:65535/tcp` (temporary test)
-- On custom Docker networks (non-default bridge), set the bridge IP manually if needed
+- The sandbox container cannot reach the host via `host.docker.internal`
+- Verify the compose stack is running so `extra_hosts` is applied: `docker compose -f docker-compose.memory.yml up -d`
+- From inside the container, check resolution: `docker exec vaf-sandbox getent hosts host.docker.internal`
+- Check that no firewall rule blocks the ephemeral port range: `sudo ufw allow 32768:65535/tcp` (temporary test)
+- Requires Docker 20.10+ for the `host-gateway` special value in `extra_hosts`
 
 ---
 

@@ -19,8 +19,15 @@ Two modes
 How _agent is injected
 -----------------------
 execute_tool() in agent.py injects self as tool_args["_agent"], matching the
-pattern used by create_agent_tool and python_sandbox. This gives the tool
-access to:
+pattern used by create_agent_tool and python_sandbox. Because run() uses
+**kwargs, Python does NOT automatically assign kwargs["_agent"] to
+self._agent — run() must do this explicitly at the top:
+
+    _injected = kwargs.get("_agent")
+    if _injected is not None:
+        self._agent = _injected
+
+This gives the tool access to:
   - self._agent.tools     → full live tool registry for run_temp execution
   - self._agent._current_user_role / _current_user_scope_id → admin check
 
@@ -178,6 +185,13 @@ class AgentWorkflowBuilderTool(BaseTool):
     # ─────────────────────────────────────────────────────────────────────────
 
     def run(self, **kwargs) -> str:                         # noqa: C901
+        # Capture agent reference injected by execute_tool() via tool_args["_agent"].
+        # The class attribute _agent defaults to None; kwargs is the only delivery
+        # mechanism here since run() receives positional self + **kwargs (not self._agent).
+        _injected = kwargs.get("_agent")
+        if _injected is not None:
+            self._agent = _injected
+
         action = (kwargs.get("action") or "").strip().lower()
 
         if action == "run_temp":
@@ -201,7 +215,13 @@ class AgentWorkflowBuilderTool(BaseTool):
         Build WorkflowStep objects from kwargs, run them synchronously via
         WorkflowEngine using the agent's live tool registry, and return the
         result.  Nothing is written to disk; WORKFLOW_TEMPLATES is untouched.
+
+        When a WebUI session is active, emits workflow_start / workflow_update /
+        workflow_output_stream WebSocket events so the VAFWorkflowRuntime panel
+        opens and shows live step progress — identical to a persistent workflow.
         """
+        import sys
+
         name      = (kwargs.get("name") or "Agent Temp Workflow").strip()
         desc      = (kwargs.get("description") or "").strip()
         raw_steps = kwargs.get("steps") or []
@@ -226,16 +246,16 @@ class AgentWorkflowBuilderTool(BaseTool):
 
         # Build WorkflowStep objects directly (no WORKFLOW_TEMPLATES mutation)
         try:
-            from vaf.workflows.engine import WorkflowEngine, WorkflowStep, create_workflow
+            from vaf.workflows.engine import WorkflowEngine, create_workflow
         except ImportError as exc:
             return f"Error: could not import workflow engine: {exc}"
 
         # Build as a template dict so create_workflow() can normalise it
         template_dict = {
-            "name":   name,
+            "name":        name,
             "description": desc,
-            "triggers": [],
-            "steps": normalised,
+            "triggers":    [],
+            "steps":       normalised,
         }
         steps = create_workflow(template_dict)
 
@@ -252,17 +272,117 @@ class AgentWorkflowBuilderTool(BaseTool):
             user_scope_id = getattr(agent, "_current_user_scope_id", None)
             username      = getattr(agent, "_current_username", None) or "admin"
 
+        # ── WebUI wiring ─────────────────────────────────────────────────────
+        # Resolve the active session ID from the agent.  Both attribute names
+        # are checked; if neither exists (CLI / test mode) session_id stays
+        # None and every _push() call is a no-op.
+        session_id = None
+        if agent is not None:
+            session_id = (
+                getattr(agent, "current_session_id", None)
+                or getattr(agent, "_session_id", None)
+            )
+
+        workflow_id = f"tmp-{uuid.uuid4().hex[:8]}"
+
+        def _push(payload: dict) -> None:
+            """Send a WebSocket event; silently swallows all errors."""
+            if not session_id:
+                return
+            try:
+                from vaf.core.web_interface import get_web_interface
+                get_web_interface()._push_session_update(session_id, payload)
+            except Exception:
+                pass
+
+        # Send workflow_start — this opens the VAFWorkflowRuntime panel
+        ui_steps = [
+            {
+                "id":     f"step-{idx + 1}",
+                "name":   s.description or s.tool,
+                "type":   "tool",
+                "status": "idle",
+            }
+            for idx, s in enumerate(steps)
+        ]
+        _push({
+            "type":       "workflow_start",
+            "workflowId": workflow_id,
+            "name":       name,
+            "steps":      ui_steps,
+        })
+
+        # ── Step-progress callback ────────────────────────────────────────────
+        _STATUS = {"start": "running", "success": "success", "error": "failed", "skip": "skipped"}
+
+        def _ws_callback(event: str, step, current: int, total: int) -> None:
+            _push({
+                "type":     "workflow_update",
+                "stepId":   f"step-{current}",
+                "status":   _STATUS.get(event, "running"),
+                "progress": int((current / total) * 100),
+            })
+
+        # ── Stdout / stderr wrapper ───────────────────────────────────────────
+        class _WebStreamWriter:
+            """
+            Forwards every write to the original stream AND splits on newlines
+            to emit workflow_output_stream events to the WebUI.
+            When session_id is None the WebUI path is skipped entirely.
+            """
+            def __init__(self, stream):
+                self._stream = stream
+                self._buf    = ""
+
+            def write(self, data: str) -> None:
+                try:
+                    self._stream.write(data)
+                    self._stream.flush()
+                except Exception:
+                    pass
+                if not session_id:
+                    return
+                self._buf += data
+                while "\n" in self._buf:
+                    line, self._buf = self._buf.split("\n", 1)
+                    _push({
+                        "type":       "workflow_output_stream",
+                        "workflowId": workflow_id,
+                        "line":       line,
+                    })
+
+            def flush(self) -> None:
+                try:
+                    self._stream.flush()
+                except Exception:
+                    pass
+
+            def isatty(self) -> bool:
+                return getattr(self._stream, "isatty", lambda: False)()
+
+            def fileno(self) -> int:
+                return getattr(self._stream, "fileno", lambda: -1)()
+
+        # ── Execute ───────────────────────────────────────────────────────────
         engine = WorkflowEngine(
             tools         = tools,
+            callback      = _ws_callback,
             user_scope_id = user_scope_id,
             username      = username,
         )
         engine._workflow_name = name   # used in debug logs
 
+        _orig_stdout = sys.stdout
+        _orig_stderr = sys.stderr
         try:
+            sys.stdout = _WebStreamWriter(sys.stdout)
+            sys.stderr = _WebStreamWriter(sys.stderr)
             result = engine.execute(steps, variables=variables)
         except Exception as exc:
             return f"Error executing temporary workflow '{name}': {exc}"
+        finally:
+            sys.stdout = _orig_stdout
+            sys.stderr = _orig_stderr
 
         if result.paused:
             return (

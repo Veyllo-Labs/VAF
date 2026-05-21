@@ -21,8 +21,9 @@ semantics while working with every backend (OpenAI, Google, local, etc.).
 
 Security
 --------
-- Binds to 127.0.0.1 only on the host; Docker maps via host.docker.internal /
-  172.17.0.1.
+- Binds to 0.0.0.0 on the host (random ephemeral port); sandbox connects via
+  host.docker.internal (all platforms; on Linux injected via extra_hosts in
+  docker-compose.memory.yml).
 - A single-use secret token per execution prevents stale processes from
   calling arbitrary tools.
 - Tool allowlist: only tools the agent has loaded are callable; the full
@@ -32,7 +33,6 @@ from __future__ import annotations
 
 import json
 import logging
-import platform
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Callable, Dict, Optional
@@ -205,18 +205,17 @@ class ToolBridgeServer:
 
     def _resolve_host_gateway(self) -> str:
         """
-        Docker containers reach the host via:
-          - host.docker.internal  (Windows / macOS Docker Desktop)
-          - 172.17.0.1            (Linux Docker bridge gateway)
+        Docker containers reach the host via host.docker.internal on all platforms:
+          - Windows / macOS: Docker Desktop resolves this automatically.
+          - Linux: requires extra_hosts: ["host.docker.internal:host-gateway"] in
+            docker-compose.memory.yml (Docker 20.10+), which injects the host IP.
 
-        On Linux we always return the bridge gateway address because the host's
-        LAN IP (what getsockname would return) is NOT reachable from inside the
-        container — only the bridge gateway is.
+        Previously this returned 172.17.0.1 hardcoded on Linux (the docker0 bridge
+        gateway). After moving the sandbox to its own isolated vaf-sandbox-network,
+        that gateway address is no longer reliable — the new network has its own
+        gateway IP. The extra_hosts approach works regardless of which bridge subnet
+        Docker assigns to the sandbox network.
         """
-        system = platform.system()
-        if system == "Linux":
-            return "172.17.0.1"
-        # Windows and macOS Docker Desktop expose a stable DNS alias.
         return "host.docker.internal"
 
     def start(self) -> None:

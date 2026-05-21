@@ -103,14 +103,14 @@ def _rrf_merge_sources(
 
     merged = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[: max(1, int(top_k or 5))]
     out: List[RagSource] = []
-    for key, score in merged:
+    for key, _rrf_score in merged:
         src = payload[key]
         out.append(
             RagSource(
                 memory_id=src.memory_id,
                 chunk_id=src.chunk_id,
                 text=src.text,
-                score=float(score),
+                score=src.score,  # original cosine similarity (vector) or lexical score, not RRF rank score
                 metadata=src.metadata,
             )
         )
@@ -429,7 +429,7 @@ class RagPipeline:
 
         # Optional hybrid retrieval for long-term RAG:
         # combine vector ranking with lexical ranking on the same Chunk store via RRF.
-        hybrid_enabled = bool(Config.get("memory_hybrid_enabled", False))
+        hybrid_enabled = bool(Config.get("memory_hybrid_enabled"))
         if not hybrid_enabled:
             return sources
 

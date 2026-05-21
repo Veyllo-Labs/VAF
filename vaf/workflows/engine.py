@@ -14,6 +14,25 @@ from typing import Dict, Any, List, Optional, Callable
 from enum import Enum
 
 
+def _strip_rich_links(text: str) -> str:
+    """Replace Rich link markup with just the display text.
+
+    When coding_agent (or any tool) returns Rich markup like
+      [link=file:///home/user/My%20Project]/home/user/My Project[/link]
+    and that output is used as a template variable in the next workflow step,
+    the URL-encoded path inside [link=...] gets embedded in the downstream task
+    text.  The coder's path-extraction regex (\\S+) then matches straight through
+    the ']' separator and produces a mangled path like
+      /home/user/My%20Project]/home/user/My
+    causing the agent to create a nested directory with a URL-encoded name.
+
+    Stripping [link=...]...[/link] and replacing it with only the display text
+    prevents this entirely.  Style tags ([bold], [dim], etc.) are left as-is
+    since they are harmless in LLM context.
+    """
+    return re.sub(r'\[link=[^\]]*\](.*?)\[/link\]', r'\1', text, flags=re.DOTALL)
+
+
 class StepStatus(Enum):
     """Status of a workflow step."""
     PENDING = "pending"
@@ -604,8 +623,11 @@ class WorkflowEngine:
                     workflow_debug_lg.event("workflow_step_complete", step_index=i, step_tool=step.tool,
                                            duration=step.duration, result_len=len(str(result)) if result else 0)
 
-                # Store output for next steps
-                outputs[step.output_name] = result
+                # Store output for next steps — strip Rich link markup so that
+                # file:// URLs like [link=file:///path%20with%20spaces]…[/link]
+                # don't embed URL-encoded paths into subsequent steps' task text,
+                # which would confuse the coder's path-extraction regex.
+                outputs[step.output_name] = _strip_rich_links(str(result))
                 final_output = result
 
                 # Truncate for display

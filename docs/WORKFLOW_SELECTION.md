@@ -127,8 +127,58 @@ It can then make an informed decision:
 |------|---------|
 | `execute_workflow(workflow_id, variables)` | Start a workflow by ID with optional pre-filled variables |
 | `list_workflows()` | Browse all available workflows with descriptions |
+| `create_agent_workflow(action, ...)` | Create and run workflows at runtime (see below) |
 
-Both tools are available to the main agent. The agent can also **adjust the pre-extracted variables** before calling `execute_workflow` — the hint is a starting point, not a constraint.
+Both `execute_workflow` and `list_workflows` are available to the main agent. The agent can also **adjust the pre-extracted variables** before calling `execute_workflow` — the hint is a starting point, not a constraint.
+
+### `create_agent_workflow` — runtime workflow creation
+
+The agent can define and run its own workflows at runtime without any human involvement. Two modes:
+
+#### `run_temp` — ephemeral plan execution
+
+```python
+create_agent_workflow(
+    action="run_temp",
+    name="Research and summarize",
+    steps=[
+        {"input": "Search for {topic} news",        "tool": "web_search",   "output": "news"},
+        {"input": "Write a 3-paragraph brief:\n{news}", "tool": "coding_agent", "output": "brief"},
+    ],
+    variables={"topic": "quantum computing"},
+)
+```
+
+- No file is written to disk. Nothing is saved after execution.
+- Ideal for complex one-off tasks: the agent designs a multi-step plan, executes it, and returns the result.
+- Available to the agent in **any session** (not admin-only).
+- The `WorkflowEngine` runs synchronously using the agent's **full live tool registry** — all tools currently loaded, including custom ones.
+- Each step's `output` is available as `{variable}` in subsequent steps.
+
+#### `create` — persistent workflow (admin-only)
+
+```python
+create_agent_workflow(
+    action="create",
+    workflow_id="daily_brief",
+    name="Daily Briefing",
+    description="Searches news and writes a daily brief",
+    triggers=["daily brief", "morning summary"],
+    steps=[...],
+)
+```
+
+- Saves to `~/.vaf/workflows/{workflow_id}.py` with a `# created_by: agent` marker.
+- Immediately reloads `WORKFLOW_TEMPLATES` — available via `execute_workflow()` and visible in the WebUI Workflows tab.
+- Agent can only delete workflows it created itself (ownership enforced by first-line marker).
+- Requires an **admin session** (same gate as `create_agent_tool`).
+
+#### Other actions
+
+| Action | Description |
+|--------|-------------|
+| `list` | List all agent-created persistent workflows |
+| `delete` | Remove an agent-created workflow (admin-only) |
 
 ---
 
@@ -194,4 +244,4 @@ After `execute_workflow` is called and a workflow begins execution, VAF applies 
 
 ---
 
-*Last updated: 2026-05-14*
+*Last updated: 2026-05-21*

@@ -1,15 +1,28 @@
 """
 Declarative Tool Contract
+=========================
 
-Small, centralized metadata + policy evaluation layer for tools.
-This first version is intentionally narrow:
-- permission_level: read | write | dangerous | system
-- channel_restrictions: blocked chat sources
-- side_effect_class: none | reversible | irreversible
+Centralized metadata + policy evaluation layer for tools.
+Every tool declares its contract as class attributes on BaseTool; this module
+reads those attributes and decides — before the tool runs — whether to:
 
-It does NOT replace the router or tool implementation logic.
-It only provides a consistent contract that `execute_tool()` can check before
-running a tool.
+  - BLOCK the call entirely (channel restriction or admin_only violation)
+  - CONFIRM with the user (dangerous permission level or legacy gate)
+  - ALLOW immediately (everything else)
+
+Contract fields (all defined on BaseTool):
+
+  permission_level  — "read" | "write" | "dangerous" | "system"
+  channel_restrictions — sources where the tool is hard-blocked
+  side_effect_class — "none" | "reversible" | "irreversible"
+  admin_only        — True → blocked for non-admin sessions
+
+Evaluation order inside evaluate_tool_policy():
+  1. admin_only check  (hard block — role-based)
+  2. channel_restrictions check  (hard block — source-based)
+  3. permission_level == "dangerous"  → confirmation required
+  4. permission_level == "system"     → skip legacy confirmation gate
+  5. Legacy risky-tool gate (fallback for tools that predate the contract)
 """
 
 from __future__ import annotations
@@ -25,8 +38,13 @@ SideEffectClass = Literal["none", "reversible", "irreversible"]
 
 ALLOWED_PERMISSION_LEVELS = {"read", "write", "dangerous", "system"}
 ALLOWED_SIDE_EFFECT_CLASSES = {"none", "reversible", "irreversible"}
+
 logger = logging.getLogger("vaf.policy")
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Data classes
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
 class ToolContract:
@@ -34,6 +52,10 @@ class ToolContract:
     permission_level: PermissionLevel = "read"
     channel_restrictions: tuple[str, ...] = ()
     side_effect_class: SideEffectClass = "none"
+    # Role-based restriction: True → only admin sessions may call this tool.
+    # Stored here (not on BaseTool directly) so the evaluator always has a
+    # normalised, immutable snapshot.
+    admin_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -43,6 +65,10 @@ class ToolPolicyDecision:
     reason: str = ""
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _decision_label(*, blocked: bool, requires_confirmation: bool) -> str:
     if blocked:
         return "block"
@@ -51,8 +77,18 @@ def _decision_label(*, blocked: bool, requires_confirmation: bool) -> str:
     return "allow"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Contract resolution
+# ─────────────────────────────────────────────────────────────────────────────
+
 def resolve_tool_contract(tool_name: str, tool: Any | None) -> ToolContract:
-    """Resolve normalized contract metadata from a tool instance."""
+    """
+    Read and normalise contract metadata from a tool instance.
+
+    Falls back to safe defaults for any missing or invalid value so that
+    a misconfigured tool is never silently treated as more permissive than
+    intended.
+    """
     raw_permission = str(getattr(tool, "permission_level", "read") or "read").strip().lower()
     if raw_permission not in ALLOWED_PERMISSION_LEVELS:
         raw_permission = "read"
@@ -63,78 +99,136 @@ def resolve_tool_contract(tool_name: str, tool: Any | None) -> ToolContract:
 
     raw_restrictions = getattr(tool, "channel_restrictions", []) or []
     restrictions = tuple(
-        str(value).strip().lower()
-        for value in raw_restrictions
-        if str(value).strip()
+        str(v).strip().lower()
+        for v in raw_restrictions
+        if str(v).strip()
     )
+
+    # admin_only defaults to False — absence of the attribute is treated as
+    # "anyone can call this" (the safe default for existing tools).
+    admin_only = bool(getattr(tool, "admin_only", False))
 
     return ToolContract(
         name=str(getattr(tool, "name", tool_name) or tool_name),
-        permission_level=raw_permission,  # type: ignore[arg-type]
+        permission_level=raw_permission,     # type: ignore[arg-type]
         channel_restrictions=restrictions,
-        side_effect_class=raw_side_effect,  # type: ignore[arg-type]
+        side_effect_class=raw_side_effect,   # type: ignore[arg-type]
+        admin_only=admin_only,
     )
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Policy evaluation
+# ─────────────────────────────────────────────────────────────────────────────
 
 def evaluate_tool_policy(
     tool_name: str,
     tool: Any | None,
     current_source: str,
     is_channel_session: bool,
+    is_admin: bool = False,
 ) -> ToolPolicyDecision:
     """
-    Evaluate tool access based on declarative metadata.
+    Evaluate whether a tool may run in the current session context.
 
-    Rules in this first cut:
-    - channel_restrictions can block channel-origin sessions
-    - permission_level=dangerous requires confirmation
-    - legacy risky-tool gating remains active as a fallback
+    Parameters
+    ----------
+    tool_name         : Name of the tool being called.
+    tool              : Live tool instance (may be None for unknown tools).
+    current_source    : Chat source string, e.g. "web", "telegram", "cli".
+    is_channel_session: True when the session originates from a messaging
+                        channel (Telegram, WhatsApp, Discord).
+    is_admin          : True when the current user is an admin.
+                        Derived in execute_tool() from _current_user_role and
+                        _current_user_scope_id vs get_local_admin_scope_id().
+
+    Returns
+    -------
+    ToolPolicyDecision with .blocked / .requires_confirmation / .reason.
+
+    Evaluation order
+    ----------------
+    1. admin_only check      — role-based hard block (new)
+    2. channel_restrictions  — source-based hard block (existing)
+    3. permission_level      — confirmation gate (extended: "system" now skips legacy gate)
+    4. Legacy risky-tool gate — fallback for tools that predate this contract
     """
     contract = resolve_tool_contract(tool_name, tool)
+    source   = str(current_source or "").strip().lower()
 
-    source = str(current_source or "").strip().lower()
+    # ── 1. Admin-only check ───────────────────────────────────────────────
+    # This is a hard block: if the tool requires an admin session and the
+    # current user is not an admin, we refuse immediately with no confirmation
+    # prompt.  The agent sees the error string returned by execute_tool() and
+    # must handle it gracefully (e.g. tell the user it cannot do this).
+    if contract.admin_only and not is_admin:
+        logger.info("POLICY_BLOCK tool=%s reason=admin_only", tool_name)
+        return ToolPolicyDecision(
+            blocked=True,
+            requires_confirmation=False,
+            reason=(
+                f"Tool '{tool_name}' requires an admin session. "
+                "This action is not available for regular user accounts."
+            ),
+        )
 
-    old_blocked = False
-    old_requires_confirmation = should_gate_tool(tool_name)
-    old_label = _decision_label(
-        blocked=old_blocked,
-        requires_confirmation=old_requires_confirmation,
-    )
-
-    contract_blocked = False
-    contract_block_reason = ""
+    # ── 2. Channel restrictions ───────────────────────────────────────────
+    # Hard block based on chat source (Telegram, WhatsApp, Discord, …).
+    # Unrelated to user role — a tool can be blocked on messaging channels
+    # even for admins (e.g. python_exec is blocked on all channels).
     if is_channel_session and contract.channel_restrictions:
-        blocked_sources = set(contract.channel_restrictions)
-        effective_sources = {"channel"}
+        blocked_sources  = set(contract.channel_restrictions)
+        effective_sources = {"channel"}  # generic "any channel" sentinel
         if source:
             effective_sources.add(source)
         if blocked_sources & effective_sources:
             label = source if source else "channel-origin"
-            contract_blocked = True
-            contract_block_reason = f"Tool '{tool_name}' is blocked for {label} sessions by policy."
+            logger.info("POLICY_BLOCK tool=%s reason=channel source=%s", tool_name, label)
+            return ToolPolicyDecision(
+                blocked=True,
+                requires_confirmation=False,
+                reason=f"Tool '{tool_name}' is blocked for {label} sessions by policy.",
+            )
 
-    contract_requires_confirmation = contract.permission_level == "dangerous"
-    new_label = _decision_label(
-        blocked=contract_blocked,
-        requires_confirmation=contract_requires_confirmation,
-    )
-    if old_label != new_label:
-        logger.info("POLICY_DIVERGENCE tool=%s old=%s new=%s", tool_name, old_label, new_label)
-
-    if contract_blocked:
-        return ToolPolicyDecision(
-            blocked=True,
-            requires_confirmation=False,
-            reason=contract_block_reason,
-        )
-
-    requires_confirmation = contract_requires_confirmation or old_requires_confirmation
-    if requires_confirmation:
+    # ── 3. Permission level → confirmation gate ───────────────────────────
+    if contract.permission_level == "dangerous":
+        # Always prompt the user — regardless of legacy gate state.
         base_reason = explain_gate(tool_name)
         if contract.side_effect_class == "irreversible":
             base_reason = f"{base_reason} This action may be irreversible."
-        elif contract.permission_level == "dangerous" and tool_name not in {"write_file", "move_file", "bash", "run_command", "python_exec"}:
+        elif tool_name not in {"write_file", "move_file", "bash", "run_command", "python_exec"}:
             base_reason = "This action is marked as dangerous by the tool contract."
+        logger.info("POLICY_CONFIRM tool=%s reason=dangerous", tool_name)
+        return ToolPolicyDecision(
+            blocked=False,
+            requires_confirmation=True,
+            reason=base_reason,
+        )
+
+    if contract.permission_level == "system":
+        # "system" tools bypass the legacy confirmation gate entirely.
+        # These are internal plumbing tools (memory updates, context tools,
+        # create_agent_tool) where a user-facing confirmation prompt would be
+        # disruptive and the action is already gated by admin_only or context.
+        # Previously this value was defined but never evaluated — now it is.
+        logger.debug("POLICY_ALLOW tool=%s reason=system_bypass", tool_name)
+        return ToolPolicyDecision(blocked=False, requires_confirmation=False, reason="")
+
+    # ── 4. Legacy risky-tool gate (fallback) ─────────────────────────────
+    # Keeps existing behaviour for built-in tools that predate the contract
+    # system and haven't yet been assigned explicit permission_levels.
+    old_requires_confirmation = should_gate_tool(tool_name)
+
+    # Log divergence between old and new systems so we can migrate gradually.
+    old_label = _decision_label(blocked=False, requires_confirmation=old_requires_confirmation)
+    new_label = _decision_label(blocked=False, requires_confirmation=False)
+    if old_label != new_label:
+        logger.info("POLICY_DIVERGENCE tool=%s old=%s new=%s", tool_name, old_label, new_label)
+
+    if old_requires_confirmation:
+        base_reason = explain_gate(tool_name)
+        if contract.side_effect_class == "irreversible":
+            base_reason = f"{base_reason} This action may be irreversible."
         return ToolPolicyDecision(
             blocked=False,
             requires_confirmation=True,

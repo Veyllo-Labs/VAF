@@ -354,6 +354,71 @@ app.add_middleware(_SecurityHeadersMiddleware)
 
 log("WebServer", "Module initialization complete")
 
+async def _broadcast_tools_update(manager) -> None:
+    """
+    Push a refreshed tools_list to every connected WebSocket client.
+    Called after any custom-tool mutation (create / update / delete / permissions)
+    so all open browser tabs see the change without a manual refresh.
+
+    Each client gets a filtered list based on their own scope/role, which means
+    we must send individual responses rather than one broadcast payload.
+    """
+    if not manager:
+        return
+    try:
+        from vaf.core.config import get_local_admin_scope_id
+        from vaf.core.custom_tools_registry import (
+            get_all_custom_tool_names,
+            get_visible_tool_names_for_user,
+            get_tool_manifest_entry,
+        )
+
+        agent          = manager.agent_instance
+        local_admin    = get_local_admin_scope_id()
+        all_custom     = set(get_all_custom_tool_names())
+
+        # Iterate over all currently connected websockets
+        for ws in list(manager.active_connections):
+            try:
+                _scope = manager.get_connection_user(ws)
+                _role  = manager.get_connection_user_role(ws)
+                _is_admin = (
+                    _role == "admin"
+                    or (_scope is not None and str(_scope) == str(local_admin))
+                )
+                _filter_scope = None if _is_admin else _scope
+                visible_custom = set(get_visible_tool_names_for_user(_filter_scope))
+
+                if agent and hasattr(agent, "tools"):
+                    tools_list = []
+                    for name, tool in agent.tools.items():
+                        is_custom = name in all_custom
+                        if is_custom and not _is_admin and name not in visible_custom:
+                            continue
+                        entry = {
+                            "name":        name,
+                            "description": getattr(tool, "description", ""),
+                            "category":    getattr(tool, "category", "general"),
+                            "is_custom":   is_custom,
+                            "can_manage":  _is_admin,
+                        }
+                        if is_custom:
+                            meta = get_tool_manifest_entry(name)
+                            if meta:
+                                entry["shared_with"] = meta.get("shared_with", ["*"])
+                                entry["created_by"]  = meta.get("created_by", "")
+                                entry["updated_at"]  = meta.get("updated_at", "")
+                        tools_list.append(entry)
+                    await ws.send_json({"type": "tools_list", "tools": tools_list})
+            except Exception:
+                pass  # Ignore disconnected / errored sockets
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "_broadcast_tools_update failed: %s", exc
+        )
+
+
 def _scan_tool_modules() -> List[dict]:
     """
     Fallback tool list based on available Python modules.
@@ -2959,42 +3024,350 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         })
 
                 elif type == "get_tools":
-                    # Return list of available tools from agent
+                    # Return list of available tools, filtered by the requesting
+                    # user's role and custom-tool visibility permissions.
                     try:
-                        # Use registered agent instance from manager
+                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.core.custom_tools_registry import (
+                            get_all_custom_tool_names,
+                            get_visible_tool_names_for_user,
+                            get_tool_manifest_entry,
+                        )
+
+                        _gt_scope = manager.get_connection_user(websocket) if manager else None
+                        _gt_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _gt_local_admin = get_local_admin_scope_id()
+                        _gt_is_admin = (
+                            _gt_role == "admin"
+                            or (
+                                _gt_scope is not None
+                                and str(_gt_scope) == str(_gt_local_admin)
+                            )
+                        )
+
+                        # Admins pass None so get_visible_tool_names_for_user returns ALL
+                        _gt_filter_scope = None if _gt_is_admin else _gt_scope
+
+                        all_custom_names   = set(get_all_custom_tool_names())
+                        visible_custom     = set(get_visible_tool_names_for_user(_gt_filter_scope))
+
                         agent = manager.agent_instance
-                        if agent and hasattr(agent, 'tools'):
-                            tools_list = [
-                                {
-                                    "name": name,
-                                    "description": getattr(tool, 'description', 'No description'),
-                                    "category": getattr(tool, 'category', 'general')
+                        if agent and hasattr(agent, "tools"):
+                            tools_list = []
+                            for name, tool in agent.tools.items():
+                                is_custom = name in all_custom_names
+                                # Non-admins: skip custom tools they can't see
+                                if is_custom and not _gt_is_admin and name not in visible_custom:
+                                    continue
+                                entry = {
+                                    "name":        name,
+                                    "description": getattr(tool, "description", "No description"),
+                                    "category":    getattr(tool, "category", "general"),
+                                    # Frontend uses these two flags to render management controls
+                                    "is_custom":   is_custom,
+                                    "can_manage":  _gt_is_admin,
                                 }
-                                for name, tool in agent.tools.items()
-                            ]
-                            # Update cache
+                                if is_custom:
+                                    meta = get_tool_manifest_entry(name)
+                                    if meta:
+                                        entry["shared_with"]  = meta.get("shared_with", ["*"])
+                                        entry["created_by"]   = meta.get("created_by", "")
+                                        entry["updated_at"]   = meta.get("updated_at", "")
+                                tools_list.append(entry)
+
                             manager.tools_cache = tools_list
                             await websocket.send_json({
                                 "type": "tools_list",
-                                "tools": tools_list
+                                "tools": tools_list,
                             })
                         elif manager.tools_cache:
                             await websocket.send_json({
                                 "type": "tools_list",
-                                "tools": manager.tools_cache
+                                "tools": manager.tools_cache,
                             })
                         else:
                             await websocket.send_json({
                                 "type": "tools_list",
-                                "tools": _scan_tool_modules()
+                                "tools": _scan_tool_modules(),
                             })
                     except Exception as e:
                         await websocket.send_json({
                             "type": "tools_list",
                             "tools": [],
-                            "error": str(e)
+                            "error": str(e),
+                        })
+
+                # ── Custom Tool Management (admin-only) ───────────────────────────
+                # All four handlers share the same admin-check pattern used
+                # throughout the WS loop (see line ~2192 for the reference pattern).
+
+                elif type == "create_custom_tool":
+                    # Upload or write a new custom tool from the WebUI editor.
+                    # Payload: { name: str, code: str, shared_with: list[str] }
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.core import custom_tools_registry as _ctr
+
+                        _ct_scope = manager.get_connection_user(websocket) if manager else None
+                        _ct_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _ct_local_admin = get_local_admin_scope_id()
+                        _ct_is_admin = (
+                            _ct_role == "admin"
+                            or (_ct_scope is not None and str(_ct_scope) == str(_ct_local_admin))
+                        )
+                        if not _ct_is_admin:
+                            await websocket.send_json({
+                                "type": "custom_tool_error",
+                                "error": "Admin permission required to create tools.",
+                            })
+                        else:
+                            _ct_name       = (data.get("name") or "").strip()
+                            _ct_code       = data.get("code", "")
+                            _ct_shared     = data.get("shared_with", ["*"])
+                            _ct_username   = manager.get_connection_username(websocket) or "admin"
+
+                            # Basic name validation: snake_case identifiers only
+                            import re as _re
+                            if not _re.match(r'^[a-z][a-z0-9_]*$', _ct_name):
+                                raise ValueError(
+                                    "Tool name must be lowercase snake_case (e.g. my_tool)."
+                                )
+
+                            # Write file + validate BaseTool subclass, then register
+                            _ct_filename = f"{_ct_name}.py"
+                            _ctr.save_tool_file(_ct_filename, _ct_code)
+                            # register_tool also validates via load_custom_tool_class
+                            _ctr.register_tool(
+                                tool_name=_ct_name,
+                                filename=_ct_filename,
+                                created_by=_ct_username,
+                                shared_with=_ct_shared,
+                            )
+
+                            # Hot-reload so the live agent immediately has the new tool
+                            agent = manager.agent_instance
+                            if agent and hasattr(agent, "reload_custom_tools"):
+                                agent.reload_custom_tools()
+
+                            await websocket.send_json({
+                                "type": "custom_tool_created",
+                                "name": _ct_name,
+                            })
+                            # Broadcast updated tool list to all connected clients
+                            # so other open tabs / admin panels refresh automatically.
+                            await _broadcast_tools_update(manager)
+
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "custom_tool_error",
+                            "error": str(e),
+                        })
+
+                elif type == "update_custom_tool":
+                    # Edit the source code of an existing custom tool.
+                    # Payload: { name: str, code: str }
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.core import custom_tools_registry as _ctr
+
+                        _ut_scope = manager.get_connection_user(websocket) if manager else None
+                        _ut_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _ut_is_admin = (
+                            _ut_role == "admin"
+                            or (_ut_scope is not None and str(_ut_scope) == str(get_local_admin_scope_id()))
+                        )
+                        if not _ut_is_admin:
+                            await websocket.send_json({
+                                "type": "custom_tool_error",
+                                "error": "Admin permission required to edit tools.",
+                            })
+                        else:
+                            _ut_name     = (data.get("name") or "").strip()
+                            _ut_code     = data.get("code", "")
+                            _ut_username = manager.get_connection_username(websocket) or "admin"
+
+                            # update_tool_source validates BaseTool presence before overwriting
+                            _ctr.update_tool_source(_ut_name, _ut_code, _ut_username)
+
+                            agent = manager.agent_instance
+                            if agent and hasattr(agent, "reload_custom_tools"):
+                                agent.reload_custom_tools()
+
+                            await websocket.send_json({
+                                "type": "custom_tool_updated",
+                                "name": _ut_name,
+                            })
+                            await _broadcast_tools_update(manager)
+
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "custom_tool_error",
+                            "error": str(e),
+                        })
+
+                elif type == "delete_custom_tool":
+                    # Remove a custom tool permanently.
+                    # Payload: { name: str }
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.core import custom_tools_registry as _ctr
+
+                        _dt_scope = manager.get_connection_user(websocket) if manager else None
+                        _dt_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _dt_is_admin = (
+                            _dt_role == "admin"
+                            or (_dt_scope is not None and str(_dt_scope) == str(get_local_admin_scope_id()))
+                        )
+                        if not _dt_is_admin:
+                            await websocket.send_json({
+                                "type": "custom_tool_error",
+                                "error": "Admin permission required to delete tools.",
+                            })
+                        else:
+                            _dt_name = (data.get("name") or "").strip()
+                            _ctr.delete_tool(_dt_name)
+
+                            # Remove from the live agent immediately
+                            agent = manager.agent_instance
+                            if agent and hasattr(agent, "reload_custom_tools"):
+                                agent.reload_custom_tools()
+
+                            await websocket.send_json({
+                                "type": "custom_tool_deleted",
+                                "name": _dt_name,
+                            })
+                            await _broadcast_tools_update(manager)
+
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "custom_tool_error",
+                            "error": str(e),
+                        })
+
+                elif type == "update_custom_tool_permissions":
+                    # Change which users can see a custom tool.
+                    # Payload: { name: str, shared_with: list[str] }
+                    #   shared_with: ["*"] → all users
+                    #   shared_with: []    → admin only
+                    #   shared_with: ["<scope_id>", ...] → specific users
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.core import custom_tools_registry as _ctr
+
+                        _pp_scope = manager.get_connection_user(websocket) if manager else None
+                        _pp_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _pp_is_admin = (
+                            _pp_role == "admin"
+                            or (_pp_scope is not None and str(_pp_scope) == str(get_local_admin_scope_id()))
+                        )
+                        if not _pp_is_admin:
+                            await websocket.send_json({
+                                "type": "custom_tool_error",
+                                "error": "Admin permission required to change tool permissions.",
+                            })
+                        else:
+                            _pp_name       = (data.get("name") or "").strip()
+                            _pp_shared     = data.get("shared_with", ["*"])
+                            _ctr.update_tool_permissions(_pp_name, _pp_shared)
+
+                            await websocket.send_json({
+                                "type": "custom_tool_permissions_updated",
+                                "name":        _pp_name,
+                                "shared_with": _pp_shared,
+                            })
+                            # Broadcast so other clients refresh their tool lists
+                            await _broadcast_tools_update(manager)
+
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "custom_tool_error",
+                            "error": str(e),
+                        })
+
+                elif type == "get_custom_tool_source":
+                    # Return the Python source code of a custom tool for the editor.
+                    # Payload: { name: str }
+                    # Admin-only — non-admins must not be able to exfiltrate source.
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.core import custom_tools_registry as _ctr
+
+                        _gs_scope = manager.get_connection_user(websocket) if manager else None
+                        _gs_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _gs_is_admin = (
+                            _gs_role == "admin"
+                            or (_gs_scope is not None and str(_gs_scope) == str(get_local_admin_scope_id()))
+                        )
+                        if not _gs_is_admin:
+                            await websocket.send_json({
+                                "type": "custom_tool_error",
+                                "error": "Admin permission required to view tool source.",
+                            })
+                        else:
+                            _gs_name   = (data.get("name") or "").strip()
+                            _gs_source = _ctr.get_tool_source(_gs_name)
+                            await websocket.send_json({
+                                "type": "custom_tool_source",
+                                "name":   _gs_name,
+                                "source": _gs_source or "",
+                            })
+
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "custom_tool_error",
+                            "error": str(e),
                         })
                 
+                elif type == "get_custom_tool_users":
+                    # Return non-admin users for the share picker in CustomToolEditor.
+                    # Admin-only: non-admins have no reason to query the user list.
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id
+
+                        _gu_scope = manager.get_connection_user(websocket) if manager else None
+                        _gu_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _gu_is_admin = (
+                            _gu_role == "admin"
+                            or (_gu_scope is not None and str(_gu_scope) == str(get_local_admin_scope_id()))
+                        )
+                        if not _gu_is_admin:
+                            await websocket.send_json({
+                                "type": "custom_tool_error",
+                                "error": "Admin permission required.",
+                            })
+                        else:
+                            # Reuse the existing /api/users logic by querying the DB directly
+                            try:
+                                from vaf.auth.database import get_auth_db
+                                from vaf.auth.models import LocalUser
+                                from sqlalchemy import select as _sa_select
+                                async with get_auth_db() as _db:
+                                    _result = await _db.execute(
+                                        _sa_select(LocalUser).where(LocalUser.is_active == True)
+                                    )
+                                    _users = _result.scalars().all()
+                                    _user_list = [
+                                        {
+                                            "id":            str(u.id),
+                                            "username":      u.username,
+                                            "user_scope_id": str(u.user_scope_id),
+                                            "role":          u.role,
+                                        }
+                                        for u in _users
+                                        if u.role != "admin"  # admins always see everything; no point including them
+                                    ]
+                            except Exception:
+                                _user_list = []
+                            await websocket.send_json({
+                                "type":  "custom_tool_users",
+                                "users": _user_list,
+                            })
+                    except Exception as e:
+                        await websocket.send_json({
+                            "type": "custom_tool_error",
+                            "error": str(e),
+                        })
+
                 elif type == "get_workflows":
                     # Return list of available workflow templates
                     try:
@@ -3010,6 +3383,166 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "workflows": [],
                             "error": str(e)
                         })
+
+                elif type == "create_workflow":
+                    from vaf.core.config import get_local_admin_scope_id
+                    _wf_scope       = manager.get_connection_user(websocket)
+                    _wf_role        = manager.get_connection_user_role(websocket)
+                    _wf_local_admin = get_local_admin_scope_id()
+                    _wf_is_admin    = (
+                        _wf_role == "admin"
+                        or (_wf_scope is not None and str(_wf_scope) == str(_wf_local_admin))
+                    )
+                    if not _wf_is_admin:
+                        await websocket.send_json({
+                            "type": "workflow_error",
+                            "error": "Admin permission required to create workflows.",
+                        })
+                    else:
+                        try:
+                            import json as _json_wf
+                            import os as _os_wf
+                            import re as _re_wf
+                            from vaf.workflows.templates import reload_workflows, list_templates
+
+                            _wf_id       = str(data.get("workflow_id") or "").strip()
+                            _wf_name     = str(data.get("name") or "").strip()
+                            _wf_desc     = str(data.get("description") or "").strip()
+                            _wf_triggers = [str(t) for t in (data.get("triggers") or []) if str(t).strip()]
+                            _wf_steps    = data.get("steps") or []
+
+                            if not _re_wf.match(r'^[a-z][a-z0-9_]*$', _wf_id):
+                                raise ValueError(f"workflow_id must be lowercase snake_case, got '{_wf_id}'")
+                            if not _wf_name:
+                                raise ValueError("name is required")
+                            if not _wf_steps:
+                                raise ValueError("at least one step is required")
+
+                            _user_wf_dir = _os_wf.path.expanduser("~/.vaf/workflows")
+                            _os_wf.makedirs(_user_wf_dir, exist_ok=True)
+                            _wf_path = _os_wf.path.join(_user_wf_dir, f"{_wf_id}.py")
+
+                            if _os_wf.path.exists(_wf_path):
+                                raise ValueError(
+                                    f"Workflow '{_wf_id}' already exists. "
+                                    "Use update_workflow to modify it."
+                                )
+
+                            _wf_dict = {
+                                "name": _wf_name,
+                                "description": _wf_desc,
+                                "triggers": _wf_triggers,
+                                "steps": _wf_steps,
+                            }
+                            _wf_content = (
+                                f"# User-created workflow: {_wf_name}\n"
+                                f"WORKFLOW = {_json_wf.dumps(_wf_dict, indent=4, ensure_ascii=False)}\n"
+                            )
+                            _wf_tmp = _wf_path + ".tmp"
+                            with open(_wf_tmp, "w", encoding="utf-8") as _f:
+                                _f.write(_wf_content)
+                            _os_wf.replace(_wf_tmp, _wf_path)
+
+                            reload_workflows()
+                            await websocket.send_json({"type": "workflow_created", "workflow_id": _wf_id})
+                            await websocket.send_json({"type": "workflows_list", "workflows": list_templates()})
+                        except Exception as e:
+                            await websocket.send_json({"type": "workflow_error", "error": str(e)})
+
+                elif type == "update_workflow":
+                    from vaf.core.config import get_local_admin_scope_id
+                    _wf_scope       = manager.get_connection_user(websocket)
+                    _wf_role        = manager.get_connection_user_role(websocket)
+                    _wf_local_admin = get_local_admin_scope_id()
+                    _wf_is_admin    = (
+                        _wf_role == "admin"
+                        or (_wf_scope is not None and str(_wf_scope) == str(_wf_local_admin))
+                    )
+                    if not _wf_is_admin:
+                        await websocket.send_json({
+                            "type": "workflow_error",
+                            "error": "Admin permission required to update workflows.",
+                        })
+                    else:
+                        try:
+                            import json as _json_wf
+                            import os as _os_wf
+                            from vaf.workflows.templates import reload_workflows, list_templates
+
+                            _wf_id       = str(data.get("workflow_id") or "").strip()
+                            _wf_name     = str(data.get("name") or "").strip()
+                            _wf_desc     = str(data.get("description") or "").strip()
+                            _wf_triggers = [str(t) for t in (data.get("triggers") or []) if str(t).strip()]
+                            _wf_steps    = data.get("steps") or []
+
+                            if not _wf_name:
+                                raise ValueError("name is required")
+                            if not _wf_steps:
+                                raise ValueError("at least one step is required")
+
+                            _user_wf_dir = _os_wf.path.expanduser("~/.vaf/workflows")
+                            _wf_path = _os_wf.path.join(_user_wf_dir, f"{_wf_id}.py")
+
+                            if not _os_wf.path.exists(_wf_path):
+                                raise ValueError(
+                                    f"Workflow '{_wf_id}' is a built-in workflow and cannot be modified."
+                                )
+
+                            _wf_dict = {
+                                "name": _wf_name,
+                                "description": _wf_desc,
+                                "triggers": _wf_triggers,
+                                "steps": _wf_steps,
+                            }
+                            _wf_content = (
+                                f"# User-created workflow: {_wf_name}\n"
+                                f"WORKFLOW = {_json_wf.dumps(_wf_dict, indent=4, ensure_ascii=False)}\n"
+                            )
+                            _wf_tmp = _wf_path + ".tmp"
+                            with open(_wf_tmp, "w", encoding="utf-8") as _f:
+                                _f.write(_wf_content)
+                            _os_wf.replace(_wf_tmp, _wf_path)
+
+                            reload_workflows()
+                            await websocket.send_json({"type": "workflow_updated", "workflow_id": _wf_id})
+                            await websocket.send_json({"type": "workflows_list", "workflows": list_templates()})
+                        except Exception as e:
+                            await websocket.send_json({"type": "workflow_error", "error": str(e)})
+
+                elif type == "delete_workflow":
+                    from vaf.core.config import get_local_admin_scope_id
+                    _wf_scope       = manager.get_connection_user(websocket)
+                    _wf_role        = manager.get_connection_user_role(websocket)
+                    _wf_local_admin = get_local_admin_scope_id()
+                    _wf_is_admin    = (
+                        _wf_role == "admin"
+                        or (_wf_scope is not None and str(_wf_scope) == str(_wf_local_admin))
+                    )
+                    if not _wf_is_admin:
+                        await websocket.send_json({
+                            "type": "workflow_error",
+                            "error": "Admin permission required to delete workflows.",
+                        })
+                    else:
+                        try:
+                            import os as _os_wf
+                            from vaf.workflows.templates import reload_workflows, list_templates
+
+                            _wf_id = str(data.get("workflow_id") or "").strip()
+                            _user_wf_dir = _os_wf.path.expanduser("~/.vaf/workflows")
+                            _wf_path = _os_wf.path.join(_user_wf_dir, f"{_wf_id}.py")
+
+                            if not _os_wf.path.exists(_wf_path):
+                                raise ValueError(
+                                    f"Workflow '{_wf_id}' is a built-in workflow and cannot be deleted."
+                                )
+
+                            _os_wf.remove(_wf_path)
+                            reload_workflows()
+                            await websocket.send_json({"type": "workflow_deleted", "workflow_id": _wf_id})
+                            await websocket.send_json({"type": "workflows_list", "workflows": list_templates()})
+                        except Exception as e:
+                            await websocket.send_json({"type": "workflow_error", "error": str(e)})
 
                 elif type == "get_trusted_sources":
                     try:

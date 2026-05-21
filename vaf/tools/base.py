@@ -9,15 +9,25 @@ class BaseTool(ABC):
     Example for a new tool (my_tool.py):
     -----------------------------------------
     from vaf.tools.base import BaseTool
-    
+
     class MyTool(BaseTool):
-        name = "my_super_tool" 
+        name        = "my_super_tool"
         description = "Does cool things"
-        
-        # Optional: Only available to Coder Sub-Agent
+
+        # Declarative contract — set these on every tool
+        permission_level  = "read"   # "read" | "write" | "dangerous" | "system"
+        side_effect_class = "none"   # "none" | "reversible" | "irreversible"
+        channel_restrictions = ()    # e.g. ("telegram", "whatsapp") to block chat channels
+        admin_only = False           # True → blocked for non-admin users entirely
+
+        # 1–3 concrete examples shown to the LLM (provider-agnostic, embedded in description)
+        input_examples = [
+            {"input": "hello world"},
+        ]
+
+        # Restrict to Coder Sub-Agent only (omit or set False for Main Agent)
         # coder_only = True
-        
-        # Optional: Tool parameters schema
+
         parameters = {
             "type": "object",
             "properties": {
@@ -25,12 +35,12 @@ class BaseTool(ABC):
             },
             "required": ["input"]
         }
-        
+
         def run(self, **kwargs):
             input_text = kwargs.get("input", "")
             return f"Processed: {input_text}"
     -----------------------------------------
-    
+
     The tool will be automatically discovered and loaded!
     """
     
@@ -68,11 +78,40 @@ class BaseTool(ABC):
     #   ]
     input_examples: List[Dict[str, Any]] = []
 
-    # Declarative tool contract metadata.
-    # Keep the first version intentionally simple.
+    # ── Declarative tool contract ────────────────────────────────────────────
+    #
+    # permission_level controls the confirmation gate in execute_tool():
+    #   "read"      — no confirmation needed (default, safe operations)
+    #   "write"     — no confirmation by default, but the action changes state
+    #   "dangerous" — always prompts the user before execution
+    #   "system"    — internal / agent-only tool; skips the confirmation gate
+    #                 entirely even when the legacy risky-tool list would gate it.
+    #                 Use for tools the agent calls as part of its own plumbing
+    #                 (e.g. memory updates, context tools) where a user prompt
+    #                 would be disruptive and the action is already controlled.
     permission_level: Literal["read", "write", "dangerous", "system"] = "read"
+
+    # channel_restrictions: sources where this tool is completely blocked.
+    # Common values: "telegram", "whatsapp", "discord", "channel" (any chat).
+    # The check runs before the tool executes — no confirmation, hard block.
     channel_restrictions: tuple[str, ...] = ()
+
+    # side_effect_class: impact classification shown in the confirmation prompt.
+    #   "none"        — read-only, no external state changed
+    #   "reversible"  — state changed but can be undone
+    #   "irreversible"— cannot be undone (e.g. sending an email, deleting a file)
     side_effect_class: Literal["none", "reversible", "irreversible"] = "none"
+
+    # admin_only: when True the tool is blocked for non-admin users at the
+    # execute_tool() level — the agent simply cannot call it during a session
+    # with a regular user.  This is checked via the session's user_scope_id /
+    # user_role, NOT via channel_restrictions (which is channel-based, not
+    # role-based).
+    #
+    # Use this for tools that must never run on behalf of a regular user —
+    # e.g. create_agent_tool, which lets the agent write arbitrary Python code
+    # to disk.  An admin has explicitly elevated trust; a regular user has not.
+    admin_only: bool = False
     
     # ═══════════════════════════════════════════════════════════════════════════
     # ABSTRACT METHOD

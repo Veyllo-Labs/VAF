@@ -266,10 +266,106 @@ Use this to verify which user scope UUID is used for each tool call when debuggi
 
 ## 9. Declarative Tool Contract
 
-VAF tools can now declare a small, centralized contract in the tool class itself:
+VAF tools declare a centralized contract directly on the class. All fields have safe defaults so they're opt-in, but every tool should set them explicitly for clarity.
 
-- `permission_level` — `read`, `write`, `dangerous`, or `system`
-- `channel_restrictions` — blocked sources such as `telegram`, `whatsapp`, `discord`, or generic `channel`
-- `side_effect_class` — `none`, `reversible`, or `irreversible`
+### Fields
 
-This contract is evaluated in the central `execute_tool()` path before the tool runs. The first version is intentionally scoped: it does **not** replace router behavior or all existing trust logic. Instead, it gives built-in tools, MCP-backed tools, and future sub-agent tools a shared policy surface so permission checks can become more consistent over time.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `permission_level` | `"read"` \| `"write"` \| `"dangerous"` \| `"system"` | `"read"` | Access level. `dangerous` → confirmation gate. `system` → skips the legacy confirmation gate entirely (for internal/agent tools where prompting would be disruptive). |
+| `side_effect_class` | `"none"` \| `"reversible"` \| `"irreversible"` | `"none"` | Impact of the tool. Added to the confirmation message when `dangerous`. |
+| `admin_only` | `bool` | `False` | When `True`, the tool is **hard-blocked** for non-admin users at the `execute_tool()` level. The check uses `_current_user_role` and `_current_user_scope_id` (both set on the agent before each turn). This is a role-based check — distinct from `channel_restrictions` which is source-based. |
+| `channel_restrictions` | `tuple[str, ...]` | `()` | Sources where the tool is blocked. Common values: `"telegram"`, `"whatsapp"`, `"discord"`, `"channel"` (generic chat). |
+
+### Evaluation order in `execute_tool()`
+
+1. **`admin_only` check** — if `admin_only == True` and the current user is not an admin, the tool is hard-blocked. `is_admin` is derived from `_current_user_role` and `_current_user_scope_id` on the agent instance.
+2. **Channel check** — if the session source is in `channel_restrictions`, the tool is rejected immediately (regardless of user role).
+3. **Permission gate** — if `permission_level == "dangerous"`, the user is prompted (once / always / cancel). `side_effect_class == "irreversible"` adds a warning line to the prompt.
+4. **`permission_level == "system"`** — bypasses the legacy confirmation gate entirely. Previously documented but never evaluated; now implemented.
+5. **Legacy trust gates** — existing risky-tool checks run as fallback for tools that predate the contract system.
+
+### Examples
+
+```python
+# Read-only, safe everywhere
+class GetContactTool(BaseTool):
+    permission_level  = "read"
+    side_effect_class = "none"
+    channel_restrictions = ()
+    admin_only = False
+
+# Writes to external service, blocked on chat channels
+class SendMailTool(BaseTool):
+    permission_level  = "write"
+    side_effect_class = "irreversible"
+    channel_restrictions = ("telegram", "whatsapp")
+    admin_only = False
+
+# Dangerous — user must confirm; cannot be undone
+class DeleteFileTool(BaseTool):
+    permission_level  = "dangerous"
+    side_effect_class = "irreversible"
+    channel_restrictions = ("telegram", "whatsapp", "discord")
+    admin_only = False
+
+# Admin-only, internal — only available in admin sessions, no confirmation gate
+class CreateAgentToolTool(BaseTool):
+    permission_level  = "system"    # skips confirmation gate
+    side_effect_class = "reversible"
+    channel_restrictions = ("telegram", "whatsapp", "discord")
+    admin_only = True               # hard-blocked for regular users
+```
+
+### `admin_only` vs `channel_restrictions` — key distinction
+
+| | `channel_restrictions` | `admin_only` |
+|---|---|---|
+| Blocks based on | Chat *source* (telegram, web, …) | User *role* (admin vs user) |
+| Admin affected? | Yes — admins on Telegram are also blocked | No — admins always pass |
+| Use case | Prevent tool abuse via messaging bots | Restrict to elevated-trust sessions |
+
+---
+
+## 10. `coder_only` — Restricting Tools to the Coder Sub-Agent
+
+Set `coder_only = True` on any tool that should **only** be available to the Coding Sub-Agent (`coder.py`), not to the Main Agent.
+
+```python
+class BashTool(BaseTool):
+    coder_only = True   # Excluded from Main Agent tool list
+```
+
+**Tools currently marked `coder_only`:**
+
+| Tool | Reason |
+|---|---|
+| `bash` | Raw shell — Main Agent delegates to Coder instead |
+| `batch` | Low-level batching — Coder-specific |
+| `codesearch` | Code-aware search — Coder-specific |
+| `linter` | Linting — Coder-specific |
+| `context_tools` | Internal Coder context management |
+
+The Main Agent's `_load_tools()` skips any tool with `coder_only = True`. The Coder loads them separately from `vaf/tools/`.
+
+---
+
+## 11. `query_llm()` — Making LLM Calls Inside a Tool
+
+`BaseTool` provides a built-in helper for tools that need to call the LLM internally (e.g. to summarize, classify, or generate content as part of their logic):
+
+```python
+def run(self, **kwargs) -> str:
+    messages = [{"role": "user", "content": "Summarize: " + kwargs.get("text", "")}]
+    return self.query_llm(messages, max_tokens=512, temperature=0.3)
+```
+
+### What `query_llm()` does internally
+
+1. **Provider detection** — reads the active provider (`openai`, `anthropic`, `google`, `local`, …).
+2. **Model resolution** — selects the correct model ID for that provider (e.g. `gpt-4o` vs `claude-sonnet-4-6`).
+3. **API backend** — if `use_api_backend=True`, streams the response and returns the full text.
+4. **Self-healing** — on HTTP 400/404, retries with a fallback model automatically.
+5. **Local server fallback** — if no API key is configured, hits the local OpenAI-compatible endpoint.
+
+Use `query_llm()` instead of calling provider SDKs directly — it stays provider-agnostic and inherits the agent's current model configuration automatically.

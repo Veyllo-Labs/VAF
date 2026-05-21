@@ -184,6 +184,62 @@ All panels follow a consistent design:
 - File info bar below header
 - Content area with internal rounded container
 
+## Workflow Creator (Admin)
+
+Admins can create, edit, and delete user-defined workflows directly in the WebUI — no file upload or server restart required.
+
+### Entry point
+
+The **Workflows** tab in the Settings modal (`SettingsModal.tsx → showWorkflowsModal`) shows a grid of workflow cards. When the logged-in user is an admin, a **"+ Create Workflow"** dashed card appears first in the grid (hidden when the search filter is active).
+
+User-created workflows show a purple **"Custom"** badge and open the creator in edit mode when clicked. Built-in workflows still open the read-only ReactFlow visualization.
+
+### WorkflowCreator component
+
+**File:** `web/components/settings/WorkflowCreator.tsx`
+
+A full-screen overlay modal (z-[80], above code viewer at z-[70]):
+
+| Field | Details |
+|-------|---------|
+| **Name** | Human-readable display name |
+| **ID** | Lowercase snake_case identifier, auto-generated from name in create mode, read-only in edit mode |
+| **Description** | Short description shown on the workflow card |
+| **Trigger phrases** | Tag-style input — phrases that activate the workflow router |
+| **Steps** | Ordered step chain (see below) |
+
+**Step chain:**
+Each step is a card with:
+- **Prompt** textarea — instruction for the agent. Supports `{variable}` substitution from previous step outputs.
+- **Tool** dropdown — which agent tool to call (`coding_agent`, `web_search`, `research_agent`, etc.). Populated from the full live tool list.
+- **Description** (optional) — label shown in workflow progress output.
+
+Between each step card (and after the last) an **"Add Step"** button inserts a new blank step. Steps can be removed individually (disabled when only one step remains).
+
+The component auto-generates an `output` variable name (`step_1_output`, `step_2_output`, …) for each step before sending to the backend.
+
+### WebSocket protocol
+
+| Message (client → server) | Payload | Description |
+|--------------------------|---------|-------------|
+| `create_workflow` | `{workflow_id, name, description, triggers, steps}` | Save new workflow to `~/.vaf/workflows/` |
+| `update_workflow` | `{workflow_id, name, description, triggers, steps}` | Overwrite an existing user workflow |
+| `delete_workflow` | `{workflow_id}` | Remove a user workflow |
+
+| Message (server → client) | Payload | Description |
+|--------------------------|---------|-------------|
+| `workflow_created` | `{workflow_id}` | Confirms creation; followed immediately by `workflows_list` |
+| `workflow_updated` | `{workflow_id}` | Confirms update; followed immediately by `workflows_list` |
+| `workflow_deleted` | `{workflow_id}` | Confirms deletion; followed immediately by `workflows_list` |
+| `workflow_error` | `{error}` | Validation or permission error |
+| `workflows_list` | `{workflows: [...]}` | Refreshed list (each entry includes `is_custom: bool`) |
+
+All three write operations are **admin-only** — the server checks the session's user role/scope before executing. Built-in workflows (those in `vaf/workflows/workflows/`) cannot be modified or deleted via the WebUI; attempting to do so returns a `workflow_error`.
+
+### Storage
+
+User workflows are stored as `.py` files in `~/.vaf/workflows/`. Agent-created workflows carry a `# created_by: agent` marker on the first line (so the agent can only edit/delete its own). The `list_templates()` function sets `is_custom: True` for any workflow whose file exists in the user directory. After every write, `reload_workflows()` is called so the router and `execute_workflow` tool see the change immediately.
+
 ## Known Issues
 
 1. **Workflow ID Matching**: The `workflowId` in chat messages must match the store's `workflow.id` for real-time updates to work. The workflow system uses the format `[WORKFLOW_ASYNC:{taskId}:{workflowId}]` where `workflowId` is the correct identifier.

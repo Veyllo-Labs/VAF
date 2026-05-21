@@ -128,12 +128,15 @@ def get_template(name: str) -> Dict[str, Any]:
 
 def list_templates() -> List[Dict[str, str]]:
     """List all available templates with name and description."""
+    user_dir = Path.home() / ".vaf" / "workflows"
     return [
         {
             "id": key,
             "name": template["name"],
             "description": template["description"],
             "steps": len(template["steps"]),
+            # True when a .py file exists in the user workflows directory
+            "is_custom": (user_dir / f"{key}.py").exists(),
         }
         for key, template in WORKFLOW_TEMPLATES.items()
     ]

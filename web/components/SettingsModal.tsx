@@ -16,6 +16,9 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import TTSSettings from './settings/TTSSettings';
+import CustomToolEditor from './settings/CustomToolEditor';
+import WorkflowCreator from './settings/WorkflowCreator';
+import type { WorkflowSaveData } from './settings/WorkflowCreator';
 import type { CreateAutomationPayload } from './CreateAutomationPopup';
 
 // Loading fallback for lazy-loaded ReactFlow
@@ -152,10 +155,46 @@ export interface SettingsModalProps {
     };
     /** Cancel the current model download. */
     onCancelModelDownload?: () => void;
-    tools?: Array<{ name: string; description: string; category: string }>;
+    tools?: Array<{
+        name: string;
+        description: string;
+        category: string;
+        /** True for user-uploaded custom tools */
+        is_custom?: boolean;
+        /** True when the current user is admin and may edit/delete this tool */
+        can_manage?: boolean;
+        /** Which users can see this custom tool ("*" = all, [] = admin only, or scope IDs) */
+        shared_with?: string[];
+        created_by?: string;
+        updated_at?: string;
+    }>;
     /** Request fresh tool list from backend (e.g. after installing PyGithub and restarting VAF). */
     onRefreshTools?: () => void;
-    workflows?: Array<{ id: string; name: string; description: string; steps: number }>;
+    /** Create a brand-new custom tool (admin only) */
+    onCreateCustomTool?: (name: string, code: string, sharedWith: string[]) => void;
+    /** Overwrite the source of an existing custom tool (admin only) */
+    onUpdateCustomTool?: (name: string, code: string, sharedWith: string[]) => void;
+    /** Delete a custom tool permanently (admin only) */
+    onDeleteCustomTool?: (name: string) => void;
+    /** Full list of non-admin users for the share picker */
+    customToolUsers?: Array<{ id: string; username: string; user_scope_id: string; role: string }>;
+    /** Trigger a backend fetch of all users for the share picker */
+    onGetCustomToolUsers?: () => void;
+    /** Whether a custom-tool save/delete is in progress */
+    isCustomToolSaving?: boolean;
+    /** Last error from the backend for a custom-tool operation */
+    customToolBackendError?: string | null;
+    workflows?: Array<{ id: string; name: string; description: string; steps: number; is_custom?: boolean }>;
+    /** Create a new user-defined workflow (admin only) */
+    onCreateWorkflow?: (data: WorkflowSaveData) => void;
+    /** Update an existing user-defined workflow (admin only) */
+    onUpdateWorkflow?: (data: WorkflowSaveData) => void;
+    /** Delete a user-defined workflow (admin only) */
+    onDeleteWorkflow?: (id: string) => void;
+    /** Whether a workflow save/delete is in progress */
+    isWorkflowSaving?: boolean;
+    /** Last error from the backend for a workflow operation */
+    workflowBackendError?: string | null;
     trustedSources?: { categories: Array<{ id: string; name: string; description: string; is_custom?: boolean; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> };
     onAddTrustedSource?: (categoryId: string, name: string, url: string) => void;
     onRemoveTrustedSource?: (domain: string, is_custom: boolean) => void;
@@ -253,7 +292,7 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 ];
 
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, workflows = [], trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -279,7 +318,24 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     
     // Modals State
     const [showToolsModal, setShowToolsModal] = useState(false);
+    // Custom tool editor state
+    // null = editor closed; { toolName: null } = create mode; { toolName: "x", ... } = edit mode
+    const [customToolEditor, setCustomToolEditor] = useState<{
+        toolName: string | null;
+        initialCode?: string;
+        initialSharedWith?: string[];
+    } | null>(null);
     const [showWorkflowsModal, setShowWorkflowsModal] = useState(false);
+    // Workflow creator state: null = closed; { workflowId: null } = create; { workflowId: "x" } = edit
+    const [workflowCreator, setWorkflowCreator] = useState<{
+        workflowId: string | null;
+        initialData?: {
+            name: string;
+            description: string;
+            triggers: string[];
+            steps: Array<{ input: string; tool: string; description: string }>;
+        };
+    } | null>(null);
     const [showTrustedSourcesModal, setShowTrustedSourcesModal] = useState(false);
     const [showNetworkModal, setShowNetworkModal] = useState(false);
     const [showMemoryModal, setShowMemoryModal] = useState(false);
@@ -2819,6 +2875,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {/* Tools Grid */}
                         <div className="flex-1 overflow-y-auto p-6 bg-gray-50/30">
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+
+                                {/* ── "Create custom tool" card (admin only, always first) ── */}
+                                {currentUser?.role === 'admin' && onCreateCustomTool && toolsSearch === '' && (
+                                    <button
+                                        onClick={() => {
+                                            // Fetch non-admin users for the share picker when the editor opens
+                                            if (onGetCustomToolUsers) onGetCustomToolUsers();
+                                            setCustomToolEditor({ toolName: null });
+                                        }}
+                                        className="group aspect-square bg-white rounded-2xl border-2 border-dashed border-gray-300 hover:border-blue-400 hover:shadow-lg hover:-translate-y-1 transition-all flex flex-col items-center justify-center gap-3 text-gray-400 hover:text-blue-500"
+                                        title="Create a new custom tool"
+                                    >
+                                        <div className="w-12 h-12 rounded-full border-2 border-dashed border-current flex items-center justify-center text-2xl font-light">
+                                            +
+                                        </div>
+                                        <span className="text-sm font-medium">Create Tool</span>
+                                    </button>
+                                )}
+
                                 {tools
                                     .filter(tool =>
                                         toolsSearch === '' ||
@@ -2826,31 +2901,66 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         tool.description.toLowerCase().includes(toolsSearch.toLowerCase())
                                     )
                                     .map((tool, idx) => (
-                                        <div 
-                                            key={idx} 
-                                            onClick={() => handleViewCode(tool.name)}
-                                            className="group relative aspect-square bg-white rounded-2xl border-2 border-gray-200 hover:border-blue-500 hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden flex flex-col"
+                                        <div
+                                            key={idx}
+                                            onClick={() => {
+                                                // Custom tools that the admin can manage: open the editor
+                                                if (tool.is_custom && tool.can_manage) {
+                                                    if (onGetCustomToolUsers) onGetCustomToolUsers();
+                                                    // Fetch source code from backend first, then open editor
+                                                    setCustomToolEditor({
+                                                        toolName: tool.name,
+                                                        initialSharedWith: tool.shared_with ?? ['*'],
+                                                        // Source is loaded asynchronously via get_custom_tool_source WS;
+                                                        // the editor will show an empty string until it arrives.
+                                                        initialCode: undefined,
+                                                    });
+                                                } else {
+                                                    // Built-in tools: open the read-only code viewer
+                                                    handleViewCode(tool.name);
+                                                }
+                                            }}
+                                            className={`group relative aspect-square bg-white rounded-2xl border-2 hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden flex flex-col
+                                                ${tool.is_custom
+                                                    ? 'border-purple-200 hover:border-purple-500'
+                                                    : 'border-gray-200 hover:border-blue-500'
+                                                }`}
                                         >
                                             {/* Decoration: Floppy Disk Icon Background */}
                                             <div className="absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity rotate-12">
                                                 <Save size={160} />
                                             </div>
-                                            
+
                                             {/* Content */}
                                             <div className="p-5 flex-1 flex flex-col relative z-10">
                                                 <div className="flex items-start justify-between mb-2">
-                                                    <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shadow-sm group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                                                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center shadow-sm transition-colors
+                                                        ${tool.is_custom
+                                                            ? 'bg-purple-50 text-purple-600 group-hover:bg-purple-600 group-hover:text-white'
+                                                            : 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white'
+                                                        }`}>
                                                         <Cpu size={20} />
                                                     </div>
-                                                    {tool.category && (
-                                                        <span className="px-2 py-1 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-md">
-                                                            {tool.category}
-                                                        </span>
-                                                    )}
+                                                    <div className="flex flex-col items-end gap-1">
+                                                        {/* Custom badge */}
+                                                        {tool.is_custom && (
+                                                            <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold uppercase tracking-wider rounded-md">
+                                                                Custom
+                                                            </span>
+                                                        )}
+                                                        {/* Category badge (built-in tools) */}
+                                                        {!tool.is_custom && tool.category && (
+                                                            <span className="px-2 py-1 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-md">
+                                                                {tool.category}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
                                                 
-                                                <h3 className="text-lg font-bold text-gray-900 mb-1 group-hover:text-blue-600 transition-colors line-clamp-1">{tool.name}</h3>
-                                                
+                                                <h3 className={`text-lg font-bold text-gray-900 mb-1 transition-colors line-clamp-1 ${tool.is_custom ? 'group-hover:text-purple-600' : 'group-hover:text-blue-600'}`}>
+                                                    {tool.name}
+                                                </h3>
+
                                                 <div className="flex-1">
                                                     <p className="text-xs text-gray-500 line-clamp-4 leading-relaxed">
                                                         {tool.description}
@@ -2858,15 +2968,23 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
 
                                                 <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 group-hover:text-gray-600">
-                                                    <span className="font-mono">v1.0.0</span>
-                                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity text-blue-600 font-medium">
-                                                        {tModals('tools.viewCode')} <ChevronRight size={12} />
+                                                    {tool.is_custom && tool.updated_at ? (
+                                                        // Custom tools: show last updated date instead of version
+                                                        <span className="font-mono text-[10px]">
+                                                            {new Date(tool.updated_at).toLocaleDateString()}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="font-mono">v1.0.0</span>
+                                                    )}
+                                                    <div className={`flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity font-medium ${tool.is_custom ? 'text-purple-600' : 'text-blue-600'}`}>
+                                                        {tool.is_custom && tool.can_manage ? 'Edit' : tModals('tools.viewCode')}
+                                                        <ChevronRight size={12} />
                                                     </div>
                                                 </div>
                                             </div>
-                                            
+
                                             {/* Bottom Bar (Floppy style) */}
-                                            <div className="h-2 bg-gray-100 border-t border-gray-200 group-hover:bg-blue-50 group-hover:border-blue-100 transition-colors" />
+                                            <div className={`h-2 border-t transition-colors ${tool.is_custom ? 'bg-purple-50 border-purple-100' : 'bg-gray-100 border-gray-200 group-hover:bg-blue-50 group-hover:border-blue-100'}`} />
                                         </div>
                                     ))}
                             </div>
@@ -2891,6 +3009,36 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             )}
 
             {/* Code Viewer Modal */}
+            {/* ── Custom Tool Editor (z-[80], above code viewer) ─────────────── */}
+            {customToolEditor !== null && (
+                <CustomToolEditor
+                    toolName={customToolEditor.toolName}
+                    initialCode={customToolEditor.initialCode}
+                    initialSharedWith={customToolEditor.initialSharedWith}
+                    users={customToolUsers}
+                    isSaving={isCustomToolSaving}
+                    backendError={customToolBackendError}
+                    onClose={() => setCustomToolEditor(null)}
+                    onSave={({ name, code, sharedWith }) => {
+                        if (customToolEditor.toolName === null) {
+                            // Create mode
+                            onCreateCustomTool?.(name, code, sharedWith);
+                        } else {
+                            // Edit mode
+                            onUpdateCustomTool?.(customToolEditor.toolName, code, sharedWith);
+                        }
+                        // Close the editor only on success — the parent closes it
+                        // by clearing customToolBackendError and isCustomToolSaving.
+                        // For simplicity we close immediately; parent can reopen on error.
+                        setCustomToolEditor(null);
+                    }}
+                    onDelete={(name) => {
+                        onDeleteCustomTool?.(name);
+                        setCustomToolEditor(null);
+                    }}
+                />
+            )}
+
             {codeModal && (
                 <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setCodeModal(null)}>
                     <div className="absolute inset-0 bg-black/50 backdrop-blur-md" />
@@ -2915,6 +3063,30 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* ── Workflow Creator (z-[80], above code viewer / tool editor) ── */}
+            {workflowCreator !== null && (
+                <WorkflowCreator
+                    workflowId={workflowCreator.workflowId}
+                    initialData={workflowCreator.initialData}
+                    availableTools={tools}
+                    isSaving={isWorkflowSaving}
+                    backendError={workflowBackendError}
+                    onClose={() => setWorkflowCreator(null)}
+                    onSave={(data) => {
+                        if (workflowCreator.workflowId === null) {
+                            onCreateWorkflow?.(data);
+                        } else {
+                            onUpdateWorkflow?.(data);
+                        }
+                        setWorkflowCreator(null);
+                    }}
+                    onDelete={(id) => {
+                        onDeleteWorkflow?.(id);
+                        setWorkflowCreator(null);
+                    }}
+                />
             )}
 
             {/* License Content Modal */}
@@ -2987,6 +3159,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {/* Workflows Grid */}
                         <div className="flex-1 overflow-y-auto p-6 bg-gray-50/30">
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+
+                                {/* ── "Create Workflow" card (admin only, always first) ── */}
+                                {currentUser?.role === 'admin' && onCreateWorkflow && workflowsSearch === '' && (
+                                    <button
+                                        onClick={() => setWorkflowCreator({ workflowId: null })}
+                                        className="group aspect-square bg-white rounded-2xl border-2 border-dashed border-gray-300 hover:border-purple-400 hover:shadow-lg hover:-translate-y-1 transition-all flex flex-col items-center justify-center gap-3 text-gray-400 hover:text-purple-500"
+                                        title="Create a new workflow"
+                                    >
+                                        <div className="w-12 h-12 rounded-full border-2 border-dashed border-current flex items-center justify-center text-2xl font-light">
+                                            +
+                                        </div>
+                                        <span className="text-sm font-medium">Create Workflow</span>
+                                    </button>
+                                )}
+
                                 {workflows
                                     .filter(wf =>
                                         workflowsSearch === '' ||
@@ -2994,29 +3181,47 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         wf.description.toLowerCase().includes(workflowsSearch.toLowerCase())
                                     )
                                     .map((wf, idx) => (
-                                        <div 
-                                            key={idx} 
-                                            onClick={() => handleViewWorkflow(wf.id)}
-                                            className="group relative aspect-square bg-white rounded-2xl border-2 border-gray-200 hover:border-purple-500 hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden flex flex-col"
+                                        <div
+                                            key={idx}
+                                            onClick={() => {
+                                                if (wf.is_custom && currentUser?.role === 'admin' && onUpdateWorkflow) {
+                                                    // Admin can edit user-created workflows
+                                                    setWorkflowCreator({ workflowId: wf.id });
+                                                } else {
+                                                    handleViewWorkflow(wf.id);
+                                                }
+                                            }}
+                                            className={`group relative aspect-square bg-white rounded-2xl border-2 hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden flex flex-col ${
+                                                wf.is_custom
+                                                    ? 'border-purple-200 hover:border-purple-500'
+                                                    : 'border-gray-200 hover:border-purple-500'
+                                            }`}
                                         >
                                             {/* Decoration: Workflow Icon Background */}
                                             <div className="absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity rotate-12">
                                                 <Workflow size={160} />
                                             </div>
-                                            
+
                                             {/* Content */}
                                             <div className="p-5 flex-1 flex flex-col relative z-10">
                                                 <div className="flex items-start justify-between mb-2">
                                                     <div className="w-10 h-10 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center shadow-sm group-hover:bg-purple-600 group-hover:text-white transition-colors">
                                                         <GitBranch size={20} />
                                                     </div>
-                                                    <span className="px-2 py-1 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-md">
-                                                        {tModals('workflows.steps', { count: wf.steps })}
-                                                    </span>
+                                                    <div className="flex flex-col items-end gap-1">
+                                                        {wf.is_custom && (
+                                                            <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold uppercase tracking-wider rounded-md">
+                                                                Custom
+                                                            </span>
+                                                        )}
+                                                        <span className="px-2 py-1 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-md">
+                                                            {tModals('workflows.steps', { count: wf.steps })}
+                                                        </span>
+                                                    </div>
                                                 </div>
-                                                
+
                                                 <h3 className="text-lg font-bold text-gray-900 mb-1 group-hover:text-purple-600 transition-colors line-clamp-1">{wf.name}</h3>
-                                                
+
                                                 <div className="flex-1">
                                                     <p className="text-xs text-gray-500 line-clamp-4 leading-relaxed">
                                                         {wf.description}
@@ -3024,9 +3229,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
 
                                                 <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 group-hover:text-gray-600">
-                                                    <span className="font-mono">{tModals('workflows.template')}</span>
+                                                    <span className="font-mono">{wf.is_custom ? 'User workflow' : tModals('workflows.template')}</span>
                                                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity text-purple-600 font-medium">
-                                                        {tModals('workflows.details')} <ChevronRight size={12} />
+                                                        {wf.is_custom && currentUser?.role === 'admin' ? 'Edit' : tModals('workflows.details')} <ChevronRight size={12} />
                                                     </div>
                                                 </div>
                                             </div>

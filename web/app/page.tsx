@@ -866,8 +866,23 @@ function VAFDashboardContent() {
     const [showChangingModelOverlay, setShowChangingModelOverlay] = useState(false);
     type PendingContactReply = { replyId: string; source: string; contactName: string; preview: string; sessionId?: string };
     const [pendingContactReplies, setPendingContactReplies] = useState<PendingContactReply[]>([]);
-    const [tools, setTools] = useState<Array<{ name: string; description: string; category: string }>>([]);
-    const [workflows, setWorkflows] = useState<Array<{ id: string; name: string; description: string; steps: number }>>([]);
+    const [tools, setTools] = useState<Array<{
+        name: string;
+        description: string;
+        category: string;
+        is_custom?: boolean;
+        can_manage?: boolean;
+        shared_with?: string[];
+        created_by?: string;
+        updated_at?: string;
+    }>>([]);
+    // Custom tool management state (admin only)
+    const [customToolUsers, setCustomToolUsers]             = useState<Array<{ id: string; username: string; user_scope_id: string; role: string }>>([]);
+    const [isCustomToolSaving, setIsCustomToolSaving]       = useState(false);
+    const [customToolBackendError, setCustomToolBackendError] = useState<string | null>(null);
+    const [workflows, setWorkflows] = useState<Array<{ id: string; name: string; description: string; steps: number; is_custom?: boolean }>>([]);
+    const [isWorkflowSaving, setIsWorkflowSaving]       = useState(false);
+    const [workflowBackendError, setWorkflowBackendError] = useState<string | null>(null);
     const [trustedSources, setTrustedSources] = useState<{ categories: Array<{ id: string; name: string; description: string; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> }>({ categories: [] });
     const [trustedSourcesError, setTrustedSourcesError] = useState<string | null>(null);
     const [automations, setAutomations] = useState<Array<{ id: string; name: string; description: string; prompt?: string; frequency: string; time: string; weekday?: string | null; day?: number | null; enabled: boolean; next_run?: string }>>([]);
@@ -2470,9 +2485,44 @@ function VAFDashboardContent() {
                 else if (data.type === 'tools_list') {
                     setTools(data.tools || []);
                 }
+                // ── Custom tool WS responses ──────────────────────────────────
+                else if (data.type === 'custom_tool_created' || data.type === 'custom_tool_updated' || data.type === 'custom_tool_deleted' || data.type === 'custom_tool_permissions_updated') {
+                    // Operation succeeded — clear saving state and error
+                    setIsCustomToolSaving(false);
+                    setCustomToolBackendError(null);
+                    // Backend also broadcasts a tools_list refresh (handled by the tools_list branch above)
+                }
+                else if (data.type === 'custom_tool_error') {
+                    // Backend rejected the operation (e.g. no BaseTool subclass found, invalid name)
+                    setIsCustomToolSaving(false);
+                    setCustomToolBackendError(data.error || 'Unknown error');
+                }
+                else if (data.type === 'custom_tool_users') {
+                    // List of non-admin users for the share picker
+                    setCustomToolUsers(data.users || []);
+                }
+                else if (data.type === 'custom_tool_source') {
+                    // Source code response — the SettingsModal stores this in its
+                    // customToolEditor state via a ref.  We surface it here so the
+                    // parent can pass it down. For now we fire an event via a custom
+                    // DOM event so the modal can pick it up without prop drilling.
+                    window.dispatchEvent(new CustomEvent('vaf:custom_tool_source', {
+                        detail: { name: data.name, source: data.source }
+                    }));
+                }
+                // ─────────────────────────────────────────────────────────────
                 else if (data.type === 'workflows_list') {
                     console.log('[Workflows]', data.workflows);
                     setWorkflows(data.workflows || []);
+                }
+                else if (data.type === 'workflow_created' || data.type === 'workflow_updated' || data.type === 'workflow_deleted') {
+                    setIsWorkflowSaving(false);
+                    setWorkflowBackendError(null);
+                    // workflows_list refresh is sent by the backend immediately after
+                }
+                else if (data.type === 'workflow_error') {
+                    setIsWorkflowSaving(false);
+                    setWorkflowBackendError(data.error || 'Unknown error');
                 }
                 else if (data.type === 'trusted_sources_list') {
                     setTrustedSources({ categories: data.categories || [] });
@@ -4843,7 +4893,43 @@ function VAFDashboardContent() {
                 onCancelModelDownload={cancelModelDownload}
                 tools={tools}
                 onRefreshTools={() => ws?.send(JSON.stringify({ type: 'get_tools' }))}
+                onCreateCustomTool={(name, code, sharedWith) => {
+                    setIsCustomToolSaving(true);
+                    setCustomToolBackendError(null);
+                    ws?.send(JSON.stringify({ type: 'create_custom_tool', name, code, shared_with: sharedWith }));
+                }}
+                onUpdateCustomTool={(name, code, sharedWith) => {
+                    setIsCustomToolSaving(true);
+                    setCustomToolBackendError(null);
+                    ws?.send(JSON.stringify({ type: 'update_custom_tool', name, code, shared_with: sharedWith }));
+                }}
+                onDeleteCustomTool={(name) => {
+                    setIsCustomToolSaving(true);
+                    setCustomToolBackendError(null);
+                    ws?.send(JSON.stringify({ type: 'delete_custom_tool', name }));
+                }}
+                customToolUsers={customToolUsers}
+                onGetCustomToolUsers={() => ws?.send(JSON.stringify({ type: 'get_custom_tool_users' }))}
+                isCustomToolSaving={isCustomToolSaving}
+                customToolBackendError={customToolBackendError}
                 workflows={workflows}
+                onCreateWorkflow={(data) => {
+                    setIsWorkflowSaving(true);
+                    setWorkflowBackendError(null);
+                    ws?.send(JSON.stringify({ type: 'create_workflow', ...data }));
+                }}
+                onUpdateWorkflow={(data) => {
+                    setIsWorkflowSaving(true);
+                    setWorkflowBackendError(null);
+                    ws?.send(JSON.stringify({ type: 'update_workflow', ...data }));
+                }}
+                onDeleteWorkflow={(id) => {
+                    setIsWorkflowSaving(true);
+                    setWorkflowBackendError(null);
+                    ws?.send(JSON.stringify({ type: 'delete_workflow', workflow_id: id }));
+                }}
+                isWorkflowSaving={isWorkflowSaving}
+                workflowBackendError={workflowBackendError}
                 trustedSources={trustedSources}
                 onAddTrustedSource={(categoryId, name, url) => ws?.send(JSON.stringify({ type: 'add_trusted_source', category_id: categoryId, name, url }))}
                 onRemoveTrustedSource={(domain, is_custom) => ws?.send(JSON.stringify({ type: 'remove_trusted_source', domain, is_custom }))}

@@ -1101,6 +1101,14 @@ class Agent:
                 print(f"[ERROR] Failed to load tool {name}: {e}")
                 pass # Still ignore for stability, but report error
         
+        # ── Custom tools (user-uploaded via WebUI) ────────────────────────────
+        # Loaded from Platform.data_dir()/custom_tools/ so they survive package
+        # updates without being overwritten.  Each tool is a plain .py file that
+        # contains a BaseTool subclass — same contract as built-in tools.
+        # Admin-only at upload time; visibility per user is filtered at the WS
+        # level (get_tools handler) not here, so the agent always has the full set.
+        self._load_custom_tools()
+
         # Provide tool registry to tools that expect it (e.g., list_tools)
         for tool in self.tools.values():
             if hasattr(tool, "available_tools"):
@@ -1111,6 +1119,86 @@ class Agent:
 
         # Track active async sub-agent tasks
         self._async_subagent_tasks = {}  # task_id -> {"agent_type": str, "task": str, "started_at": datetime}
+
+    def _load_custom_tools(self) -> None:
+        """
+        Load all custom tools registered in custom_tools_registry into self.tools.
+
+        Called once at startup from _load_tools().  For live updates (after the
+        admin uploads / deletes a tool via the WebUI) use reload_custom_tools().
+
+        Custom tools follow the same filtering rules as built-in tools:
+          - coder_only=True → skip (custom tools are always for the main agent)
+          - thinking_done / thinking_workspace_* → skip (custom tools are never
+            thinking-mode internals)
+        The per-user visibility filter is applied later at the WebSocket layer
+        (get_tools handler) so the agent instance always holds the full set.
+        """
+        try:
+            from vaf.core.custom_tools_registry import (
+                load_manifest,
+                load_custom_tool_class,
+            )
+        except Exception as exc:
+            print(f"[WARN] custom_tools_registry not available: {exc}")
+            return
+
+        manifest = load_manifest()
+        for tool_name in manifest.get("tools", {}).keys():
+            try:
+                cls = load_custom_tool_class(tool_name)
+                if cls is None:
+                    continue
+                instance = cls()
+                # Skip if somehow a custom tool is marked coder-only
+                if getattr(instance, "coder_only", False):
+                    continue
+                self.tools[instance.name] = instance
+            except Exception as exc:
+                print(f"[ERROR] Failed to load custom tool '{tool_name}': {exc}")
+
+    def reload_custom_tools(self) -> None:
+        """
+        Hot-reload custom tools without restarting the agent.
+
+        Removes all previously loaded custom tool entries from self.tools, then
+        re-loads every tool currently listed in the manifest.  Called by the
+        WebSocket handlers in web_server.py after create / update / delete
+        operations so the live agent immediately reflects the change.
+
+        Thread safety: self.tools is a plain dict; mutations here happen on the
+        asyncio event loop thread (the WS handler awaits the FastAPI coroutine
+        which calls this synchronously), so no extra lock is needed.
+        """
+        try:
+            from vaf.core.custom_tools_registry import (
+                get_all_custom_tool_names,
+                load_manifest,
+            )
+        except Exception as exc:
+            print(f"[WARN] reload_custom_tools: registry unavailable: {exc}")
+            return
+
+        # Remove all custom tool entries that were previously registered.
+        # We identify them by cross-referencing the current manifest names —
+        # this avoids accidentally removing built-in tools with the same name.
+        all_custom_names = set(get_all_custom_tool_names())
+        for name in list(self.tools.keys()):
+            if name in all_custom_names:
+                del self.tools[name]
+
+        # Re-load from disk (fresh importlib call — picks up source changes too)
+        self._load_custom_tools()
+
+        # Refresh the tool registry reference for discovery tools (list_tools etc.)
+        for tool in self.tools.values():
+            if hasattr(tool, "available_tools"):
+                try:
+                    tool.available_tools = self.tools
+                except Exception:
+                    pass
+
+        print(f"[INFO] reload_custom_tools: active custom tools = {list(all_custom_names)}")
 
     def _register_tool_state_providers(self):
         """
@@ -6850,12 +6938,37 @@ class Agent:
             or (isinstance(sid, str) and sid.startswith(channel_session_prefixes))
         )
 
+        # Determine whether the current session belongs to an admin user.
+        # Two sources are checked — whichever is set takes precedence:
+        #   1. _current_user_role   — set from the WebSocket session metadata
+        #      (e.g. "admin" / "user") when the user is authenticated via the DB.
+        #   2. _current_user_scope_id vs get_local_admin_scope_id() — covers the
+        #      single-user / local-admin case where no DB role is stored.
+        # This value is passed into evaluate_tool_policy() so tools with
+        # admin_only=True are hard-blocked for regular users before they run.
+        try:
+            from vaf.core.config import get_local_admin_scope_id as _get_local_admin
+            _current_role  = getattr(self, "_current_user_role", None)
+            _current_scope = getattr(self, "_current_user_scope_id", None)
+            _local_admin   = _get_local_admin()
+            is_admin = (
+                _current_role == "admin"
+                or (
+                    _current_scope is not None
+                    and str(_current_scope) == str(_local_admin)
+                )
+            )
+        except Exception:
+            # If we cannot determine admin status, default to False (safer).
+            is_admin = False
+
         tool_instance = self.tools.get(name)
         policy_decision = evaluate_tool_policy(
             tool_name=name,
             tool=tool_instance,
             current_source=current_source,
             is_channel_session=is_channel_session,
+            is_admin=is_admin,
         )
         if policy_decision.blocked:
             return f"Security Error: {policy_decision.reason}"
@@ -7008,6 +7121,17 @@ class Agent:
                     if name == "python_sandbox" and is_channel_session:
                         # Non-main channel sessions must not bridge host tools from sandbox code.
                         tool_args["with_vaf_tools"] = False
+                if name == "create_agent_tool":
+                    # Inject agent reference so the tool can call reload_custom_tools()
+                    # after writing the file — making the new tool live immediately
+                    # without a server restart.
+                    tool_args["_agent"] = self
+                if name == "create_agent_workflow":
+                    # Inject agent reference so the tool can:
+                    #   - use the live tool registry for run_temp execution
+                    #   - check admin status for create/delete actions
+                    #   - pass user_scope_id / username to WorkflowEngine
+                    tool_args["_agent"] = self
                 if name == "checkpoint_context":
                     # Inject agent reference so checkpoint_context can call agent.checkpoint_and_reset()
                     tool_args["_agent"] = self
